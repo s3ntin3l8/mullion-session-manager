@@ -726,6 +726,24 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   description. The external review relay's prompt is out of scope and does not
   carry them.
 
+  **A skip must name its issue (#2724).** The worker prompt also tells the
+  worker to file a follow-up issue for each Scope item it skips or defers
+  (attached to the task's parent epic, never as a sub-issue of the task's own
+  issue, which would park the task) and to name it on the line:
+  `Deferred: <what> (#<number>)`. At parse time a `deviated` entry whose evidence
+  cites a `Skipped:` or `Deferred:` line with no `#<number>` (and no `Decision:` or
+  `Not run locally:` line, which need none) is rewritten to `partial`, so it
+  sends the task back like any unfinished item; `deriveVerdict` applies the
+  same rule to a raw scope list. `REVIEW_METHOD_LINES` also asks the reviewer
+  for two suggestion-level checks: a new exported symbol, option, field or flag
+  with no producer or no consumer, and a change meant to apply to "every place
+  that does X" with matches the diff left untouched. Both ride the existing
+  `suggestion` severity, so neither blocks by itself.
+
+  The "Prompt repository" and "Prompt path" settings (Settings → Review relay)
+  configure the GitHub-side relay's prompt only. Task Master reviews, including
+  Hermes as the review agent, always use `buildReviewPrompt`.
+
   A missing file is treated as **inconclusive**, not "no findings" and not
   "approved" — but not on the very first tick that observes it missing.
   `task-reconciler.ts`'s `processReviewingTasks` only accepts a missing file

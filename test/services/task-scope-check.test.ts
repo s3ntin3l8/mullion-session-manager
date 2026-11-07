@@ -147,9 +147,68 @@ describe("scope check (#2599)", () => {
     expect(deriveVerdict({ ...base, scope: [entry("deviated", "x") as never] })).toBe(
       "changes-requested",
     );
+    expect(
+      deriveVerdict({ ...base, scope: [entry("deviated", "Skipped: x (#12)") as never] }),
+    ).toBe("approved");
+    // A skip that names no follow-up issue is unfinished work, not a deferral.
     expect(deriveVerdict({ ...base, scope: [entry("deviated", "Skipped: x") as never] })).toBe(
-      "approved",
+      "changes-requested",
     );
+  });
+
+  describe("a skipped or deferred item must name its follow-up issue (#2724)", () => {
+    it.each(["Skipped: docs for the new flag", "Deferred: the migration, too big for one task"])(
+      "downgrades `%s` to partial and sends the task back",
+      (evidence) => {
+        const parsed = parse({ scope: [entry("deviated", evidence)] });
+        expect(parsed.scope[0].status).toBe("partial");
+        expect(parsed.scope[0].evidence).toContain("without a follow-up issue");
+        expect(parsed.scope[0].evidence).toContain(evidence);
+        expect(parsed.verdict).toBe("changes-requested");
+      },
+    );
+
+    it.each([
+      "Skipped: docs for the new flag (#123)",
+      "Deferred: the migration, tracked in #456",
+      "Decision: kept the old API",
+      "Not run locally: the e2e suite needs a display",
+      // A Decision line next to a Skipped one covers it: the choice is declared.
+      "Decision: dropped the retry. Skipped: its test",
+    ])("accepts `%s` as a declared deviation", (evidence) => {
+      const parsed = parse({ scope: [entry("deviated", evidence)] });
+      expect(parsed.scope[0].status).toBe("deviated");
+      expect(parsed.verdict).toBe("approved");
+    });
+
+    it("the review prompt states the rule", () => {
+      const out = buildReviewPrompt({
+        task: TASK,
+        worktreePath: BASE.worktreePath,
+        findingsPath: FINDINGS_PATH,
+      });
+      expect(out).toContain("names the follow-up issue");
+      expect(out).toContain("treated as `partial`");
+    });
+
+    it("the review prompt carries the wiring and call-site checks as suggestions", () => {
+      const out = buildReviewPrompt({
+        task: TASK,
+        worktreePath: BASE.worktreePath,
+        findingsPath: FINDINGS_PATH,
+      });
+      expect(out).toContain("who sets it and who reads it");
+      expect(out).toContain("report it as a suggestion anchored on its definition");
+      expect(out).toContain("grep for the");
+      expect(out).toContain("a match the diff left untouched is a suggestion");
+    });
+
+    it("the worker prompt tells the worker to file the issue, and not under its own", () => {
+      const out = buildTaskMasterPreamble(BASE);
+      expect(out).toContain("file a follow-up issue");
+      expect(out).toContain("`Deferred: <what> (#<number>)`");
+      expect(out).toContain("Do not attach it as a sub-issue of this task's");
+    });
   });
 
   it("renders a Scope check section in the comment and review-body modes", () => {

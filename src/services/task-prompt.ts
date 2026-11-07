@@ -371,6 +371,12 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  `Skipped:`, `Deferred:` or `Not run locally:`. Mullion shows those lines to",
     "  the reviewer and in the pull request description, so say what and why in one",
     "  line each.",
+    "- When you skip or defer a Scope item of the issue, file a follow-up issue for it",
+    "  before you end your turn (`gh issue create`, with the context and acceptance",
+    "  criteria someone could pick up on their own) and name it on the line, as",
+    "  `Deferred: <what> (#<number>)`. Do not attach it as a sub-issue of this task's",
+    "  own issue: that would park this task. A skipped item with no issue behind it",
+    "  is treated by the reviewer as not done.",
   );
 
   if (commitTitlePath) {
@@ -720,6 +726,22 @@ function normalizeDispositions(raw: unknown): ReviewDisposition[] {
  * `Decision:` / `Skipped:` / `Deferred:` / `Not run locally:` commit lines). */
 const DECLARED_DECISION_RE = /(?:^|[\s"'`(])(?:decision|skipped|deferred|not run locally):/i;
 
+const SKIP_DECLARATION_RE = /(?:^|[\s"'`(])(?:skipped|deferred):/i;
+const OTHER_DECLARATION_RE = /(?:^|[\s"'`(])(?:decision|not run locally):/i;
+const ISSUE_REF_RE = /#\d+/;
+
+/** A `Skipped:`/`Deferred:` line only counts as a deferral when it names the
+ * follow-up issue that tracks the work (`#<number>`): without one the item was
+ * dropped, not deferred. A `Decision:` or `Not run locally:` line needs none
+ * (it records a choice or an unrun check, not unfinished work). */
+function declaresUntrackedSkip(evidence: string): boolean {
+  return (
+    SKIP_DECLARATION_RE.test(evidence) &&
+    !OTHER_DECLARATION_RE.test(evidence) &&
+    !ISSUE_REF_RE.test(evidence)
+  );
+}
+
 function normalizeScope(raw: unknown): ScopeCheck[] {
   if (!Array.isArray(raw)) return [];
   const out: ScopeCheck[] = [];
@@ -746,6 +768,14 @@ function normalizeScope(raw: unknown): ScopeCheck[] {
       });
       continue;
     }
+    if (status === "deviated" && declaresUntrackedSkip(evidence)) {
+      out.push({
+        item: rec.item,
+        status: "partial",
+        evidence: `Skipped or deferred without a follow-up issue (a deferral names it as #<number>). ${evidence}`,
+      });
+      continue;
+    }
     out.push({ item: rec.item, status, evidence });
   }
   return out;
@@ -759,8 +789,9 @@ function normalizeScope(raw: unknown): ScopeCheck[] {
  *    (an unfixed blocker keeps blocking even if this round forgot to list it);
  * 1b. a Scope item that is `missing`/`partial` → `changes-requested` too, and
  *    so is a `deviated` one whose `evidence` cites no declared decision (it
- *    counts as `missing`). A cited `deviated` item is a stated decision and
- *    does not block by itself;
+ *    counts as `missing`), and so is one that only cites a `Skipped:`/`Deferred:`
+ *    line naming no follow-up issue (it counts as `partial`). A cited
+ *    `deviated` item is a stated decision and does not block by itself;
  * 2. otherwise the highest finding severity decides — any `critical`/`warning`
  *    (or severity-less) finding → `changes-requested`, only `suggestion`s →
  *    `approved-with-suggestions`, no findings → `approved`.
@@ -786,7 +817,8 @@ export function deriveVerdict(parts: {
       (c) =>
         c.status === "missing" ||
         c.status === "partial" ||
-        (c.status === "deviated" && !DECLARED_DECISION_RE.test(c.evidence)),
+        (c.status === "deviated" &&
+          (!DECLARED_DECISION_RE.test(c.evidence) || declaresUntrackedSkip(c.evidence))),
     )
   ) {
     return "changes-requested";
@@ -1238,6 +1270,11 @@ const REVIEW_METHOD_LINES = [
   "- Check the diff against the issue's Scope: for every Scope checkbox of the",
   "  task, find the code or test that satisfies it, and check that nothing listed",
   "  under Out of scope was done. Report each Scope item in `scope`.",
+  "- For every new exported symbol, option, field or flag the diff adds, grep for",
+  "  who sets it and who reads it. One with no producer or no consumer is defined",
+  "  but not wired: report it as a suggestion anchored on its definition.",
+  '- When the change is meant to apply to "every place that does X", grep for the',
+  "  other places that do X: a match the diff left untouched is a suggestion.",
   "",
 ];
 
@@ -1412,6 +1449,8 @@ export function buildReviewPrompt(opts: {
     "must quote the worker's declared decision (a `Decision:`, `Skipped:`,",
     "`Deferred:` or `Not run locally:` line) — a `deviated` entry that cites none is",
     "treated as `missing`, and a declared decision you disagree with is a finding.",
+    "A `Skipped:` or `Deferred:` line only counts when it names the follow-up issue",
+    "that tracks the work (`#<number>`); one that names none is treated as `partial`.",
     "",
     "Severity is what decides the outcome, so assign it honestly:",
     "- critical — security, data loss, a crash, or broken core behavior.",

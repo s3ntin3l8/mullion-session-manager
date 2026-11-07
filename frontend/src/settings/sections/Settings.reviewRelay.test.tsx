@@ -218,6 +218,13 @@ describe("Settings -> Review relay", () => {
     expect(relay().getByRole("button", { name: "Test connection" })).toBeInTheDocument();
   });
 
+  it("says the prompt repository covers GitHub-side reviews, not Task Master's", async () => {
+    await renderCard();
+    expect(
+      screen.getByText(/Task Master reviews always use Mullion's own prompt/),
+    ).toBeInTheDocument();
+  });
+
   it("commits the prompt repository on Enter", async () => {
     const user = userEvent.setup();
     await renderCard();
