@@ -6,6 +6,7 @@ import { commitHostWipChanges, resolveHostGitStatus } from "./host-git.js";
 import { resolveGitIdentity } from "./git-identity.js";
 import { getStoredSettings } from "./settings.js";
 import { killSession } from "./session-lifecycle.js";
+import { removeCheckoutIfClean } from "./checkout-removal.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
 import type { SessionBackend } from "./session-backend.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -17,6 +18,29 @@ import {
   formatFailureDiagnostics,
   type DiagnosticParts,
 } from "./task-failure-diagnostics.js";
+
+/** Best-effort removal of a failed task's worktree (and its browsers, via
+ * `removeCheckoutIfClean`); a dirty tree stays for inspection. */
+export async function removeFailedTaskWorktree(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  hostId: string,
+  after: string,
+): Promise<void> {
+  if (!task.worktreePath) return;
+  await removeCheckoutIfClean(app, {
+    projectId: project.id,
+    hostId,
+    worktreePath: task.worktreePath,
+    parentCwd: project.cwd,
+  }).catch((err) => {
+    app.log.warn(
+      { err, taskId: task.id, worktreePath: task.worktreePath },
+      `task reconcile: removeWorktreeIfClean threw after ${after}`,
+    );
+  });
+}
 
 /**
  * Executes the #722 "no commits ahead of base" failure found by
@@ -179,11 +203,6 @@ export async function failReviewingGate(
     "failed",
   );
   if (task.worktreePath) {
-    await backend.removeWorktreeIfClean(task.worktreePath, project.cwd).catch((err) => {
-      app.log.warn(
-        { err, taskId: task.id, worktreePath: task.worktreePath },
-        "task reconcile: removeWorktreeIfClean threw after the no-commits gate failure",
-      );
-    });
+    await removeFailedTaskWorktree(app, task, project, workerHostId, "the no-commits gate failure");
   }
 }
