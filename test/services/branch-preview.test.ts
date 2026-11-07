@@ -26,6 +26,7 @@ import {
   dockPreviewWorktreePath,
   ensureLocalBranch,
   getPreviewWorktree,
+  removeWorktree,
   trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -103,6 +104,9 @@ function fakeLiveness(state: "alive" | "dead" | "unknown" | Error) {
       if (state instanceof Error) throw state;
       return Object.fromEntries(ids.map((id) => [id, state]));
     }),
+    // A stale preview worktree is removed through the backend (checkout-removal.ts).
+    removeWorktree: (worktreePath: string, parentCwd?: string) =>
+      removeWorktree(worktreePath, parentCwd),
   } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
 }
 
@@ -427,9 +431,12 @@ describe("branch previews (issues #2016/#2018)", () => {
       });
       fakeLiveness("dead");
       const create = fakeCreate(app);
+      const forgetSpy = vi.spyOn(app.browser, "forgetCheckout");
       await getOrCreateBranchPreview(app, projectId, "feat/x", { fastForward: true });
       expect(create).toHaveBeenCalledTimes(1);
       expect(fs.existsSync(wt)).toBe(false);
+      // #2687 — the recut worktree's old browser state goes with it.
+      expect(forgetSpy).toHaveBeenCalledWith(projectId, "local", wt);
       expect(getPreviewWorktree(dead.id)).toBeUndefined();
     });
 

@@ -15,6 +15,7 @@ import { promoteTaskToPR } from "./task-promote.js";
 import { recordTaskTransition } from "./task-state.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { resolveBackend } from "./session-backend.js";
+import { removeCheckoutIfClean } from "./checkout-removal.js";
 import { killSession } from "./session-lifecycle.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
 
@@ -45,14 +46,17 @@ export function cleanupTaskWorktree(
   if (!task.worktreePath) return;
   const target = resolveCleanupTarget(app, task, project);
   if (!target) return;
-  void resolveBackend(app, target.hostId)
-    .removeWorktreeIfClean(task.worktreePath, target.cwdOnHost)
-    .catch((err) => {
-      app.log.warn(
-        { err, worktreePath: task.worktreePath, projectId: project.id },
-        "task cleanup: removeWorktreeIfClean threw",
-      );
-    });
+  void removeCheckoutIfClean(app, {
+    projectId: project.id ?? task.projectId,
+    hostId: target.hostId,
+    worktreePath: task.worktreePath,
+    parentCwd: target.cwdOnHost,
+  }).catch((err) => {
+    app.log.warn(
+      { err, worktreePath: task.worktreePath, projectId: project.id },
+      "task cleanup: removeWorktreeIfClean threw",
+    );
+  });
 }
 
 type CleanupProject = { id?: number; cwd: string; hostId: string; hostCwds?: string | null };
@@ -120,7 +124,12 @@ export function cleanupMergedTaskBranch(
   const backend = resolveBackend(app, target.hostId);
   void (async () => {
     if (task.worktreePath) {
-      const res = await backend.removeWorktreeIfClean(task.worktreePath, target.cwdOnHost);
+      const res = await removeCheckoutIfClean(app, {
+        projectId: project.id ?? task.projectId,
+        hostId: target.hostId,
+        worktreePath: task.worktreePath,
+        parentCwd: target.cwdOnHost,
+      });
       if (!res.removed && res.reason !== "not-a-repo") {
         app.log.info(
           { projectId: project.id, branchName, reason: res.reason },

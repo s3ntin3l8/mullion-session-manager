@@ -181,6 +181,7 @@ split across two cells.
 | `browser.action`           | full, session   | `POST /api/sessions/:id/browser`                           | `browser <subcommand>`                                              | — (see `browser_action`, hook socket)      |
 | `browser.find`             | full, session   | `POST /api/sessions/:id/browser/find`                      | `browser find`                                                      | — (see `browser_action`, hook socket)      |
 | `browser.bindings`         | full, session   | `GET /api/sessions/:id/browser`                            | —                                                                   | —                                          |
+| `browser.unbind`           | full, session   | `DELETE /api/sessions/:id/browser`                         | `browser unbind`                                                    | —                                          |
 | `device.list`              | full, session   | `GET /api/devices`                                         | `device list`                                                       | `list_devices`                             |
 | `device.get`               | full, session   | `GET /api/devices/:id`                                     | —                                                                   | —                                          |
 | `device.create`            | full, session\* | `POST /api/devices`                                        | `device create`; `device connect` (see \* below)                    | — (no MCP wrapper)                         |
@@ -857,6 +858,9 @@ multiplexing the way PTY output or the events feed does.
 
 { "id": 22, "op": "browser.bindings", "body": { "sessionId": 42 } }
 { "id": 22, "ok": true, "status": 200, "result": [ /* browser pane bindings */ ] }
+
+{ "id": 23, "op": "browser.unbind", "body": { "sessionId": 42 } }
+{ "id": 23, "ok": true, "status": 200, "result": { "ok": true, "unbound": 1 } }
 ```
 
 - **`browser.action`** — `body` is `AgentAction`
@@ -884,6 +888,10 @@ multiplexing the way PTY output or the events feed does.
   plain local DB read — no `BROWSER_ENABLED` gate and no multi-host
   proxying, since a session's browser-pane bindings are recorded
   independently of whether a Playwright instance is actually running.
+- **`browser.unbind`** — drops the session's browser binding (closing the
+  target's browser when no other session uses it) so its next browser call
+  resolves the session's current host and checkout; the way out of a
+  `binding_unavailable` refusal. Same target-id rules as `browser.bindings`.
 
 Errors (an unknown/killed session, an invalid action, or — for
 `action`/`find` specifically — `BROWSER_ENABLED` off) come back shaped

@@ -10,6 +10,14 @@ import { request } from "./client.js";
 import type { Preview, ProjectPreviewConfig } from "./types.js";
 
 export const browserApi = {
+  // Drops a session's browser binding (DELETE /api/sessions/:id/browser): the
+  // way out of a `binding_unavailable` browser — its checkout or host is gone —
+  // so the next attach resolves the session's current host and checkout.
+  unbindSessionBrowser: (sessionId: number) =>
+    request<{ ok: boolean; unbound: number }>(`/api/sessions/${sessionId}/browser`, {
+      method: "DELETE",
+    }),
+
   getProjectPreviewTargets: (projectId: number) =>
     request<ProjectPreviewConfig>(`/api/projects/${projectId}/preview-targets`),
   saveProjectPreviewTargets: (projectId: number, config: ProjectPreviewConfig) =>

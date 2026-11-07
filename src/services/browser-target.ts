@@ -62,8 +62,9 @@ export type BrowserTargetResult =
       status: 400 | 501 | 503;
       message: string;
       /** `binding_unavailable`: the session's recorded target can no longer be
-       * used and the session must unbind (DELETE /api/sessions/:id/browser)
-       * to re-bind to its current host and checkout. */
+       * used and the session must unbind (DELETE /api/sessions/:id/browser;
+       * the browser pane's "Re-bind"/"Unbind" and `mullion browser unbind`
+       * call it) to re-bind to its current host and checkout. */
       code?: "binding_unavailable";
     };
 
@@ -242,7 +243,7 @@ export async function resolveSessionBrowserTarget(
             ok: false,
             status: 400,
             code: "binding_unavailable",
-            message: `${gone}. Unbind this session's browser (DELETE /api/sessions/${sessionId}/browser) to re-bind it to its current host and checkout.`,
+            message: `${gone}. Unbind this session's browser to re-bind it to its current host and checkout: run \`mullion browser unbind\`, use "Re-bind" in the browser pane, or DELETE /api/sessions/${sessionId}/browser.`,
           };
         }
         const gate = requireOperation(app, target.hostId, BROWSER_TARGETS_OPERATION);

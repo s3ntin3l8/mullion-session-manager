@@ -33,6 +33,7 @@ import { resolveTaskWorkerHost } from "../services/session-live-info.js";
 import { deliverRejectFeedback } from "../services/task-reject.js";
 import { readLiveWorkerState } from "../services/task-reseed.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { removeCheckoutForced } from "../services/checkout-removal.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { removeLabel } from "../services/github-write.js";
@@ -776,10 +777,12 @@ export async function tasksRoute(app: FastifyInstance) {
     let worktreeRemoved = false;
     if (task.worktreePath) {
       try {
-        worktreeRemoved = await resolveBackend(app, project.hostId).removeWorktree(
-          task.worktreePath,
-          project.cwd,
-        );
+        worktreeRemoved = await removeCheckoutForced(app, {
+          projectId: project.id,
+          hostId: project.hostId,
+          worktreePath: task.worktreePath,
+          parentCwd: project.cwd,
+        });
       } catch (err) {
         app.log.warn(
           { err, worktreePath: task.worktreePath, taskId: task.id },

@@ -794,6 +794,7 @@ describe("reconcileExitedSessions", () => {
         .where(eq(tasks.id, taskId))
         .run();
       mockMasterAlive(app, false);
+      const forgetSpy = vi.spyOn(app.browser, "forgetCheckout");
 
       const sessionBackendModule = await import("../../src/services/session-backend.js");
       const realResolveBackend = sessionBackendModule.resolveBackend;
@@ -816,6 +817,12 @@ describe("reconcileExitedSessions", () => {
       expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(
         "/tmp/.mullion-worktrees/mullion-task-1",
         "/tmp",
+      );
+      // #2687 — and the removed worktree's browsers are released.
+      expect(forgetSpy).toHaveBeenCalledWith(
+        projectId,
+        "local",
+        "/tmp/.mullion-worktrees/mullion-task-1",
       );
 
       resolveBackendSpy.mockRestore();

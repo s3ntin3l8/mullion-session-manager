@@ -11,8 +11,8 @@ import {
   dockPreviewWorktreePath,
   ensureLocalBranch,
   findPreviewWorktreeSessionId,
-  removeWorktree,
 } from "./git-worktree.js";
+import { removeCheckoutForced } from "./checkout-removal.js";
 import {
   bindBranchPreview,
   findBranchPreview,
@@ -201,7 +201,14 @@ async function clearStaleWorktree(
   // this same path again — from under the new session about to be cut there.
   const tracked = findPreviewWorktreeSessionId(worktreePath);
   if (tracked !== undefined) deletePreviewWorktree(tracked);
-  if (!(await removeWorktree(worktreePath, projectCwd))) {
+  if (
+    !(await removeCheckoutForced(app, {
+      projectId,
+      hostId: LOCAL_HOST_ID,
+      worktreePath,
+      parentCwd: projectCwd,
+    }))
+  ) {
     throw new BranchPreviewError(
       "worktree_busy",
       "a stale preview worktree for this branch could not be removed",

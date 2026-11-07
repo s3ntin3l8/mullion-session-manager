@@ -8,7 +8,7 @@ import {
   bindingBrowserTarget,
 } from "./browser-target.js";
 import { requireOperation } from "./host-agents.js";
-import { LOCAL_HOST_ID } from "./host-registry.js";
+import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 
@@ -48,6 +48,29 @@ export function recordSessionBrowserBinding(
       set: { lastAttachedAt: now },
     })
     .run();
+}
+
+/** Records the binding of an attach that already launched (or proxied to) the
+ * target, ending the attach window either way. When the insert fails — the
+ * session row was deleted mid-launch and the foreign key rejects it, say — the
+ * target is released (closed if nothing else uses it) and `false` is returned
+ * so the caller can tell the panel. Never throws. */
+export function recordBindingOrRelease(
+  app: FastifyInstance,
+  sessionId: number,
+  target: BrowserTarget,
+  attachDone: () => void,
+): boolean {
+  try {
+    recordSessionBrowserBinding(app, sessionId, target);
+    attachDone();
+    return true;
+  } catch (err) {
+    app.log.warn({ err, sessionId, target }, "failed to record the session's browser binding");
+    attachDone();
+    void closeTargetIfUnused(app, target);
+    return false;
+  }
 }
 
 /** GET /api/sessions/:id/browser's data source — an array since the schema
@@ -163,6 +186,26 @@ export function closeSessionBrowserBindings(app: FastifyInstance, sessionId: num
   }
 }
 
+/** Closes `target` unless a session is bound to it or attaching to it. For an
+ * attach that failed after it had launched the target, which no binding row
+ * would ever close. Never throws. */
+export async function closeTargetIfUnused(
+  app: FastifyInstance,
+  target: BrowserTarget,
+): Promise<void> {
+  try {
+    if (!app.hasDecorator("db")) {
+      // An agent host has no bindings: the primary owns them.
+      return;
+    }
+    const [project] = app.db.select().from(projects).where(eq(projects.id, target.projectId)).all();
+    if (!project || targetInUse(app, project, target)) return;
+    await closeBrowserTarget(app, target);
+  } catch (err) {
+    app.log.warn({ err, target }, "failed to release an unused browser target");
+  }
+}
+
 /** A checkout is being removed: closes every browser running in it, drops the
  * bindings that point at it and deletes the stored state of those targets
  * (the project-default target keeps its file). Never throws. */
@@ -259,6 +302,30 @@ function recordPendingClose(
   error: string,
 ): void {
   const now = new Date();
+  // A new close request for a target whose record already gave up re-arms it
+  // with a fresh `createdAt` and attempt count, so its first failure does not
+  // give up again at once on the old age (and it is no longer reported as
+  // leaked while it is being retried). A record still being retried keeps its
+  // own schedule.
+  app.db
+    .update(pendingBrowserCloses)
+    .set({
+      gaveUpAt: null,
+      attempts: 0,
+      createdAt: now,
+      nextAttemptAt: new Date(now.getTime() + CLOSE_RETRY_BASE_MS),
+      ...(forget ? { forget: true } : {}),
+    })
+    .where(
+      and(
+        eq(pendingBrowserCloses.projectId, target.projectId),
+        eq(pendingBrowserCloses.hostId, target.hostId),
+        eq(pendingBrowserCloses.checkoutRoot, target.checkoutRoot),
+        eq(pendingBrowserCloses.endpoint, target.endpoint ?? ""),
+        isNotNull(pendingBrowserCloses.gaveUpAt),
+      ),
+    )
+    .run();
   app.db
     .insert(pendingBrowserCloses)
     .values({
@@ -279,21 +346,28 @@ function recordPendingClose(
         pendingBrowserCloses.checkoutRoot,
         pendingBrowserCloses.endpoint,
       ],
-      // Escalating to forget re-arms a record that already gave up, so the
-      // newly requested cleanup is retried when the host returns.
+      // Escalating to forget keeps the record forget; re-arming a record that
+      // already gave up is done by the update above.
       set: {
         lastError: error,
-        ...(forget
-          ? {
-              forget: true,
-              gaveUpAt: null,
-              nextAttemptAt: new Date(now.getTime() + CLOSE_RETRY_BASE_MS),
-            }
-          : {}),
+        ...(forget ? { forget: true } : {}),
       },
     })
     .run();
   app.log.warn({ target, error }, "remote browser close not delivered; will retry");
+}
+
+/** Drops the pending closes of hosts that are no longer in the registry: no
+ * retry can ever reach them, and a leaked count for them would show on no
+ * host. Returns how many were dropped. */
+export function pruneOrphanedPendingCloses(app: FastifyInstance): number {
+  let pruned = 0;
+  for (const row of app.db.select().from(pendingBrowserCloses).all()) {
+    if (row.hostId === LOCAL_HOST_ID || getHostRow(app, row.hostId)) continue;
+    app.db.delete(pendingBrowserCloses).where(eq(pendingBrowserCloses.id, row.id)).run();
+    pruned++;
+  }
+  return pruned;
 }
 
 let processingPending = false;
@@ -309,6 +383,8 @@ export async function processPendingBrowserCloses(
   if (processingPending || !app.hasDecorator("db")) return;
   processingPending = true;
   try {
+    const pruned = pruneOrphanedPendingCloses(app);
+    if (pruned > 0) app.log.info({ pruned }, "dropped pending browser closes of removed hosts");
     const due = app.db
       .select()
       .from(pendingBrowserCloses)
@@ -367,6 +443,8 @@ export async function processPendingBrowserCloses(
 export function listLeakedBrowserCloses(
   app: FastifyInstance,
 ): Array<typeof pendingBrowserCloses.$inferSelect> {
+  // A removed host's rows would count as leaked on no host.
+  pruneOrphanedPendingCloses(app);
   return app.db
     .select()
     .from(pendingBrowserCloses)

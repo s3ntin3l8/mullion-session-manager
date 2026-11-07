@@ -29,7 +29,7 @@
 // (plugins/session-worktree-sweep.ts) for the ones that were not yet pushed or
 // merged at that moment — an agent has no database and no timers of its own.
 
-import { closeCheckoutBrowsers } from "./session-browsers.js";
+import { removeCheckoutIfClean } from "./checkout-removal.js";
 import type { FastifyInstance } from "fastify";
 import { and, asc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
@@ -240,12 +240,13 @@ async function reclaim(
   }
   if (!branchIsSafe(branch)) return keep("unpushed");
 
-  const removal = await resolveBackend(app, hostId).removeWorktreeIfClean(
-    row.cwd,
-    row.worktreeRepoCwd,
-  );
+  const removal = await removeCheckoutIfClean(app, {
+    projectId: row.projectId,
+    hostId,
+    worktreePath: row.cwd,
+    parentCwd: row.worktreeRepoCwd,
+  });
   if (removal.removed) {
-    await closeCheckoutBrowsers(app, row.projectId, hostId, row.cwd);
     recordReclaimed(app, row);
     return { status: "reclaimed" };
   }

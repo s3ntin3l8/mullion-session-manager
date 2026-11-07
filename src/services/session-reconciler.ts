@@ -3,6 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveBackend, warnHostError } from "./session-backend.js";
+import { removeCheckoutIfClean } from "./checkout-removal.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
@@ -338,10 +339,12 @@ async function reconcileRow(
       // posture as task-reconciler.ts's budget-exceeded path.
       if (updatedTask.worktreePath) {
         try {
-          await resolveBackend(app, project.hostId).removeWorktreeIfClean(
-            updatedTask.worktreePath,
-            project.cwd,
-          );
+          await removeCheckoutIfClean(app, {
+            projectId: project.id,
+            hostId: project.hostId,
+            worktreePath: updatedTask.worktreePath,
+            parentCwd: project.cwd,
+          });
         } catch (err) {
           app.log.warn(
             { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },

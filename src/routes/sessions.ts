@@ -16,6 +16,7 @@ import { resolveBackend, unknownOutcomeMessage } from "../services/session-backe
 import { HostRequestError } from "../services/remote-host-client.js";
 import { isHostBusyError } from "../services/remote-host-errors.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { removeCheckoutForced } from "../services/checkout-removal.js";
 import { parseHostCwds, projectCwdOnHost } from "../services/placement.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import { isValidDevServerUrl } from "./projects.js";
@@ -1197,7 +1198,12 @@ export async function sessionsRoute(app: FastifyInstance) {
         }
         const backend = resolveBackend(app, srcHostId);
         try {
-          await backend.removeWorktree(worktreePath, repoCwd);
+          await removeCheckoutForced(app, {
+            projectId: row.projectId,
+            hostId: srcHostId,
+            worktreePath,
+            parentCwd: repoCwd,
+          });
         } catch {
           // Best-effort: a leaked worktree directory is the cheaper failure.
         }

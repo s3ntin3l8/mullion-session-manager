@@ -37,6 +37,7 @@ import {
   type SessionBackend,
 } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
+import { removeCheckoutIfClean } from "./checkout-removal.js";
 import { ensureRemoteHostProtocols } from "./host-agents.js";
 import { resolveHostBaseRef, resolveRepoRef } from "./host-git.js";
 import { resolveGitHubToken } from "./github-integration.js";
@@ -1391,14 +1392,17 @@ export async function retryTask(
   // the spawn host is the placement decision #1724 owns.
   async function release(reason: string, worktreeToClean?: { path: string }): Promise<void> {
     if (worktreeToClean && workerCwd !== null) {
-      await resolveBackend(app, workerHostId)
-        .removeWorktreeIfClean(worktreeToClean.path, workerCwd)
-        .catch((err: unknown) => {
-          app.log.warn(
-            { err, taskId, worktreePath: worktreeToClean.path },
-            "task retry: failed to clean up the resumed worktree after a later failure",
-          );
-        });
+      await removeCheckoutIfClean(app, {
+        projectId: task.projectId,
+        hostId: workerHostId,
+        worktreePath: worktreeToClean.path,
+        parentCwd: workerCwd,
+      }).catch((err: unknown) => {
+        app.log.warn(
+          { err, taskId, worktreePath: worktreeToClean.path },
+          "task retry: failed to clean up the resumed worktree after a later failure",
+        );
+      });
     }
     const updated = app.db
       .update(tasks)

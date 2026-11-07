@@ -696,6 +696,7 @@ function handleConnection(
                     error: resolved.ok
                       ? "This session's browser runs on another host; use the session browser API."
                       : resolved.message,
+                    ...(!resolved.ok && resolved.code ? { code: resolved.code } : {}),
                   })}\n`,
                 );
               }

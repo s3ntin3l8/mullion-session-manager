@@ -8,6 +8,7 @@
 // real process-level wiring lives in mullion.mjs.
 
 import fs from "node:fs";
+import { buildBrowserCommands } from "./browser-commands.mjs";
 import { execFileSync } from "node:child_process";
 import {
   MullionSocketError,
@@ -1117,46 +1118,14 @@ const sessionCommands = {
   },
 };
 
-const browserCommands = {};
-for (const action of Object.keys(BROWSER_ACTIONS)) {
-  browserCommands[action] = async (client, args, opts, io) => {
-    const { body, cliFlags } = parseBrowserArgs(action, args);
-    const op = body.by !== undefined ? "browser.find" : "browser.action";
-    const requestBody = withSessionId(body, opts);
-    const result =
-      opts.session !== undefined
-        ? await client.request(op, requestBody)
-        : await requestOwnSessionFallback(
-            client,
-            op,
-            requestBody,
-            io,
-            "'sessionId' is required",
-            (ownId) => ({ ...requestBody, sessionId: ownId }),
-          );
-    // `json: result` carries the raw response through even on this branch —
-    // not just `{screenshot}` — so a future field the server adds to the
-    // screenshot response isn't silently dropped from `--json` output.
-    if (action === "screenshot")
-      return { screenshot: result.screenshot, outPath: cliFlags.out, json: result };
-    // Issue #381 (3.10) — reuses that exact same write path: runCommand's
-    // `outcome.screenshot`/`outcome.outPath` branch decodes base64 and
-    // writes it to disk. `screenshot` here just names that shared "binary
-    // payload to write out" channel, not the screenshot action itself — the
-    // download response has no `screenshot` field of its own.
-    if (action === "download" && cliFlags.out !== undefined) {
-      const first = result.downloads?.[0];
-      if (!first) throw new CliUsageError("no downloads available to write to --out");
-      if (first.contents === undefined) {
-        throw new CliUsageError(
-          "download response has no 'contents' field to write (did the file exceed --max-bytes?)",
-        );
-      }
-      return { screenshot: first.contents, outPath: cliFlags.out, json: result };
-    }
-    return { json: result, text: formatBrowserResult(action, result) };
-  };
-}
+const browserCommands = buildBrowserCommands({
+  BROWSER_ACTIONS,
+  parseBrowserArgs,
+  formatBrowserResult,
+  withSessionId,
+  requestOwnSessionFallback,
+  CliUsageError,
+});
 
 const projectCommands = {
   async list(client) {
@@ -2016,7 +1985,7 @@ Commands:
   session list|get|children|wait|prompt|message|message-status|create|spawn-child|kill|rename|logs|transcript|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
-          download
+          download|unbind
   project list|actions|targets|dock|tooling
   preview create|get|delete|list
   dock start|stop|list

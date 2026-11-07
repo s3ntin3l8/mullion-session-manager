@@ -27,7 +27,11 @@ import {
   processPendingBrowserCloses,
   recordSessionBrowserBinding,
 } from "../../src/services/session-browsers.js";
-import { proxyToRemoteBrowser } from "../../src/routes/browser.js";
+import {
+  attachSocketToBrowser,
+  proxyToRemoteBrowser,
+  REMOTE_BROWSER_OPEN_TIMEOUT_MS,
+} from "../../src/routes/browser.js";
 import { pendingBrowserCloses } from "../../src/db/schema.js";
 import { BrowserManager } from "../../src/services/browser-manager.js";
 import { EventEmitter } from "node:events";
@@ -572,6 +576,230 @@ describe("browser execution targets", () => {
       await processPendingBrowserCloses(app, new Date());
       expect(post).not.toHaveBeenCalled();
       expect(app.db.select().from(pendingBrowserCloses).all()).toHaveLength(0);
+    });
+  });
+
+  describe("attach and release lifecycle (issue #2687)", () => {
+    function fakeSocket() {
+      const socket = new EventEmitter() as EventEmitter & Record<string, unknown>;
+      Object.assign(socket, { OPEN: 1, readyState: 1, bufferedAmount: 0 });
+      socket.send = vi.fn();
+      socket.close = vi.fn(() => {
+        socket.readyState = 3;
+      });
+      return socket;
+    }
+    function fakeUpstream() {
+      const up = new EventEmitter() as EventEmitter & Record<string, unknown>;
+      Object.assign(up, { OPEN: 1, CONNECTING: 0, readyState: 0, bufferedAmount: 0 });
+      up.close = vi.fn();
+      return up;
+    }
+    const MISSING_SESSION = 987_654_321; // no row: the binding's foreign key fails
+
+    it("a local binding insert that throws releases the target and reports the error", async () => {
+      const root = "/work/attach-fail";
+      const projectId = addProject(root, "local");
+      const target = { projectId, hostId: "local", checkoutRoot: root, legacy: true };
+      const managed = {
+        page: { url: () => "about:blank", on: vi.fn(), off: vi.fn() },
+        browser: new EventEmitter(),
+        onClosed: vi.fn(() => () => {}),
+      };
+      vi.spyOn(app.browser, "getOrLaunch").mockResolvedValue(managed as never);
+      const closeTarget = vi.spyOn(app.browser, "closeTarget").mockResolvedValue(undefined);
+      const socket = fakeSocket();
+
+      await attachSocketToBrowser(app, socket as never, { sessionId: MISSING_SESSION, target });
+
+      // No in-flight entry is left behind, so the unused context is closed.
+      await vi.waitFor(() => expect(closeTarget).toHaveBeenCalledWith(target));
+      expect(socket.close).toHaveBeenCalled();
+      expect(JSON.parse((socket.send as ReturnType<typeof vi.fn>).mock.calls[0][0])).toMatchObject({
+        type: "error",
+      });
+      // No frame loop was started for the failed attach.
+      expect(managed.page.on).not.toHaveBeenCalled();
+    });
+
+    it("keeps a context another session still uses when an attach to it fails", async () => {
+      const root = "/work/attach-shared";
+      const projectId = addProject(root, "local");
+      const other = addSession(projectId, root, "local");
+      const target = { projectId, hostId: "local", checkoutRoot: root, legacy: true };
+      recordSessionBrowserBinding(app, other, target);
+      vi.spyOn(app.browser, "getOrLaunch").mockResolvedValue({
+        page: { url: () => "", on: vi.fn(), off: vi.fn() },
+        browser: new EventEmitter(),
+        onClosed: vi.fn(() => () => {}),
+      } as never);
+      const closeTarget = vi.spyOn(app.browser, "closeTarget").mockResolvedValue(undefined);
+      await attachSocketToBrowser(app, fakeSocket() as never, {
+        sessionId: MISSING_SESSION,
+        target,
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(closeTarget).not.toHaveBeenCalled();
+    });
+
+    it("a remote upstream that never opens times out without an uncaught exception", async () => {
+      const a = await addHost();
+      negotiate(a, AGENT_OPERATIONS);
+      const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
+      const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
+      const up = fakeUpstream();
+      vi.spyOn(RemoteHostClient.prototype, "openBrowserWs").mockReturnValue(up as never);
+      const post = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+      const socket = fakeSocket();
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        proxyToRemoteBrowser(app, socket as never, MISSING_SESSION, target);
+        vi.advanceTimersByTime(REMOTE_BROWSER_OPEN_TIMEOUT_MS + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(up.close).toHaveBeenCalled();
+      expect(socket.close).toHaveBeenCalled();
+      // A late error after the abort is handled, not thrown.
+      expect(() => up.emit("error", new Error("aborted"))).not.toThrow();
+
+      // The attach window was released: the target can be closed again.
+      const s1 = addSession(projectId, "/work/p", a);
+      recordSessionBrowserBinding(app, s1, target);
+      closeSessionBrowserBindings(app, s1);
+      await vi.waitFor(() => expect(post).toHaveBeenCalledWith("/internal/browser/close", target));
+    });
+
+    it("a remote binding insert that throws inside the open listener is contained and releases the target", async () => {
+      const a = await addHost();
+      negotiate(a, AGENT_OPERATIONS);
+      const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
+      const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
+      const up = fakeUpstream();
+      vi.spyOn(RemoteHostClient.prototype, "openBrowserWs").mockReturnValue(up as never);
+      const post = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+      const socket = fakeSocket();
+      proxyToRemoteBrowser(app, socket as never, MISSING_SESSION, target);
+      up.readyState = 1;
+      expect(() => up.emit("open")).not.toThrow();
+      expect(up.close).toHaveBeenCalled();
+      expect(socket.close).toHaveBeenCalled();
+      await vi.waitFor(() => expect(post).toHaveBeenCalledWith("/internal/browser/close", target));
+    });
+
+    it("records a remote automation binding only after the agent took the call", async () => {
+      const a = await addHost();
+      negotiate(a, AGENT_OPERATIONS);
+      const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
+      const failing = addSession(projectId, "/work/p", a);
+      const working = addSession(projectId, "/work/p", a);
+      const call = vi
+        .spyOn(RemoteHostClient.prototype, "browserAutomationAction")
+        .mockRejectedValueOnce(new Error("agent unreachable"))
+        .mockResolvedValue({ ok: true });
+      const failed = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${failing}/browser`,
+        payload: { action: "snapshot" },
+      });
+      expect(failed.statusCode).toBe(502);
+      expect(listSessionBrowserBindings(app, failing)).toHaveLength(0);
+
+      const ok = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${working}/browser`,
+        payload: { action: "snapshot" },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(listSessionBrowserBindings(app, working)).toHaveLength(1);
+    });
+
+    it("answers a gone binding with its code, and the unbind route clears it", async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "bt-gone-"));
+      const worktree = path.join(root, "wt");
+      fs.mkdirSync(worktree);
+      const projectId = addProject(root, "local");
+      const sessionId = addSession(projectId, worktree, "local");
+      recordSessionBrowserBinding(app, sessionId, {
+        projectId,
+        hostId: "local",
+        checkoutRoot: worktree,
+        legacy: false,
+      });
+      fs.rmSync(worktree, { recursive: true });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "snapshot" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ code: "binding_unavailable" });
+      expect(res.json().message).toMatch(/mullion browser unbind/);
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+  });
+
+  describe("pending close housekeeping (issue #2687)", () => {
+    it("prunes a pending close of a host that no longer exists, so no host reports it leaked", async () => {
+      const a = await addHost();
+      const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
+      const base = { projectId, checkoutRoot: "/work/p", nextAttemptAt: new Date(0) };
+      app.db
+        .insert(pendingBrowserCloses)
+        .values([
+          { ...base, hostId: "removed-host", gaveUpAt: new Date() },
+          { ...base, hostId: "also-removed", endpoint: "x" },
+          { ...base, hostId: a, endpoint: "kept", gaveUpAt: new Date() },
+        ])
+        .run();
+      expect(listLeakedBrowserCloses(app).map((r) => r.hostId)).toEqual([a]);
+      await processPendingBrowserCloses(app, new Date(Date.now() + 60_000));
+      expect(
+        app.db
+          .select()
+          .from(pendingBrowserCloses)
+          .all()
+          .map((r) => r.hostId),
+      ).toEqual([a]);
+    });
+
+    it("re-arms a gave-up close when a new plain close for the target is requested", async () => {
+      const a = await addHost();
+      negotiate(
+        a,
+        AGENT_OPERATIONS.filter((op) => op !== "browser-targets"),
+      );
+      const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
+      const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
+      const s1 = addSession(projectId, "/work/p", a);
+      recordSessionBrowserBinding(app, s1, target);
+      closeSessionBrowserBindings(app, s1);
+      await vi.waitFor(() =>
+        expect(app.db.select().from(pendingBrowserCloses).all()).toHaveLength(1),
+      );
+      const old = new Date(Date.now() - 2 * CLOSE_RETRY_GIVE_UP_MS);
+      app.db
+        .update(pendingBrowserCloses)
+        .set({ createdAt: old, gaveUpAt: new Date(), attempts: 9 })
+        .run();
+      expect(listLeakedBrowserCloses(app)).toHaveLength(1);
+
+      const s2 = addSession(projectId, "/work/p", a);
+      recordSessionBrowserBinding(app, s2, target);
+      closeSessionBrowserBindings(app, s2);
+      await vi.waitFor(() => expect(listLeakedBrowserCloses(app)).toHaveLength(0));
+      const [row] = app.db.select().from(pendingBrowserCloses).all();
+      expect(row.gaveUpAt).toBeNull();
+      expect(row.attempts).toBe(0);
+      expect(row.createdAt.getTime()).toBeGreaterThan(old.getTime() + CLOSE_RETRY_GIVE_UP_MS);
+
+      // Its first failure no longer gives up on the stale age.
+      await processPendingBrowserCloses(app, new Date(Date.now() + 2 * 60_000));
+      const [after] = app.db.select().from(pendingBrowserCloses).all();
+      expect(after.gaveUpAt).toBeNull();
+      expect(after.attempts).toBe(1);
     });
   });
 

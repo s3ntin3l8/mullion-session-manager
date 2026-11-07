@@ -27,7 +27,7 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveCommitsPastBase } from "./commits-past-base.js";
 // #2416 — one throttle policy for the reconciler's "this state is stuck"
 // warnings, instead of a copy per lookup.
-import { failReviewingGate } from "./task-gate-failure.js";
+import { failReviewingGate, removeFailedTaskWorktree } from "./task-gate-failure.js";
 import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
@@ -5352,14 +5352,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // removeWorktreeIfClean's own doc comment on why "dirty" is
                 // the only real refusal condition it has).
                 if (task.worktreePath) {
-                  await backend
-                    .removeWorktreeIfClean(task.worktreePath, project.cwd)
-                    .catch((err) => {
-                      app.log.warn(
-                        { err, taskId: task.id, worktreePath: task.worktreePath },
-                        "task reconcile: removeWorktreeIfClean threw after budget failure",
-                      );
-                    });
+                  await removeFailedTaskWorktree(app, task, project, hostId, "budget failure");
                 }
               }
               continue;
