@@ -1,7 +1,7 @@
-// One paginated walk over a GitHub REST list endpoint, shared by the four
-// list reads in github-write.ts.
+// One paginated walk over a GitHub REST list endpoint, shared by the list
+// reads across the GitHub services.
 //
-// Four call sites each hand-rolled the same loop with the same shape:
+// Five call sites each hand-rolled the same loop with the same shape:
 //
 //   for (let page = 1; page <= MAX_PAGES; page += 1) {
 //     const items = await githubRequest<...>(..., `?per_page=${PAGE_SIZE}&page=${page}`);
@@ -27,6 +27,10 @@
 //
 //   - listPullRequestReviews (github-write.ts) reads `/pulls/{n}/reviews`
 //     (a bare array).
+//
+//   - the closed-PR walk in github-merged-prs.ts reads `/pulls` (a bare
+//     array) but caps at 3 pages x 100 — the 300 most recently updated
+//     closed PRs of a repo.
 //
 // The two response shapes are the reason the loops drifted: a bare array IS
 // the items, an envelope holds them under a key. `fetchAllPages` takes the

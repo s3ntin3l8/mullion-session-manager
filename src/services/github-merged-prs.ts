@@ -1,4 +1,5 @@
 import { getPullRequestByNumber, listClosedPullRequests } from "./github-write.js";
+import { fetchAllPages } from "./github-pagination.js";
 import type { ClosedPullRequest } from "./github-write.js";
 
 // Shared "which PRs of this repo are already closed/merged" lookup. Task
@@ -11,6 +12,13 @@ import type { ClosedPullRequest } from "./github-write.js";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 /** 3 pages x 100 = the 300 most recently updated closed PRs. */
 const MAX_PAGES = 3;
+/**
+ * The `per_page` size `listClosedPullRequests` asks for. It has to match the
+ * `per_page=100` in that URL: the walk treats a page holding fewer items than
+ * this as the last page, so a LARGER size here would make the first (full)
+ * page look like the last one and cut the walk short.
+ */
+const PAGE_SIZE = 100;
 const MAX_CACHE_ENTRIES = 100;
 
 export interface ClosedPrRecord {
@@ -51,17 +59,17 @@ async function load(token: string, owner: string, repo: string): Promise<RepoEnt
   const byNumber = new Map<number, ClosedPrRecord>();
   const byBranch = new Map<string, ClosedPrRecord>();
   const self = key(owner, repo);
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const prs = await listClosedPullRequests(token, owner, repo, page);
-    for (const pr of prs) {
-      const record = toRecord(pr);
-      byNumber.set(pr.number, record);
-      // A fork's PR from a same-named branch says nothing about our branch.
-      if (pr.headRepo?.toLowerCase() !== self) continue;
-      // Pages are newest-updated first, so the first PR seen per branch wins.
-      if (!byBranch.has(pr.headRef)) byBranch.set(pr.headRef, record);
-    }
-    if (prs.length < 100) break;
+  const prs = await fetchAllPages((page) => listClosedPullRequests(token, owner, repo, page), {
+    maxPages: MAX_PAGES,
+    pageSize: PAGE_SIZE,
+  });
+  for (const pr of prs) {
+    const record = toRecord(pr);
+    byNumber.set(pr.number, record);
+    // A fork's PR from a same-named branch says nothing about our branch.
+    if (pr.headRepo?.toLowerCase() !== self) continue;
+    // Pages are newest-updated first, so the first PR seen per branch wins.
+    if (!byBranch.has(pr.headRef)) byBranch.set(pr.headRef, record);
   }
   return { at: Date.now(), byNumber, byBranch };
 }
