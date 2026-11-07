@@ -18,6 +18,7 @@ import {
 import { resolveSessionBrowserTarget } from "../../src/services/browser-target.js";
 import { resolveAgentBrowserTarget } from "../../src/services/session-lifecycle.js";
 import { sessionBrowserTarget } from "../../src/services/session-browser-targets.js";
+import { gitEnv } from "../../src/services/git-env.js";
 import { BROWSER_TARGET_SCHEMA } from "../../src/routes/internal-schemas.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
@@ -297,9 +298,10 @@ describe("browser endpoints (#2688)", () => {
 
   it("a branch preview in its own worktree resolves its own target", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "be-wt-"));
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: root, stdio: "ignore", env: gitEnv() });
     git("init", "-q", "-b", "main");
-    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i");
+    git("commit", "-q", "--allow-empty", "-m", "i");
     const worktree = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "be-wt-branch-")));
     fs.rmSync(worktree, { recursive: true });
     git("worktree", "add", "-q", "-b", "feat", worktree);
