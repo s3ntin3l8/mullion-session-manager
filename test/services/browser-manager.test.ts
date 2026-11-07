@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 
 // BrowserManager launches real Chromium via Playwright — CI has no browser
@@ -148,10 +147,7 @@ describe("BrowserManager", () => {
     newPageError = null;
     launchedBrowsers.length = 0;
     vi.mocked(chromium.launch).mockClear();
-    dataDir = path.join(
-      os.tmpdir(),
-      `browser-manager-test-${crypto.randomBytes(4).toString("hex")}`,
-    );
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-manager-test-"));
     manager = new BrowserManager({ enabled: true, maxContexts: 2, dataDir });
   });
 
