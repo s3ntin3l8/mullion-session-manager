@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { CHANNEL_SATURATED_REASON } from "../shared/constants.js";
 import { LOCAL_HOST_ID, listHosts } from "./host-registry.js";
 import { HostCapacityTracker } from "./host-capacity.js";
 import { HostAgentTracker, agentsTtlMs, refreshRemoteHostAgents } from "./host-agents.js";
@@ -36,7 +37,6 @@ const OFFLINE_AFTER_MISSED = 3;
 // Consecutive busy pings (channel up, every slot held) tolerated before the
 // host is called degraded: hung transfers must not read as healthy forever.
 export const DEGRADED_AFTER_BUSY = 3;
-export const CHANNEL_SATURATED_REASON = "channel saturated";
 
 /**
  * Live-state health tracker for remote hosts — the same DB-row-records-

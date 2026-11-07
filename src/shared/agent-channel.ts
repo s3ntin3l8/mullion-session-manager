@@ -32,6 +32,14 @@ export const AGENT_CHANNEL_MAX_STREAM_CHANNELS =
  * attach, events, control-relay and ssh-agent streams. A preview open beyond
  * this is refused at once and the proxy answers 503 with Retry-After. */
 export const AGENT_CHANNEL_MAX_PREVIEW_CHANNELS = Math.floor(AGENT_CHANNEL_MAX_STREAM_CHANNELS / 4);
+/** Most stream slots preview WebSockets (a dev server's HMR socket, one per open
+ * dev tab, held for as long as the tab is open) may hold, counted apart from the
+ * preview responses above so open tabs cannot starve preview assets. A socket
+ * beyond this is refused at once (it closes at the open: the upgrade has
+ * already been accepted, so there is no 503 to send). */
+export const AGENT_CHANNEL_MAX_PREVIEW_WS_CHANNELS = Math.floor(
+  AGENT_CHANNEL_MAX_STREAM_CHANNELS / 4,
+);
 /** Queued-but-unsent bytes at which a side closes the connection. */
 export const AGENT_CHANNEL_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 /** Largest first frame accepted, so the handshake cannot be used to buffer. */

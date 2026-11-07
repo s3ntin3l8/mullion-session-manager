@@ -52,6 +52,7 @@ import {
   type AgentChannelStreamKind,
 } from "../shared/agent-channel.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
+import { probeHealth } from "./host-health-probe.js";
 
 export {
   HostOutcomeUnknownError,
@@ -2508,16 +2509,10 @@ export class RemoteHostClient {
         (err: unknown) => (isHostBusyError(err) ? "busy" : "down"),
       );
     }
-    const res = await fetch(`${this.baseUrl}/health`, {
-      signal: AbortSignal.timeout(defaultRequestTimeoutMs),
-      // Same redirect-bypass reasoning as request() above — no bearer
-      // token to leak here, but a followed redirect would still report
-      // "online" based on an unvalidated target's response instead of
-      // the configured baseUrl's own.
-      redirect: "manual",
-      dispatcher: this.pinnedDispatcher(),
-    }).catch(() => null);
-    return res?.ok ? "ok" : "down";
+    return probeHealth(this.baseUrl, defaultRequestTimeoutMs, () => this.pinnedDispatcher(), {
+      hostId: this.hostId,
+      log: this.channelApp?.log,
+    });
   }
 
   // Cookie profiles are primary-only state (see routes/browser-cookies.ts's

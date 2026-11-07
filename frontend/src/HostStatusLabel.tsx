@@ -30,7 +30,11 @@ export function HostStatusLabel({ host }: { host: Host }) {
   return (
     <span className="host-derived-status">
       {display?.label && (
-        <span className="host-derived-status-health" style={{ color: display.color }}>
+        <span
+          className="host-derived-status-health"
+          style={{ color: display.color }}
+          title={display.title}
+        >
           {display.dot && (
             <span className={`settings-status-dot ${display.dot}`} aria-hidden="true" />
           )}

@@ -34,58 +34,70 @@ describe("preview proxy: busy and over-limit agent channel", () => {
   });
 
   it.each([
-    ["a saturated channel", () => new HostBusyError("h"), 503, "1"],
-    ["an over-limit request body", () => new HostRequestError("h", 413, "too big"), 413, undefined],
+    ["a saturated channel", () => new HostBusyError("h"), 503, "1", /preview unavailable/],
+    [
+      "an over-limit request body",
+      () => new HostRequestError("h", 413, "too big"),
+      413,
+      undefined,
+      /preview unavailable/,
+    ],
     // The dev server's response outgrew the limit: the upstream's doing, not a 413 for the browser.
     [
       "an over-limit upstream response",
       () => new HostResponseTooLargeError("h", "big"),
       502,
       undefined,
+      /response is too large/,
     ],
-  ])("answers %s explicitly rather than with a blanket 502", async (_n, makeErr, status, retry) => {
-    const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-busy", baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/projects",
-      payload: {
-        allowDuplicate: true,
-        name: "remote-busy-test",
-        cwd: "/x",
-        hostId: host.json().id,
-      },
-    });
-    const projectId = created.json().id as number;
-    await app.inject({
-      method: "PATCH",
-      url: `/api/projects/${projectId}`,
-      payload: { devServerUrl: "5173" },
-    });
-    const preview = await app.inject({
-      method: "POST",
-      url: "/api/previews",
-      payload: { kind: "project", projectId },
-    });
-    const slug = preview.json().slug as string;
-    const spy = vi
-      .spyOn(RemoteHostClient.prototype, "openPreviewHttp")
-      .mockRejectedValue(makeErr());
+  ])(
+    "answers %s explicitly rather than with a blanket 502",
+    async (_n, makeErr, status, retry, body) => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "remote-busy", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          allowDuplicate: true,
+          name: "remote-busy-test",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
+      });
+      const projectId = created.json().id as number;
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { devServerUrl: "5173" },
+      });
+      const preview = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId },
+      });
+      const slug = preview.json().slug as string;
+      const spy = vi
+        .spyOn(RemoteHostClient.prototype, "openPreviewHttp")
+        .mockRejectedValue(makeErr());
 
-    const res = await app.inject({
-      method: "GET",
-      url: "/",
-      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
-    });
-    spy.mockRestore();
-    expect(res.statusCode).toBe(status);
-    expect(res.headers["retry-after"]).toBe(retry);
-    await app.close();
-  });
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      });
+      spy.mockRestore();
+      expect(res.statusCode).toBe(status);
+      expect(res.headers["retry-after"]).toBe(retry);
+      // The message tells the three apart: a bare status would not.
+      expect(res.json().message).toMatch(body);
+      await app.close();
+    },
+  );
 
   it("answers 503 + Retry-After through the real mux and client once the preview cap is full (#2702)", async () => {
     const app = await buildApp();

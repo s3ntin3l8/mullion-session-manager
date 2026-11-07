@@ -72,6 +72,26 @@ describe("HostsSection token rotation", () => {
     expect(screen.queryByText(/waiting for the agent/)).not.toBeInTheDocument();
   });
 
+  it("shows a saturated channel's reason on the row, with an explanation on hover (issue #2702)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "busy-box",
+          health: "degraded",
+          healthReason: "channel saturated",
+          lastCheckedAt: "2026-01-01T00:00:10.000Z",
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    expect(screen.getByText("channel saturated")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/every request slot has been busy/),
+    );
+  });
+
   it("flags a host with leaked browsers (issue #2641)", () => {
     stubFetch({});
     useDashboardStore.setState({ hosts: [makeHost({ id: "h", name: "ctr", leakedBrowsers: 2 })] });

@@ -49,6 +49,10 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 // resolves to the in-process PtyManager (session-backend.ts) rather than a
 // RemoteHostClient.
 export const LOCAL_HOST_ID = "local";
+/** Why a degraded host is degraded when its channel is up and answering but every
+ * request slot has been busy for several checks in a row. The server sends it as
+ * `healthReason`, and the UI keys its explanation off the same string. */
+export const CHANNEL_SATURATED_REASON = "channel saturated";
 
 /** Most entries a project's `hostCwds` map may hold. One number for the create
  * and update schemas (routes/projects.ts), the auto-detect sweep
