@@ -169,6 +169,11 @@ async function callDeregister(app: FastifyInstance, session: AgentSession): Prom
 export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   if (app.config.MULLION_ROLE !== "agent") return;
 
+  // Observable retry state (#2691): lets a test (and an operator's debug view)
+  // assert "stopped retrying: the identity was rejected" without a timing window.
+  const enrollment: AgentEnrollmentState = { state: "idle", failedAttempts: 0 };
+  app.agentEnrollment = enrollment;
+
   let renewTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   // Guards against two concurrent renewals. The ordinary renewal timer and
@@ -215,6 +220,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
 
   function onIdentityRejected(): void {
     identityRejected = true;
+    enrollment.state = "rejected";
     app.log.error(
       { hostId: identity?.hostId },
       `[agent-enrollment] the primary rejected this agent's machine identity (revoked, expired after 90 days unused, or unknown). ` +
@@ -332,6 +338,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     if (registerInFlight) return;
     if (identityRejected) return;
     registerInFlight = true;
+    enrollment.state = "registering";
     try {
       let attempt = 0;
       while (!stopped) {
@@ -354,6 +361,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
           // while this call was in flight.
           if (stopped) return;
           app.log.info({ hostId: session.hostId }, "[agent-enrollment] registered with primary");
+          enrollment.state = "registered";
           scheduleRenewal(session);
           return;
         } catch (err) {
@@ -375,6 +383,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
             attempt++;
             continue;
           }
+          enrollment.failedAttempts++;
           const delay =
             REGISTER_RETRY_DELAYS_MS[Math.min(attempt, REGISTER_RETRY_DELAYS_MS.length - 1)];
           app.log.warn(
@@ -452,8 +461,17 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   });
 });
 
+/** Where this agent's registration loop stands. `rejected` is terminal (the
+ * primary refused the stored machine identity; the operator clears it). */
+export interface AgentEnrollmentState {
+  state: "idle" | "registering" | "registered" | "rejected";
+  /** Registrations that failed and were retried with backoff. */
+  failedAttempts: number;
+}
+
 declare module "fastify" {
   interface FastifyInstance {
+    agentEnrollment?: AgentEnrollmentState;
     // Issue #245 / roadmap 7.1 — this agent's own current session
     // credential, set once registration succeeds. internal.ts's onRequest
     // gate checks an inbound bearer token against this (in addition to the

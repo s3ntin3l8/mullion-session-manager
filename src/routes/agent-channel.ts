@@ -185,6 +185,18 @@ export async function agentChannelRoute(app: FastifyInstance) {
             mux.close();
           },
         };
+        // `ready` goes out BEFORE anything below can open a mux channel: the
+        // stream fanouts may open one synchronously, and the agent only starts
+        // its mux after reading this frame, so a binary open arriving first is
+        // read as an unrecognized handshake reply and the connection is dropped.
+        const ready: AgentChannelReadyFrame = {
+          type: "ready",
+          hostId,
+          protocolVersion: localProtocolInfo().protocolVersion,
+          negotiatedOperations: negotiated,
+          carriedOperations: carried,
+        };
+        socket.send(JSON.stringify(ready));
         app.agentChannels.set(hostId, entry);
         markChannelConnected(app, hostId);
         // Request/response operations are carried (#2451) once negotiated;
@@ -226,15 +238,6 @@ export async function agentChannelRoute(app: FastifyInstance) {
           app.log.info({ hostId, reason }, "agent channel closed");
         });
         app.log.info({ hostId, protocolVersion: entry.protocolVersion }, "agent channel ready");
-
-        const ready: AgentChannelReadyFrame = {
-          type: "ready",
-          hostId,
-          protocolVersion: localProtocolInfo().protocolVersion,
-          negotiatedOperations: negotiated,
-          carriedOperations: carried,
-        };
-        socket.send(JSON.stringify(ready));
       }
       socket.on("message", onFirstFrame);
     },

@@ -387,6 +387,29 @@ describe("reseedTaskIfSessionExited", () => {
       expect(seedOf(task.id)).toBe(true);
     });
 
+    it("recognises a seed the TUI wrapped, indented and put a border through", async () => {
+      const { task } = await adopt();
+      mockRenderedScrollback.mockResolvedValue(
+        "│ > Reviewer feed │\n│ back: please fix  │\n│ the flaky test   │\n",
+      );
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(true);
+    });
+
+    it("types the seed once when the screen shows nothing of it (scrolled away)", async () => {
+      const { task } = await adopt();
+      mockRenderedScrollback.mockResolvedValue("some unrelated later output\n> ");
+
+      await recheckAdoptedSeeds(app, later());
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
+      expect(seedOf(task.id)).toBe(true);
+    });
+
     it("waits out the boot grace window", async () => {
       const { task } = await adopt();
 

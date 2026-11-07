@@ -412,12 +412,38 @@ export const ADOPTED_SEED_GRACE_MS = 30_000;
 /** Stop re-checking a session that never became typeable. */
 export const ADOPTED_SEED_MAX_AGE_MS = 30 * 60_000;
 
-const squash = (text: string): string => text.replace(/\s+/g, " ").trim();
+/** Letters and digits only, lower-cased: a TUI that wraps a line, indents it,
+ * or draws a border/prompt marker inside it changes only whitespace and
+ * punctuation, so comparing in this form survives all of them. */
+const alnum = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
-/** A distinctive opening of the seed, to look for in the session's own output. */
-function seedFingerprint(prompt: string): string {
-  const firstLine = prompt.split("\n").find((l) => l.trim() !== "") ?? "";
-  return squash(firstLine).slice(0, 40);
+const FRAGMENT_LINES = 3;
+const FRAGMENT_CHARS = 30;
+const FRAGMENT_MIN_CHARS = 12;
+
+/**
+ * Short distinctive fragments of the seed's first lines, to look for in the
+ * session's own output. Several, from different lines, so one line the TUI
+ * folded oddly does not decide the answer alone.
+ */
+function seedFragments(prompt: string): string[] {
+  const fragments: string[] = [];
+  for (const line of prompt.split("\n")) {
+    const fragment = alnum(line).slice(0, FRAGMENT_CHARS);
+    if (fragment.length < FRAGMENT_MIN_CHARS) continue;
+    fragments.push(fragment);
+    if (fragments.length === FRAGMENT_LINES) break;
+  }
+  return fragments;
+}
+
+/** Does the rendered output show the seed? A majority of its fragments must be present. */
+export function screenShowsSeed(screen: string, prompt: string): boolean {
+  const fragments = seedFragments(prompt);
+  if (fragments.length === 0) return false;
+  const haystack = alnum(screen);
+  const found = fragments.filter((f) => haystack.includes(f)).length;
+  return found >= Math.ceil(fragments.length / 2);
 }
 
 /** Test seam: forget every remembered adoption. */
@@ -469,8 +495,7 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
       const screen = await resolveBackend(app, state.hostId).getRenderedScrollback(
         String(task.sessionId),
       );
-      const fingerprint = seedFingerprint(pending.prompt);
-      hasSeed = fingerprint !== "" && squash(screen).includes(fingerprint);
+      hasSeed = screenShowsSeed(screen, pending.prompt);
     } catch (err) {
       app.log.warn(
         { err, taskId, sessionId: task.sessionId },

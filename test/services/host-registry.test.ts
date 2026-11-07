@@ -723,6 +723,25 @@ describe("host-registry", () => {
       await appRef.close();
     });
 
+    it("flags two identity-bearing rows that share a URL even when their hostnames differ (documented exception)", async () => {
+      appRef = await buildApp();
+      const url = u();
+      const stale = enroll(url, "old-name", 100);
+      const fresh = enroll(url, "new-name", 0);
+      const health = (id: string) => (id === stale ? "offline" : "online");
+      expect(findPossibleDuplicates(appRef, health).get(fresh)).toEqual([stale]);
+      await appRef.close();
+    });
+
+    it("never flags two identity-bearing rows on the same hostname with different URLs", async () => {
+      appRef = await buildApp();
+      const stale = enroll(u(), "shared-name", 100);
+      const fresh = enroll(u(), "shared-name", 0);
+      const health = (id: string) => (id === stale ? "offline" : "online");
+      expect(findPossibleDuplicates(appRef, health).get(fresh)).toBeUndefined();
+      await appRef.close();
+    });
+
     it("flags a legacy (identity-less) row by self-reported hostname when the URL differs", async () => {
       appRef = await buildApp();
       const name = `h-${crypto.randomUUID()}`;

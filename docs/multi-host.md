@@ -180,7 +180,13 @@ in `machine_credential`.
   active session. A row that carries a machine identity is never offered on
   hostname alone, addressed or not, so two agents that share a hostname are not
   flagged; and an outbound-only agent that lost its state (a new identity, no
-  address) leaves its old row unflagged, to be removed by hand. Settings → Hosts shows "Possible duplicate of <name>" on the newer
+  address) leaves its old row unflagged, to be removed by hand. The one
+  exception to "an identity-bearing row is never matched" is the advertised
+  `baseUrl`: two rows that both carry a machine identity and advertise the same
+  URL **are** flagged (once the older is offline with no active session), because
+  that is exactly what an agent that lost `agent-identity.json` and re-enrolled at
+  the same address leaves behind. A URL is an address the operator controls, a
+  hostname is not. Settings → Hosts shows "Possible duplicate of <name>" on the newer
   row and offers _Remove stale host_ on the stale ones, which is the normal
   delete (with its confirmation, and its refusal while projects still
   reference the host). Two live agents sharing a URL are not flagged. Nothing
@@ -2043,9 +2049,14 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   A **prompt** (`sessions.prompt`, and message delivery) lost mid-request replies
   with an explicit "may have been delivered (outcome unknown)" error, never "the
   host is unreachable", and is not retried: the calling agent should read the
-  session's output before sending it again. The same applies to the other mutating
-  control calls (review-gate decision, attention acknowledge), which reply 502 with
-  that wording. A **read** (`wait-output`, the transcript read) has nothing to
+  session's output before sending it again. The same applies to **every** other
+  mutating call a `RemoteBackend` makes: spawn, terminate, image and file uploads,
+  review-gate decision, attention acknowledge, promote decision, seed stash, worktree
+  create/checkout/remove/resume/prune/sync and the branch mutators. Each raises one
+  typed `MutationOutcomeUnknownError` (a `HostOutcomeUnknownError`, never a returned
+  value, so a truthiness check on a boolean result cannot read it as success), which
+  the routes answer with 502 and that wording ("MAY HAVE BEEN DELIVERED"), never
+  "failed to reach host". A **read** (`wait-output`, the transcript read) has nothing to
   repeat, so a lost connection there is a plain "host is unreachable".
   The read-only (idempotent) POST list is pinned against the agent's registered
   `/internal` routes by a test (an unclassified route, or a stale entry, fails it);

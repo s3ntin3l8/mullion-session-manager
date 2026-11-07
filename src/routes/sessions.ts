@@ -12,11 +12,7 @@ import BetterSqlite3 from "better-sqlite3";
 import { projects, sessions } from "../db/schema.js";
 import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
-import {
-  resolveBackend,
-  isUnknownMutationOutcome,
-  type UnknownMutationOutcome,
-} from "../services/session-backend.js";
+import { resolveBackend, unknownOutcomeMessage } from "../services/session-backend.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { isHostBusyError } from "../services/remote-host-errors.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -1277,7 +1273,9 @@ export async function sessionsRoute(app: FastifyInstance) {
           );
         }
         warnings.push(
-          "The promoted session is running, but the source session's pending promote request could not be resolved on its host.",
+          unknownOutcomeMessage(err)
+            ? "The promoted session is running, but the connection to the source session's host was lost while resolving its pending promote request, so the decision MAY HAVE BEEN DELIVERED (outcome unknown)."
+            : "The promoted session is running, but the source session's pending promote request could not be resolved on its host.",
         );
       }
 
@@ -1328,10 +1326,16 @@ export async function sessionsRoute(app: FastifyInstance) {
       // project's: a session may live on a host of its own (placement),
       // and this operation is about the session.
       const hostId = resolveSessionHostId(app, row);
-      const ok = await resolveBackend(app, hostId).resolvePendingPromote(String(sessionId), {
-        decision: "declined",
-        reason: request.body.reason,
-      });
+      let ok: boolean;
+      try {
+        ok = await resolveBackend(app, hostId).resolvePendingPromote(String(sessionId), {
+          decision: "declined",
+          reason: request.body.reason,
+        });
+      } catch (err) {
+        app.log.error({ err, sessionId, hostId }, "promote decline failed to reach host");
+        return reply.badGateway(unknownOutcomeMessage(err) ?? "Failed to deliver decision to host");
+      }
       if (!ok) return reply.conflict("No promote request is currently pending for this session");
       reply.code(204);
     },
@@ -1399,7 +1403,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       // and this operation is about the session.
       const hostId = resolveSessionHostId(app, row);
       const { decision, reason, gateId } = request.body;
-      let ok: boolean | UnknownMutationOutcome;
+      let ok: boolean;
       try {
         ok = await resolveBackend(app, hostId).resolveReviewGate(
           String(sessionId),
@@ -1409,9 +1413,9 @@ export async function sessionsRoute(app: FastifyInstance) {
         );
       } catch (err) {
         app.log.error({ err, sessionId, hostId }, "review-gate decision failed to reach host");
-        return reply.badGateway("Failed to deliver decision to host");
+        const unknown = unknownOutcomeMessage(err);
+        return reply.badGateway(unknown ?? "Failed to deliver decision to host");
       }
-      if (isUnknownMutationOutcome(ok)) return reply.badGateway(ok.error);
       if (!ok) return reply.conflict("No review is currently pending for this session");
       reply.code(204);
     },
@@ -1536,14 +1540,14 @@ export async function sessionsRoute(app: FastifyInstance) {
       // project's: a session may live on a host of its own (placement),
       // and this operation is about the session.
       const hostId = resolveSessionHostId(app, row);
-      let acked: boolean | UnknownMutationOutcome;
+      let acked: boolean;
       try {
         acked = await resolveBackend(app, hostId).acknowledgeAttention(String(sessionId));
       } catch (err) {
         app.log.error({ err, sessionId, hostId }, "attention ack failed to reach host");
-        return reply.badGateway("Failed to deliver acknowledgement to host");
+        const unknown = unknownOutcomeMessage(err);
+        return reply.badGateway(unknown ?? "Failed to deliver acknowledgement to host");
       }
-      if (isUnknownMutationOutcome(acked)) return reply.badGateway(acked.error);
       if (!acked) {
         // Either a blocking kind is still pending on the owning host (its
         // own dedicated resolve route — review-gate/promote/permission/
@@ -1646,6 +1650,8 @@ export async function sessionsRoute(app: FastifyInstance) {
           { err, sessionId, hostId: resolveSessionHostId(app, row) },
           "session file upload failed",
         );
+        const unknownUpload = unknownOutcomeMessage(err);
+        if (unknownUpload) return reply.badGateway(unknownUpload);
         // The local backend tags an unusable `.mullion-uploads` (symlink/file)
         // with statusCode 409 — surface that as the client-visible conflict.
         if ((err as { statusCode?: number }).statusCode === 409) {
