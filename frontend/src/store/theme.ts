@@ -9,11 +9,6 @@ const THEME_ROOT_CLASS = "cmux-root";
 // is only meaningful next to `cmux-root`.
 const THEME_LIGHT_CLASS = "light";
 
-// Anything a caller may want to append. `false`/`null`/`undefined` are
-// dropped, so a call site can pass a conditional class inline
-// (`sidebarOpen && "sb-open"`) without building a string first.
-export type ThemeClassExtra = string | false | null | undefined;
-
 // Builds the class list for a surface that has to carry the theme itself.
 //
 // Anything portaled to `document.body` leaves the app's own `.cmux-root`
@@ -27,7 +22,14 @@ export type ThemeClassExtra = string | false | null | undefined;
 // `theme` is the *resolved* theme (`"dark" | "light"`), never the
 // `"system"` preference — callers read the store's resolved `theme`, or
 // resolve the preference themselves (see `resolveTheme()` in helpers.ts).
-export function themeClassName(theme: Theme, ...extra: ThemeClassExtra[]): string {
+//
+// The extra classes are appended after the theme classes. `false`/`null`/
+// `undefined` are dropped, so a call site can pass a conditional class
+// inline (`sidebarOpen && "sb-open"`) without building a string first.
+export function themeClassName(
+  theme: Theme,
+  ...extra: (string | false | null | undefined)[]
+): string {
   const classes = [THEME_ROOT_CLASS];
   if (theme === "light") classes.push(THEME_LIGHT_CLASS);
   for (const cls of extra) {

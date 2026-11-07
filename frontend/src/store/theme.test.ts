@@ -39,15 +39,19 @@ describe("themeClassName", () => {
 // watching for.
 const HAND_WRITTEN_THEME_CLASS = `cmux-root${"$"}{`;
 
-const sources = import.meta.glob(["../**/*.ts", "../**/*.tsx", "!../**/*.test.ts"], {
-  query: "?raw",
-  import: "default",
-}) as Record<string, () => Promise<string>>;
+const sources = import.meta.glob(
+  ["../**/*.ts", "../**/*.tsx", "!../**/*.test.ts", "!../**/*.test.tsx"],
+  {
+    query: "?raw",
+    import: "default",
+  },
+) as Record<string, () => Promise<string>>;
 
 describe("theme class guard (issue #2517)", () => {
-  // Reading a few hundred source files through Vite's module graph is
-  // slower than the 5s default allows when the whole suite runs in
-  // parallel — the guard itself takes a few seconds.
+  // The scan reads a few hundred source files through Vite's module graph.
+  // That is well under a second on an idle machine, but a loaded one can
+  // take several — so the timeout is raised rather than left at the 5s
+  // default.
   it("has no hand-written theme class outside the helper", async () => {
     const offenders: string[] = [];
     for (const [path, load] of Object.entries(sources)) {
