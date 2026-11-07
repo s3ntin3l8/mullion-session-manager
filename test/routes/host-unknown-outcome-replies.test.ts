@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, afterAll, beforeAll, afterEach } from "vitest";
+import type * as UpdateChecker from "../../src/services/update-checker.js";
 import { plainNodePtyMock } from "../helpers/mock-pty.js";
 
 vi.mock("node-pty", () => plainNodePtyMock());
+vi.mock("../../src/services/update-checker.js", async (importActual) => ({
+  ...(await importActual<typeof UpdateChecker>()),
+  resolveReleaseByTag: vi.fn(async () => ({
+    assetUrl: "https://example.invalid/asset.tgz",
+    checksumUrl: "https://example.invalid/asset.sha256",
+  })),
+}));
 
 const { buildApp } = await import("../../src/app.js");
 const clientModule = await import("../../src/services/remote-host-client.js");
@@ -146,6 +154,29 @@ describe("remote mutations that lose the connection mid-request", () => {
     });
     expect(res.statusCode).toBe(502);
     expect(mayCount(res.json().message)).toBe(1);
+  });
+
+  it("applying an update reports an unknown outcome: the update may already be installing", async () => {
+    vi.spyOn(clientModule, "getRemoteHostClient").mockReturnValue({
+      resolveConfig: vi.fn().mockResolvedValue({ version: "0.0.1" }),
+      applyUpdate: vi.fn().mockRejectedValue(unknown()),
+    } as never);
+    const res = await app.inject({ method: "POST", url: `/api/hosts/${hostId}/update/apply` });
+    expect(res.statusCode).toBe(502);
+    expect(mayCount(res.json().message)).toBe(1);
+  });
+
+  it("the update's version pre-check is a read: losing it is plain 'unreachable'", async () => {
+    vi.spyOn(clientModule, "getRemoteHostClient").mockReturnValue({
+      resolveConfig: vi
+        .fn()
+        .mockRejectedValue(
+          new clientModule.HostUnreachableError(hostId, new Error("ECONNREFUSED")),
+        ),
+    } as never);
+    const res = await app.inject({ method: "POST", url: `/api/hosts/${hostId}/update/apply` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().message).toMatch(/is unreachable/);
   });
 
   it("a plain unreachable host still reads 'unreachable', never an unknown outcome", async () => {

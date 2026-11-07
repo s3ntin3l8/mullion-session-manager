@@ -647,7 +647,7 @@ export async function hostsRoute(app: FastifyInstance) {
     } catch (err) {
       if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
       app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
-      return replyHostUnreachable(reply, id, err, "applying the update");
+      return reply.serviceUnavailable(`Host ${id} is unreachable`);
     }
 
     let release;
@@ -676,7 +676,8 @@ export async function hostsRoute(app: FastifyInstance) {
     } catch (err) {
       if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
       app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
-      return reply.serviceUnavailable(`Host ${id} is unreachable`);
+      // The call that matters: the update may already be installing.
+      return replyHostUnreachable(reply, id, err, "applying the update");
     }
   });
 
