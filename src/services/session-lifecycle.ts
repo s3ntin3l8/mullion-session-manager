@@ -30,6 +30,7 @@ import {
 } from "./git-worktree.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
+import { forceRemoveCheckout, previewRemover } from "./checkout-removal.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -916,7 +917,7 @@ export async function createSessionRecord(
   // `rb`; this wrapper unwinds it on any non-ok result or throw. Once the
   // spawn succeeded (`rb.spawned`) ownership has passed to the live session
   // and nothing is rolled back.
-  const rb: CreateRollback = { done: false, spawned: false };
+  const rb: CreateRollback = { done: false, spawned: false, projectId: params.projectId };
   let result: CreateSessionResult;
   try {
     result = await createSessionRecordInner(app, params, rb);
@@ -942,6 +943,7 @@ interface CreateRollback {
    * tracked separately.
    */
   worktreeHostId?: string;
+  projectId?: number; // for releasing the worktree's browsers
   /** Worktree created by this call (never a pre-existing one). */
   worktreePath?: string;
   /** Repo the worktree was cut from (parentCwd for removeWorktree/deleteBranch). */
@@ -983,9 +985,10 @@ async function rollbackCreate(app: FastifyInstance, rb: CreateRollback): Promise
     // The worktree lives on ITS host — the project's, where it was cut
     // from — which is not necessarily the host the scope was created on
     // (issue #1722).
-    const worktreeBackend = () => resolveBackend(app, rb.worktreeHostId ?? rb.hostId!);
+    const wtHost = rb.worktreeHostId ?? rb.hostId!;
+    const worktreeBackend = () => resolveBackend(app, wtHost);
     try {
-      await worktreeBackend().removeWorktree(rb.worktreePath, rb.parentCwd);
+      await forceRemoveCheckout(app, rb.projectId, wtHost, rb.worktreePath, rb.parentCwd);
     } catch {
       // Best-effort: a leaked worktree directory is the cheaper failure —
       // same posture as cleanupPreviewWorktree's pendingRemoval retry.
@@ -2130,32 +2133,16 @@ function trackPreview(
     // removeWarned/syncWarned (Hermes review) — per-closure state tracking
     // whether the LAST attempt already logged a failure, so a host that stays
     // down warns once per outage rather than once per 5s tick forever.
+    // Every host removes via the checkout helper, releasing the browsers (#2700).
+    remove: previewRemover(
+      app,
+      { projectId, hostId: placementHost, worktreePath: effectiveCwd, parentCwd: previewParentCwd },
+      logPreviewWorktreeHostError,
+    ),
     ...(placementHost !== LOCAL_HOST_ID
       ? (() => {
-          let removeWarned = false;
           let syncWarned = false;
           return {
-            remove: async () => {
-              try {
-                const result = await resolveBackend(app, placementHost).removeWorktree(
-                  effectiveCwd,
-                  previewParentCwd,
-                );
-                removeWarned = false;
-                return result;
-              } catch (err) {
-                const wasAlreadyWarned = removeWarned;
-                removeWarned = true;
-                return logPreviewWorktreeHostError(
-                  app,
-                  "remove",
-                  placementHost,
-                  effectiveCwd,
-                  err,
-                  wasAlreadyWarned,
-                );
-              }
-            },
             sync: async () => {
               try {
                 const result = await resolveBackend(app, placementHost).syncWorktree(

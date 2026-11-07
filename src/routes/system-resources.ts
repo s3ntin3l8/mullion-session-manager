@@ -170,6 +170,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       .where(eq(projects.hostId, LOCAL_HOST_ID))
       .all();
     return {
+      app,
       projects: rows,
       inUse: (_project, worktreePath) => worktreeInUse(app, worktreePath),
       mergedPr: mergedPullRequest,

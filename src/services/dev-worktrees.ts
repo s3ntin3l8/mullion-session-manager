@@ -10,7 +10,9 @@ import {
   resolveDefaultBaseRefNoFetch,
 } from "./git-refs.js";
 import { getGitStatus } from "./git-status.js";
-import { removeListedWorktree } from "./git-worktree.js";
+import type { FastifyInstance } from "fastify";
+import { removeListedCheckout } from "./checkout-removal.js";
+import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { dirSize } from "./temp-storage.js";
 import {
   assertMountSupport,
@@ -28,7 +30,7 @@ import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
 //
 // A worktree is only ever offered when removing it loses no work: its tree is
 // clean, nothing is using it, it has been idle for a day, and its commits are
-// provably elsewhere. Removal goes through `removeListedWorktree`, the same
+// provably elsewhere. Removal goes through `removeListedCheckout`, the same
 // clean-status-checked path the Git panel uses (that helper runs the removal
 // itself with `--force` once its own check has passed, so the guard is that
 // check, repeated right before each removal here). The branch is always left
@@ -109,6 +111,8 @@ export interface DevWorktreePruneResult {
 }
 
 export interface DevWorktreeOptions {
+  /** Removal goes through the shared checkout helper, which needs the app. */
+  app: FastifyInstance;
   /** Local projects only: remote hosts' worktrees live on another machine. */
   projects: DevWorktreeProject[];
   /** A live session or resumable task is using this worktree. */
@@ -732,7 +736,12 @@ export async function pruneDevWorktrees(
           const bytes = await dirSize(candidate.path);
           const again = await evaluate(gathered.ctx, located, options);
           if (again?.headSha !== candidate.headSha || again.reason !== candidate.reason) continue;
-          const result = await removeListedWorktree(project.cwd, candidate.path);
+          const result = await removeListedCheckout(options.app, {
+            projectId: project.id,
+            hostId: LOCAL_HOST_ID,
+            cwd: project.cwd,
+            worktreePath: candidate.path,
+          });
           if (result.removed) {
             removed += 1;
             reclaimedBytes += bytes;

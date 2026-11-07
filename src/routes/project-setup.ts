@@ -1,4 +1,5 @@
 import { EXISTING_INSTRUCTIONS_MODES } from "../shared/constants.js";
+import { removeCheckoutForced } from "../services/checkout-removal.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { resolveGitIdentity } from "../services/git-identity.js";
 import { existsSync } from "node:fs";
@@ -398,6 +399,7 @@ function withoutRefreshedPaths(
  * shape every OTHER creation failure here already produces. */
 async function reuseOrCreateWorktree(
   app: FastifyInstance,
+  projectId: number,
   hostId: string,
   cwd: string,
   seed: string,
@@ -411,7 +413,12 @@ async function reuseOrCreateWorktree(
       return { created: true, path: predictedPath, branch: `mullion/${seed}` };
     }
     if (pathExists) {
-      await backend.removeWorktree(predictedPath, cwd);
+      await removeCheckoutForced(app, {
+        projectId,
+        hostId,
+        worktreePath: predictedPath,
+        parentCwd: cwd,
+      });
       await backend.deleteBranch(cwd, `mullion/${seed}`, { force: true });
     }
     const baseRefResult = await resolveHostBaseRef(app, hostId, cwd);
@@ -661,6 +668,7 @@ async function ensureSetupWorktree(
   }
   const worktreeResult = await reuseOrCreateWorktree(
     app,
+    projectId,
     project.hostId,
     project.cwd,
     seed,

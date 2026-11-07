@@ -37,7 +37,7 @@ import {
   type SessionBackend,
 } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
-import { removeCheckoutIfClean } from "./checkout-removal.js";
+import { clearOrphanedCheckout, removeCheckoutIfClean } from "./checkout-removal.js";
 import { ensureRemoteHostProtocols } from "./host-agents.js";
 import { resolveHostBaseRef, resolveRepoRef } from "./host-git.js";
 import { resolveGitHubToken } from "./github-integration.js";
@@ -850,9 +850,14 @@ export async function dispatchClaimedTask(
     // previous attempt would have left one.
     const backend = resolveBackend(app, placement.hostId);
     // Orphan-clearing (6.8/#283) — unchanged from the old claimTask.
-    const clearResult = await backend.clearOrphanedTaskWorktree(
-      placementCwd,
-      predictedWorktreePath,
+    const clearResult = await clearOrphanedCheckout(
+      app,
+      {
+        projectId: project.id,
+        hostId: placement.hostId,
+        cwd: placementCwd,
+        worktreePath: predictedWorktreePath,
+      },
       branchName,
     );
     if (!clearResult.cleared) {
