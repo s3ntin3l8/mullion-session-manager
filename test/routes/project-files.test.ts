@@ -11,7 +11,8 @@ import { projects, sessions } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { gitEnv } from "../../src/services/git-env.js";
 import { RemoteHostClient } from "../../src/services/remote-host-client.js";
-import { HostBusyError } from "../../src/services/remote-host-errors.js";
+import { MuxBusyError } from "../../src/services/ssh-agent-mux.js";
+import { bindChannelHost, unbindChannelHost } from "../../src/services/agent-channel-tunnel.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
@@ -804,22 +805,69 @@ describe("project-files routes", () => {
       await agentApp.close();
     });
 
-    it("answers a busy outbound channel 503 with Retry-After, not 500 (#2674)", async () => {
+    it("answers a saturated outbound channel 503 with Retry-After, not 500 (#2674, #2690)", async () => {
       const { agentApp, port } = await startAgent("pf-token-busy");
       const { primary, projectId } = await remoteProject(port, "pf-token-busy", projectCwd);
-      const spy = vi
-        .spyOn(RemoteHostClient.prototype, "listProjectDir")
-        .mockRejectedValue(new HostBusyError("h1"));
+      const [project] = primary.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const hostId = project!.hostId!;
+      // The real client over a real route; only the mux is saturated: every
+      // slot is taken, so the open is refused as busy.
+      const openChannel = vi.fn().mockRejectedValue(new MuxBusyError("all channels in use"));
+      primary.agentChannels.set(hostId, {
+        hostId,
+        carriedOperations: ["channel-requests"],
+        negotiatedOperations: ["channel-requests"],
+        terminal: null,
+        mux: { openChannel },
+      } as never);
+      bindChannelHost(primary, hostId);
       try {
         const res = await primary.inject({
           method: "GET",
           url: `/api/projects/${projectId}/files`,
         });
+        expect(openChannel).toHaveBeenCalled();
         expect(res.statusCode).toBe(503);
         expect(res.headers["retry-after"]).toBe("1");
         expect(res.json().retryable).toBe(true);
       } finally {
-        spy.mockRestore();
+        primary.agentChannels.delete(hostId);
+        unbindChannelHost(primary, hostId);
+        await primary.close();
+        await agentApp.close();
+      }
+    });
+
+    it("cuts a chunked upload to a remote host off at the limit, naming it (#2690)", async () => {
+      const { agentApp, port } = await startAgent("pf-token-chunked");
+      const { primary, projectId } = await remoteProject(port, "pf-token-chunked", projectCwd);
+      const config = primary.config as { FILE_TRANSFER_MAX_BYTES: number };
+      const max = config.FILE_TRANSFER_MAX_BYTES;
+      config.FILE_TRANSFER_MAX_BYTES = 1024;
+      let produced = 0;
+      try {
+        const res = await primary.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/files/upload?path=chunked.bin`,
+          headers: { "content-type": "application/octet-stream" },
+          // No Content-Length: only the running count can catch it.
+          payload: Readable.from(
+            (function* () {
+              for (let i = 0; i < 64; i++) {
+                produced += 512;
+                yield Buffer.alloc(512);
+              }
+            })(),
+          ),
+        });
+        expect(res.statusCode).toBe(413);
+        expect(res.json().code).toBe("too_large");
+        expect(res.json().message).toContain("1024 byte transfer limit");
+        expect(fs.existsSync(path.join(projectCwd, "chunked.bin"))).toBe(false);
+        // Stopped at the limit; the rest was discarded, not forwarded.
+        expect(produced).toBeGreaterThan(1024);
+      } finally {
+        config.FILE_TRANSFER_MAX_BYTES = max;
         await primary.close();
         await agentApp.close();
       }

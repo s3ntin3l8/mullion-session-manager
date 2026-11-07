@@ -43,6 +43,8 @@ interface Rig {
   previewHeaders: Array<Record<string, unknown>>;
   /** Open "/sse" preview responses, one per request, ended by the test. */
   sse: PassThrough[];
+  /** "/slow" previews: set once the agent's replay of one is cancelled. */
+  slow: { started: number; cancelled: number };
 }
 
 function* bigPieces() {
@@ -51,7 +53,7 @@ function* bigPieces() {
 }
 const sha = (b: Buffer) => crypto.createHash("sha256").update(b).digest("hex");
 
-async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
+async function rig(opts: { download?: Buffer; agentCap?: number } = {}): Promise<Rig> {
   fetchSpy = vi.spyOn(globalThis, "fetch");
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
   await new Promise((r) => wss.once("listening", r));
@@ -73,6 +75,7 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
   const uploads: Rig["uploads"] = [];
   const previewHeaders: Rig["previewHeaders"] = [];
   const sse: PassThrough[] = [];
+  const slow = { started: 0, cancelled: 0 };
   const agent: FastifyInstance = Fastify({ bodyLimit: 8 * MIB });
   agent.addHook("onRequest", async (request, reply) => {
     if (request.headers[AGENT_CHANNEL_AUTH_HEADER] !== TOKEN) {
@@ -111,6 +114,32 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
       body.write("data: one\n\n");
       return reply.header("content-type", "text/event-stream").send(body);
     }
+    if (wildcard === "slow") {
+      // The dev server never answers: only the replay's cancellation ends this.
+      slow.started++;
+      await new Promise<void>((resolve) => {
+        request.raw.once("close", () => {
+          slow.cancelled++;
+          resolve();
+        });
+      });
+      return reply.code(200).send("late");
+    }
+    if (wildcard === "head-big") {
+      return reply
+        .header("content-type", "application/octet-stream")
+        .header("content-length", String(70 * MIB))
+        .send();
+    }
+    if (wildcard === "three") {
+      return reply.type("application/octet-stream").send(
+        Readable.from(
+          (function* () {
+            for (let i = 0; i < 3; i++) yield Buffer.alloc(MIB);
+          })(),
+        ),
+      );
+    }
     if (wildcard === "big") {
       // No content-length: only the running count can catch it.
       return reply.type("application/octet-stream").send(Readable.from(bigPieces()));
@@ -122,7 +151,15 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
       .send(`hello ${request.method} ${request.url}`);
   });
   await agent.ready();
-  agentMux.onChannel((channel) => serveChannelRequest(agent, channel, TOKEN));
+  agentMux.onChannel((channel) =>
+    serveChannelRequest(
+      agent,
+      channel,
+      TOKEN,
+      undefined,
+      opts.agentCap !== undefined ? { maxResponseBytes: opts.agentCap } : {},
+    ),
+  );
 
   const entry = {
     hostId: "h1",
@@ -155,7 +192,7 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
     wss.close();
     await agent.close();
   });
-  return { entry, client, transport, uploads, previewHeaders, sse };
+  return { entry, client, transport, uploads, previewHeaders, sse, slow };
 }
 
 const drain = async (r: Readable) => {
@@ -464,4 +501,99 @@ describe("a host that never bound the channel (#2620)", () => {
       .catch(() => undefined);
     expect(String(fetchSpy.mock.calls[3]![0])).toContain("/internal/project-files/upload?");
   });
+});
+
+describe("outbound transfer edge cases (#2690)", () => {
+  it("passes a HEAD of an asset over the limit: no body follows, so its Content-Length is not a size", async () => {
+    const r = await rig();
+    const res = await r.client.openPreviewHttp(1, "/head-big", {
+      method: "HEAD",
+      headers: new Headers(),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-length")).toBe(String(70 * MIB));
+    expect(await res.text()).toBe("");
+    // The same response to a GET is still refused: a body that size would follow.
+    const get = await r.client.openPreviewHttp(1, "/head-big", {
+      method: "GET",
+      headers: new Headers(),
+    });
+    expect(get.status).toBe(200);
+    await get.body?.cancel().catch(() => undefined);
+  }, 60_000);
+
+  it("refuses a bodied response whose head declares more than the limit", async () => {
+    const r = await rig({ download: Buffer.alloc(65 * MIB) });
+    const err = await r.client.downloadProjectFile("/proj", "huge.bin").catch((e) => e);
+    expect(err.statusCode).toBe(413);
+  }, 60_000);
+
+  it("ends a response the agent cuts at its own limit with an error, not a clean end", async () => {
+    // The agent caps at 1 MiB; the primary's own check is switched off
+    // (Infinity), so only the agent's cut can be what the primary sees.
+    const r = await rig({ agentCap: MIB });
+    const res = await channelFetchStream(r.entry, {
+      method: "GET",
+      path: "/internal/preview/1/three",
+      headers: {},
+      timeoutMs: 10_000,
+      maxResponseBytes: Number.POSITIVE_INFINITY,
+    });
+    expect(res.status).toBe(200);
+    const err = await drain(res.stream).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/channel/);
+  }, 30_000);
+
+  it("lets the same 3 MiB response through when neither side's limit is hit", async () => {
+    const r = await rig();
+    const res = await channelFetchStream(r.entry, {
+      method: "GET",
+      path: "/internal/preview/1/three",
+      headers: {},
+      timeoutMs: 10_000,
+    });
+    expect((await drain(res.stream)).length).toBe(3 * MIB);
+  }, 30_000);
+
+  it("cancels the upstream request when the channel closes before the headers", async () => {
+    const r = await rig();
+    const controller = new AbortController();
+    const pending = channelFetchStream(r.entry, {
+      method: "GET",
+      path: "/internal/preview/1/slow",
+      headers: {},
+      timeoutMs: 10_000,
+      signal: controller.signal,
+    }).catch((e: Error) => e);
+    await vi.waitFor(() => expect(r.slow.started).toBe(1));
+    controller.abort();
+    expect(await pending).toBeInstanceOf(Error);
+    // The dev server is still "producing headers"; the replay is dropped anyway.
+    await vi.waitFor(() => expect(r.slow.cancelled).toBe(1), { timeout: 5000 });
+  });
+
+  it("resets the idle timer on every chunk and times out only when the stream goes quiet", async () => {
+    const r = await rig();
+    const res = await channelFetchStream(r.entry, {
+      method: "GET",
+      path: "/internal/preview/1/sse",
+      headers: {},
+      timeoutMs: 400,
+      idleTimeoutMs: 400,
+      stream: true,
+    });
+    const seen: string[] = [];
+    res.stream.on("data", (c: Buffer) => seen.push(c.toString()));
+    const failed = new Promise<Error>((resolve) => res.stream.once("error", resolve));
+    // 6 chunks, 150 ms apart: 900 ms in total, well past the 400 ms budget.
+    for (let i = 0; i < 6; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      r.sse[0]!.write(`data: ${i}\n\n`);
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(6);
+    // Quiet for longer than the budget: now it fails.
+    const err = await failed;
+    expect(err.message).toMatch(/timed out|idle/i);
+  }, 15_000);
 });

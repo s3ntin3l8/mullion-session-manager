@@ -139,6 +139,15 @@ export function maxResponseBodyBytesForPath(path: string): number {
 function formatLimit(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MiB` : `${bytes} bytes`;
 }
+/** A response that carries no body whatever its Content-Length says. */
+export function responseHasNoBody(method: string, status: number): boolean {
+  return (
+    method.toUpperCase() === "HEAD" ||
+    (status >= 100 && status < 200) ||
+    status === 204 ||
+    status === 304
+  );
+}
 export function requestTooLargeMessage(cap: number): string {
   return `request body exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
 }
@@ -498,9 +507,13 @@ async function exchange(
         if (first.length > 0) body.push(first);
         settle(null, { status: head.status, headers: head.headers ?? {}, stream: body });
       };
+      // The length the head promises, or 0 where no body follows whatever the
+      // headers say: a HEAD reply and the null-body statuses carry the
+      // Content-Length of the representation they describe (#2690).
       const declaredLength = (): number => {
         try {
           const head = JSON.parse(parser.headLine!) as ChannelResponseHead;
+          if (responseHasNoBody(req.method, head.status)) return 0;
           const raw = head.headers?.["content-length"];
           const n = Number(Array.isArray(raw) ? raw[0] : raw);
           return Number.isFinite(n) ? n : 0;
@@ -750,6 +763,7 @@ export function createRequestSink(
   channel: MuxChannel,
   authToken: string,
   peerId?: string,
+  opts: { maxResponseBytes?: number } = {},
 ): ChannelSink {
   const parser = new HeadAndBodyParser();
   const write = makeWriter(channel);
@@ -869,14 +883,42 @@ export function createRequestSink(
         // out, and the body is read chunk by chunk below. Nothing is buffered
         // past the channel's own limit (#2674), and an SSE / long-poll preview
         // delivers each chunk as it is written instead of at the end.
-        const res = await app.inject({
+        // The primary may give up (timeout, disconnect) while the dev server
+        // is still producing headers: the close handler is registered before
+        // the call, and aborts the replay's request so the upstream is dropped
+        // now, not when the server finally answers (#2690).
+        const replay = new AbortController();
+        let gone = channel.closed;
+        let payload: Readable | null = null;
+        let onGone: () => void = () => undefined;
+        const goneSignal = new Promise<null>((resolve) => {
+          onGone = () => resolve(null);
+        });
+        channel.onClose(() => {
+          gone = true;
+          // Before the headers: cancel the replay itself. After them the
+          // response stream is destroyed as before; aborting then would make
+          // the replayed route's own error handler write into a sent reply.
+          if (payload === null) replay.abort();
+          else payload.destroy();
+          onGone();
+        });
+        if (gone) {
+          replay.abort();
+          return;
+        }
+        const injected = app.inject({
           method: method as "GET",
           url: head.path,
           headers,
           remoteAddress: `channel:${peer}`,
           payloadAsStream: true,
+          signal: replay.signal,
           ...(body.length > 0 ? { payload: body } : {}),
         });
+        injected.catch(() => undefined);
+        const res = await Promise.race([injected, goneSignal]);
+        if (res === null) return;
         // Every response header but the framing the channel replaces: a
         // download needs its content-length, a preview its location,
         // set-cookie and validators.
@@ -885,15 +927,19 @@ export function createRequestSink(
           if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
           outHeaders[name.toLowerCase()] = Array.isArray(value) ? value.map(String) : String(value);
         }
-        const payload = res.stream();
-        const cap = maxResponseBodyBytesForPath(head.path);
+        const stream = res.stream();
+        payload = stream;
+        if (gone) {
+          stream.destroy();
+          return;
+        }
+        const cap = opts.maxResponseBytes ?? maxResponseBodyBytesForPath(head.path);
+        const bodyless = responseHasNoBody(method, res.statusCode);
         const declared = Number(outHeaders["content-length"]);
-        if (Number.isFinite(declared) && declared > cap) {
-          payload.destroy();
+        if (!bodyless && Number.isFinite(declared) && declared > cap) {
+          stream.destroy();
           return await refuse(413, responseTooLargeMessage(cap));
         }
-        // The primary went away (timeout, disconnect): stop reading the replay.
-        channel.onClose(() => payload.destroy());
         let wroteHead = false;
         try {
           await write(
@@ -903,21 +949,32 @@ export function createRequestSink(
             ),
           );
           wroteHead = true;
-          let sent = 0;
-          for await (const piece of payload) {
-            const buf = Buffer.isBuffer(piece) ? piece : Buffer.from(piece as Uint8Array);
-            sent += buf.length;
-            // An undeclared length is bounded as it arrives: past the limit
-            // the channel is cut (the primary reports a truncated response).
-            if (sent > cap) {
-              payload.destroy();
-              return;
+          if (bodyless) {
+            stream.destroy();
+          } else {
+            let sent = 0;
+            for await (const piece of stream) {
+              const buf = Buffer.isBuffer(piece) ? piece : Buffer.from(piece as Uint8Array);
+              sent += buf.length;
+              // An undeclared length is bounded as it arrives. Past the limit
+              // the response is ended with the ERROR end marker: the channel
+              // is closed WITHOUT the EOF a complete response ends with, which
+              // the primary reports as a failed response (never as a short,
+              // clean one). docs/multi-host.md, "Outbound transfers".
+              if (sent > cap) {
+                stream.destroy();
+                app.log.warn(
+                  { cap, path: head.path },
+                  "[agent-channel] response over the channel limit, ended with an error",
+                );
+                return;
+              }
+              await write(buf);
             }
-            await write(buf);
           }
           channel.eof();
         } catch (err) {
-          payload.destroy();
+          stream.destroy();
           // Before the head went out the primary can still be answered; after
           // that the channel just ends short and the primary reports it lost.
           if (!wroteHead && !channel.closed) throw err;
@@ -939,8 +996,9 @@ export function serveChannelRequest(
   channel: MuxChannel,
   authToken: string,
   peerId?: string,
+  opts: { maxResponseBytes?: number } = {},
 ): void {
-  const sink = createRequestSink(app, channel, authToken, peerId);
+  const sink = createRequestSink(app, channel, authToken, peerId, opts);
   channel.onData(sink.data);
   channel.onEof(sink.eof);
 }
