@@ -1105,6 +1105,41 @@ whole feature exists for):
   no_log: true # this task's `environment:` carries a real secret
 ```
 
+### Reruns, upgrades and changing credentials (issue #2452)
+
+The role above is safe to run on every converge. What a rerun does and does
+not touch:
+
+| Thing                                         | On a rerun / upgrade                                                                                                                                                                                                                       |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.env`                                        | Never rewritten. Only `HOST`/`PORT` (when `MULLION_AGENT_HOST`/`PORT` are passed) and an _empty_ `MULLION_AGENT_TOKEN` are filled in; its mode is tightened to `600`. Changed `MULLION_AGENT_*` role variables are ignored once it exists. |
+| `data/sessions/agent-identity.json`           | Never read or written by `install.sh`. The enrolled host id and machine credential survive reruns, release upgrades and daemon restarts, so the primary keeps one host row.                                                                |
+| Release, `current` symlink, unit/plist/task   | Replaced/refreshed (this is the upgrade).                                                                                                                                                                                                  |
+| Secrets in process arguments and install logs | None: every credential travels in the environment or the `.env` (mode `600`), never in a command line, and `install.sh` does not print them. Keep `no_log: true` on the task.                                                              |
+
+Once an agent has enrolled it authenticates with its **machine credential**,
+which it rotates on every renewal; the `MULLION_ENROLLMENT_TOKEN` in `.env` is
+only used to enroll. So a changed token in your role variables does not move
+an enrolled agent, and is not a way to take over another host: the primary
+matches a rerun by host id, never by advertised URL.
+
+To change something on purpose, from Ansible:
+
+| Goal                                              | Do this                                                                                                                                                                                               |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rotate the fleet enrollment secret                | Change `MULLION_ENROLLMENT_SECRET` on the primary and the role variable; new agents use it. Enrolled agents keep renewing with their machine credential, so they need no change.                      |
+| Change `.env` settings (primary URL, roots, name) | Delete `{{ mullion_home }}/.env` in a task before `install.sh` (or template the whole file). Leave `agent-identity.json` alone to keep the same host row.                                             |
+| Cut off a lost or compromised agent               | `POST /api/hosts/:id/revoke` on the primary. Final: the agent gets `401`, does not fall back to its bootstrap token, and the fleet secret cannot re-claim that row.                                   |
+| Bring a revoked per-host agent back               | `POST /api/hosts/:id/rotate-token` on the primary (re-arms the row and returns a new bootstrap token), clear the agent's `agent-identity.json`, and re-run with the new token. Old secrets stay dead. |
+| Re-enroll a fleet-secret agent as a fresh host    | Clear its `agent-identity.json` and restart. It becomes a **new** host; remove the old offline row (_Remove stale host_).                                                                             |
+
+There is deliberately no operator "rotate machine credential" endpoint:
+renewal rotates it already (the previous credential stays valid for 24 h so a
+lost response cannot lock the agent out), and revoke is the response to a
+suspected leak. Never put the machine credential or `agent-identity.json` in
+inventory, a playbook or a log; the file is owner-only (`0600`) and written by
+the agent alone.
+
 `mullion_primary_url` and `mullion_enrollment_token` are ordinary
 role/group variables — keep the token in your vault
 (`ansible-vault`), not committed alongside the playbook. No task on the
