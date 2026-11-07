@@ -55,7 +55,11 @@ repo is live on the next run:
     `pull-requests: write` + `actions: write`. `actions: write` is the unusual
     one: the callee pushes with `GITHUB_TOKEN` and then approves the pushed
     commit's held `pull_request` runs itself (see the `strict` note below), so a
-    caller copied from the list above without it fails at startup.
+    caller copied from the list above without it fails at startup. This repo's
+    `visual-refresh.yml` calls the shared `visual-refresh` twice, `refresh` (README
+    and PWA images, `bot/refresh-screenshots`) and `baselines` (`visual/baselines`,
+    `bot/refresh-baselines`, `allow-json: true` because the baselines carry JSON), chained
+    with `needs:` because the shared workflow runs one refresh at a time per repo.
 
 ## `ci-cd.yml` structure
 

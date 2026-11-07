@@ -106,6 +106,12 @@ Two workflows keep the images current without a local Docker (both call shared w
   screenshots and, only when an image differs from `main` by more than 20 px (re-renders are never byte-identical), opens
   or updates one `chore(uiux): refresh screenshots` PR from `bot/refresh-screenshots`. Review the images, merge it or close
   it; the next run rewrites the branch.
+- **Weekly baselines refresh** (same workflow, runs after the screenshots one): the safety net for a UI PR that moved a
+  baseline scene without updating `visual/baselines/`. When a fresh render of `main` differs from the committed
+  baselines (a PNG by more than 20 px, or any change to `metrics.json` / `provenance.json`), it opens or updates one
+  `chore(uiux): refresh visual baselines` PR from `bot/refresh-baselines`. Review the images like any baseline change.
+  The right place to move a baseline is still the PR that moves the page: the visual-check comment says so (it lists
+  the baseline shots the PR changed and points at `/update-baselines`), and this PR only catches what was forgotten.
 - **`/update-baselines`**: comment it on a pull request (write access, branch in this repository) and CI regenerates
   `visual/baselines/` and pushes one commit of the images that really changed to that branch, then replies with the list.
   Forks, closed PRs and commenters without write access are refused with a reply. Two ordinary outcomes also

@@ -115,7 +115,9 @@ How this repo applies the conventions above — facts and commands, not rules.
   when you are iterating on a screen, and put a "Visual check" section in a UI
   PR's description: which scenes changed and whether that was intended. Move
   the committed baselines (`make visual-baseline`, or comment
-  `/update-baselines` on the PR) in the PR that moves the page. Details: `CONTRIBUTING.md`, "Demo instance and screenshots".
+  `/update-baselines` on the PR) in the PR that moves the page; the check's
+  comment says so when you forget, and a weekly PR catches what slips through.
+  Details: `CONTRIBUTING.md`, "Demo instance and screenshots".
 - **Spikes must be fully isolated from the host's real agent state.** A probe
   that points an agent CLI at a copy or symlink farm of its real data directory
   can fence the live runtime and abort the user's other sessions (observed with
