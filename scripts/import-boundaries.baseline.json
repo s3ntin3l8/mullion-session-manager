@@ -1,0 +1,306 @@
+{
+  "$comment": "The import-boundary baseline — issue #2413 / #2414. Every import cycle and every layering inversion the tree has today is listed here with a note saying why it is still allowed. The guard (scripts/check-import-boundaries.mjs) fails on a violation that is NOT listed, and on a listed entry that no longer describes a real violation: the baseline only turns down. Regenerate with `node scripts/check-import-boundaries.mjs --update` and read the diff.",
+  "cycles": [
+    {
+      "note": "issue #2414 — the PR-phase helpers and the sidebar's origin filter import each other through the sidebar barrel (the value edges alternate with type-only ones, so there is no runtime loop).",
+      "edges": [
+        "frontend/src/github/prPhase.ts -> frontend/src/ui/sidebar/index.ts",
+        "frontend/src/github/rowOrigin.ts -> frontend/src/github/prPhase.ts",
+        "frontend/src/ui/sidebar/OriginFilter.tsx -> frontend/src/github/rowOrigin.ts",
+        "frontend/src/ui/sidebar/index.ts -> frontend/src/ui/sidebar/OriginFilter.tsx"
+      ],
+      "files": [
+        "frontend/src/github/prPhase.ts",
+        "frontend/src/github/rowOrigin.ts",
+        "frontend/src/ui/sidebar/OriginFilter.tsx",
+        "frontend/src/ui/sidebar/index.ts"
+      ]
+    },
+    {
+      "note": "issue #2414 — views.ts is the sidebar's registry: it imports its members to list them, and the members import their props type back from it.",
+      "edges": [
+        "frontend/src/right-sidebar/FilesSidebarView.tsx -> frontend/src/right-sidebar/views.ts",
+        "frontend/src/right-sidebar/GitHubSidebarView.tsx -> frontend/src/right-sidebar/views.ts",
+        "frontend/src/right-sidebar/GitSidebarView.tsx -> frontend/src/right-sidebar/views.ts",
+        "frontend/src/right-sidebar/HistorySidebarView.tsx -> frontend/src/right-sidebar/views.ts",
+        "frontend/src/right-sidebar/ProjectSidebarView.tsx -> frontend/src/right-sidebar/views.ts",
+        "frontend/src/right-sidebar/TasksSidebarView.tsx -> frontend/src/right-sidebar/views.ts",
+        "frontend/src/right-sidebar/views.ts -> frontend/src/right-sidebar/FilesSidebarView.tsx",
+        "frontend/src/right-sidebar/views.ts -> frontend/src/right-sidebar/GitHubSidebarView.tsx",
+        "frontend/src/right-sidebar/views.ts -> frontend/src/right-sidebar/GitSidebarView.tsx",
+        "frontend/src/right-sidebar/views.ts -> frontend/src/right-sidebar/HistorySidebarView.tsx",
+        "frontend/src/right-sidebar/views.ts -> frontend/src/right-sidebar/ProjectSidebarView.tsx",
+        "frontend/src/right-sidebar/views.ts -> frontend/src/right-sidebar/TasksSidebarView.tsx"
+      ],
+      "files": [
+        "frontend/src/right-sidebar/FilesSidebarView.tsx",
+        "frontend/src/right-sidebar/GitHubSidebarView.tsx",
+        "frontend/src/right-sidebar/GitSidebarView.tsx",
+        "frontend/src/right-sidebar/HistorySidebarView.tsx",
+        "frontend/src/right-sidebar/ProjectSidebarView.tsx",
+        "frontend/src/right-sidebar/TasksSidebarView.tsx",
+        "frontend/src/right-sidebar/views.ts"
+      ]
+    },
+    {
+      "note": "issue #2414 — the services' type-level mesh (session, browser and host modules importing each other's types). The runtime cycles inside this group are broken separately; what is left here is type-only.",
+      "edges": [
+        "src/plugins/hooks.ts -> src/routes/browser-automation.ts",
+        "src/plugins/hooks.ts -> src/services/browser-target.ts",
+        "src/plugins/hooks.ts -> src/services/session-browsers.ts",
+        "src/plugins/hooks.ts -> src/services/session-github-auth.ts",
+        "src/routes/browser-automation.ts -> src/routes/browser.ts",
+        "src/routes/browser-automation.ts -> src/services/browser-target.ts",
+        "src/routes/browser-automation.ts -> src/services/remote-host-client.ts",
+        "src/routes/browser-automation.ts -> src/services/session-browsers.ts",
+        "src/routes/browser.ts -> src/services/browser-target.ts",
+        "src/routes/browser.ts -> src/services/remote-host-client.ts",
+        "src/routes/browser.ts -> src/services/session-browsers.ts",
+        "src/services/browser-target.ts -> src/services/execution-context.ts",
+        "src/services/browser-target.ts -> src/services/host-agents.ts",
+        "src/services/browser-target.ts -> src/services/placement.ts",
+        "src/services/browser-target.ts -> src/services/remote-host-client.ts",
+        "src/services/browser-target.ts -> src/services/session-browsers.ts",
+        "src/services/checkout-materialize.ts -> src/services/host-cwds-meta.ts",
+        "src/services/checkout-materialize.ts -> src/services/host-git.ts",
+        "src/services/checkout-materialize.ts -> src/services/placement.ts",
+        "src/services/checkout-materialize.ts -> src/services/project-origin.ts",
+        "src/services/checkout-materialize.ts -> src/services/setup-recipe.ts",
+        "src/services/checkout-removal.ts -> src/services/session-backend.ts",
+        "src/services/checkout-removal.ts -> src/services/session-browsers.ts",
+        "src/services/execution-context.ts -> src/services/placement.ts",
+        "src/services/execution-context.ts -> src/services/remote-host-client.ts",
+        "src/services/execution-context.ts -> src/services/remote-worktree-cache.ts",
+        "src/services/execution-context.ts -> src/services/session-lifecycle.ts",
+        "src/services/execution-context.ts -> src/services/session-live-info.ts",
+        "src/services/host-agents.ts -> src/services/remote-host-client.ts",
+        "src/services/host-cwds-meta.ts -> src/services/placement.ts",
+        "src/services/host-git.ts -> src/services/host-agents.ts",
+        "src/services/host-git.ts -> src/services/remote-host-client.ts",
+        "src/services/placement.ts -> src/services/host-agents.ts",
+        "src/services/placement.ts -> src/services/project-origin.ts",
+        "src/services/project-origin.ts -> src/services/remote-host-client.ts",
+        "src/services/remote-host-client-cache.ts -> src/services/remote-host-client.ts",
+        "src/services/remote-host-client.ts -> src/plugins/hooks.ts",
+        "src/services/remote-host-client.ts -> src/services/remote-host-client-cache.ts",
+        "src/services/remote-host-client.ts -> src/services/scaffold-generate.ts",
+        "src/services/remote-worktree-cache.ts -> src/services/remote-host-client.ts",
+        "src/services/scaffold-generate.ts -> src/services/host-git.ts",
+        "src/services/session-backend.ts -> src/plugins/hooks.ts",
+        "src/services/session-backend.ts -> src/services/host-agents.ts",
+        "src/services/session-backend.ts -> src/services/remote-host-client.ts",
+        "src/services/session-backend.ts -> src/services/remote-worktree-cache.ts",
+        "src/services/session-backend.ts -> src/services/task-prompt.ts",
+        "src/services/session-browsers.ts -> src/services/browser-target.ts",
+        "src/services/session-browsers.ts -> src/services/host-agents.ts",
+        "src/services/session-browsers.ts -> src/services/placement.ts",
+        "src/services/session-browsers.ts -> src/services/remote-host-client.ts",
+        "src/services/session-github-auth.ts -> src/services/host-git.ts",
+        "src/services/session-github-auth.ts -> src/services/remote-host-client.ts",
+        "src/services/session-lifecycle.ts -> src/services/browser-target.ts",
+        "src/services/session-lifecycle.ts -> src/services/checkout-materialize.ts",
+        "src/services/session-lifecycle.ts -> src/services/checkout-removal.ts",
+        "src/services/session-lifecycle.ts -> src/services/host-agents.ts",
+        "src/services/session-lifecycle.ts -> src/services/host-git.ts",
+        "src/services/session-lifecycle.ts -> src/services/placement.ts",
+        "src/services/session-lifecycle.ts -> src/services/session-backend.ts",
+        "src/services/session-lifecycle.ts -> src/services/session-browsers.ts",
+        "src/services/session-lifecycle.ts -> src/services/session-github-auth.ts",
+        "src/services/session-lifecycle.ts -> src/services/session-live-info.ts",
+        "src/services/session-lifecycle.ts -> src/services/session-worktree-reclaim.ts",
+        "src/services/session-lifecycle.ts -> src/services/setup-recipe.ts",
+        "src/services/session-live-info.ts -> src/services/browser-target.ts",
+        "src/services/session-live-info.ts -> src/services/remote-host-client.ts",
+        "src/services/session-live-info.ts -> src/services/session-backend.ts",
+        "src/services/session-live-info.ts -> src/services/session-browsers.ts",
+        "src/services/session-worktree-reclaim.ts -> src/services/checkout-removal.ts",
+        "src/services/session-worktree-reclaim.ts -> src/services/host-git.ts",
+        "src/services/session-worktree-reclaim.ts -> src/services/session-backend.ts",
+        "src/services/session-worktree-reclaim.ts -> src/services/session-live-info.ts",
+        "src/services/session-worktree-reclaim.ts -> src/services/worktree-usage.ts",
+        "src/services/setup-recipe.ts -> src/services/host-git.ts",
+        "src/services/task-decisions.ts -> src/services/host-git.ts",
+        "src/services/task-prompt.ts -> src/services/task-decisions.ts",
+        "src/services/task-prompt.ts -> src/services/task-review-focus.ts",
+        "src/services/task-review-focus.ts -> src/services/task-decisions.ts",
+        "src/services/worktree-usage.ts -> src/services/session-backend.ts"
+      ],
+      "files": [
+        "src/plugins/hooks.ts",
+        "src/routes/browser-automation.ts",
+        "src/routes/browser.ts",
+        "src/services/browser-target.ts",
+        "src/services/checkout-materialize.ts",
+        "src/services/checkout-removal.ts",
+        "src/services/execution-context.ts",
+        "src/services/host-agents.ts",
+        "src/services/host-cwds-meta.ts",
+        "src/services/host-git.ts",
+        "src/services/placement.ts",
+        "src/services/project-origin.ts",
+        "src/services/remote-host-client-cache.ts",
+        "src/services/remote-host-client.ts",
+        "src/services/remote-worktree-cache.ts",
+        "src/services/scaffold-generate.ts",
+        "src/services/session-backend.ts",
+        "src/services/session-browsers.ts",
+        "src/services/session-github-auth.ts",
+        "src/services/session-lifecycle.ts",
+        "src/services/session-live-info.ts",
+        "src/services/session-worktree-reclaim.ts",
+        "src/services/setup-recipe.ts",
+        "src/services/task-decisions.ts",
+        "src/services/task-prompt.ts",
+        "src/services/task-review-focus.ts",
+        "src/services/worktree-usage.ts"
+      ]
+    },
+    {
+      "note": "issue #2414 — the bundle managers read and write the filesystem at import time, so the order they load in is load-bearing.",
+      "edges": [
+        "src/services/bundle-sync.ts -> src/services/hook-adapters/agy.ts",
+        "src/services/bundle-sync.ts -> src/services/hook-adapters/claude-code.ts",
+        "src/services/bundle-sync.ts -> src/services/hook-adapters/codex.ts",
+        "src/services/bundle-sync.ts -> src/services/hook-adapters/mullion-bundle.ts",
+        "src/services/hook-adapters/agy.ts -> src/services/hook-adapters/mullion-bundle.ts",
+        "src/services/hook-adapters/claude-code-skills.ts -> src/services/hook-adapters/claude-code.ts",
+        "src/services/hook-adapters/claude-code.ts -> src/services/bundle-sync.ts",
+        "src/services/hook-adapters/claude-code.ts -> src/services/hook-adapters/mullion-bundle.ts",
+        "src/services/hook-adapters/codex-skills.ts -> src/services/hook-adapters/codex.ts",
+        "src/services/hook-adapters/codex.ts -> src/services/hook-adapters/mullion-bundle.ts",
+        "src/services/hook-adapters/mullion-bundle.ts -> src/services/skills.ts",
+        "src/services/skills.ts -> src/services/hook-adapters/agy.ts",
+        "src/services/skills.ts -> src/services/hook-adapters/claude-code-skills.ts",
+        "src/services/skills.ts -> src/services/hook-adapters/claude-code.ts",
+        "src/services/skills.ts -> src/services/hook-adapters/codex-skills.ts",
+        "src/services/skills.ts -> src/services/hook-adapters/codex.ts"
+      ],
+      "files": [
+        "src/services/bundle-sync.ts",
+        "src/services/hook-adapters/agy.ts",
+        "src/services/hook-adapters/claude-code-skills.ts",
+        "src/services/hook-adapters/claude-code.ts",
+        "src/services/hook-adapters/codex-skills.ts",
+        "src/services/hook-adapters/codex.ts",
+        "src/services/hook-adapters/mullion-bundle.ts",
+        "src/services/skills.ts"
+      ]
+    },
+    {
+      "note": "out of scope for #2414 — this one belongs to the Session split (#2403), which owns pty-manager.ts.",
+      "edges": [
+        "src/services/dev-server-detect.ts -> src/services/pty-manager.ts",
+        "src/services/pty-manager.ts -> src/services/dev-server-detect.ts"
+      ],
+      "files": ["src/services/dev-server-detect.ts", "src/services/pty-manager.ts"]
+    },
+    {
+      "note": "issue #2414 — the PR-phase helper and the GitHub client import each other's types.",
+      "edges": [
+        "src/services/github-pr-phase.ts -> src/services/github.ts",
+        "src/services/github.ts -> src/services/github-pr-phase.ts"
+      ],
+      "files": ["src/services/github-pr-phase.ts", "src/services/github.ts"]
+    },
+    {
+      "note": "issue #2414 — the pairing policy constants and the host registry import each other.",
+      "edges": [
+        "src/services/host-pairing.ts -> src/services/host-registry.ts",
+        "src/services/host-registry.ts -> src/services/host-pairing.ts"
+      ],
+      "files": ["src/services/host-pairing.ts", "src/services/host-registry.ts"]
+    },
+    {
+      "note": "issue #2414 — the runtime config defaults and the settings module import each other's types.",
+      "edges": [
+        "src/services/runtime-config.ts -> src/services/settings.ts",
+        "src/services/settings.ts -> src/services/runtime-config.ts"
+      ],
+      "files": ["src/services/runtime-config.ts", "src/services/settings.ts"]
+    },
+    {
+      "note": "issue #2414 — the approve/promote/github-sync trio call each other.",
+      "edges": [
+        "src/services/task-approve.ts -> src/services/task-github-sync.ts",
+        "src/services/task-approve.ts -> src/services/task-promote.ts",
+        "src/services/task-github-sync.ts -> src/services/task-approve.ts",
+        "src/services/task-promote.ts -> src/services/task-github-sync.ts"
+      ],
+      "files": [
+        "src/services/task-approve.ts",
+        "src/services/task-github-sync.ts",
+        "src/services/task-promote.ts"
+      ]
+    },
+    {
+      "note": "issue #2414 — the reconciler spawns review agents, and the spawner reads the reconciler's round cap.",
+      "edges": [
+        "src/services/task-reconciler.ts -> src/services/task-review-spawn.ts",
+        "src/services/task-review-spawn.ts -> src/services/task-reconciler.ts"
+      ],
+      "files": ["src/services/task-reconciler.ts", "src/services/task-review-spawn.ts"]
+    }
+  ],
+  "inversions": [
+    {
+      "from": "src/plugins/agent-channel-client.ts",
+      "to": "src/routes/internal-streams.ts",
+      "note": "accidental — the stream-accept helpers live in a route file; they belong in a module the plugin can import."
+    },
+    {
+      "from": "src/plugins/control-socket.ts",
+      "to": "src/routes/events.ts",
+      "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
+    },
+    {
+      "from": "src/plugins/control-socket.ts",
+      "to": "src/routes/terminal.ts",
+      "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
+    },
+    {
+      "from": "src/plugins/hooks.ts",
+      "to": "src/routes/browser-automation.ts",
+      "note": "accidental — the browser action helpers live in a route file; they belong in a module the plugin can import."
+    },
+    {
+      "from": "src/services/agent-channel-streams.ts",
+      "to": "src/plugins/agent-channel.ts",
+      "note": "accidental — the plugin's ConnectedAgentChannel type is shared with the service; it belongs in a module both can import."
+    },
+    {
+      "from": "src/services/agent-channel-tunnel.ts",
+      "to": "src/plugins/agent-channel.ts",
+      "note": "accidental — the plugin's ConnectedAgentChannel type is shared with the service; it belongs in a module both can import."
+    },
+    {
+      "from": "src/services/control-relay-fanout.ts",
+      "to": "src/plugins/control-socket.ts",
+      "note": "accidental — the relay needs the control socket's connection handler; it belongs in a module both can import."
+    },
+    {
+      "from": "src/services/host-agents.ts",
+      "to": "src/routes/server-info.ts",
+      "note": "accidental — appVersion is declared in a route file; it belongs in a service."
+    },
+    {
+      "from": "src/services/placement.ts",
+      "to": "src/routes/server-info.ts",
+      "note": "accidental — appVersion is declared in a route file; it belongs in a service."
+    },
+    {
+      "from": "src/services/remote-host-client.ts",
+      "to": "src/plugins/hooks.ts",
+      "note": "accidental — the PromoteDecision type is shared between the plugin and the service; it belongs in a module both can import."
+    },
+    {
+      "from": "src/services/session-backend.ts",
+      "to": "src/plugins/hooks.ts",
+      "note": "accidental — the PromoteDecision type is shared between the plugin and the service; it belongs in a module both can import."
+    },
+    {
+      "from": "src/services/session-env.ts",
+      "to": "src/plugins/env.ts",
+      "note": "deliberate — it reads the validated config (app.config), which the plugin owns."
+    }
+  ]
+}
