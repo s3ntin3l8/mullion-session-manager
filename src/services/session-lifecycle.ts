@@ -64,6 +64,7 @@ import type { BrowserTarget } from "./browser-manager.js";
 import { resolveSessionBrowserTarget } from "./browser-target.js";
 import { requiredLaunchOptions, type LaunchFields } from "./launch-requirements.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
+import { MAX_SESSION_ENV_ENTRIES, MAX_SESSION_ENV_VALUE_LENGTH } from "./session-limits.js";
 import { commandAgentBin } from "./hook-adapters/index.js";
 import {
   readProjectBriefing,
@@ -94,8 +95,7 @@ import {
 // do past the limit — a rejected upgrade or a hang, take your pick — the
 // point of this bound is staying clear of it, not characterizing the
 // failure.)
-export const MAX_SESSION_ENV_ENTRIES = 16;
-export const MAX_SESSION_ENV_VALUE_LENGTH = 256;
+export { MAX_SESSION_ENV_ENTRIES, MAX_SESSION_ENV_VALUE_LENGTH };
 
 // Default terminal size for a session that hasn't had a browser attach yet
 // to report its real dimensions — the first WS attach immediately resizes

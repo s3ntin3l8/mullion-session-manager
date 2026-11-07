@@ -544,10 +544,10 @@ export interface BrowserActionHookMessage {
   name?: string;
   limit?: number;
   /** Issue #382 (3.11) — CSS selector for an iframe host element; see
-   * src/routes/browser-automation.ts's resolveSearchRoot. */
+   * src/services/browser-automation-actions.ts's resolveSearchRoot. */
   frame?: string;
   /** Issue #381 (3.10) — the `download` action's own fields; see
-   * src/routes/browser-automation.ts's `executeBrowserAction` "download"
+   * src/services/browser-automation-actions.ts's `executeBrowserAction` "download"
    * case for the full semantics (defaults, clamping, `clear`'s race-safety
    * requirement). */
   timeout_ms?: number;

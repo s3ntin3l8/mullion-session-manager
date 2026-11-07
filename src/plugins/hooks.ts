@@ -14,12 +14,14 @@ import type {
 import type { Page } from "playwright";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
+// The browser actions live in a service, not in routes/browser-automation.ts:
+// a plugin importing a route inverts the layering (issue #2413).
 import {
   executeBrowserAction,
   executeBrowserFind,
   resolveSearchRoot,
-} from "../routes/browser-automation.js";
-import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
+} from "../services/browser-automation-actions.js";
+import type { AgentAction, FindElementsBody } from "../services/browser-automation-actions.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import { resolveSessionBrowserTarget } from "../services/browser-target.js";
 import {
@@ -42,15 +44,13 @@ import { reclaimSocketPath } from "../services/unix-socket.js";
 import { buildGithubTokenReply, getSessionGithubAuth } from "../services/session-github-token.js";
 import { recoverLocalSessionGithubAuth } from "../services/session-github-auth.js";
 
-// Issue #271, option 2 — the decision a human ultimately reaches for a
-// pending `promote_request` (POST /api/sessions/:id/promote or
-// .../promote/decline), delivered back down the still-open MCP-tool socket
-// connection. "accepted" carries the new worktree session's own id/path so
-// the model's tool result can tell it where its work moved; "declined"
-// optionally carries a reason.
-export type PromoteDecision =
-  | { decision: "accepted"; worktreePath: string; newSessionId: number }
-  | { decision: "declined"; reason?: string };
+// The promote decision's type lives in src/shared/promote-decision.ts: two
+// SERVICES resolve the pending promote (session-backend.ts,
+// remote-host-client.ts), and a service importing a plugin inverts the
+// layering (issue #2413). Re-exported here so every existing importer keeps
+// its path.
+import type { PromoteDecision } from "../shared/promote-decision.js";
+export type { PromoteDecision };
 
 // Phase 2's structured agent-hook channel (issue #172) — a second,
 // structured channel alongside the existing PTY-parsed one (attention-detect.ts):
@@ -747,7 +747,7 @@ function handleConnection(
               // Issue #382 — this hook-socket path (the MCP use_browser/
               // browser_action tools) is a second call site for
               // executeBrowserFind, alongside the REST route
-              // (src/routes/browser-automation.ts) — resolve `frame` here
+              // (src/services/browser-automation-actions.ts) — resolve `frame` here
               // too, or a frame-scoped `find` sent through the MCP tool
               // would silently search the whole page instead.
               const root = await resolveSearchRoot(page, msg.frame);

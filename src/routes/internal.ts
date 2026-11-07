@@ -156,7 +156,7 @@ import {
   parsePort,
   previewQueryError,
   resolveLoopbackPreviewUrl,
-} from "./internal-streams.js";
+} from "../services/internal-streams.js";
 import { AGENT_CHANNEL_AUTH_HEADER } from "../services/agent-channel-tunnel.js";
 import {
   rememberSessionBrowserTarget,

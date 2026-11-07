@@ -20,7 +20,7 @@ import {
   acceptControlRelayConnection,
   type ControlRelayHolder,
 } from "../../src/plugins/control-relay.js";
-import { serveRelayChannel } from "../../src/services/control-relay-fanout.js";
+import { serveRelayChannel } from "../../src/plugins/control-relay-fanout.js";
 import { createMuxConnection, type MuxConnection } from "../../src/services/ssh-agent-mux.js";
 
 // Minimal ws double: two linked instances deliver send() as the peer's

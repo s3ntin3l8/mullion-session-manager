@@ -29,7 +29,7 @@ import {
 } from "../../src/services/agent-channel-tunnel.js";
 import { acceptControlRelayConnection } from "../../src/plugins/control-relay.js";
 import { materializeControlRelaySocket } from "../../src/services/control-relay-agent.js";
-import { serveRelayChannel } from "../../src/services/control-relay-fanout.js";
+import { serveRelayChannel } from "../../src/plugins/control-relay-fanout.js";
 import { buildTestApp } from "../helpers/app.js";
 import { projects, sessions } from "../../src/db/schema.js";
 

@@ -1,6 +1,6 @@
 import type { BrowserTarget } from "../services/browser-manager.js";
 import type { SessionGithubAuth } from "../services/session-github-token.js";
-import type { PromoteDecision } from "../plugins/hooks.js";
+import type { PromoteDecision } from "../shared/promote-decision.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 
@@ -16,16 +16,13 @@ import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 // a schema that changes shape during a refactor like this one can fail
 // silently rather than loudly.
 
-// A session id is always the primary's stringified integer row id
-// (String(sessionId) — see terminal.ts/sessions.ts) by construction, but
-// this schema is the agent's only defense against a malformed one: it flows
-// straight into pty-manager.ts's scopeUnitName(instanceId, id) ->
-// `crs-session-<instanceId>-<id>`, naming a real systemd --user scope and
-// dtach socket file. An id with systemd- or filesystem-illegal characters
-// (e.g. "/") wouldn't be an injection (spawn/stop always use an argv
-// array, never a shell string), but would make bootstrap/terminate
-// silently target the wrong unit/file.
-export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+// The pattern itself lives in src/services/session-limits.ts, with the env
+// bounds the agent-side spawn schema enforces: this file is DB-less and
+// dependency-free by design, and it used to DUPLICATE those two numbers
+// "kept in sync by hand" because the canonical home pulled in the primary's
+// DB schema. There is no reason for that any more.
+import { SESSION_ID_PATTERN } from "../services/session-limits.js";
+export { SESSION_ID_PATTERN };
 export const SESSION_ID_SCHEMA = {
   type: "string",
   minLength: 1,
@@ -60,18 +57,17 @@ export const SESSION_ID_PARAMS_SCHEMA = {
   },
 } as const;
 
-// Duplicated from session-lifecycle.ts's own MAX_SESSION_ENV_ENTRIES/
-// MAX_SESSION_ENV_VALUE_LENGTH rather than imported — that module pulls in
-// the primary's DB schema, which this agent-side (DB-less) schema file has
-// no business importing just for two numeric bounds. Keep the two values
-// in sync by hand — see the comment on the source constants for why they're
-// sized the way they are (openAttach()'s WS-upgrade query string, not just
-// "a sane cap"). Exported so internal.ts's `/internal/ws/attach`
+// The env bounds live in src/services/session-limits.ts now (see the note
+// above SESSION_ID_PATTERN) — the same numbers session-lifecycle.ts and
+// routes/sessions.ts enforce. Exported so internal.ts's `/internal/ws/attach`
 // preValidation enforces the identical bound on the query-string `env` it
 // parses by hand (that route takes no JSON body, so it can't reuse this
 // schema object directly).
-export const MAX_SESSION_ENV_ENTRIES = 16;
-export const MAX_SESSION_ENV_VALUE_LENGTH = 256;
+import {
+  MAX_SESSION_ENV_ENTRIES,
+  MAX_SESSION_ENV_VALUE_LENGTH,
+} from "../services/session-limits.js";
+export { MAX_SESSION_ENV_ENTRIES, MAX_SESSION_ENV_VALUE_LENGTH };
 
 export interface SpawnSessionBody {
   id: string;
@@ -927,7 +923,7 @@ export const bundleSyncRemoveSchema = {
 export type PromoteDecisionBody = PromoteDecision;
 
 // Issue #271 — mirrors reviewGateSchema's shape for the accepted/declined
-// union (see plugins/hooks.ts's PromoteDecision). Not built via schemaFor
+// union (see shared/promote-decision.ts's PromoteDecision). Not built via schemaFor
 // above (a different field set — decision/worktreePath/newSessionId/reason —
 // not the git-path family), and used bare (not `{ body: ... }`) since its
 // one call site combines it with SESSION_ID_PARAMS_SCHEMA under a shared

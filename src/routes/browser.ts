@@ -188,14 +188,13 @@ function parseInputMessage(value: unknown): BrowserInputMessage | null {
 // chrome:// internals, which a screenshot would then exfiltrate straight
 // back over this same authenticated WS. Mirrors BrowserPanel.tsx's own
 // isDangerousIframeSrc guard on the existing iframe preview.
-export function isSafeNavigationUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
+//
+// The check itself lives in src/services/url-guard.ts, with the rest of the
+// URL-safety decisions: the browser automation actions need it too, and they
+// are a service, so a service importing it from here inverted the layering
+// (issue #2413). Re-exported so every existing importer keeps its path.
+import { isSafeNavigationUrl } from "../services/url-guard.js";
+export { isSafeNavigationUrl };
 
 // Runs inside the page to read the current selection ahead of a copy/cut —
 // see dispatchInput's "copy"/"cut" case for why this must happen BEFORE any

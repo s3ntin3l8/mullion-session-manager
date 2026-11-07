@@ -170,3 +170,25 @@ export function isAllowedHttpUrl(value: string, policy: UrlGuardPolicy): boolean
     return false;
   }
 }
+
+// The browser's own navigation policy: http(s) ONLY, with no IP-range check.
+//
+// This is deliberately WEAKER than isAllowedHttpUrl above, which rejects
+// loopback/private ranges unless the caller's policy allows them. A browser
+// pane navigating to a developer's own `http://localhost:3000` is normal, so
+// the navigation guard cannot be the registration-time guard's policy — it
+// only refuses the schemes that would let a screenshot exfiltrate the host
+// filesystem (`file://`) or reach Chromium internals (`chrome://`).
+//
+// It lives here, with the rest of the URL-safety decisions, because the
+// browser automation actions (services/browser-automation-actions.ts) need it
+// and they are a service: a service importing it from routes/browser.ts would
+// invert the layering (issue #2413).
+export function isSafeNavigationUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}

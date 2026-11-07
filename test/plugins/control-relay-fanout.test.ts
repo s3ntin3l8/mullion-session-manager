@@ -36,7 +36,7 @@ vi.mock("../../src/services/host-registry.js", () => ({
   listHosts: (...args: unknown[]) => listHostsMock(...(args as [])),
 }));
 
-const { startControlRelayFanout } = await import("../../src/services/control-relay-fanout.js");
+const { startControlRelayFanout } = await import("../../src/plugins/control-relay-fanout.js");
 import { bindChannelHost, unbindChannelHost } from "../../src/services/agent-channel-tunnel.js";
 
 const host = (id: string, extra: Partial<{ isLocal: boolean; baseUrl: string | null }> = {}) => ({

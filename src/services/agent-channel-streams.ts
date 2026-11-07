@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket } from "ws";
-import type { ConnectedAgentChannel } from "../plugins/agent-channel.js";
+import type { ConnectedAgentChannel } from "../shared/agent-channel.js";
 import { ChannelSocket } from "./channel-socket.js";
 import { createRequestSink, type ChannelSink, type HostTransport } from "./agent-channel-tunnel.js";
 import type { MuxChannel } from "./ssh-agent-mux.js";

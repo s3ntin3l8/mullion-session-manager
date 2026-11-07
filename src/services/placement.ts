@@ -10,7 +10,7 @@ import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
 import { effectiveProtocol, isOlderVersion, refreshLocalAgents } from "./host-agents.js";
 import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protocol.js";
-import { appVersion } from "../routes/server-info.js";
+import { appVersion } from "./app-version.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
 
 /**
