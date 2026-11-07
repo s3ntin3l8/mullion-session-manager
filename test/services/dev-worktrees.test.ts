@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gitEnv } from "../../src/services/git-env.js";
 import {
@@ -83,7 +84,10 @@ const exists = (p: string) => fs.existsSync(p);
 const branches = () =>
   git(repo, ["branch", "--format=%(refname:short)"]).split("\n").filter(Boolean);
 
+// No db decorator: the checkout helper then has no browser state to release.
+const app = { hasDecorator: () => false } as unknown as FastifyInstance;
 const opts = (extra: Partial<DevWorktreeOptions> = {}): DevWorktreeOptions => ({
+  app,
   projects: [project],
   ...extra,
 });
@@ -282,9 +286,9 @@ describe("dev-worktrees", () => {
       const link = path.join(base, "repo-link");
       fs.symlinkSync(repo, link);
       const viaLink = { ...project, cwd: link };
-      const status = await inspectDevWorktrees({ projects: [viaLink] });
+      const status = await inspectDevWorktrees({ app, projects: [viaLink] });
       expect(status.candidates.map((c) => c.slug)).toEqual(["via-link"]);
-      const result = await pruneDevWorktrees({ projects: [viaLink] });
+      const result = await pruneDevWorktrees({ app, projects: [viaLink] });
       expect(result.output).toBe("Removed 1 stale developer worktree.");
     });
 
@@ -292,6 +296,7 @@ describe("dev-worktrees", () => {
       addWorktree("ok", { pushed: true });
       deleteRemoteBranch("ok");
       const status = await inspectDevWorktrees({
+        app,
         projects: [
           { id: 2, name: "none", cwd: path.join(base, "missing") },
           { id: 3, name: "plain", cwd: base },
@@ -873,6 +878,7 @@ describe("dev-worktrees", () => {
       addWorktree("a", { pushed: true });
       deleteRemoteBranch("a");
       const result = await pruneDevWorktrees({
+        app,
         projects: [{ id: 2, name: "missing", cwd: path.join(base, "missing") }, project],
         fetch: async () => {
           throw new Error("offline");

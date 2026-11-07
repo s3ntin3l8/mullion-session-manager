@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { forceRemoveCheckout } from "./checkout-removal.js";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -1753,21 +1754,15 @@ async function attemptAutoRebase(
   // Clear any leftover worktree from a prior attempt first. resumeTaskWorktree
   // targets a deterministic path (deriveWorktreePath), so a second attempt at
   // the same path fails outright unless the first attempt's worktree is gone.
-  // Unconditional force-remove, not removeWorktreeIfClean: the worker's own
-  // preamble tells it to commit and leave the tree clean, so anything left
-  // behind on an already-superseded attempt is a contract violation, not
-  // work worth the careful preservation removeWorktreeIfClean exists for.
-  // The path is derived from the worker's project root — the same root the
-  // worktree was cut from — so the stale attempt is cleared where it
-  // actually is. Deriving it from the PROJECT's root would name a
-  // directory that does not exist on the worker's host when the two
-  // differ, and the resume below would then collide with it.
+  // Unconditional force-remove: the worker's preamble says to commit and leave
+  // the tree clean, so what an already-superseded attempt left is a contract
+  // violation, not work to preserve. Through the checkout helper, because the
+  // new worktree reuses this path and the old browser context is keyed to it.
+  // The path is derived from the worker's root (where it was cut from), not
+  // the project's, which may not exist on the worker's host.
   const stalePath = deriveWorktreePath(workerCwd, branchName);
-  await backend.removeWorktree(stalePath, workerCwd).catch((err) => {
-    app.log.warn(
-      { err, taskId: task.id, stalePath },
-      "task auto-rebase: failed to clear a stale worktree before retrying",
-    );
+  await forceRemoveCheckout(app, project.id, workerHostId, stalePath, workerCwd).catch((err) => {
+    app.log.warn({ err, taskId: task.id, stalePath }, "auto-rebase: stale worktree kept");
   });
 
   const worktree = await backend.resumeTaskWorktree(workerCwd, branchName);

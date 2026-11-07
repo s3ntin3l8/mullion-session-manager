@@ -1,4 +1,5 @@
 import fp from "fastify-plugin";
+import { pruneCheckouts } from "../services/checkout-removal.js";
 import type { FastifyInstance } from "fastify";
 import { and, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
@@ -148,7 +149,11 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
           const orphans = dirs.filter((dir) => !activePaths.has(dir));
           if (orphans.length === 0) continue;
 
-          const result = await backend.pruneWorktrees(project.cwd, orphans);
+          const result = await pruneCheckouts(
+            app,
+            { projectId: project.id, hostId, cwd: project.cwd },
+            orphans,
+          );
           if (result.removed.length > 0 || result.skipped.length > 0) {
             app.log.info(
               {

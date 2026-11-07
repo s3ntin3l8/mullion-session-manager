@@ -127,6 +127,27 @@ function hashedFileId(target: BrowserTarget): string {
   return `project-${target.projectId}-${digest}`;
 }
 
+/** Index file listing every endpoint a checkout's browser has been opened
+ * with. A target's files are named by a one-way digest of its endpoint, so a
+ * stopped endpoint's file can only be found again if its endpoint was written
+ * down; deleting the checkout reads this list (issue #2700). */
+function endpointIndexPath(dataDir: string, projectId: number, checkoutRoot: string): string {
+  const digest = createHash("sha1")
+    .update(`${projectId}\0${checkoutRoot}`)
+    .digest("hex")
+    .slice(0, 16);
+  return path.join(dataDir, `project-${projectId}-${digest}.endpoints`);
+}
+
+function readEndpointIndex(file: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    return Array.isArray(parsed) ? parsed.filter((e): e is string => typeof e === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Short filesystem-safe id for a target's on-disk state.
  *
  * The project's default checkout keeps the storage file its browser had before
@@ -285,6 +306,21 @@ export class BrowserManager {
     return [...this.instances.values()].filter((m) => m.projectId === projectId);
   }
 
+  /** Writes the target's endpoint into its checkout's index (best-effort). */
+  private recordEndpoint(target: BrowserTarget): void {
+    if (!target.endpoint) return;
+    const file = endpointIndexPath(this.dataDir, target.projectId, target.checkoutRoot);
+    try {
+      const known = readEndpointIndex(file);
+      if (known.includes(target.endpoint)) return;
+      mkdirSync(this.dataDir, { recursive: true });
+      writeFileSync(file, JSON.stringify([...known, target.endpoint]));
+    } catch {
+      // Best-effort: a missing entry only means a stopped endpoint's file is
+      // left behind when the checkout goes.
+    }
+  }
+
   private storageStatePath(target: BrowserTarget): string {
     return path.join(this.dataDir, `${targetFileId(this.dataDir, target)}.json`);
   }
@@ -427,6 +463,7 @@ export class BrowserManager {
       recursive: true,
       force: true,
     }).catch(() => {});
+    this.recordEndpoint(target);
 
     const browser = await this.ensureProcess();
 
@@ -653,20 +690,33 @@ export class BrowserManager {
     await rm(this.downloadsDir(target), { recursive: true, force: true });
   }
 
-  /** `forgetTarget` for every target of one checkout: each running endpoint
-   * plus the checkout's default-endpoint target, whose files may exist with
-   * nothing running. (A stopped endpoint's file cannot be found: its name is a
-   * one-way digest of the endpoint.) */
-  async forgetCheckout(projectId: number, hostId: string, checkoutRoot: string): Promise<void> {
+  /** `forgetTarget` for every target of one checkout: each running endpoint,
+   * each endpoint recorded in the checkout's index (stopped contexts, whose
+   * files are named by a one-way digest and could not be found otherwise),
+   * any `extraEndpoints` the caller knows of, and the default-endpoint
+   * target. */
+  async forgetCheckout(
+    projectId: number,
+    hostId: string,
+    checkoutRoot: string,
+    extraEndpoints: readonly string[] = [],
+  ): Promise<void> {
     const targets = new Map<string, BrowserTarget>();
     for (const managed of this.listForProject(projectId)) {
       if (managed.target.checkoutRoot === checkoutRoot) {
         targets.set(browserTargetKey(managed.target), managed.target);
       }
     }
+    const indexFile = endpointIndexPath(this.dataDir, projectId, checkoutRoot);
+    const endpoints = [...readEndpointIndex(indexFile), ...extraEndpoints];
+    for (const endpoint of endpoints) {
+      const t: BrowserTarget = { projectId, hostId, checkoutRoot, legacy: false, endpoint };
+      targets.set(browserTargetKey(t), t);
+    }
     const base: BrowserTarget = { projectId, hostId, checkoutRoot, legacy: false };
     targets.set(browserTargetKey(base), base);
     for (const target of targets.values()) await this.forgetTarget(target);
+    await rm(indexFile, { force: true });
   }
 
   /** Closes every target of a project (project deleted or merged
