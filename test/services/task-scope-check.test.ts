@@ -173,12 +173,26 @@ describe("scope check (#2599)", () => {
       "Deferred: the migration, tracked in #456",
       "Decision: kept the old API",
       "Not run locally: the e2e suite needs a display",
-      // A Decision line next to a Skipped one covers it: the choice is declared.
-      "Decision: dropped the retry. Skipped: its test",
+      "Deferred: migrations (#12). Skipped: the suite (#13)",
+      "Decision: could not file an issue, issues are disabled on this repo",
     ])("accepts `%s` as a declared deviation", (evidence) => {
       const parsed = parse({ scope: [entry("deviated", evidence)] });
       expect(parsed.scope[0].status).toBe("deviated");
       expect(parsed.verdict).toBe("approved");
+    });
+
+    it.each([
+      // One tracked skip cannot carry an untracked one.
+      "Deferred: migrations (#12). Skipped: the whole test suite",
+      "Skipped: docs. Deferred: the migration (#12). Skipped: the tests",
+      // A Decision line covers only itself, not a Skipped line beside it.
+      "Decision: descoped the retry. Skipped: its test",
+      // The number must sit on the skip's own line, not on another declaration's.
+      "Skipped: the tests. Deferred: the migration (#12)",
+    ])("judges each declaration on its own: `%s` is partial", (evidence) => {
+      const parsed = parse({ scope: [entry("deviated", evidence)] });
+      expect(parsed.scope[0].status).toBe("partial");
+      expect(parsed.verdict).toBe("changes-requested");
     });
 
     it("the review prompt states the rule", () => {
@@ -199,14 +213,16 @@ describe("scope check (#2599)", () => {
       });
       expect(out).toContain("who sets it and who reads it");
       expect(out).toContain("report it as a suggestion anchored on its definition");
-      expect(out).toContain("grep for the");
-      expect(out).toContain("a match the diff left untouched is a suggestion");
+      const flat = out.replace(/\s+/g, " ");
+      expect(flat).toContain('"every place that does X", grep for the other places that do X');
+      expect(flat).toContain("a match the diff left untouched is a suggestion");
     });
 
     it("the worker prompt tells the worker to file the issue, and not under its own", () => {
       const out = buildTaskMasterPreamble(BASE);
       expect(out).toContain("file a follow-up issue");
       expect(out).toContain("`Deferred: <what> (#<number>)`");
+      expect(out).toContain("say so on a `Decision:` line instead");
       expect(out).toContain("Do not attach it as a sub-issue of this task's");
     });
   });

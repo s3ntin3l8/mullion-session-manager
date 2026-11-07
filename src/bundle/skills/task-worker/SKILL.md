@@ -59,7 +59,8 @@ it before you end your turn, with the context and acceptance criteria someone
 could pick up on their own, and name it on the line (`Deferred: <what>
 (#<number>)`). Do not attach it as a sub-issue of this task's own issue: that
 would park this task. The reviewer treats a skipped item with no issue behind
-it as not done.
+it as not done. If you cannot file one (issues are disabled, or you have no
+permission to), say so on a `Decision:` line instead, with why.
 
 None of this is about disabling caution — it's about relocating the
 checkpoint from "before you act" (nobody there to clear it) to "in the

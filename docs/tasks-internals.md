@@ -728,13 +728,17 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
 
   **A skip must name its issue (#2724).** The worker prompt also tells the
   worker to file a follow-up issue for each Scope item it skips or defers
-  (attached to the task's parent epic, never as a sub-issue of the task's own
-  issue, which would park the task) and to name it on the line:
-  `Deferred: <what> (#<number>)`. At parse time a `deviated` entry whose evidence
-  cites a `Skipped:` or `Deferred:` line with no `#<number>` (and no `Decision:` or
-  `Not run locally:` line, which need none) is rewritten to `partial`, so it
-  sends the task back like any unfinished item; `deriveVerdict` applies the
-  same rule to a raw scope list. `REVIEW_METHOD_LINES` also asks the reviewer
+  (never as a sub-issue of the task's own issue, which would park the task) and to
+  name it on the line:
+  `Deferred: <what> (#<number>)`. If it cannot file one (issues disabled, no
+  permission) it says so on a `Decision:` line instead. At parse time each
+  declaration in a `deviated` entry's evidence is judged on its own text, up to
+  the next declaration: a `Skipped:` or `Deferred:` one with no `#<number>`
+  rewrites the entry to `partial`, so it sends the task back like any unfinished
+  item, whatever the other declarations say (a tracked skip cannot carry an
+  untracked one, and a `Decision:` or `Not run locally:` line covers only
+  itself). The parser cannot tell which issue a number names; the reviewer
+  judges that. `deriveVerdict` applies the same rule to a raw scope list. `REVIEW_METHOD_LINES` also asks the reviewer
   for two suggestion-level checks: a new exported symbol, option, field or flag
   with no producer or no consumer, and a change meant to apply to "every place
   that does X" with matches the diff left untouched. Both ride the existing

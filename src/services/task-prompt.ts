@@ -376,7 +376,9 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  criteria someone could pick up on their own) and name it on the line, as",
     "  `Deferred: <what> (#<number>)`. Do not attach it as a sub-issue of this task's",
     "  own issue: that would park this task. A skipped item with no issue behind it",
-    "  is treated by the reviewer as not done.",
+    "  is treated by the reviewer as not done. If you cannot file one (issues are",
+    "  disabled, or you have no permission to), say so on a `Decision:` line instead,",
+    "  with why.",
   );
 
   if (commitTitlePath) {
@@ -726,20 +728,25 @@ function normalizeDispositions(raw: unknown): ReviewDisposition[] {
  * `Decision:` / `Skipped:` / `Deferred:` / `Not run locally:` commit lines). */
 const DECLARED_DECISION_RE = /(?:^|[\s"'`(])(?:decision|skipped|deferred|not run locally):/i;
 
-const SKIP_DECLARATION_RE = /(?:^|[\s"'`(])(?:skipped|deferred):/i;
-const OTHER_DECLARATION_RE = /(?:^|[\s"'`(])(?:decision|not run locally):/i;
+const DECLARATION_MARK_RE = /(?:^|[\s"'`(])(decision|skipped|deferred|not run locally):/gi;
 const ISSUE_REF_RE = /#\d+/;
 
 /** A `Skipped:`/`Deferred:` line only counts as a deferral when it names the
  * follow-up issue that tracks the work (`#<number>`): without one the item was
- * dropped, not deferred. A `Decision:` or `Not run locally:` line needs none
- * (it records a choice or an unrun check, not unfinished work). */
+ * dropped, not deferred. Each declaration is judged on its own text, up to the
+ * next declaration, so a tracked skip cannot carry an untracked one, and a
+ * `Decision:` or `Not run locally:` line (a choice or an unrun check, which need
+ * no issue) covers only itself. The parser cannot tell WHICH issue a number
+ * names; the reviewer judges that. */
 function declaresUntrackedSkip(evidence: string): boolean {
-  return (
-    SKIP_DECLARATION_RE.test(evidence) &&
-    !OTHER_DECLARATION_RE.test(evidence) &&
-    !ISSUE_REF_RE.test(evidence)
-  );
+  const marks = [...evidence.matchAll(DECLARATION_MARK_RE)];
+  return marks.some((mark, i) => {
+    const kind = mark[1]!.toLowerCase();
+    if (kind !== "skipped" && kind !== "deferred") return false;
+    const from = mark.index! + mark[0].length;
+    const to = marks[i + 1]?.index ?? evidence.length;
+    return !ISSUE_REF_RE.test(evidence.slice(from, to));
+  });
 }
 
 function normalizeScope(raw: unknown): ScopeCheck[] {
