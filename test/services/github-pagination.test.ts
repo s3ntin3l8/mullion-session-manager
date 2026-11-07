@@ -2,13 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import { fetchAllPages } from "../../src/services/github-pagination.js";
 
 // The helper is deliberately tiny; what it has to get RIGHT is the two
-// things the four hand-rolled loops got subtly different about — the
+// things the five hand-rolled loops got subtly different about — the
 // response shape (a bare array vs an envelope) and the stop condition (a
 // SHORT page is the end of the list, an EMPTY page is not).
 //
-// The four call sites' own constants are covered by their own tests
-// (github-write.test.ts); here the helper is exercised against the shapes
-// it has to support, with the page size and cap supplied per call.
+// The five call sites' own constants are covered by their own tests
+// (github-write.test.ts, github-merged-prs.test.ts); here the helper is
+// exercised against the shapes it has to support, with the page size and cap
+// supplied per call.
 
 describe("github-pagination: fetchAllPages", () => {
   describe("bare-array responses", () => {

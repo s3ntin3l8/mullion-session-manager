@@ -1,4 +1,9 @@
-import { getPullRequestByNumber, listClosedPullRequests } from "./github-write.js";
+import {
+  CLOSED_PRS_PAGE_SIZE,
+  getPullRequestByNumber,
+  listClosedPullRequests,
+} from "./github-write.js";
+import { fetchAllPages } from "./github-pagination.js";
 import type { ClosedPullRequest } from "./github-write.js";
 
 // Shared "which PRs of this repo are already closed/merged" lookup. Task
@@ -51,17 +56,20 @@ async function load(token: string, owner: string, repo: string): Promise<RepoEnt
   const byNumber = new Map<number, ClosedPrRecord>();
   const byBranch = new Map<string, ClosedPrRecord>();
   const self = key(owner, repo);
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const prs = await listClosedPullRequests(token, owner, repo, page);
-    for (const pr of prs) {
-      const record = toRecord(pr);
-      byNumber.set(pr.number, record);
-      // A fork's PR from a same-named branch says nothing about our branch.
-      if (pr.headRepo?.toLowerCase() !== self) continue;
-      // Pages are newest-updated first, so the first PR seen per branch wins.
-      if (!byBranch.has(pr.headRef)) byBranch.set(pr.headRef, record);
-    }
-    if (prs.length < 100) break;
+  const prs = await fetchAllPages((page) => listClosedPullRequests(token, owner, repo, page), {
+    // The endpoint's own per_page, not a second copy of the number: the walk
+    // stops at the first page holding fewer items than the page size, so the
+    // two have to be the same size or the walk ends early.
+    maxPages: MAX_PAGES,
+    pageSize: CLOSED_PRS_PAGE_SIZE,
+  });
+  for (const pr of prs) {
+    const record = toRecord(pr);
+    byNumber.set(pr.number, record);
+    // A fork's PR from a same-named branch says nothing about our branch.
+    if (pr.headRepo?.toLowerCase() !== self) continue;
+    // Pages are newest-updated first, so the first PR seen per branch wins.
+    if (!byBranch.has(pr.headRef)) byBranch.set(pr.headRef, record);
   }
   return { at: Date.now(), byNumber, byBranch };
 }

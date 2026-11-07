@@ -1611,9 +1611,19 @@ export interface ClosedPullRequest {
 }
 
 /**
- * One page (100) of closed pull requests, most recently updated first —
- * merged and abandoned alike (`mergedAt` tells them apart). Read-only. The
- * paginated caller lives in github-merged-prs.ts; this is just the REST shape.
+ * The `per_page` size `listClosedPullRequests` asks for. Exported because its
+ * paginated caller (github-merged-prs.ts) has to measure a page against the
+ * SAME number to know where the list ended — two literals in two modules are
+ * exactly the kind of pair that drifts, and a drift here silently cuts the
+ * walk to one page.
+ */
+export const CLOSED_PRS_PAGE_SIZE = 100;
+
+/**
+ * One page of closed pull requests (CLOSED_PRS_PAGE_SIZE of them), most
+ * recently updated first — merged and abandoned alike (`mergedAt` tells them
+ * apart). Read-only. The paginated caller lives in github-merged-prs.ts; this
+ * is just the REST shape.
  */
 export async function listClosedPullRequests(
   token: string,
@@ -1635,7 +1645,7 @@ export async function listClosedPullRequests(
     owner,
     repo,
     "GET",
-    `/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=${page}`,
+    `/pulls?state=closed&sort=updated&direction=desc&per_page=${CLOSED_PRS_PAGE_SIZE}&page=${page}`,
   );
   return results.map((pr) => ({
     number: pr.number,
