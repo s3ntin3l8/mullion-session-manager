@@ -96,7 +96,9 @@ and names each such shot with its pixel count, and the reports are in `visual/.o
 launcher exits 4, but `make` folds every failure into exit 2, so read that message, not the status.) Run it when you change
 the demo, a hook or a scene, or when a shot flips between runs. The base is rendered with the working tree's
 `scripts/demo` and `scripts/git-env.mjs` (`baseHarness`), so a PR that fixes the demo harness is not compared against its
-own bug; a fix in app code (`frontend/`, `src/`) still is.
+own bug. App code (`frontend/`, `src/`) comes from the merge base, so a fix there is the diff the check shows. One
+seam to know: `scripts/demo/env.mjs` imports `src/cli/sun-path.mjs`, so a PR that renames one of its exports and updates
+`env.mjs` leaves the base demo failing at import, and every shot then reads `new`.
 
 Two workflows keep the images current without a local Docker (both call shared workflows in `s3ntin3l8/.github`):
 
