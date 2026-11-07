@@ -26,6 +26,9 @@ jobs:
 
   # After the screenshots job, never beside it: the shared workflow runs one refresh at a time per repo, and a
   # third queued run would be dropped. `!cancelled()` so a failed screenshots refresh does not skip this one.
+  # A dispatch landing while the Monday run holds that group can drop this queued job (one pending run per
+  # group): it simply retries next Monday, or dispatch again. The shared workflow refuses any changed file that is
+  # not PNG or JSON, so a non-constant stamp in visual/baselines/.visual-kit would fail this job.
   baselines:
     needs: refresh
     if: ${{ !cancelled() && !github.event.repository.fork }}
