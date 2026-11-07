@@ -12,7 +12,11 @@ import BetterSqlite3 from "better-sqlite3";
 import { projects, sessions } from "../db/schema.js";
 import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
-import { resolveBackend } from "../services/session-backend.js";
+import {
+  resolveBackend,
+  isUnknownMutationOutcome,
+  type UnknownMutationOutcome,
+} from "../services/session-backend.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { isHostBusyError } from "../services/remote-host-errors.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -1392,7 +1396,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       // and this operation is about the session.
       const hostId = resolveSessionHostId(app, row);
       const { decision, reason, gateId } = request.body;
-      let ok: boolean;
+      let ok: boolean | UnknownMutationOutcome;
       try {
         ok = await resolveBackend(app, hostId).resolveReviewGate(
           String(sessionId),
@@ -1404,6 +1408,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         app.log.error({ err, sessionId, hostId }, "review-gate decision failed to reach host");
         return reply.badGateway("Failed to deliver decision to host");
       }
+      if (isUnknownMutationOutcome(ok)) return reply.badGateway(ok.error);
       if (!ok) return reply.conflict("No review is currently pending for this session");
       reply.code(204);
     },
@@ -1528,13 +1533,14 @@ export async function sessionsRoute(app: FastifyInstance) {
       // project's: a session may live on a host of its own (placement),
       // and this operation is about the session.
       const hostId = resolveSessionHostId(app, row);
-      let acked: boolean;
+      let acked: boolean | UnknownMutationOutcome;
       try {
         acked = await resolveBackend(app, hostId).acknowledgeAttention(String(sessionId));
       } catch (err) {
         app.log.error({ err, sessionId, hostId }, "attention ack failed to reach host");
         return reply.badGateway("Failed to deliver acknowledgement to host");
       }
+      if (isUnknownMutationOutcome(acked)) return reply.badGateway(acked.error);
       if (!acked) {
         // Either a blocking kind is still pending on the owning host (its
         // own dedicated resolve route — review-gate/promote/permission/

@@ -2007,13 +2007,20 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   A **prompt** (`sessions.prompt`, and message delivery) lost mid-request replies
   with an explicit "may have been delivered (outcome unknown)" error, never "the
   host is unreachable", and is not retried: the calling agent should read the
-  session's output before sending it again.
-  The idempotent (retry-safe) POST list is pinned against the agent's `/internal`
-  routes by a test; it includes the read-only `read-files`, `worktrees/compare-paths`
-  and `project-files/download`, and `git-repair` only for its `confirm: false` plan.
+  session's output before sending it again. The same applies to the other mutating
+  control calls (review-gate decision, attention acknowledge), which reply 502 with
+  that wording. A **read** (`wait-output`, the transcript read) has nothing to
+  repeat, so a lost connection there is a plain "host is unreachable".
+  The read-only (idempotent) POST list is pinned against the agent's registered
+  `/internal` routes by a test (an unclassified route, or a stale entry, fails it);
+  it includes `wait-output`, `read-files`, `worktrees/compare-paths` and
+  `project-files/download`, and `git-repair` only for its `confirm: false` plan.
+  **There is no retry layer.** "Idempotent" only changes what a mid-request close
+  is reported as: a plain `HostUnreachableError` ("reported as unreachable, not
+  unknown outcome"), so the caller may re-issue the read itself.
 - **`HostUnreachableError`**: A network failure before sending, a dropped link on an
-  idempotent request, or a 5xx HTTP response. Read-only calls and idempotent probes
-  keep retrying as before.
+  idempotent request, or a 5xx HTTP response. The transport does not retry; callers
+  that poll (probes, reconcilers) try again on their next tick.
 
 **Troubleshooting.** A host with no URL that never leaves `pending`: its channel
 has not connected; check the agent's log for `[agent-channel]` lines and that

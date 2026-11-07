@@ -79,7 +79,7 @@ describe("auto-rebase spawn with an unknown outcome (#2637)", () => {
     delete process.env.MULLION_TASK_MASTER_ENABLED;
   });
 
-  it("adopts the kept session and never spawns a second worker", async () => {
+  async function setup(name: string) {
     mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
     mockResolveGitHubToken.mockResolvedValue("tok");
     mockGetPullRequestByNumber.mockResolvedValue({
@@ -104,7 +104,7 @@ describe("auto-rebase spawn with an unknown outcome (#2637)", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { allowDuplicate: true, createDir: true, name: "p-rebase", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name, cwd: "/tmp" },
     });
     const projectId = created.json().id as number;
     await app.inject({
@@ -133,6 +133,11 @@ describe("auto-rebase spawn with an unknown outcome (#2637)", () => {
       .values({ projectId, command: "claude", cwd: "/tmp", status: "active" })
       .returning()
       .all();
+    return { app, task, kept, projectId };
+  }
+
+  it("adopts the kept session and never spawns a second worker", async () => {
+    const { app, task, kept } = await setup("p-rebase");
     const create = vi.spyOn(lifecycle, "createSessionRecord").mockResolvedValue({
       ok: false,
       reason: "outcome-unknown",
@@ -153,6 +158,32 @@ describe("auto-rebase spawn with an unknown outcome (#2637)", () => {
     row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
     expect(row.rebaseAttempts).toBe(1);
     expect(create.mock.calls.length).toBe(spawnsAfterFirstTick);
+    await app.close();
+  });
+
+  // The rebase CAS is status-guarded; a transition that lands while the spawn is
+  // in flight loses it. A clean spawn and an adopted unknown-outcome one are
+  // handled alike: the session is killed, since nothing points at it.
+  it.each([
+    ["a clean spawn", false],
+    ["an unknown-outcome spawn", true],
+  ])("kills the spawned session when the rebase CAS is lost after %s", async (_n, unknown) => {
+    const { app, task, kept } = await setup(`p-rebase-loss-${unknown ? "u" : "c"}`);
+    const kill = vi.spyOn(lifecycle, "killSession").mockResolvedValue(null);
+    vi.spyOn(lifecycle, "createSessionRecord").mockImplementation(async () => {
+      // A concurrent transition out of done while the spawn is in flight.
+      app.db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, task.id)).run();
+      return unknown
+        ? { ok: false, reason: "outcome-unknown", sessionId: kept.id }
+        : ({ ok: true, row: { id: kept.id }, initialPromptApplied: true } as never);
+    });
+
+    await reconcileTasks(app);
+
+    const row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
+    expect(row.sessionId).toBeNull();
+    expect(row.rebaseAttempts).toBe(0);
+    expect(kill).toHaveBeenCalledWith(app, kept.id);
     await app.close();
   });
 });

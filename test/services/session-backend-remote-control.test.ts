@@ -127,6 +127,31 @@ describe("RemoteBackend.waitOutput", () => {
     clientMock.resolveWaitOutput.mockReset();
   });
 
+  it("reports a lost channel as plain unreachable: a read has nothing to double-deliver", async () => {
+    clientMock.resolveWaitOutput.mockRejectedValue(
+      new HostOutcomeUnknownError("mac-1", new Error("channel closed")),
+    );
+    const out = await backend().waitOutput("5", waitReq());
+    expect(out).toMatchObject({
+      failed: true,
+      status: 502,
+      error: expect.stringMatching(/unreachable/),
+    });
+    expect((out as { error: string }).error).not.toMatch(/DELIVERED/);
+  });
+
+  it("reports a lost channel on the transcript read as plain unreachable", async () => {
+    clientMock.resolveTranscript.mockRejectedValue(
+      new HostOutcomeUnknownError("mac-1", new Error("channel closed")),
+    );
+    const out = await backend().getTranscript("5", {} as never);
+    expect(out).toMatchObject({
+      ok: false,
+      status: 502,
+      error: expect.stringMatching(/unreachable/),
+    });
+  });
+
   it("returns a match from the first chunk", async () => {
     clientMock.resolveWaitOutput.mockResolvedValue({
       matched: true,

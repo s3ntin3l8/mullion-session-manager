@@ -1892,9 +1892,12 @@ async function attemptAutoRebase(
     }
     app.log.warn(
       { taskId: task.id, newSessionId: spawnedSessionId },
-      "task auto-rebase: lost a race with a concurrent transition — the freshly spawned session is orphaned, left for a human to notice",
+      "task auto-rebase: lost a race with a concurrent transition — killing the freshly spawned session, nothing points at it",
     );
-    if (!result.ok) await killSession(app, spawnedSessionId); // nothing points at it
+    // Same for a clean spawn and an adopted unknown-outcome one (#2637): the CAS
+    // lost, so the task never took the session as its handle and no later tick
+    // would find it.
+    await killSession(app, spawnedSessionId);
     return;
   }
 
