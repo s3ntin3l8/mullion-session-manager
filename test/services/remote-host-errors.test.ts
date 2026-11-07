@@ -93,7 +93,8 @@ const internalRoutes = await (async () => {
 
 describe("isIdempotentRequest (#2637)", () => {
   const routes = internalRoutes;
-  const concrete = (r: string) => r.replace(":id", "7").replace(":port", "3000").replace("*", "x");
+  const concrete = (r: string) =>
+    r.replaceAll(":id", "7").replaceAll(":port", "3000").replaceAll("*", "x");
 
   it("finds the internal POST routes", () => {
     expect(routes.length).toBeGreaterThan(30);
