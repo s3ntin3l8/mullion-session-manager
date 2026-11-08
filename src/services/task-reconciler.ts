@@ -1653,6 +1653,18 @@ async function attemptMerge(
     const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
     const readiness = classifyMergeReadiness(pr);
 
+    // A finished auto-rebase attempt is judged while the PR reads settled and
+    // not conflicting: on a later tick main may already have outrun it, and a
+    // `dirty` tick reads the post-outrun state (see settleRapidRebaseExit).
+    if (
+      project.autoApprove &&
+      task.rebaseSpawnHeadSha !== null &&
+      readiness !== "dirty" &&
+      readiness !== "already-done"
+    ) {
+      await settleRapidRebaseExit(app, task, project);
+    }
+
     switch (readiness) {
       case "already-done": {
         // Merged or closed out of band (a human merged it directly on
@@ -3152,7 +3164,14 @@ async function attemptAutoApprove(
     // Reset the backoff so the auto-approve attempt on the next tick is not
     // throttled by the attempts accumulated during the dirty/rebase period.
     resetAutoApproveBackoff(task.id);
-    await clearRebaseHoldIfWorkerFinished(app, task);
+    // Judge the finished attempt while this post-push read is clean: main may
+    // outrun the head before a later (dirty) tick could see it.
+    const verdict = project.autoApprove
+      ? await settleRapidRebaseExit(app, task, project, { outrunOnly: true })
+      : "settled";
+    // An undetermined read keeps the hold-back (rebaseStartedAt) too: every
+    // later judge is gated on it, so ending it now would lose the refund.
+    if (verdict !== "undetermined") await clearRebaseHoldIfWorkerFinished(app, task);
   }
 
   if (!hasIngestedCurrentReview(task)) return;

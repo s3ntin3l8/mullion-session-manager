@@ -1677,6 +1677,23 @@ the task's branch to fix the conflict instead of just backing off:
   exit lets the task return to `reviewing` with the approval still carried and
   `needsHumanReason: "no-progress"` set. Each rapid exit logs one `warn` with
   the task id, session id, agent and elapsed seconds.
+- **A rebase that landed a mergeable head is refunded when main outruns it.**
+  On a busy repo each rebase can make the PR mergeable only for the next merge
+  to `main` to re-conflict it, and two such attempts would otherwise exhaust
+  `MAX_REBASE_ATTEMPTS`. When a finished (non-rapid) worker has moved the PR
+  head off `rebaseSpawnHeadSha` and GitHub reports the PR `mergeable` and not
+  `dirty`, `settleRapidRebaseExit` refunds the attempt and counts it in
+  `rebaseOutrunCount`, capped at `MAX_REBASE_OUTRUNS` (5) per task; past the cap
+  the normal give-up applies. A head that is still `dirty` leaves the attempt
+  counted. An unreadable or still-computing (`mergeable === null`) read is
+  undetermined: the attempt marker is kept and a later tick reads again, so a
+  flaky GET never costs the refund. On a `reviewing` task the auto-rebase
+  hold-back (`rebaseStartedAt`) is kept too, since every later judge is gated on
+  it (`settleRapidRebaseExit` returns `"undetermined"` and the caller skips
+  `clearRebaseHoldIfWorkerFinished`). It is judged best effort, on the first tick
+  that reads a settled PR after the worker finishes: the merge sweep (a `done`
+  task, on its retry backoff) and the auto-approve tick (a `reviewing` task, when
+  the PR reads mergeable) both run it before main can re-conflict the PR.
 
 **Why `unstable` doesn't merge.** `unstable` means a _non-required_ check is
 failing or still running — and this repo deliberately does not require

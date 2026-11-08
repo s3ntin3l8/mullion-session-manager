@@ -1384,6 +1384,9 @@ export const tasks = sqliteTable(
     // head. Refunded from `rebaseAttempts` until the cap, so a dead agent does
     // not spend the real attempts.
     rebaseAbortedAttempts: integer("rebase_aborted_attempts").notNull().default(0),
+    // Rebase attempts refunded because the worker landed a mergeable head that
+    // main then outran. Capped (MAX_REBASE_OUTRUNS) so the refund cannot loop.
+    rebaseOutrunCount: integer("rebase_outrun_count").notNull().default(0),
     // Suggestions-round workers that ended within RAPID_EXIT_MS with the PR
     // head unchanged.
     suggestionsRapidExits: integer("suggestions_rapid_exits").notNull().default(0),

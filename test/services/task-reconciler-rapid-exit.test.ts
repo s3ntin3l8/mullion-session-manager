@@ -63,7 +63,7 @@ const { reconcileTasks, resetMergeBackoff, autoReturnTask } =
 const lifecycle = await import("../../src/services/session-lifecycle.js");
 const reseedModule = await import("../../src/services/task-reseed.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
-const { eq } = await import("drizzle-orm");
+const { eq, ne } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-rapid-exit-${process.pid}.db`);
 
@@ -130,7 +130,13 @@ describe("a worker that exits within seconds", () => {
     await Promise.all(apps.splice(0).map((a) => a.close()));
   });
 
-  function mockPr(headSha: string) {
+  function mockPr(
+    headSha: string,
+    state: { mergeable: boolean | null; mergeableState: string } = {
+      mergeable: false,
+      mergeableState: "dirty",
+    },
+  ) {
     mockGetPullRequestByNumber.mockResolvedValue({
       number: 9,
       htmlUrl: "https://github.com/o/r/pull/9",
@@ -142,8 +148,7 @@ describe("a worker that exits within seconds", () => {
       title: "feat: do the thing",
       state: "open",
       merged: false,
-      mergeable: false,
-      mergeableState: "dirty",
+      ...state,
     });
   }
 
@@ -183,7 +188,13 @@ describe("a worker that exits within seconds", () => {
   // `spawnedAgoMs` ago, finishing `ranMs` after that.
   async function rebaseTask(
     name: string,
-    opts: { ranMs: number; attempts?: number; aborted?: number; headAtSpawn?: string | null },
+    opts: {
+      ranMs: number;
+      attempts?: number;
+      aborted?: number;
+      outruns?: number;
+      headAtSpawn?: string | null;
+    },
   ) {
     const { app, projectId, session } = await setupProject(name);
     const spawnedAt = new Date(Math.floor(Date.now() / 1000) * 1000 - 10 * 60_000);
@@ -203,6 +214,7 @@ describe("a worker that exits within seconds", () => {
         sessionId: session.id,
         rebaseAttempts: opts.attempts ?? 1,
         rebaseAbortedAttempts: opts.aborted ?? 0,
+        rebaseOutrunCount: opts.outruns ?? 0,
         rebaseStartedAt: spawnedAt,
         rebaseSpawnHeadSha: opts.headAtSpawn === undefined ? "sha-head" : opts.headAtSpawn,
       })
@@ -300,6 +312,129 @@ describe("a worker that exits within seconds", () => {
     expect(row.rebaseAttempts).toBe(2);
     expect(row.mergeError).toContain("gave up after 2 attempt(s)");
     expect(create).not.toHaveBeenCalled();
+  });
+
+  // The worker ran for minutes and pushed (PR head moved off the spawn head).
+  describe("a rebase that landed a head main then outran", () => {
+    const pushed = { ranMs: 5 * 60_000, headAtSpawn: "sha-before" };
+
+    it("refunds the attempt when GitHub reports the pushed head mergeable", async () => {
+      const { app, task } = await rebaseTask("p-outrun-refund", pushed);
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      await reconcileTasks(app);
+      const row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseOutrunCount).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBeNull();
+    });
+
+    it("does not refund a head that is still conflicting", async () => {
+      const { app, task } = await rebaseTask("p-outrun-dirty", pushed);
+      mockPr("sha-after");
+      await reconcileTasks(app);
+      const row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseOutrunCount).toBe(0);
+    });
+
+    it("stops refunding after the fifth outrun", async () => {
+      const { app, task } = await rebaseTask("p-outrun-cap", { ...pushed, outruns: 5 });
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      await reconcileTasks(app);
+      const row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseOutrunCount).toBe(5);
+    });
+
+    it("does not refund while GitHub is still computing, then refunds on a clean later tick", async () => {
+      const { app, task } = await rebaseTask("p-outrun-null", pushed);
+      mockPr("sha-after", { mergeable: null, mergeableState: "unknown" });
+      await reconcileTasks(app);
+      let row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseOutrunCount).toBe(0);
+      // Undetermined: the attempt marker survives so a later tick judges it.
+      expect(row.rebaseSpawnHeadSha).toBe("sha-before");
+
+      resetMergeBackoff(task.id);
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      await reconcileTasks(app);
+      row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseOutrunCount).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBeNull();
+    });
+
+    it("refunds a reviewing task's finished attempt at the auto-approve tick", async () => {
+      const { app, task } = await rebaseTask("p-outrun-reviewing", pushed);
+      app.db
+        .update(tasks)
+        .set({
+          status: "reviewing",
+          reviewingAt: new Date(),
+          lastReviewVerdict: "clean",
+          mergeRequestedAt: null,
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      await reconcileTasks(app);
+      const row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseOutrunCount).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBeNull();
+    });
+
+    it("keeps the hold-back and marker on a reviewing task when the settle read is still computing", async () => {
+      const { app, task } = await rebaseTask("p-outrun-reviewing-null", pushed);
+      app.db
+        .update(tasks)
+        .set({
+          status: "reviewing",
+          reviewingAt: new Date(),
+          lastReviewVerdict: "clean",
+          mergeRequestedAt: null,
+          mergeError: "stale merge error",
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      // The DB is shared across this file: rows left by earlier tests would be
+      // swept in the same tick and consume the one-shot PR read below, so the
+      // settle block never ran. Leave this task as the only one.
+      app.db.delete(tasks).where(ne(tasks.id, task.id)).run();
+      // First read (the tick's) is clean; the settle re-read is still computing.
+      mockPr("sha-after", { mergeable: null, mergeableState: "unknown" });
+      const computing = await mockGetPullRequestByNumber();
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      const clean = await mockGetPullRequestByNumber();
+      mockGetPullRequestByNumber.mockReset();
+      mockGetPullRequestByNumber.mockResolvedValueOnce(clean).mockResolvedValue(computing);
+      await reconcileTasks(app);
+      let row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBe("sha-before");
+      expect(row.rebaseStartedAt).not.toBeNull();
+      // The settle block ran (it clears the stale merge error); only the
+      // refund was withheld.
+      expect(row.mergeError).toBeNull();
+
+      mockGetPullRequestByNumber.mockReset();
+      mockGetPullRequestByNumber.mockResolvedValue(clean);
+      await reconcileTasks(app);
+      row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseOutrunCount).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBeNull();
+    });
+
+    it("keeps the attempt marker when the PR cannot be read", async () => {
+      const { app, task } = await rebaseTask("p-outrun-unreadable", pushed);
+      mockGetPullRequestByNumber.mockRejectedValue(new Error("github down"));
+      await reconcileTasks(app);
+      const row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBe("sha-before");
+    });
   });
 
   // A suggestions round: the approved review's nits sent back to the worker,
