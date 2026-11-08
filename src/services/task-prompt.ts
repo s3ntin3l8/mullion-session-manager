@@ -1693,6 +1693,14 @@ export function buildRebasePrompt(opts: WorkerPreambleOptions & { baseRef: strin
     `Rebase onto the latest ${opts.baseRef}, resolve every conflict, then re-run the repo's own ` +
     "verification gate (the same one the instructions above point at) — a conflict resolution " +
     "that isn't re-verified can silently break something the original change got right.\n\n" +
+    "Generated files are not merged by hand. If a conflicted file is generated (a lockfile, a " +
+    "secrets or import-boundary baseline, a snapshot, a timing table such as a shard-durations " +
+    `file), take ${opts.baseRef}'s copy (during a rebase, \`git checkout --ours <file>\` is the ` +
+    "base branch's side) and then regenerate it with the command the repo's AGENTS.md, " +
+    "CONTRIBUTING.md or the file's own header names, instead of editing conflict markers by " +
+    "hand. If no regeneration command is documented, say so in your final message and resolve " +
+    "it by hand. Before finishing, confirm no conflict markers remain: " +
+    "`git grep -nE '^(<<<<<<<|>>>>>>>)'`.\n\n" +
     `You are staying ON ${opts.branchName} the whole time — a rebase replays this branch's own ` +
     "commits onto a newer base, it does not switch to or create another branch, so this does not " +
     'conflict with the "do not switch, rebase onto, or create another branch" rule above (that ' +
