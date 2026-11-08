@@ -24,4 +24,14 @@ describe("reviewRoundLabel", () => {
       "## Round 1 (retry 3)",
     );
   });
+
+  it("joins both notes in a single parenthetical", () => {
+    expect(
+      reviewRoundLabel({
+        ...base,
+        lastAutoReturnReason: "suggestions",
+        inconclusiveReviewRearmCount: 1,
+      }),
+    ).toBe("## Round 1 (retry 2, re-review after suggestions)");
+  });
 });

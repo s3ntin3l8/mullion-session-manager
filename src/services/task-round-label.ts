@@ -4,7 +4,11 @@
  *
  * A suggestions round and a re-armed inconclusive review both spend no round,
  * so they would otherwise repeat the previous heading; each gets a suffix.
- * A never-re-armed round keeps the plain heading.
+ * A never-re-armed round keeps the plain heading, and every heading must stay
+ * prefix-compatible with `^## Round (\d+)` and the `\n\n(?=## Round )` split:
+ * `parseReviewRounds` (frontend/src/lib/reviewRounds.ts) and
+ * `openRefsOfRenderedRound`/`priorRoundFor` parse it back. Keep the suffix on
+ * the one heading line.
  */
 export function reviewRoundLabel(
   task: {
@@ -14,14 +18,15 @@ export function reviewRoundLabel(
   },
   supersedeInconclusive = false,
 ): string {
-  const suggestions =
-    task.lastAutoReturnReason === "suggestions" ? " (re-review after suggestions)" : "";
-  const retry =
-    task.inconclusiveReviewRearmCount > 0
-      ? ` (retry ${task.inconclusiveReviewRearmCount + 1})`
-      : "";
-  if (supersedeInconclusive) {
-    return `## Round ${task.autoReturnRounds + 1} (late verdict — supersedes the inconclusive ingest)${retry}`;
+  const notes: string[] = [];
+  if (task.inconclusiveReviewRearmCount > 0) {
+    notes.push(`retry ${task.inconclusiveReviewRearmCount + 1}`);
   }
-  return `## Round ${task.autoReturnRounds + 1}${suggestions}${retry}`;
+  if (supersedeInconclusive) {
+    notes.push("late verdict — supersedes the inconclusive ingest");
+  } else if (task.lastAutoReturnReason === "suggestions") {
+    notes.push("re-review after suggestions");
+  }
+  const suffix = notes.length > 0 ? ` (${notes.join(", ")})` : "";
+  return `## Round ${task.autoReturnRounds + 1}${suffix}`;
 }
