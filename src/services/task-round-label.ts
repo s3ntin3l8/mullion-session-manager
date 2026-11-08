@@ -42,7 +42,10 @@ export function reviewRoundLabel(
   // A human re-review of a concluded round spends no counter, so it would
   // re-ingest under the same heading; number it against what is already stored.
   const taken = new Set(
-    (storedFindings ?? "").split("\n").filter((l) => l.startsWith("## Round ")),
+    (storedFindings ?? "")
+      .split("\n")
+      .filter((l) => l.startsWith("## Round "))
+      .map((l) => l.trimEnd()),
   );
   let label = build([]);
   for (let n = 2; taken.has(label); n++) label = build([`re-review ${n}`]);
