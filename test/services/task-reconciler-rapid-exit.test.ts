@@ -63,7 +63,7 @@ const { reconcileTasks, resetMergeBackoff, autoReturnTask } =
 const lifecycle = await import("../../src/services/session-lifecycle.js");
 const reseedModule = await import("../../src/services/task-reseed.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
-const { eq } = await import("drizzle-orm");
+const { eq, ne } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-rapid-exit-${process.pid}.db`);
 
@@ -394,9 +394,14 @@ describe("a worker that exits within seconds", () => {
           reviewingAt: new Date(),
           lastReviewVerdict: "clean",
           mergeRequestedAt: null,
+          mergeError: "stale merge error",
         })
         .where(eq(tasks.id, task.id))
         .run();
+      // The DB is shared across this file: rows left by earlier tests would be
+      // swept in the same tick and consume the one-shot PR read below, so the
+      // settle block never ran. Leave this task as the only one.
+      app.db.delete(tasks).where(ne(tasks.id, task.id)).run();
       // First read (the tick's) is clean; the settle re-read is still computing.
       mockPr("sha-after", { mergeable: null, mergeableState: "unknown" });
       const computing = await mockGetPullRequestByNumber();
@@ -409,6 +414,9 @@ describe("a worker that exits within seconds", () => {
       expect(row.rebaseAttempts).toBe(1);
       expect(row.rebaseSpawnHeadSha).toBe("sha-before");
       expect(row.rebaseStartedAt).not.toBeNull();
+      // The settle block ran (it clears the stale merge error); only the
+      // refund was withheld.
+      expect(row.mergeError).toBeNull();
 
       mockGetPullRequestByNumber.mockReset();
       mockGetPullRequestByNumber.mockResolvedValue(clean);
