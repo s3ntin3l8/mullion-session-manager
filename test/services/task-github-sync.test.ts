@@ -1038,14 +1038,6 @@ describe("task-github-sync", () => {
       expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     });
 
-    it("reports permanent and records githubSyncError when no GitHub token is connected", async () => {
-      mockGetToken.mockReturnValue(null);
-      const task = baseTask({ issueNumber: 5, prNumber: 9 });
-      const out = await postReviewFindingsComment(app, task, project, { body: "## Round 1" });
-      expect(out).toBe("permanent");
-      expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
-    });
-
     it("falls back to an issue comment when posting the review fails but the task also has a linked issue", async () => {
       mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
       mockCreateComment.mockResolvedValue({

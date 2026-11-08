@@ -774,6 +774,20 @@ function failedMintOutcomes(appId: string): MintOutcome[] {
     .sort((a, b) => a.scope.localeCompare(b.scope) || a.at - b.at);
 }
 
+/**
+ * Whether the last App mint for this repo failed for a transient reason (a
+ * 5xx, a network error — state "error"), as opposed to GitHub refusing the
+ * permission ("denied"). A null `resolveGitHubToken` result with this set
+ * means "try again later", not "no integration".
+ */
+export function hasTransientMintFailure(repo: { owner: string; repo: string }): boolean {
+  const suffix = `:${repo.owner}/${repo.repo}`;
+  for (const [key, o] of mintOutcomes) {
+    if (o.state === "error" && key.endsWith(suffix)) return true;
+  }
+  return false;
+}
+
 /** Test-only reset. */
 export function clearMintOutcomesForTests(): void {
   mintOutcomes.clear();

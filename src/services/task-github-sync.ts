@@ -26,7 +26,12 @@ import { trimDiagnosticsForComment } from "./task-failure-diagnostics.js";
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
-import { getIntegration, resolveGitHubToken, resolveReviewerToken } from "./github-integration.js";
+import {
+  getIntegration,
+  hasTransientMintFailure,
+  resolveGitHubToken,
+  resolveReviewerToken,
+} from "./github-integration.js";
 import { resolveRepoRef, resolveRepoRefResult } from "./host-git.js";
 import {
   addLabels,
@@ -778,6 +783,10 @@ function reviewPostMarker(key: string): string {
  * `COMMENT` posted from the primary identity instead — logged at `debug`,
  * never a `githubSyncError`, the same "expected steady state" posture
  * `resolveGitHubToken` already has for the primary App not covering a repo.
+ * That posture is for the REVIEWER token only: a missing PRIMARY token
+ * records "No GitHub token connected" and reports "permanent" (clearing the
+ * pending marker), unless the last App mint failed transiently
+ * (`hasTransientMintFailure`), which reports "retry".
  * `getPullRequestByNumber` and the issue-comment fallback always use the
  * primary token; only the review-posting call itself ever swaps identity.
  *
@@ -873,6 +882,9 @@ export async function postReviewFindingsComment(
   if (!repoRef) return "posted";
   const token = await resolveGitHubToken(app, repoRef);
   if (!token) {
+    // A transient App mint failure (5xx, network) with no PAT to fall back to
+    // also yields null: that one a later tick can fix, so keep the marker.
+    if (hasTransientMintFailure(repoRef)) return "retry";
     // No retry can supply a missing token: record why and report the
     // permanent outcome (which clears the pending marker) rather than "posted".
     recordGithubSyncError(app, task.id, "No GitHub token connected");
