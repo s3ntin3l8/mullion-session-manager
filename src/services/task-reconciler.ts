@@ -4159,7 +4159,7 @@ async function ingestReviewOutcome(
   } = input;
   // A suggestions round spends no round, so a re-review after one (the
   // worker asked for it) shares its counter with the review before it.
-  const roundLabel = reviewRoundLabel(task, input.supersedeInconclusive);
+  const roundLabel = reviewRoundLabel(task, input.supersedeInconclusive, task.reviewFindings);
 
   const commentBody = parsed
     ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
