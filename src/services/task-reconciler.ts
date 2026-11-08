@@ -3732,6 +3732,15 @@ export async function autoReturnTask(
         // must not have moved either. Same "roll back together" reasoning
         // as every other field in this write.
         claimedAt: task.claimedAt,
+        // The suggestions rapid-exit ledger rolls back with the round: a
+        // round that never started leaves no ledger behind.
+        ...(opts.reason === "suggestions"
+          ? {
+              suggestionsSeedPrompt: task.suggestionsSeedPrompt,
+              suggestionsRapidExits: task.suggestionsRapidExits,
+              rapidExitRetryAfter: task.rapidExitRetryAfter,
+            }
+          : {}),
       })
       // Adding `status = "in_progress"` here (issue #973) is a real
       // semantic change, not just a tighter guard: status and the round now

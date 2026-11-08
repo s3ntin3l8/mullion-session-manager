@@ -400,7 +400,7 @@ describe("a worker that exits within seconds", () => {
 
   it("resets the rapid-exit ledger whenever autoReturnTask seeds a suggestions round", async () => {
     const { app, projectId, session } = await setupProject("p-seed-reset");
-    vi.spyOn(reseedModule, "reseedTaskIfSessionExited").mockResolvedValue(true);
+    const reseed = vi.spyOn(reseedModule, "reseedTaskIfSessionExited").mockResolvedValue(true);
     const [task] = app.db
       .insert(tasks)
       .values({
@@ -412,6 +412,10 @@ describe("a worker that exits within seconds", () => {
         branchName: "mullion/task-x",
         worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
         agentCommand: "claude",
+        reviewSessionId: session.id,
+        lastReviewVerdict: "approved-with-suggestions",
+        lastReviewVerdictAt: new Date(Date.now() - 60_000),
+        lastReviewedHeadSha: "sha-head",
         suggestionsSeedPrompt: "OLD round prompt",
         suggestionsRapidExits: 1,
         rapidExitRetryAfter: new Date(Date.now() + 600_000),
@@ -430,5 +434,23 @@ describe("a worker that exits within seconds", () => {
     expect(row.suggestionsSeedPrompt).toBe("NEW comments-batch prompt");
     expect(row.suggestionsRapidExits).toBe(0);
     expect(row.rapidExitRetryAfter).toBeNull();
+
+    // End to end: the new round's worker ends in 20 s with the head unchanged;
+    // the guard re-seeds the NEW prompt, not the previous round's.
+    const finishedAt = row.claimedAt!.getTime() + 20_000;
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => fakeInfo({ lastTurnEndedAt: finishedAt, workFinishedAt: finishedAt }),
+    } as never);
+    await reconcileTasks(app);
+    expect(getTask(app, task.id).suggestionsRapidExits).toBe(1);
+    app.db
+      .update(tasks)
+      .set({ rapidExitRetryAfter: new Date(Date.now() - 1000) })
+      .where(eq(tasks.id, task.id))
+      .run();
+    resetMergeBackoff(task.id);
+    await reconcileTasks(app);
+    expect(reseed).toHaveBeenCalledTimes(2);
+    expect(reseed.mock.calls[1][3]).toBe("NEW comments-batch prompt");
   });
 });
