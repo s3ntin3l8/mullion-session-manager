@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
+import { repoRefMocks } from "../helpers/pr-review-defaults.js";
 
 const {
   mockHermesUsable,
@@ -41,7 +42,7 @@ const { mockResolveRepoRef, mockResolveGitHubToken, mockGetPullRequestByNumber, 
   }));
 vi.mock("../../src/services/host-git.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveRepoRef: mockResolveRepoRef,
+  ...repoRefMocks(mockResolveRepoRef),
 }));
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -166,8 +167,11 @@ describe("re-armed review round heading (#2752)", () => {
     const stored = get(retry)?.reviewFindings ?? "";
     expect(stored).toContain("## Round 1\n\nfirst attempt");
     expect(stored).toContain("## Round 1 (retry 2)");
-    // The posted PR review body carries the same distinct heading.
-    expect(mockCreatePrReview.mock.calls.at(-1)?.[4].body).toMatch(/^## Round 1 \(retry 2\)\n\n/);
+    // The posted PR review body carries the same distinct heading, after the
+    // hidden dedupe marker the review post adds (#2749).
+    expect(mockCreatePrReview.mock.calls.at(-1)?.[4].body).toMatch(
+      /^<!-- mullion-review-post:[^>]*-->\n## Round 1 \(retry 2\)\n\n/,
+    );
     await app.close();
   });
 });
