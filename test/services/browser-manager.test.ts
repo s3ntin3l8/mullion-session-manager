@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import type * as fsPromises from "node:fs/promises";
 import { EventEmitter } from "node:events";
 
 // BrowserManager launches real Chromium via Playwright — CI has no browser
@@ -117,6 +118,26 @@ class FakeBrowser extends EventEmitter {
     this.emit("disconnected");
   }
 }
+
+// Lets a test park BrowserManager.openTarget inside its downloads sweep, which
+// runs before the endpoint is recorded: the earliest point of an open.
+const fsHooks = vi.hoisted(() => ({
+  rm: null as null | ((target: string) => Promise<void>),
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fsPromises>();
+  return {
+    ...actual,
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      const hook = fsHooks.rm;
+      if (hook && String(args[0]).includes(`${path.sep}downloads${path.sep}`)) {
+        fsHooks.rm = null; // park the first downloads sweep only
+        await hook(String(args[0]));
+      }
+      return actual.rm(...args);
+    },
+  };
+});
 
 vi.mock("playwright", () => ({
   chromium: {
@@ -704,6 +725,11 @@ describe("BrowserManager", () => {
   });
 
   describe("forgetProject while a browser is still opening", () => {
+    /** Lets every already-queued promise continuation run, without wall-clock time. */
+    async function microtaskTurns(n = 100) {
+      for (let i = 0; i < n; i++) await Promise.resolve();
+    }
+
     it("waits for the open, closes its context and leaves no file or pooled context", async () => {
       let release!: () => void;
       const gate = new Promise<void>((r) => (release = r));
@@ -728,7 +754,7 @@ describe("BrowserManager", () => {
       const forgetting = withHook.forgetProject(7).then(() => {
         forgotten = true;
       });
-      await new Promise((r) => setTimeout(r, 20));
+      await microtaskTurns();
       expect(forgotten).toBe(false); // it waits for the open to settle
 
       release();
@@ -740,6 +766,49 @@ describe("BrowserManager", () => {
       expect(left(dataDir)).toEqual([]);
       expect(left(path.join(dataDir, "downloads"))).toEqual([]);
       expect(withHook.instanceCount).toBe(0);
+      expect(launchedBrowsers[0].contexts[0].closeSpy).toHaveBeenCalled();
+    });
+
+    it("waits for an open parked before it records its endpoint or clears downloads", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let blocked!: () => void;
+      const inOpen = new Promise<void>((r) => (blocked = r));
+      // Files the project already has on disk when forgetProject runs, made
+      // for real so the assertions below can fail.
+      fsHooks.rm = async (downloads) => {
+        fs.mkdirSync(downloads, { recursive: true });
+        fs.writeFileSync(path.join(downloads, "old.csv"), "x");
+        fs.writeFileSync(path.join(dataDir, "project-7-0123456789abcdef.json"), "{}");
+        blocked();
+        await gate;
+      };
+      const withEndpoint = new BrowserManager({ enabled: true, maxContexts: 2, dataDir });
+
+      const opening = withEndpoint.getOrLaunch({ ...target(7), endpoint: "http://localhost:5173" });
+      await inOpen; // parked in openTarget, before the endpoint is recorded
+      expect(withEndpoint.instanceCount).toBe(0);
+      expect(launchedBrowsers).toHaveLength(0);
+      expect(fs.readdirSync(path.join(dataDir, "downloads"))).toHaveLength(1);
+
+      let forgotten = false;
+      const forgetting = withEndpoint.forgetProject(7).then(() => {
+        forgotten = true;
+      });
+      await microtaskTurns();
+      expect(forgotten).toBe(false); // it waits for the open to settle
+
+      release();
+      await opening;
+      await forgetting;
+
+      // The open recorded its endpoint after forgetProject was called; the
+      // wait is what lets forgetProject remove it too.
+      const left = (dir: string) =>
+        fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith("project-7")) : [];
+      expect(left(dataDir)).toEqual([]);
+      expect(left(path.join(dataDir, "downloads"))).toEqual([]);
+      expect(withEndpoint.instanceCount).toBe(0);
       expect(launchedBrowsers[0].contexts[0].closeSpy).toHaveBeenCalled();
     });
   });
