@@ -258,6 +258,48 @@ describe("a worker that exits within seconds", () => {
     expect(row.rapidExitRetryAfter).toBeNull();
   });
 
+  it("spawns no reviewer during the backoff, and one once the backoff ends", async () => {
+    const { app, task } = await rebaseTask("p-rapid-no-reviewer", { ranMs: 3_000 });
+    const create = vi.spyOn(lifecycle, "createSessionRecord");
+    app.db
+      .update(projects)
+      .set({ defaultReviewAgent: "claude" })
+      .where(eq(projects.id, task.projectId))
+      .run();
+
+    await reconcileTasks(app); // aborts the rapid-exit rebase, starts the backoff
+    expect(getTask(app, task.id).rebaseStartedAt).toBeNull();
+    expect(getTask(app, task.id).rapidExitRetryAfter).not.toBeNull();
+
+    // The shape the abort leaves behind: rebaseStartedAt is null, so only the
+    // backoff stamp can hold the reviewer spawn back.
+    app.db
+      .update(tasks)
+      .set({
+        status: "reviewing",
+        reviewingAt: new Date(Date.now() - 3_600_000), // past the CI wait
+        completedAt: null,
+        worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
+        reviewSessionId: null,
+        reviewRunId: null,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    await reconcileTasks(app); // a sweep inside the backoff
+    expect(create).not.toHaveBeenCalled();
+    expect(getTask(app, task.id).reviewSessionId).toBeNull();
+    expect(getTask(app, task.id).reviewSpawnClaimedAt).toBeNull();
+
+    app.db
+      .update(tasks)
+      .set({ rapidExitRetryAfter: new Date(Date.now() - 1000) })
+      .where(eq(tasks.id, task.id))
+      .run();
+    await reconcileTasks(app); // past the backoff the held reviewer is eligible again
+    expect(create).toHaveBeenCalled();
+  });
+
   it("still counts a normal rebase session", async () => {
     const { app, task } = await rebaseTask("p-normal-rebase", { ranMs: 5 * 60_000 });
     await reconcileTasks(app);
