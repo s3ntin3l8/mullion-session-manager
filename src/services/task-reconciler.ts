@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { reviewRoundLabel } from "./task-round-label.js";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -4237,13 +4238,7 @@ async function ingestReviewOutcome(
   } = input;
   // A suggestions round spends no round, so a re-review after one (the
   // worker asked for it) shares its counter with the review before it.
-  const roundLabel = `## Round ${task.autoReturnRounds + 1}${
-    input.supersedeInconclusive
-      ? " (late verdict — supersedes the inconclusive ingest)"
-      : task.lastAutoReturnReason === "suggestions"
-        ? " (re-review after suggestions)"
-        : ""
-  }`;
+  const roundLabel = reviewRoundLabel(task, input.supersedeInconclusive);
 
   const commentBody = parsed
     ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
