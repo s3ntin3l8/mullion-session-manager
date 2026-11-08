@@ -323,14 +323,20 @@ export async function attemptAutoRebase(
           .run();
         closeSessionBrowserBindings(app, task.sessionId);
       } catch (err) {
+        // Word the message by how this block was entered: an expired hold has
+        // no previous rebase attempt, only the blocking worker round.
         app.log.warn(
           { err, taskId: task.id, sessionId: task.sessionId },
-          "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick",
+          blocker !== null
+            ? "task auto-rebase: the worker session behind an expired rebase hold is still active and could not be terminated, leaving it for a later tick"
+            : "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick",
         );
         recordMergeError(
           app,
           task.id,
-          "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution",
+          blocker !== null
+            ? `Conflicts with main — ${blocker} could not be stopped, needs manual resolution`
+            : "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution",
         );
         return;
       }

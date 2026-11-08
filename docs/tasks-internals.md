@@ -1657,7 +1657,11 @@ the task's branch to fix the conflict instead of just backing off:
   `tasks.mergeError`, and tries again on a later tick. The wait is bounded by
   `REBASE_HOLD_MAX_MS` (30 minutes, tracked in memory from the first held
   tick, so a restart only restarts the clock): after that the rebase proceeds
-  and logs a `warn` naming the task and the blocker. An unreadable worker
+  and logs a `warn` naming the task and the blocker. Proceeding first
+  terminates the still-live worker round's session (killing an in-flight
+  suggestions or review-fix turn) and only then recreates the worktree; if the
+  terminate fails nothing is touched and the failure is recorded in
+  `tasks.mergeError`. An unreadable worker
   status fails open. It does not wait for CI: a conflicting PR runs none.
 - **A worker that exits within seconds is not an attempt.** An agent CLI that
   dies at once (agy on an exhausted quota, #1363) still reads as a finished
