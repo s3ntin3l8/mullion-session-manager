@@ -1,16 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { getHostRow, decryptToken } from "./host-registry.js";
 import { resolveHostTransport } from "./agent-channel-tunnel.js";
-import { RemoteHostClient } from "./remote-host-client.js";
+import { RemoteHostClient } from "./remote-host-client-core.js";
 
-// Split out of remote-host-client.ts (its size ratchet): the per-host client
-// cache. remote-host-client.ts re-exports getRemoteHostClient, so callers keep
+// Split out of the remote host client (its size ratchet): the per-host client
+// cache. remote-host-client.ts (the façade) re-exports getRemoteHostClient, so callers keep
 // importing it from there.
 
 // Cached per (app instance, hostId), self-invalidating on
 // token/baseUrl/session change (compared against the current DB row on
 // every lookup) rather than requiring host-registry.ts to explicitly
-// notify this module — keeps the two services free of a circular import.
+// notify this module — and the class is imported from remote-host-client-core.js, not the façade, so the two stay free of a circular import.
 // sessionIdEnc is included (issue #245 / roadmap 7.1) so a rotated session
 // rebuilds the cached client with the fresh credential, same as an edited
 // baseUrl/authTokenEnc already does. sessionSecretEnc is included too
