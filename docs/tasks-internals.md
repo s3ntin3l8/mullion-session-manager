@@ -1602,6 +1602,23 @@ the task's branch to fix the conflict instead of just backing off:
   checked out elsewhere), or the attempt cap is spent, the sweep falls back to
   today's plain `dirty` backoff — surfaced in `tasks.mergeError` for a human,
   same as `mergeOnApprove` without `autoApprove`.
+- **A worker that exits within seconds is not an attempt.** An agent CLI that
+  dies at once (agy on an exhausted quota, #1363) still reads as a finished
+  worker. `src/services/worker-rapid-exit.ts` holds the one predicate for it:
+  the session's `workFinishedAt` is under `RAPID_EXIT_MS` (60 s) after the
+  spawn and the PR head is still the one read at spawn (the same
+  `getPullRequestByNumber` read the review-stall detector uses; an unreadable
+  head fails open, so the attempt is counted as before). For the rebase worker,
+  such an attempt is refunded from `rebaseAttempts`, counted in
+  `rebaseAbortedAttempts`, and the next one waits 10 minutes
+  (`rapidExitRetryAfter`). The third aborted attempt is not refunded, so the
+  normal give-up applies. The same check protects a suggestions round (an
+  approved review's nits): a worker that ends that fast with the head
+  unchanged does not complete the round. It is re-seeded once after the same
+  backoff with the stored prompt (`suggestionsSeedPrompt`); a second rapid
+  exit lets the task return to `reviewing` with the approval still carried and
+  `needsHumanReason: "no-progress"` set. Each rapid exit logs one `warn` with
+  the task id, session id, agent and elapsed seconds.
 
 **Why `unstable` doesn't merge.** `unstable` means a _non-required_ check is
 failing or still running — and this repo deliberately does not require
