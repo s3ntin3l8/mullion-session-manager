@@ -4319,6 +4319,7 @@ async function ingestReviewOutcome(
               }
             : {}),
           verdict,
+          ...(reviewedHeadSha !== undefined ? { reviewedHeadSha } : {}),
           posted: false,
           createdAt: now,
         }

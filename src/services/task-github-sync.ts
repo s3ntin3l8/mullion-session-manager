@@ -703,8 +703,10 @@ export async function isIssueStillTrackable(
  *  - `permanent`: a failure no retry fixes (a 4xx other than 429 — a missing
  *    or closed PR, a token without write access); already recorded in
  *    `githubSyncError`.
+ *  - `stale`: only with `dropIfHeadMoved` — the PR head is no longer the one
+ *    the round reviewed, so nothing was posted and the caller drops the marker.
  */
-export type ReviewPostOutcome = "posted" | "retry" | "permanent";
+export type ReviewPostOutcome = "posted" | "retry" | "permanent" | "stale";
 
 /** Transient GitHub failures worth another attempt: a rate limit, a 5xx, a
  * 408/429, or anything that never got an HTTP answer (a network error, a
@@ -734,6 +736,11 @@ export interface PendingReviewPost {
   reviewSummary?: string;
   findings?: ReviewFinding[];
   verdict: ReviewVerdict | "inconclusive";
+  /** The PR head the round reviewed. A retry posts with this `commit_id`, never
+   * with whatever head the PR has by then. Absent when the head was unknown at
+   * ingest (the poller had not cached it): the retry then falls back to the
+   * current head. */
+  reviewedHeadSha?: string;
   /** The review has landed; only Mullion's own-thread resolution is owed
    * (approving verdicts only). */
   posted: boolean;
@@ -847,6 +854,12 @@ export async function postReviewFindingsComment(
      * carrying `dedupeKey` (a post whose response was lost), and does not
      * repeat the issue-comment fallback. */
     isRetry?: boolean;
+    /** The head the round reviewed: the review is posted against this commit,
+     * not the PR's current head. */
+    commitId?: string;
+    /** With `commitId`: post nothing and return `"stale"` when the PR head has
+     * moved past it (the round is no longer the one in flight). */
+    dropIfHeadMoved?: boolean;
   } & (
     | {
         /** Round header + summary only, no bullets — the PR review's body
@@ -924,6 +937,14 @@ export async function postReviewFindingsComment(
         if (existing.some((r) => r.body?.includes(mark))) return "posted";
       }
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+      if (
+        params.dropIfHeadMoved &&
+        params.commitId !== undefined &&
+        pr.headSha !== params.commitId
+      ) {
+        return "stale";
+      }
+      const commitId = params.commitId ?? pr.headSha;
       // Narrows `params.reviewSummary` to `string` on this branch — the
       // union above ties it to `findings` being present, so this check is
       // what makes the anchor/bullet duplication structurally impossible
@@ -959,7 +980,7 @@ export async function postReviewFindingsComment(
             (params.findings !== undefined && anchored.length > 0
               ? params.reviewSummary
               : params.body),
-          commitId: pr.headSha,
+          commitId,
           comments: anchored.length > 0 ? anchored : undefined,
           event,
         });
@@ -996,7 +1017,7 @@ export async function postReviewFindingsComment(
           );
           await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
             body: marker + params.body,
-            commitId: pr.headSha,
+            commitId,
           });
         } else {
           throw err;
