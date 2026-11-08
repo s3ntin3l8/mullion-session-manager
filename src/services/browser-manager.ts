@@ -262,6 +262,9 @@ export class BrowserManager {
   // Targets whose context is being opened, so concurrent callers share one
   // launch and the pool bound counts them before they land in `instances`.
   private readonly pending = new Map<string, Promise<ManagedBrowser>>();
+  // The project each `pending` open belongs to, so closeForProject can wait
+  // for the opens that have not landed in `instances` yet.
+  private readonly pendingProject = new Map<string, number>();
   // Targets whose context is being saved and closed. They are out of
   // `instances` but still occupy the shared process (and a pool slot), and a
   // relaunch of the same key must wait for the close: it would otherwise wipe
@@ -456,8 +459,10 @@ export class BrowserManager {
 
     const launch = this.openTarget(target, key).finally(() => {
       this.pending.delete(key);
+      this.pendingProject.delete(key);
     });
     this.pending.set(key, launch);
+    this.pendingProject.set(key, target.projectId);
     try {
       return await launch;
     } catch (err) {
@@ -768,6 +773,17 @@ export class BrowserManager {
   /** Closes every target of a project (project deleted or merged
    * away). Safe to call when none is running. */
   async closeForProject(projectId: number): Promise<void> {
+    // A browser still opening is in `pending`, not `instances`: wait for it to
+    // settle so its context is closed too, instead of surviving and
+    // re-creating the project's files after the caller deleted them.
+    for (;;) {
+      const opening = [...this.pendingProject]
+        .filter(([, id]) => id === projectId)
+        .map(([key]) => this.pending.get(key))
+        .filter((p): p is Promise<ManagedBrowser> => p !== undefined);
+      if (opening.length === 0) break;
+      await Promise.allSettled(opening);
+    }
     await Promise.all(this.listForProject(projectId).map((m) => this.closeTarget(m.target)));
   }
 
