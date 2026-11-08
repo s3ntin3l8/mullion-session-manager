@@ -1671,11 +1671,13 @@ the task's branch to fix the conflict instead of just backing off:
   head off `rebaseSpawnHeadSha` and GitHub reports the PR `mergeable` and not
   `dirty`, `settleRapidRebaseExit` refunds the attempt and counts it in
   `rebaseOutrunCount`, capped at `MAX_REBASE_OUTRUNS` (5) per task; past the cap
-  the normal give-up applies. It fails open: an unreadable or still-computing
-  (`mergeable === null`) state, or a head that is still `dirty`, leaves the
-  attempt counted. The attempt is judged once, on the first tick after the
-  worker finishes: the merge sweep runs it before acting on any non-conflicting
-  PR, so the read sees the pushed head before main can outrun it.
+  the normal give-up applies. A head that is still `dirty` leaves the attempt
+  counted. An unreadable or still-computing (`mergeable === null`) read is
+  undetermined: the attempt marker is kept and a later tick reads again, so a
+  flaky GET never costs the refund. It is judged best effort, on the first tick
+  that reads a settled PR after the worker finishes: the merge sweep (a `done`
+  task, on its retry backoff) and the auto-approve tick (a `reviewing` task, when
+  the PR reads mergeable) both run it before main can re-conflict the PR.
 
 **Why `unstable` doesn't merge.** `unstable` means a _non-required_ check is
 failing or still running — and this repo deliberately does not require

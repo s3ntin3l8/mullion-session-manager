@@ -73,12 +73,14 @@ export const REBASE_ATTEMPT_STALE_MS = 30 * 60_000;
  * attempt is refunded and the next one waits RAPID_EXIT_BACKOFF_MS. After
  * MAX_RAPID_REBASE_ABORTS such aborts the refund stops and the normal give-up
  * applies. Fails open: an unreadable session or PR head leaves the attempt
- * counted. Mutates `task` in memory like clearRebaseHoldIfWorkerFinished.
+ * counted. Also refunds a finished attempt that landed a mergeable head
+ * (main outran it), see MAX_REBASE_OUTRUNS. Mutates `task` in memory like clearRebaseHoldIfWorkerFinished.
  */
 export async function settleRapidRebaseExit(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
+  opts: { outrunOnly?: boolean } = {},
 ): Promise<void> {
   if (
     task.rebaseSpawnHeadSha === null ||
@@ -109,6 +111,10 @@ export async function settleRapidRebaseExit(
     workFinishedAt: info.workFinishedAt,
     headAtSpawn: task.rebaseSpawnHeadSha,
   });
+  // `outrunOnly` (the auto-approve tick's post-push read): judge only a
+  // pushed, mergeable head. A rapid exit or an unmoved head is left for the
+  // dirty tick, so this never clears a marker the hold-back still depends on.
+  if (rapid && opts.outrunOnly) return;
   if (!rapid) {
     // An attempt that landed a mergeable head, which main then outran, did its
     // job: refund it (bounded by MAX_REBASE_OUTRUNS). The head must have moved
@@ -119,7 +125,11 @@ export async function settleRapidRebaseExit(
     const patch: Partial<typeof tasks.$inferSelect> = { rebaseSpawnHeadSha: null };
     if (task.rebaseOutrunCount < MAX_REBASE_OUTRUNS && task.rebaseAttempts > 0) {
       const pr = await readPrHeadAndMergeability(app, task, project);
-      if (pr !== null && pr.headSha !== headAtSpawn && pr.mergeable) {
+      // Undetermined (unreadable, or GitHub still computing): keep the marker
+      // so a later tick judges the attempt again instead of counting it for good.
+      if (pr === null || (pr.headSha !== headAtSpawn && pr.mergeable === null)) return;
+      if (opts.outrunOnly && pr.headSha === headAtSpawn) return;
+      if (pr.headSha !== headAtSpawn && pr.mergeable) {
         patch.rebaseAttempts = task.rebaseAttempts - 1;
         patch.rebaseOutrunCount = task.rebaseOutrunCount + 1;
         app.log.info(

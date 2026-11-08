@@ -57,22 +57,26 @@ export async function readPrHeadSha(
 /**
  * The PR head and whether GitHub currently reports it conflict-free. Null when
  * the PR cannot be read; `mergeable` is true only for a settled `mergeable ===
- * true` that is not `dirty` (a still-computing `null` is not clean).
+ * true` that is not `dirty`, false for a settled conflict, and null while GitHub
+ * is still computing.
  */
 export async function readPrHeadAndMergeability(
   app: FastifyInstance,
   task: Pick<TaskRow, "id" | "prNumber">,
   project: ProjectRow,
-): Promise<{ headSha: string; mergeable: boolean } | null> {
+): Promise<{ headSha: string; mergeable: boolean | null } | null> {
   if (task.prNumber === null) return null;
   try {
     const repoRef = await resolveRepoRef(app, project);
     const token = repoRef ? await resolveGitHubToken(app, repoRef, "read") : null;
     if (!repoRef || !token) return null;
     const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+    // Tri-state: null = GitHub is still computing (`mergeable === null` /
+    // `unknown`), which is "ask again", never a verdict.
+    const computing = pr.mergeable === null || pr.mergeableState === "unknown";
     return {
       headSha: pr.headSha,
-      mergeable: pr.mergeable === true && pr.mergeableState !== "dirty",
+      mergeable: computing ? null : pr.mergeable === true && pr.mergeableState !== "dirty",
     };
   } catch (err) {
     app.log.warn(

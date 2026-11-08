@@ -346,13 +346,52 @@ describe("a worker that exits within seconds", () => {
       expect(row.rebaseOutrunCount).toBe(5);
     });
 
-    it("does not refund while GitHub is still computing mergeability", async () => {
+    it("does not refund while GitHub is still computing, then refunds on a clean later tick", async () => {
       const { app, task } = await rebaseTask("p-outrun-null", pushed);
       mockPr("sha-after", { mergeable: null, mergeableState: "unknown" });
       await reconcileTasks(app);
-      const row = getTask(app, task.id);
+      let row = getTask(app, task.id);
       expect(row.rebaseAttempts).toBe(1);
       expect(row.rebaseOutrunCount).toBe(0);
+      // Undetermined: the attempt marker survives so a later tick judges it.
+      expect(row.rebaseSpawnHeadSha).toBe("sha-before");
+
+      resetMergeBackoff(task.id);
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      await reconcileTasks(app);
+      row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseOutrunCount).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBeNull();
+    });
+
+    it("refunds a reviewing task's finished attempt at the auto-approve tick", async () => {
+      const { app, task } = await rebaseTask("p-outrun-reviewing", pushed);
+      app.db
+        .update(tasks)
+        .set({
+          status: "reviewing",
+          reviewingAt: new Date(),
+          lastReviewVerdict: "clean",
+          mergeRequestedAt: null,
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      await reconcileTasks(app);
+      const row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseOutrunCount).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBeNull();
+    });
+
+    it("keeps the attempt marker when the PR cannot be read", async () => {
+      const { app, task } = await rebaseTask("p-outrun-unreadable", pushed);
+      mockGetPullRequestByNumber.mockRejectedValue(new Error("github down"));
+      await reconcileTasks(app);
+      const row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBe("sha-before");
     });
   });
 

@@ -3157,6 +3157,11 @@ async function attemptAutoApprove(
     // Reset the backoff so the auto-approve attempt on the next tick is not
     // throttled by the attempts accumulated during the dirty/rebase period.
     resetAutoApproveBackoff(task.id);
+    // Judge the finished attempt while this post-push read is clean: main may
+    // outrun the head before a later (dirty) tick could see it.
+    if (project.autoApprove) {
+      await settleRapidRebaseExit(app, task, project, { outrunOnly: true });
+    }
     await clearRebaseHoldIfWorkerFinished(app, task);
   }
 
