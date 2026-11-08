@@ -1,0 +1,180 @@
+// Retrying a round's review post that a transient GitHub failure lost (#2749):
+// the durable marker is `tasks.reviewPostPending`, written by the ingest in
+// task-reconciler.ts's processReviewingTasks. See docs/tasks-internals.md,
+// "A lost post is retried, and holds auto-approve".
+import type { FastifyInstance } from "fastify";
+import { and, eq, isNotNull } from "drizzle-orm";
+import { projects, tasks } from "../db/schema.js";
+import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
+import {
+  postReviewFindingsComment,
+  recordGithubSyncError,
+  parsePendingReviewPost,
+  type PendingReviewPost,
+} from "./task-github-sync.js";
+import { resolveMullionOwnThreadsWithOutcome } from "./task-own-threads.js";
+import { isApprovingVerdict } from "./task-prompt.js";
+import { createRetryBackoff } from "./task-retry-backoff.js";
+
+// A review post that keeps failing transiently is given up on after this long:
+// a marker must not outlive any plausible outage, or the task would wait on it
+// (auto-approve and merge are held) forever.
+const REVIEW_POST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const REVIEW_POST_RETRY_TTL_MS = 60 * 1000;
+const REVIEW_POST_RETRY_MAX_TTL_MS = 15 * 60 * 1000;
+const MAX_REVIEW_POST_RETRIES_PER_SWEEP = 20;
+const MAX_REVIEW_POST_RETRY_ENTRIES = 500;
+// Process-local like the other retry ledgers: the marker itself is durable, the
+// rate limiter need not be (a restart just retries at once).
+const reviewPostRetryBackoff = createRetryBackoff<number>({
+  ttlMs: REVIEW_POST_RETRY_TTL_MS,
+  maxTtlMs: REVIEW_POST_RETRY_MAX_TTL_MS,
+  maxEntries: MAX_REVIEW_POST_RETRY_ENTRIES,
+});
+
+/** Compare-and-set on the marker's exact text, so a newer round's marker (or
+ * one a concurrent tick already settled) is never overwritten. */
+function writeReviewPostPending(
+  app: FastifyInstance,
+  taskId: number,
+  expectedRaw: string,
+  nextRaw: string | null,
+): boolean {
+  return (
+    app.db
+      .update(tasks)
+      .set({ reviewPostPending: nextRaw })
+      .where(and(eq(tasks.id, taskId), eq(tasks.reviewPostPending, expectedRaw)))
+      .run().changes > 0
+  );
+}
+
+/**
+ * One attempt at what a round still owes GitHub: its review post, then (an
+ * approving verdict) the resolution of Mullion's own earlier threads. Settles
+ * the `reviewPostPending` marker: cleared when both are done, or when the post
+ * failed permanently (already recorded in `githubSyncError`); kept — with the
+ * post marked done once it has landed — when a transient failure means a later
+ * tick must try again. A failed thread resolution never marks the round as
+ * posted-and-finished.
+ */
+export async function attemptPendingReviewPost(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  pending: PendingReviewPost,
+  raw: string,
+  isRetry: boolean,
+  onLanded: (taskId: number) => void,
+): Promise<void> {
+  let current = pending;
+  let currentRaw = raw;
+  let again = false;
+  if (!current.posted) {
+    const base = { body: current.body, verdict: current.verdict, dedupeKey: current.key, isRetry };
+    const outcome = await postReviewFindingsComment(
+      app,
+      task,
+      project,
+      current.findings !== undefined && current.reviewSummary !== undefined
+        ? { ...base, reviewSummary: current.reviewSummary, findings: current.findings }
+        : base,
+    );
+    if (outcome === "retry") again = true;
+    else if (outcome === "posted") {
+      current = { ...current, posted: true };
+      const nextRaw = JSON.stringify(current);
+      // Lost the marker to a newer round or a concurrent tick: that owner settles it.
+      if (!writeReviewPostPending(app, task.id, currentRaw, nextRaw)) return;
+      currentRaw = nextRaw;
+    }
+    // "permanent": already recorded in githubSyncError — nothing to retry, but
+    // the thread resolution below does not depend on the post.
+  }
+
+  // D1 — a "clean" verdict is corroborating evidence any of Mullion's own
+  // earlier anchored findings on this PR were actually addressed; resolve them
+  // now so a repo requiring conversation resolution doesn't deadlock on a
+  // self-inflicted stale thread. Never fires on "changes-requested" or
+  // "inconclusive" (a crashed/silent reviewer confirms nothing). Independent
+  // of whether the post landed; a transient failure here keeps the marker so a
+  // later tick retries it, and never marks the round as finished.
+  if (isApprovingVerdict(current.verdict)) {
+    const { retry } = await resolveMullionOwnThreadsWithOutcome(app, task, project);
+    if (retry) again = true;
+  }
+  if (again) {
+    reviewPostRetryBackoff.record(task.id, Date.now());
+    return;
+  }
+  writeReviewPostPending(app, task.id, currentRaw, null);
+  reviewPostRetryBackoff.clear(task.id);
+  // The post this verdict was waiting on has landed: let auto-approve act at once.
+  onLanded(task.id);
+}
+
+/**
+ * Retries every round whose review post (or own-thread resolution) was lost to
+ * a transient GitHub failure — the incident this exists for: a rate limit hit
+ * between the ingest and the post, the approving review never landed, and the
+ * task was auto-approved against GitHub's still-standing CHANGES_REQUESTED.
+ * Runs right after `processReviewingTasks` and before `processAutoApprovals`,
+ * so a post that lands here releases auto-approve in the same tick.
+ *
+ * The marker is dropped, never retried forever, when: the task is no longer one
+ * a review post is owed for (merged, failed, back in the queue); the post fails
+ * permanently; or it is older than REVIEW_POST_MAX_AGE_MS (recorded in
+ * `githubSyncError`).
+ */
+export async function retryPendingReviewPosts(
+  app: FastifyInstance,
+  onLanded: (taskId: number) => void,
+): Promise<void> {
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(isNotNull(tasks.reviewPostPending))
+    .all();
+  if (rows.length === 0) return;
+
+  const now = Date.now();
+  let attempted = 0;
+  for (const { task, project } of rows) {
+    const raw = task.reviewPostPending!;
+    const pending = parsePendingReviewPost(raw);
+    const owed =
+      task.status === "reviewing" ||
+      task.status === "claimed" ||
+      task.status === "in_progress" ||
+      (task.status === "done" && task.mergedAt === null);
+    if (pending === null || !owed) {
+      writeReviewPostPending(app, task.id, raw, null);
+      reviewPostRetryBackoff.clear(task.id);
+      continue;
+    }
+    if (now - pending.createdAt > REVIEW_POST_MAX_AGE_MS) {
+      if (writeReviewPostPending(app, task.id, raw, null)) {
+        recordGithubSyncError(
+          app,
+          task.id,
+          "Gave up posting this round's review to GitHub after 24h of transient failures",
+        );
+      }
+      reviewPostRetryBackoff.clear(task.id);
+      continue;
+    }
+    if (isGitHubRateLimited()) {
+      app.log.debug(
+        { sweep: "retryPendingReviewPosts", resumeInMs: githubRateLimitRemainingMs() },
+        "task reconcile: skipping sweep — GitHub rate limit is in effect",
+      );
+      return;
+    }
+    if (attempted >= MAX_REVIEW_POST_RETRIES_PER_SWEEP) return;
+    if (!reviewPostRetryBackoff.shouldAttempt(task.id, now)) continue;
+    attempted++;
+    reviewPostRetryBackoff.record(task.id, now);
+    await attemptPendingReviewPost(app, task, project, pending, raw, true, onLanded);
+  }
+}

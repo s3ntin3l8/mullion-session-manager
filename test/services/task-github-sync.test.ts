@@ -1062,7 +1062,7 @@ describe("task-github-sync", () => {
 
       await expect(
         postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("posted");
 
       expect(mockCreateComment).toHaveBeenCalledWith(
         "ghp_token",
@@ -1086,7 +1086,7 @@ describe("task-github-sync", () => {
 
       await expect(
         postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("retry");
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
       expect(row.githubSyncError).toContain("issue comment also rejected");
@@ -1102,7 +1102,7 @@ describe("task-github-sync", () => {
 
       await expect(
         postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("retry");
 
       expect(mockCreateComment).not.toHaveBeenCalled();
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();

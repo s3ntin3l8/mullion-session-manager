@@ -795,6 +795,33 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   Either way, the rendered text is also appended to `tasks.reviewFindings` —
   durable across the worktree's own eventual removal, and rendered in the
   task detail drawer's Review card.
+
+- **A lost post is retried, and holds auto-approve (`#2749`).** The ingest
+  write in `processReviewingTasks` also stores a retry payload (the rendered
+  body, summary, findings and verdict, plus a key) as JSON in
+  `tasks.reviewPostPending` — a dedicated column, not `githubSyncError`, which
+  unrelated GitHub writes overwrite and clear. The post and (for an approving
+  verdict) `resolveMullionOwnThreadsIfClean` then run through
+  `attemptPendingReviewPost`; success clears the marker. A transient failure
+  (a rate limit, a 5xx/408/429, a network error) leaves it set, and
+  `retryPendingReviewPosts` — right after `processReviewingTasks` and before
+  `processAutoApprovals` in each tick — retries with a process-local backoff
+  (1 min doubling to 15 min), so a post that lands releases auto-approve in the
+  same tick. While the marker is set on an approving verdict,
+  `processAutoApprovals` and `processMergeRequests` skip the task (GitHub may
+  still hold an older `CHANGES_REQUESTED`), and the card reads "Review waiting
+  to be posted to GitHub". The marker cannot outlive its cause: a permanent
+  failure (a 4xx other than 429, a token without write scope) clears it and is
+  recorded in `githubSyncError`; a marker older than 24 hours is dropped with a
+  `githubSyncError`; and one on a task that is merged or no longer
+  claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
+  (rate limit) keeps the marker with `posted: true`, so only the resolution is
+  retried; it never marks the round finished. The review body carries a hidden
+  `<!-- mullion-review-post:<key> -->` marker, and a retry first looks for it
+  among the PR's reviews, so a post whose response was lost is not duplicated
+  (a task with no PR, whose round goes to an issue comment, has no such check).
+  The issue-comment fallback is tried on the first attempt only.
+
 - **Trigger an automatic `reviewing → in_progress` round.** If the verdict
   is `changes-requested`, this task hasn't already spent its round budget,
   and `taskMaster.enabled`: the task flips back to `in_progress` and the
@@ -1836,7 +1863,10 @@ once **all** of the following hold:
    A suggestions round that carried its approval (see above) keeps both
    pointers, so it passes this gate on the verdict it already earned.
 3. That round's verdict (`tasks.lastReviewVerdict`, written alongside
-   ingestion by `processReviewingTasks`) is approving (`isApprovingVerdict`).
+   ingestion by `processReviewingTasks`) is approving (`isApprovingVerdict`),
+   **and its review has landed on GitHub** (`tasks.reviewPostPending` is
+   null, `#2749`): `processAutoApprovals` skips an approving verdict whose
+   post is still pending, so it never runs into an older `CHANGES_REQUESTED`.
 4. CI on the PR head reads an explicit `success` — via the same
    PR-plus-Actions-runs lookup the review-agent spawn already uses to wait
    for CI (`fetchCurrentCiStatus`, factored out of `resolveReviewCi`).

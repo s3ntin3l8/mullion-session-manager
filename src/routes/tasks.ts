@@ -236,6 +236,9 @@ const TASK_ROW_COLUMNS = {
   // Every read of `task.lastReviewVerdict` was `undefined` at runtime while
   // typechecking as `string | null`.
   lastReviewVerdict: tasks.lastReviewVerdict,
+  // Raw retry payload — not surfaced; withAutoReturnCapped turns it into the
+  // `reviewPostPending` boolean the board shows ("review waiting to be posted").
+  reviewPostPending: tasks.reviewPostPending,
   // Not surfaced directly — consumed by withAutoReturnCapped below to derive
   // `autoReturnCapped`, then stripped, same treatment as blockedBy/
   // withBlockedState just below. Raw per-project config has no reason to
@@ -378,14 +381,19 @@ function withAutoReturnCapped<
   T extends {
     autoReturnRounds: number;
     projectMaxAutoReturnRounds: number | null;
+    reviewPostPending: string | null;
   },
 >(
   row: T,
   installCap: number,
-): Omit<T, "projectMaxAutoReturnRounds"> & { autoReturnCapped: boolean } {
-  const { projectMaxAutoReturnRounds, ...rest } = row;
+): Omit<T, "projectMaxAutoReturnRounds" | "reviewPostPending"> & {
+  autoReturnCapped: boolean;
+  reviewPostPending: boolean;
+} {
+  const { projectMaxAutoReturnRounds, reviewPostPending, ...rest } = row;
   return {
     ...rest,
+    reviewPostPending: reviewPostPending !== null,
     autoReturnCapped:
       row.autoReturnRounds >=
       resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }, installCap),

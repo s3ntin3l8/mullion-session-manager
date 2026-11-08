@@ -38,8 +38,11 @@ import {
   getMergedClosingPullRequest,
   getPullRequestByNumber,
   createPullRequestReview,
+  listPullRequestReviews,
 } from "./github-write.js";
 import { GitHubApiError } from "./github.js";
+import { GitHubRateLimitError } from "./github-fetch.js";
+import { GitHubWriteScopeError } from "./github-request.js";
 import {
   isApprovingVerdict,
   severityPrefix,
@@ -687,6 +690,68 @@ export async function isIssueStillTrackable(
 }
 
 /**
+ * What became of a `postReviewFindingsComment` call, for the caller that owns
+ * a durable retry marker (`tasks.reviewPostPending`):
+ *  - `posted`: the round is on GitHub (or there was nothing to post it to).
+ *  - `retry`: a transient failure (rate limit, 5xx, a network error) — the
+ *    round is NOT on GitHub as a review; try again later.
+ *  - `permanent`: a failure no retry fixes (a 4xx other than 429 — a missing
+ *    or closed PR, a token without write access); already recorded in
+ *    `githubSyncError`.
+ */
+export type ReviewPostOutcome = "posted" | "retry" | "permanent";
+
+/** Transient GitHub failures worth another attempt: a rate limit, a 5xx, a
+ * 408/429, or anything that never got an HTTP answer (a network error, a
+ * timeout). Every other 4xx — and a token without write scope — is permanent. */
+export function isRetryableGitHubError(err: unknown): boolean {
+  if (err instanceof GitHubRateLimitError) return true;
+  if (err instanceof GitHubWriteScopeError) return false;
+  if (err instanceof GitHubApiError) {
+    // Status 0 is "no HTTP answer at all" (githubApiFetch's timeout/network error).
+    return (
+      err.statusCode === 0 ||
+      err.statusCode >= 500 ||
+      err.statusCode === 429 ||
+      err.statusCode === 408
+    );
+  }
+  return true;
+}
+
+/** The payload a retry needs to re-post one round's review: stored as JSON in
+ * `tasks.reviewPostPending`, since the findings file is gone once ingested. */
+export interface PendingReviewPost {
+  /** Names this round in the hidden marker prefixed to the review body, so a
+   * retry can tell that a post whose response was lost did land. */
+  key: string;
+  body: string;
+  reviewSummary?: string;
+  findings?: ReviewFinding[];
+  verdict: ReviewVerdict | "inconclusive";
+  /** The review has landed; only Mullion's own-thread resolution is owed
+   * (approving verdicts only). */
+  posted: boolean;
+  /** Epoch ms the marker was set — bounds how long a transient failure is
+   * retried. */
+  createdAt: number;
+}
+
+export function parsePendingReviewPost(raw: string | null): PendingReviewPost | null {
+  if (raw === null) return null;
+  try {
+    const v = JSON.parse(raw) as PendingReviewPost;
+    return typeof v?.key === "string" && typeof v.body === "string" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function reviewPostMarker(key: string): string {
+  return `<!-- mullion-review-post:${key} -->`;
+}
+
+/**
  * Posts the review agent's findings — as an actual PR review (`task.prNumber`,
  * the common case once a task has entered "reviewing") with each finding as
  * an inline anchored comment, falling back to an ordinary issue comment when
@@ -716,8 +781,9 @@ export async function isIssueStillTrackable(
  *
  * A PR review needs two GitHub calls (`getPullRequestByNumber` for the head
  * SHA, then `createPullRequestReview`) where a plain comment needed one, on
- * a path with no second chance (the round's findings are already durably
- * ingested by the time this runs). If EITHER call fails for a task that also
+ * a path whose only second chance is the caller's retry marker
+ * (`tasks.reviewPostPending`, #2749 — see `ReviewPostOutcome`; the round's
+ * findings are already durably ingested by the time this runs). If EITHER call fails for a task that also
  * has a linked issue, this falls back to an ordinary issue comment as a
  * last resort — so a PR-side failure (rate limit, the PR being deleted or
  * transferred, a transient 5xx) doesn't also mean GitHub never hears about
@@ -761,6 +827,15 @@ export async function postReviewFindingsComment(
      * all, so it always stays `COMMENT`, same as an explicit
      * `"inconclusive"`. */
     verdict?: ReviewVerdict | "inconclusive";
+    /** The caller tracks this post with a durable retry marker
+     * (`tasks.reviewPostPending`) and reads the returned outcome. Prefixes a
+     * hidden marker to the review body, and a transient failure is not
+     * written to `githubSyncError` (the marker is the record). */
+    dedupeKey?: string;
+    /** A retry of an earlier attempt: first looks for a review already
+     * carrying `dedupeKey` (a post whose response was lost), and does not
+     * repeat the issue-comment fallback. */
+    isRetry?: boolean;
   } & (
     | {
         /** Round header + summary only, no bullets — the PR review's body
@@ -776,16 +851,27 @@ export async function postReviewFindingsComment(
       }
     | { reviewSummary?: undefined; findings?: undefined }
   ),
-): Promise<void> {
+): Promise<ReviewPostOutcome> {
   // Cheap short-circuit before any GitHub call: genuinely nothing to post
   // to (an unclaimed remote-hosted task, or one whose draft-PR-open attempt
   // hasn't succeeded yet and has no linked issue either).
-  if (task.prNumber === null && task.issueNumber === null) return;
+  if (task.prNumber === null && task.issueNumber === null) return "posted";
 
   const repoRef = await resolveRepoRef(app, project);
-  if (!repoRef) return;
+  if (!repoRef) return "posted";
   const token = await resolveGitHubToken(app, repoRef);
-  if (!token) return;
+  if (!token) return "posted";
+
+  // The failure that decided the outcome: a retryable one with a tracking
+  // marker is not a githubSyncError (the marker shows it), anything else is.
+  const failed = (err: unknown): ReviewPostOutcome => {
+    const retryable = isRetryableGitHubError(err);
+    if (!(retryable && params.dedupeKey !== undefined)) {
+      recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
+    }
+    return retryable ? "retry" : "permanent";
+  };
+  const marker = params.dedupeKey !== undefined ? `${reviewPostMarker(params.dedupeKey)}\n` : "";
 
   // #737 — verdict -> gating event. `undefined` (no verdict, or explicitly
   // "inconclusive") stays `COMMENT`, posted from the primary identity like
@@ -798,6 +884,16 @@ export async function postReviewFindingsComment(
 
   if (task.prNumber !== null) {
     try {
+      if (params.isRetry && params.dedupeKey !== undefined) {
+        const existing = await listPullRequestReviews(
+          token,
+          repoRef.owner,
+          repoRef.repo,
+          task.prNumber,
+        );
+        const mark = reviewPostMarker(params.dedupeKey);
+        if (existing.some((r) => r.body?.includes(mark))) return "posted";
+      }
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
       // Narrows `params.reviewSummary` to `string` on this branch — the
       // union above ties it to `findings` being present, so this check is
@@ -830,9 +926,10 @@ export async function postReviewFindingsComment(
       try {
         await createPullRequestReview(reviewToken, repoRef.owner, repoRef.repo, task.prNumber, {
           body:
-            params.findings !== undefined && anchored.length > 0
+            marker +
+            (params.findings !== undefined && anchored.length > 0
               ? params.reviewSummary
-              : params.body,
+              : params.body),
           commitId: pr.headSha,
           comments: anchored.length > 0 ? anchored : undefined,
           event,
@@ -869,7 +966,7 @@ export async function postReviewFindingsComment(
             "[task-github-sync] PR review rejected (422) — retrying as a plain COMMENT from the primary identity, with findings folded into the body",
           );
           await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
-            body: params.body,
+            body: marker + params.body,
             commitId: pr.headSha,
           });
         } else {
@@ -878,53 +975,49 @@ export async function postReviewFindingsComment(
       }
       // Deliberately does NOT clearGithubSyncError here — see this
       // function's own doc comment (task 258971's investigation).
-      return;
+      return "posted";
     } catch (err) {
       app.log.warn(
         { taskId: task.id, prNumber: task.prNumber, err },
         "[task-github-sync] failed to post review findings as a PR review",
       );
       // A PR review needs two calls (GET the head SHA, then POST the
-      // review) where a plain comment needed one, and this whole path is
-      // one-shot — the round's findings are already durably written to
-      // `tasks.reviewFindings`/ingested, with nothing left to retry from.
-      // A linked issue is a last-resort fallback so the failure doesn't
-      // also mean GitHub never hears about this round at all.
-      if (task.issueNumber !== null) {
+      // review). A linked issue is a last-resort fallback so the failure
+      // doesn't also mean GitHub never hears about this round at all. A
+      // retry skips it: the first attempt already left that comment.
+      if (task.issueNumber !== null && !params.isRetry) {
         try {
           await createComment(token, repoRef.owner, repoRef.repo, task.issueNumber, params.body);
           // Deliberately does NOT clearGithubSyncError here — see this
           // function's own doc comment (task 258971's investigation).
-          return;
+          // The comment is not the gating review, though: an owed approving
+          // or changes-requesting review is still outstanding when the
+          // failure was transient.
+          return gatingEvent !== undefined && isRetryableGitHubError(err) ? "retry" : "posted";
         } catch (fallbackErr) {
           app.log.warn(
             { taskId: task.id, issueNumber: task.issueNumber, err: fallbackErr },
             "[task-github-sync] issue-comment fallback also failed after the PR review post failed",
           );
-          recordGithubSyncError(
-            app,
-            task.id,
-            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
-          );
-          return;
+          return failed(isRetryableGitHubError(fallbackErr) ? fallbackErr : err);
         }
       }
-      recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
+      return failed(err);
     }
-    return;
   }
 
   const commentTarget = task.issueNumber;
-  if (commentTarget === null) return;
+  if (commentTarget === null) return "posted";
   try {
     await createComment(token, repoRef.owner, repoRef.repo, commentTarget, params.body);
     // Deliberately does NOT clearGithubSyncError here — see this function's
     // own doc comment (task 258971's investigation).
+    return "posted";
   } catch (err) {
     app.log.warn(
       { taskId: task.id, commentTarget, err },
       "[task-github-sync] failed to post review findings comment",
     );
-    recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
+    return failed(err);
   }
 }

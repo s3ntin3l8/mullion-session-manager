@@ -511,6 +511,11 @@ export function TaskCard({
               : `Round ${task.autoReturnRounds} · returned to worker`}
         </div>
       )}
+      {task.reviewPostPending && (
+        <div className="task-card-review-round" role="status">
+          Review waiting to be posted to GitHub
+        </div>
+      )}
       {task.sessionId !== null && (
         <TaskSessionSlot
           session={workerSession ?? undefined}

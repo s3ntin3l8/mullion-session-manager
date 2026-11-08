@@ -3505,7 +3505,7 @@ describe("reconcileTasks", () => {
         mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
         mockGetPullRequestReviewDecision.mockResolvedValue("REVIEW_REQUIRED");
         mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
-        mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 422"));
+        mockCreatePullRequestReview.mockRejectedValueOnce(new Error("HTTP 422"));
 
         await reconcileTasks(app);
 
