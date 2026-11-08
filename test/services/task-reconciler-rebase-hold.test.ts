@@ -229,6 +229,28 @@ describe("auto-rebase hold-back", () => {
     ).toBe("killed");
   });
 
+  it("(c) does not terminate a live round when no seed-capable agent is recorded", async () => {
+    const { app, task, project } = await setup("hold-expiry-no-seed", {
+      status: "reviewing",
+      approvalCarriedAt: new Date(),
+      agentCommand: "not-a-seedable-agent",
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => ({ workFinishedAt: null, lastTurnEndedAt: null }),
+    } as never);
+    const terminate = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined as never);
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+    await attemptAutoRebase(app, task, project, "main");
+    now.mockReturnValue(t0 + REBASE_HOLD_MAX_MS + 1000);
+    await attemptAutoRebase(app, getTask(app, task.id), project, "main");
+    expect(terminate).not.toHaveBeenCalled();
+    expect(
+      app.db.select().from(sessions).where(eq(sessions.id, task.sessionId!)).get()!.status,
+    ).toBe("active");
+    expect(getTask(app, task.id).mergeError).toContain("no seed-capable agent");
+  });
+
   it("(d) spawns as before when nothing blocks", async () => {
     const { app, task, project } = await setup("hold-none", {});
     const create = vi.spyOn(lifecycle, "createSessionRecord").mockResolvedValue({

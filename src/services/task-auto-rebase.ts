@@ -278,6 +278,17 @@ export async function attemptAutoRebase(
     return;
   }
 
+  // Checked before anything is terminated: killing a live round only to bail
+  // here would be an irreversible kill with no replacement worker.
+  if (!task.agentCommand || !commandSupportsSeed(task.agentCommand)) {
+    recordMergeError(
+      app,
+      task.id,
+      "Conflicts with main — no seed-capable agent recorded for this task, needs manual resolution",
+    );
+    return;
+  }
+
   const blocker = await findRebaseBlocker(app, task, backend);
   if (blocker !== null) {
     const heldSince = rebaseHeldSince.get(task.id) ?? now;
@@ -328,14 +339,14 @@ export async function attemptAutoRebase(
         app.log.warn(
           { err, taskId: task.id, sessionId: task.sessionId },
           blocker !== null
-            ? "task auto-rebase: the worker session behind an expired rebase hold is still active and could not be terminated, leaving it for a later tick"
+            ? "task auto-rebase: the worker round behind an expired rebase hold is still active and could not be terminated, leaving it for a later tick"
             : "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick",
         );
         recordMergeError(
           app,
           task.id,
           blocker !== null
-            ? `Conflicts with main — ${blocker} could not be stopped, needs manual resolution`
+            ? `Conflicts with main — the worker round behind the expired hold (${blocker}) could not be stopped, needs manual resolution`
             : "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution",
         );
         return;
@@ -348,14 +359,6 @@ export async function attemptAutoRebase(
   // even reach "done"), but fall back the same way task-claim.ts's resume
   // path does rather than crash on an unexpected null.
   const branchName = task.branchName ?? deriveTaskBranchName(task);
-  if (!task.agentCommand || !commandSupportsSeed(task.agentCommand)) {
-    recordMergeError(
-      app,
-      task.id,
-      "Conflicts with main — no seed-capable agent recorded for this task, needs manual resolution",
-    );
-    return;
-  }
 
   // Pre-removal cleanup: terminate an active review session before force-removing
   // the worktree it is running in. On a reviewing task's first auto-rebase,
