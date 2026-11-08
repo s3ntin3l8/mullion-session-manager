@@ -28,7 +28,8 @@
       "src/services/task-reconciler.ts",
       "src/services/task-reseed.ts",
       "src/services/task-claim.ts",
-      "src/routes/tasks.ts"
+      "src/routes/tasks.ts",
+      "src/services/task-auto-return-rounds.ts"
     ],
     "summary": "reconcileTasks sweep order, auto-return rounds and rollback, approval carry, per-host loop control flow"
   },
@@ -53,7 +54,9 @@
       "src/services/task-workflow-gate.ts",
       "src/services/task-promote.ts",
       "src/services/github-write.ts",
-      "src/services/merge-readiness.ts"
+      "src/services/merge-readiness.ts",
+      "src/services/task-cleanup.ts",
+      "src/services/task-review-end.ts"
     ],
     "summary": "merge sweep and 405/409, per-task backoff ledgers, session cleanup via killSession, the workflow-file push gate"
   },

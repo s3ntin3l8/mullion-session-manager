@@ -33,13 +33,26 @@ cleared at every site that resumes work (auto-return, reject, retry, entering
 reviewing). The cap is announced on `capReached` alone, not only for
 `changes-requested`.
 
+The cap ITSELF is a precedence, not a single number:
+`project.maxAutoReturnRounds ?? installCap`, where `installCap` is the
+install-wide `taskMaster.maxAutoReturnRounds` (default 10), and `0` at
+either level means UNLIMITED — it resolves to `Infinity`, so every
+`rounds >= cap` comparison keeps working unchanged. That precedence lives
+in `resolveMaxAutoReturnRounds` (`src/services/task-auto-return-rounds.ts`,
+moved out of the reconciler when the import cycle was broken); a project's
+own cap overrides the install-wide one, and the project value wins even
+when it is 0.
+
 **Breaks.** Burning limited rounds when nothing was delivered; a capped task
 showing "review in flight" forever; a resumed task keeping a stale "needs a
 human" banner.
 
 **Check.** A new auto-return reason: does it set `spendsRound` correctly and
 survive a failed re-seed? `git grep -n autoReturnCapAnnouncedAt -- src` and confirm
-a clear at each work-resuming write.
+a clear at each work-resuming write. A change to the CAP reads
+`resolveMaxAutoReturnRounds` (`src/services/task-auto-return-rounds.ts`) — the
+project value wins over the install-wide one, and 0 means unlimited at
+either level.
 
 ## 3. An approval carried through a suggestions round needs a current approval
 
