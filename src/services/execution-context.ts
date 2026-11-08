@@ -12,8 +12,8 @@ import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
-import { resolveSessionHostId } from "./session-live-info.js";
-import { isSiblingWorktreeCwd } from "./session-lifecycle.js";
+import { resolveSessionHostId } from "./session-host.js";
+import { isSiblingWorktreeCwd } from "./session-cwd.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { isRemoteWorktree } from "./remote-worktree-cache.js";
 

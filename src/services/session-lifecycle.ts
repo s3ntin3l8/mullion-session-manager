@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { resolveGitIdentity } from "./git-identity.js";
 import { crossProjectAllowed } from "./cross-project.js";
 import path from "node:path";
-import { readdirSync, openSync, readSync, closeSync, statSync, realpathSync } from "node:fs";
+import { readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
 // Issue #1223 — only used for the `instanceof BetterSqlite3.SqliteError`
 // check below, to detect `sessions_stack_identity_unique`'s violation.
@@ -32,7 +32,6 @@ import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
 import { forceRemoveCheckout, previewRemover } from "./checkout-removal.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
-import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { isOutcomeUnknown } from "./remote-host-errors.js";
 import { resolveHostBaseRef, resolveRepoRef, viaRemote } from "./host-git.js";
@@ -46,6 +45,7 @@ import type { SessionGithubAuth } from "./session-github-token.js";
 import { startSetupRecipe } from "./setup-recipe.js";
 import { closeSessionBrowserBindings, recordSessionBrowserBinding } from "./session-browsers.js";
 import { resolveSessionHostId } from "./session-live-info.js";
+import { isSiblingWorktreeCwd } from "./session-cwd.js";
 import {
   parseHostCwds,
   projectCwdOnHost,
@@ -865,38 +865,8 @@ export async function discoverCommittedScaffoldOnHost(
   return { skillCommitted: true, reviewerCommitted: true, warnings: [] };
 }
 
-/**
- * Issue #1332 — the one exception to a child spawn's cwd containment: a
- * directory that is itself a registered git worktree of the project's own
- * repository (`git worktree list` run from `project.cwd`, so membership is
- * decided by git's own registry, never a caller-supplied path). Anything
- * else — an arbitrary path, an unregistered checkout of the same repo, a
- * subdirectory *of* a sibling worktree — stays rejected. Symlinks are
- * resolved on both sides so a link can't masquerade as a listed worktree.
- * Local hosts only: `listWorktrees` shells out on this machine, so a remote
- * host's project keeps the strict containment rule.
- */
-export async function isSiblingWorktreeCwd(
-  project: { cwd: string; hostId: string },
-  effectiveCwd: string,
-): Promise<boolean> {
-  if (project.hostId !== LOCAL_HOST_ID) return false;
-  const worktrees = await listWorktrees(project.cwd);
-  if (!worktrees) return false;
-  let target: string;
-  try {
-    target = realpathSync(effectiveCwd);
-  } catch {
-    return false;
-  }
-  return worktrees.some((wt) => {
-    try {
-      return realpathSync(wt.path) === target;
-    } catch {
-      return false;
-    }
-  });
-}
+// isSiblingWorktreeCwd lives in session-cwd.ts (issue #2713); re-exported here.
+export { isSiblingWorktreeCwd };
 
 // Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
 // POST /api/sessions/:id/promote (option 2), and POST /api/tasks/:id/claim
