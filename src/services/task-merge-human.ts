@@ -24,6 +24,14 @@ export const CLEARED_MERGE_ERROR = {
   needsHumanReason: clearMergeNeedsHumanReason,
 };
 
+/** Like CLEARED_MERGE_ERROR, for a human merge request: that also acts on a
+ * `review-post-failed` hold (holdsForReviewPost), so it is released too. */
+export function clearedFor(reason: string | null | undefined) {
+  return reason === "review-post-failed"
+    ? { mergeError: null, needsHumanReason: null }
+    : CLEARED_MERGE_ERROR;
+}
+
 // A confirmed-merged task never carries a merge error: `mergedAt` wins over a
 // late failure from an in-flight request or a slow sweep (a webhook or a
 // concurrent reconcile may have recorded the merge while this one was still

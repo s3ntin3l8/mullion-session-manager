@@ -6,6 +6,9 @@ describe("needsHumanText", () => {
     expect(needsHumanText("cap")).toBe("round cap reached");
     expect(needsHumanText("no-progress")).toBe("worker returned without a change");
     expect(needsHumanText("finding-persisted")).toBe("same finding still open after two rounds");
+    expect(needsHumanText("review-post-failed")).toBe(
+      "approving review could not be posted to GitHub",
+    );
   });
 
   it("reads a missing reason as the round cap — the original, still most common, case", () => {

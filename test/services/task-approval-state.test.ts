@@ -35,6 +35,14 @@ describe("deriveApprovalState (#2252)", () => {
     },
   );
 
+  it("is awaiting-human on an auto-approving project when the approving review post failed", () => {
+    const auto = { ...base, projectAutoApprove: true };
+    expect(deriveApprovalState(auto, true)).toBe("auto-pending");
+    expect(deriveApprovalState({ ...auto, needsHumanReason: "review-post-failed" }, true)).toBe(
+      "awaiting-human",
+    );
+  });
+
   it("is null unless the task is reviewing", () => {
     expect(deriveApprovalState({ ...base, status: "in_progress" }, true)).toBeNull();
     expect(deriveApprovalState({ ...base, status: "done" }, true)).toBeNull();

@@ -67,7 +67,11 @@ import {
   type PendingReviewPost,
 } from "./task-github-sync.js";
 import { resolveMullionOwnThreadsIfClean } from "./task-own-threads.js";
-import { attemptPendingReviewPost, retryPendingReviewPosts } from "./task-review-post.js";
+import {
+  attemptPendingReviewPost,
+  holdsForReviewPost,
+  retryPendingReviewPosts,
+} from "./task-review-post.js";
 import { recordTaskTransition } from "./task-state.js";
 import { endIfRebaseEmptied, endReviewingOnPrState } from "./task-review-end.js";
 import { isHostTransientError } from "./remote-host-errors.js";
@@ -2096,7 +2100,7 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
     if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
 
     // Same hold as processAutoApprovals: not while the approving review is unposted.
-    if (task.reviewPostPending !== null && isApprovingVerdict(task.lastReviewVerdict)) continue;
+    if (holdsForReviewPost(task)) continue;
     if (!mergeRetryBackoff.shouldAttempt(task.id, now)) continue;
 
     attempted++;
@@ -3404,7 +3408,7 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
     // An approving verdict whose review has not landed on GitHub yet: GitHub
     // may still hold an older CHANGES_REQUESTED, so approving now would run
     // into it (retryPendingReviewPosts clears the marker once it lands).
-    if (task.reviewPostPending !== null && isApprovingVerdict(task.lastReviewVerdict)) continue;
+    if (holdsForReviewPost(task)) continue;
 
     // While a rebase is in flight (rebaseStartedAt !== null), the backoff
     // accumulated during the dirty period would otherwise block
@@ -4368,7 +4372,11 @@ async function ingestReviewOutcome(
       // Task 409707 — anchors reannounceInconclusiveReviewsAfterGrace's
       // grace window; see that column's own doc comment in schema.ts.
       lastReviewVerdictAt: new Date(now),
-      ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason } : {}),
+      ...(announcingCap
+        ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason }
+        : task.needsHumanReason === "review-post-failed"
+          ? { needsHumanReason: null }
+          : {}),
       ...(reviewedHeadSha !== undefined ? { lastReviewedHeadSha: reviewedHeadSha } : {}),
     })
     .where(

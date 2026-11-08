@@ -92,7 +92,11 @@ export async function approveTask(
       // never has yet.
       mergeRequestedAt: project.mergeOnApprove ? new Date() : null,
       mergeError: null,
-      needsHumanReason: clearMergeNeedsHumanReason,
+      // A human approving past a failed approving-review post acts on the hold
+      // (holdsForReviewPost); leave it set and processMergeRequests would skip
+      // the merge on every tick.
+      needsHumanReason:
+        task.needsHumanReason === "review-post-failed" ? null : clearMergeNeedsHumanReason,
       rebaseStartedAt: null,
     })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))

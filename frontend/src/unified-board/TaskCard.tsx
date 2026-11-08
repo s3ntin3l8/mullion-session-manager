@@ -525,6 +525,12 @@ export function TaskCard({
               : `Round ${task.autoReturnRounds} · returned to worker`}
         </div>
       )}
+      {task.needsHumanReason === "review-post-failed" && (
+        <div className="task-card-review-round task-card-review-round-capped" role="status">
+          {needsHumanText(task.needsHumanReason)}, needs a human
+          {task.githubSyncError ? ` — ${task.githubSyncError}` : ""}
+        </div>
+      )}
       {task.reviewPostPending && (
         <div className="task-card-review-round" role="status">
           Review waiting to be posted to GitHub

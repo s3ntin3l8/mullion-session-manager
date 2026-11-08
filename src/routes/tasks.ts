@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
-import { CLEARED_MERGE_ERROR } from "../services/task-merge-human.js";
+import { CLEARED_MERGE_ERROR, clearedFor } from "../services/task-merge-human.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
@@ -1483,7 +1483,7 @@ export async function tasksRoute(app: FastifyInstance) {
 
     const [updated] = app.db
       .update(tasks)
-      .set({ mergeRequestedAt: new Date(), ...CLEARED_MERGE_ERROR })
+      .set({ mergeRequestedAt: new Date(), ...clearedFor(existing.needsHumanReason) })
       .where(eq(tasks.id, taskId))
       .returning()
       .all();
