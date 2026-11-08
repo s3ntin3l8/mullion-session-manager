@@ -811,5 +811,37 @@ describe("BrowserManager", () => {
       expect(withEndpoint.instanceCount).toBe(0);
       expect(launchedBrowsers[0].contexts[0].closeSpy).toHaveBeenCalled();
     });
+
+    it("also waits for an open parked on a closing target", async () => {
+      const first = await manager.getOrLaunch(target(7));
+      const ctx = first.context as unknown as FakeContext;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      ctx.closeSpy.mockImplementation(() => gate);
+
+      const closing = manager.closeTarget(target(7));
+      await vi.waitFor(() => expect(ctx.closeSpy).toHaveBeenCalled());
+      const parked = manager.getOrLaunch(target(7)); // parks on `closing`
+      let forgotten = false;
+      const forgetting = manager.forgetProject(7).then(() => {
+        forgotten = true;
+      });
+      await microtaskTurns();
+      expect(forgotten).toBe(false);
+
+      release();
+      await closing;
+      await parked;
+      await forgetting;
+
+      const left = (dir: string) =>
+        fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith("project-7")) : [];
+      expect(left(dataDir)).toEqual([]);
+      expect(left(path.join(dataDir, "downloads"))).toEqual([]);
+      expect(manager.instanceCount).toBe(0);
+      const contexts = launchedBrowsers.flatMap((b) => b.contexts);
+      expect(contexts).toHaveLength(2);
+      expect(contexts[1].closeSpy).toHaveBeenCalled();
+    });
   });
 });

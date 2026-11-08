@@ -265,6 +265,10 @@ export class BrowserManager {
   // The project each `pending` open belongs to, so closeForProject can wait
   // for the opens that have not landed in `instances` yet.
   private readonly pendingProject = new Map<string, number>();
+  // Opens parked on a `closing` entry of their target: in neither `instances`
+  // nor `pending` yet, so closeForProject has to wait for them separately.
+  // Each settles at the moment its caller resumes (see getOrLaunch).
+  private readonly parkedOpens = new Set<{ projectId: number; settled: Promise<void> }>();
   // Targets whose context is being saved and closed. They are out of
   // `instances` but still occupy the shared process (and a pool slot), and a
   // relaunch of the same key must wait for the close: it would otherwise wipe
@@ -439,7 +443,22 @@ export class BrowserManager {
     const key = browserTargetKey(target);
     // A close of this very target is still saving: start clean after it.
     const closingNow = this.closing.get(key);
-    if (closingNow) await closingNow;
+    if (closingNow) {
+      let resume!: () => void;
+      const parked = {
+        projectId: target.projectId,
+        settled: new Promise<void>((r) => (resume = r)),
+      };
+      this.parkedOpens.add(parked);
+      try {
+        await closingNow;
+      } finally {
+        // Same synchronous run as the `pending.set` below, so closeForProject
+        // sees this open in `pending` the moment it stops seeing it here.
+        this.parkedOpens.delete(parked);
+        resume();
+      }
+    }
     const existing = this.instances.get(key);
     if (existing && existing.browser.isConnected()) return existing;
     if (existing) {
@@ -771,16 +790,21 @@ export class BrowserManager {
   }
 
   /** Closes every target of a project (project deleted or merged
-   * away). Safe to call when none is running. */
+   * away). Safe to call when none is running. Waits for opens already in
+   * flight, including ones parked on a closing target; an open that starts
+   * after this wait has finished is the caller's to prevent. */
   async closeForProject(projectId: number): Promise<void> {
     // A browser still opening is in `pending`, not `instances`: wait for it to
     // settle so its context is closed too, instead of surviving and
     // re-creating the project's files after the caller deleted them.
     for (;;) {
-      const opening = [...this.pendingProject]
+      const opening: Promise<unknown>[] = [...this.pendingProject]
         .filter(([, id]) => id === projectId)
         .map(([key]) => this.pending.get(key))
         .filter((p): p is Promise<ManagedBrowser> => p !== undefined);
+      for (const p of this.parkedOpens) {
+        if (p.projectId === projectId) opening.push(p.settled);
+      }
       if (opening.length === 0) break;
       await Promise.allSettled(opening);
     }
