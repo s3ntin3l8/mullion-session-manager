@@ -75,8 +75,9 @@ Screenshots and visual checks run on [visual-kit](https://github.com/s3ntin3l8/v
 the scenes in `visual/scenes.json` in a pinned browser image, and stops the demo.
 `visual/Dockerfile` pins an exact kit release on purpose (the renderer is part of
 the baselines, so a floating tag would move them without a commit); Dependabot's
-weekly `docker` entry opens the bump PR, and if a release moves pixels, run
-`make visual-baseline` on that PR.
+weekly `docker` entry opens the bump PR; run `make visual-baseline` on it, whatever the
+version step (it rewrites `provenance.json`'s runner, which the kit's staleness check
+ignores for a patch release, and the PNGs only move if the pixels did).
 
 Besides Docker, the demo itself needs what every Mullion session needs: `dtach` and
 a running `systemd --user` manager, because each demo session is a dtach PTY in a
