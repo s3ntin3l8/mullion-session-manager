@@ -203,6 +203,32 @@ describe("auto-rebase hold-back", () => {
     );
   });
 
+  it("(c) terminates a still-live worker round before the expired hold removes its worktree", async () => {
+    const { app, task, project } = await setup("hold-expiry-live", {
+      status: "reviewing",
+      approvalCarriedAt: new Date(),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => ({ workFinishedAt: null, lastTurnEndedAt: null }),
+    } as never);
+    const terminate = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined as never);
+    vi.spyOn(lifecycle, "createSessionRecord").mockResolvedValue({
+      ok: true,
+      row: { id: task.sessionId },
+      initialPromptApplied: true,
+    } as never);
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+    await attemptAutoRebase(app, task, project, "main");
+    expect(terminate).not.toHaveBeenCalled();
+    now.mockReturnValue(t0 + REBASE_HOLD_MAX_MS + 1000);
+    await attemptAutoRebase(app, getTask(app, task.id), project, "main");
+    expect(terminate).toHaveBeenCalledWith(String(task.sessionId));
+    expect(
+      app.db.select().from(sessions).where(eq(sessions.id, task.sessionId!)).get()!.status,
+    ).toBe("killed");
+  });
+
   it("(d) spawns as before when nothing blocks", async () => {
     const { app, task, project } = await setup("hold-none", {});
     const create = vi.spyOn(lifecycle, "createSessionRecord").mockResolvedValue({

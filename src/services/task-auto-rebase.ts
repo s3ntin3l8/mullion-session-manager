@@ -293,7 +293,10 @@ export async function attemptAutoRebase(
   }
   rebaseHeldSince.delete(task.id);
 
-  if (task.rebaseStartedAt !== null && task.sessionId !== null) {
+  // An expired hold (blocker !== null) may sit on a still-live worker round
+  // in this very worktree: terminate it like a superseded attempt, so the
+  // force-remove below never pulls the cwd out from under a running agent.
+  if ((task.rebaseStartedAt !== null || blocker !== null) && task.sessionId !== null) {
     // Reaching here means rebaseStartedAt is past its window (the withinWindow
     // check above already returned otherwise) and a retry is going to happen
     // (the cap check above already returned otherwise) — so the previous
