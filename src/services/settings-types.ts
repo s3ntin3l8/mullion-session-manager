@@ -2,7 +2,8 @@
 // log-level vocabulary. Split out of settings.ts so runtime-config.ts can read
 // the shape without importing settings.ts (which imports runtime-config.ts's
 // resolvers) — see issue #2715. settings.ts re-exports everything here, so
-// every existing importer keeps its path. Types only: no defaults, no logic.
+// every existing importer keeps its path. Types plus the `LOG_LEVELS`
+// constant: no defaults, no logic.
 import type { CacheDirId } from "./cache-storage.js";
 import type {
   Theme,

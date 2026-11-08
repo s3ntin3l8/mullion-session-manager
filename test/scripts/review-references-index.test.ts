@@ -148,6 +148,28 @@ describe("mullion-review-invariants reference index", () => {
     );
     expect(matchReferences(index, ["README.md", "docs/cli.md"])).toEqual([]);
   });
+
+  it("selects the remote-host reference for the split remote-host-client modules", () => {
+    for (const f of [
+      "remote-host-client.ts",
+      "remote-host-client-core.ts",
+      "remote-host-transport.ts",
+      "remote-host-file-streams.ts",
+      "remote-host-client-types.ts",
+    ]) {
+      const hit = matchReferences(index, [`src/services/${f}`]).map((m: { ref: string }) =>
+        path.basename(m.ref),
+      );
+      expect(hit, f).toContain("pty-host-scope-and-remote-hosts.md");
+    }
+  });
+
+  it("selects the settings reference for settings-types.ts", () => {
+    const hit = matchReferences(index, ["src/services/settings-types.ts"]).map(
+      (m: { ref: string }) => path.basename(m.ref),
+    );
+    expect(hit).toContain("settings-and-schema-threading.md");
+  });
 });
 
 describe("--content over the real references", () => {
