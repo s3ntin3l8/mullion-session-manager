@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HOST_WARN_INTERVAL_MS,
   HostOutcomes,
+  forgetHostWarnings,
   noteHostReachable,
   resetHostWarnThrottle,
   warnHostThrottled,
@@ -111,5 +112,16 @@ describe("host-warn-throttle", () => {
         "host reachable again",
       );
     });
+  });
+
+  it("forgetHostWarnings drops a removed host's entries so its next warning logs fresh", () => {
+    const log = makeLog();
+    warnHostThrottled(log, "h1", {}, "down");
+    warnHostThrottled(log, "h2", {}, "down");
+    forgetHostWarnings("h1");
+    // h1's entry is gone (logs again, no suppressed count); h2's is untouched.
+    expect(warnHostThrottled(log, "h1", {}, "down")).toBe(true);
+    expect(log.warn).toHaveBeenLastCalledWith({ hostId: "h1" }, "down");
+    expect(warnHostThrottled(log, "h2", {}, "down")).toBe(false);
   });
 });

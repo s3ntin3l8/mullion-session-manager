@@ -10,6 +10,10 @@
 // throttled stream's host answers again and forgets that stream, so the next
 // outage warns immediately.
 //
+// Entries live until the host answers again (`noteHostReachable`) or the host
+// is deleted (`forgetHostWarnings`, called by the host-registry removal path);
+// a host that stays down and registered keeps its few entries until restart.
+//
 // In-memory only: a restart costs at most one extra line per key. Behaviour
 // of the callers is untouched — only whether a line is written changes.
 
@@ -76,6 +80,11 @@ export function noteHostReachable(
   if (byMessage.size === 0) state.delete(hostId);
   if (cleared.length === 0) return;
   log.info({ hostId, suppressed, recovered: cleared }, "host reachable again");
+}
+
+/** Drops every throttle entry for `hostId`; called when the host is deleted. */
+export function forgetHostWarnings(hostId: string): void {
+  state.delete(hostId);
 }
 
 /**
