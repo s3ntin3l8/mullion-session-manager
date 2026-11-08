@@ -78,6 +78,32 @@ export function noteHostReachable(
   log.info({ hostId, suppressed, recovered: cleared }, "host reachable again");
 }
 
+/**
+ * Per-poll tally for a loop that talks to a host once per item. A host counts
+ * as recovered only when it answered at least one item and failed none: an item
+ * the host rejects (a 4xx) lands in the same catch as an unreachable host, so
+ * one success must not clear the throttle for a host that still has failures.
+ */
+export class HostOutcomes {
+  private readonly succeeded = new Set<string>();
+  private readonly failedHosts = new Set<string>();
+
+  ok(hostId: string): void {
+    this.succeeded.add(hostId);
+  }
+
+  failed(hostId: string): void {
+    this.failedHosts.add(hostId);
+  }
+
+  /** Call once after the loop: reports recovery for the clean hosts only. */
+  settle(log: Pick<FastifyBaseLogger, "info">, ...messages: string[]): void {
+    for (const hostId of this.succeeded) {
+      if (!this.failedHosts.has(hostId)) noteHostReachable(log, hostId, ...messages);
+    }
+  }
+}
+
 /** Test-only reset: the state is module-scope. */
 export function resetHostWarnThrottle(): void {
   state.clear();

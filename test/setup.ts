@@ -2,7 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { afterAll } from "vitest";
+import { afterAll, beforeEach } from "vitest";
+import { resetHostWarnThrottle } from "../src/services/host-warn-throttle.js";
 import { schema } from "../src/plugins/env.js";
 import { reapDtachMasters } from "./helpers/reap-dtach.js";
 import { SESSION_RUNTIME_ENV_KEYS } from "./helpers/session-runtime-env.js";
@@ -173,4 +174,10 @@ afterAll(() => {
   fs.rmSync(`${tmpDb}-shm`, { force: true });
   fs.rmSync(`${tmpDb}-journal`, { force: true });
   fs.rmSync(tmpSessionsDir, { recursive: true, force: true });
+});
+
+// The unreachable-host warning throttle is module-scope state; start every
+// test with it empty so no assertion depends on test order (#2753).
+beforeEach(() => {
+  resetHostWarnThrottle();
 });

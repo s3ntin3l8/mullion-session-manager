@@ -64,7 +64,7 @@ import { getPRsStatus, getCachedDefaultBranchCi } from "../services/github.js";
 import { overlayRelayRuns } from "../services/relay-review-state.js";
 import { annotatePrTasks } from "../services/mullion-links.js";
 import path from "node:path";
-import { noteHostReachable, warnHostThrottled } from "../services/host-warn-throttle.js";
+import { HostOutcomes, warnHostThrottled } from "../services/host-warn-throttle.js";
 
 // Throttled per (host, message) — see services/host-warn-throttle.ts.
 const MSG_STATUS_PROJECT = "batch git-status: remote host unreachable, omitting project";
@@ -206,6 +206,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
       const sessionIds = parseIdListParam(request.query.sessionIds);
 
       const projectsResult: Record<string, GitStatus | null> = {};
+      const projectOutcome = new HostOutcomes();
       const problemsResult: Record<string, GitStatusFailure> = {};
       if (ids.length > 0) {
         const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
@@ -231,7 +232,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               const remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(
                 project.cwd,
               );
-              noteHostReachable(app.log, project.hostId, MSG_STATUS_PROJECT);
+              projectOutcome.ok(project.hostId);
               if (!remoteResult.isRepo) {
                 projectsResult[project.id] = null;
               } else if (remoteResult.status) {
@@ -241,6 +242,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
                 problemsResult[project.id] = remoteResult.problem;
               }
             } catch (err) {
+              projectOutcome.failed(project.hostId);
               warnHostThrottled(
                 app.log,
                 project.hostId,
@@ -252,7 +254,10 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
         }
       }
 
+      projectOutcome.settle(app.log, MSG_STATUS_PROJECT);
+
       const sessionsResult: Record<string, GitStatus | null> = {};
+      const sessionOutcome = new HostOutcomes();
       if (sessionIds.length > 0) {
         const targets = await resolveSessionCwdTargets(app, sessionIds);
         for (const target of targets) {
@@ -274,7 +279,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitStatus(
                 target.cwd,
               );
-              noteHostReachable(app.log, target.hostId, MSG_STATUS_SESSION);
+              sessionOutcome.ok(target.hostId);
               if (!remoteResult.isRepo) {
                 sessionsResult[target.sessionId] = null;
               } else if (remoteResult.status) {
@@ -286,6 +291,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               // surfaces here as a 4xx HostRequestError, not just the usual
               // HostUnreachableError — both just mean "omit this session,"
               // same as the project loop above.
+              sessionOutcome.failed(target.hostId);
               warnHostThrottled(
                 app.log,
                 target.hostId,
@@ -296,6 +302,8 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           }
         }
       }
+
+      sessionOutcome.settle(app.log, MSG_STATUS_SESSION);
 
       return { projects: projectsResult, sessions: sessionsResult, problems: problemsResult };
     },
@@ -331,6 +339,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
       const result: Record<string, GitDiffStats | null> = {};
       if (sessionIds.length === 0) return result;
 
+      const outcome = new HostOutcomes();
       const targets = await resolveSessionCwdTargets(app, sessionIds);
       for (const target of targets) {
         if (target.invalid) {
@@ -354,13 +363,14 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               target.cwd,
               base,
             );
-            noteHostReachable(app.log, target.hostId, MSG_DIFF_STATS);
+            outcome.ok(target.hostId);
             if (!remoteResult.isRepo) {
               result[target.sessionId] = null;
             } else if (remoteResult.stats) {
               result[target.sessionId] = remoteResult.stats;
             }
           } catch (err) {
+            outcome.failed(target.hostId);
             warnHostThrottled(
               app.log,
               target.hostId,
@@ -370,6 +380,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           }
         }
       }
+      outcome.settle(app.log, MSG_DIFF_STATS);
 
       return result;
     },
@@ -422,6 +433,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
 
       const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
 
+      const refsOutcome = new HostOutcomes();
       await Promise.all(
         rows.map(async (project) => {
           // Branches half and PR half run concurrently, not sequentially —
@@ -437,10 +449,9 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
             // isMerged enrichment).
             try {
               branchesResult[project.id] = await resolveProjectGitBranches(app, project, false);
-              if (project.hostId !== LOCAL_HOST_ID) {
-                noteHostReachable(app.log, project.hostId, MSG_REFS);
-              }
+              if (project.hostId !== LOCAL_HOST_ID) refsOutcome.ok(project.hostId);
             } catch (err) {
+              refsOutcome.failed(project.hostId);
               warnHostThrottled(app.log, project.hostId, { projectId: project.id, err }, MSG_REFS);
             }
           })();
@@ -496,6 +507,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           await Promise.all([branchesPromise, prsPromise]);
         }),
       );
+      refsOutcome.settle(app.log, MSG_REFS);
 
       return { branches: branchesResult, prs: prsResult, defaultBranchCi: defaultBranchCiResult };
     },

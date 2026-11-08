@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HOST_WARN_INTERVAL_MS,
+  HostOutcomes,
   noteHostReachable,
   resetHostWarnThrottle,
   warnHostThrottled,
@@ -80,5 +81,35 @@ describe("host-warn-throttle", () => {
     expect(log.info).not.toHaveBeenCalled();
     // The unrelated stream is still throttled.
     expect(warnHostThrottled(log, "h1", {}, "other")).toBe(false);
+  });
+
+  describe("HostOutcomes", () => {
+    it("does not report recovery for a host with a failed item next to a successful one", () => {
+      const log = makeLog();
+      warnHostThrottled(log, "h1", {}, "down");
+      const outcome = new HostOutcomes();
+      outcome.failed("h1");
+      outcome.ok("h1");
+      outcome.settle(log, "down");
+      expect(log.info).not.toHaveBeenCalled();
+      // Still throttled: the next repeat is swallowed.
+      expect(warnHostThrottled(log, "h1", {}, "down")).toBe(false);
+    });
+
+    it("reports recovery once for a host whose items all succeeded", () => {
+      const log = makeLog();
+      warnHostThrottled(log, "h1", {}, "down");
+      warnHostThrottled(log, "h2", {}, "down");
+      const outcome = new HostOutcomes();
+      outcome.ok("h1");
+      outcome.ok("h1");
+      outcome.failed("h2");
+      outcome.settle(log, "down");
+      expect(log.info).toHaveBeenCalledTimes(1);
+      expect(log.info).toHaveBeenCalledWith(
+        { hostId: "h1", suppressed: 0, recovered: ["down"] },
+        "host reachable again",
+      );
+    });
   });
 });

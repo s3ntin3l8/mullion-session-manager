@@ -12,6 +12,12 @@ import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
 
+const MSG_REJECTED =
+  "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions";
+const MSG_UNREACHABLE = "session reconcile: host unreachable, skipping its sessions";
+const MSG_BUSY =
+  "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick";
+
 /**
  * A row younger than this is never flipped to "exited" (see reconcileRow): the
  * row is inserted before the spawn creates the session's scope, so a probe in
@@ -100,24 +106,10 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // HostUnreachableError it will keep recurring every cycle without
         // ever resolving on its own. Logged distinctly so that's visible
         // to an operator rather than reading identically to "network blip."
-        warnHostError(
-          app.log,
-          { hostId },
-          err,
-          "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
-          "session reconcile: host unreachable, skipping its sessions",
-          "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick",
-          hostId,
-        );
+        warnHostError(app.log, { hostId }, err, MSG_REJECTED, MSG_UNREACHABLE, MSG_BUSY, hostId);
         return;
       }
-      noteHostReachable(
-        app.log,
-        hostId,
-        "session reconcile: host unreachable, skipping its sessions",
-        "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick",
-        "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
-      );
+      noteHostReachable(app.log, hostId, MSG_UNREACHABLE, MSG_BUSY, MSG_REJECTED);
 
       for (const row of rows) {
         try {
