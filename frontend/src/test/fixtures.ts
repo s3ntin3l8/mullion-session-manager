@@ -177,6 +177,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     releaseError: null,
     rebaseStartedAt: null,
     lastReviewVerdict: null,
+    reviewPostPending: false,
     assignee: null,
     failureReason: null,
     failureDiagnostics: null,

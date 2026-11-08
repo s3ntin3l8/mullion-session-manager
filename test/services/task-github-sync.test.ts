@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vites
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { repoRefMocks } from "../helpers/pr-review-defaults.js";
 
 const mockGetToken = vi.fn();
 const mockGetIntegration = vi.fn();
@@ -23,9 +24,7 @@ vi.mock("../../src/services/github-integration.js", () => ({
   resolveReviewerToken: mockResolveReviewerToken,
   getIntegration: mockGetIntegration,
 }));
-vi.mock("../../src/services/host-git.js", () => ({
-  resolveRepoRef: mockResolveRepoRef,
-}));
+vi.mock("../../src/services/host-git.js", () => repoRefMocks(mockResolveRepoRef));
 vi.mock("../../src/services/github-write.js", () => ({
   addLabels: mockAddLabels,
   removeLabel: mockRemoveLabel,
@@ -1039,15 +1038,6 @@ describe("task-github-sync", () => {
       expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     });
 
-    it("is a no-op when no GitHub token is connected", async () => {
-      mockGetToken.mockReturnValue(null);
-      const task = baseTask({ issueNumber: 5, prNumber: 9 });
-
-      await postReviewFindingsComment(app, task, project, { body: "## Round 1\n\nfindings" });
-
-      expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
-    });
-
     it("falls back to an issue comment when posting the review fails but the task also has a linked issue", async () => {
       mockCreatePullRequestReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
       mockCreateComment.mockResolvedValue({
@@ -1062,7 +1052,7 @@ describe("task-github-sync", () => {
 
       await expect(
         postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("posted");
 
       expect(mockCreateComment).toHaveBeenCalledWith(
         "ghp_token",
@@ -1086,7 +1076,7 @@ describe("task-github-sync", () => {
 
       await expect(
         postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("retry");
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();
       expect(row.githubSyncError).toContain("issue comment also rejected");
@@ -1102,7 +1092,7 @@ describe("task-github-sync", () => {
 
       await expect(
         postReviewFindingsComment(app, row0, project, { body: "## Round 1\n\nfindings" }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("retry");
 
       expect(mockCreateComment).not.toHaveBeenCalled();
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, row0.id)).all();

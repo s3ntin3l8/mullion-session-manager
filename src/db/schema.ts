@@ -1413,6 +1413,18 @@ export const tasks = sqliteTable(
     // read it back later, not just at ingestion time — re-parsing the
     // rendered reviewFindings prose is not a gate worth betting a merge on.
     lastReviewVerdict: text("last_review_verdict"),
+    // Durable "this round's review post has not landed on GitHub yet" marker:
+    // a JSON `PendingReviewPost` (task-github-sync.ts) holding everything a
+    // retry needs to re-post the round — the findings file is gone by then.
+    // Written by processReviewingTasks' ingest write (same statement as
+    // lastReviewVerdict, so the verdict is never visible without it), cleared
+    // by the successful post, or by a permanent failure (which is recorded in
+    // githubSyncError) or the marker's age limit. While set, auto-approve and
+    // the merge sweep do not act on an approving verdict, and the board shows
+    // the review as waiting to be posted. A dedicated column, not
+    // githubSyncError: that one is overwritten and cleared by unrelated
+    // GitHub writes (task-promote.ts), which would silently drop the marker.
+    reviewPostPending: text("review_post_pending"),
     // Task 409707 — when `lastReviewVerdict` above was last written, stamped
     // in the SAME ingest write. Exists only to anchor the inconclusive-review
     // re-arm sweep's grace window (`reannounceInconclusiveReviewsAfterGrace`,

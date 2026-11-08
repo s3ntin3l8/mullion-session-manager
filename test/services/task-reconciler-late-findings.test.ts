@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
+import { repoRefMocks } from "../helpers/pr-review-defaults.js";
 
 const {
   mockResolveRepoRef,
@@ -22,7 +23,7 @@ const {
 
 vi.mock("../../src/services/host-git.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  resolveRepoRef: mockResolveRepoRef,
+  ...repoRefMocks(mockResolveRepoRef),
 }));
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),

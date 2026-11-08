@@ -1,0 +1,1 @@
+ALTER TABLE `tasks` ADD `review_post_pending` text;

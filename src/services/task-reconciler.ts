@@ -64,7 +64,10 @@ import {
   syncTaskTransition,
   computeTaskDiffStat,
   postReviewFindingsComment,
+  type PendingReviewPost,
 } from "./task-github-sync.js";
+import { resolveMullionOwnThreadsIfClean } from "./task-own-threads.js";
+import { attemptPendingReviewPost, retryPendingReviewPosts } from "./task-review-post.js";
 import { recordTaskTransition } from "./task-state.js";
 import { endIfRebaseEmptied, endReviewingOnPrState } from "./task-review-end.js";
 import { isHostTransientError } from "./remote-host-errors.js";
@@ -127,7 +130,6 @@ import {
   detectReleaseWorkflow,
   getPullRequestReviewDecision,
   createPullRequestReview,
-  resolveReviewThread,
   updatePullRequestTitle,
 } from "./github-write.js";
 import {
@@ -2073,6 +2075,8 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
     if (attempted >= MAX_MERGE_RETRIES_PER_SWEEP) return;
     if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
 
+    // Same hold as processAutoApprovals: not while the approving review is unposted.
+    if (task.reviewPostPending !== null && isApprovingVerdict(task.lastReviewVerdict)) continue;
     if (!mergeRetryBackoff.shouldAttempt(task.id, now)) continue;
 
     attempted++;
@@ -3369,6 +3373,11 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
     if (attempted >= MAX_AUTO_APPROVALS_PER_SWEEP) return;
     if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
 
+    // An approving verdict whose review has not landed on GitHub yet: GitHub
+    // may still hold an older CHANGES_REQUESTED, so approving now would run
+    // into it (retryPendingReviewPosts clears the marker once it lands).
+    if (task.reviewPostPending !== null && isApprovingVerdict(task.lastReviewVerdict)) continue;
+
     // While a rebase is in flight (rebaseStartedAt !== null), the backoff
     // accumulated during the dirty period would otherwise block
     // attemptAutoApprove — preventing it from ever seeing the resolved
@@ -3785,122 +3794,6 @@ export async function autoReturnTask(
 }
 
 // unlinkFindingsFileIfPresent is imported from ./task-review-spawn.js
-
-/**
- * D1 — on any repo with `required_conversation_resolution` enabled (this
- * repo's own `main` included), an anchored review finding blocks merge
- * FOREVER once its thread is created: nothing before this called GitHub's
- * thread-resolution mutation at all (`docs/tasks-internals.md`'s own
- * Auto-approve section documented the resulting false-positive "blocked"
- * read, but never closed it). Confirmed live in a dry run (2026-08-27): a real anchored
- * finding, fixed and re-reviewed clean, still left `mergeStateStatus:
- * BLOCKED` with green CI — resolving the stale thread by hand was the only
- * way to unstick it.
- *
- * Deliberately NOT "the worker resolves its own threads" in the literal
- * sense — a worker has no route to a GitHub GraphQL thread node id (the
- * REST review-post response this codebase uses to post findings doesn't
- * return one), and handing it a write-scoped GitHub token just to look one
- * up would be a real capability grant for no real safety gain. Instead,
- * Mullion resolves — but ONLY once its own NEXT independent review round
- * confirms the diff is no longer a "changes-requested" one, i.e. exactly
- * the same corroboration a human reviewer clicking Resolve would be acting
- * on. This function has two call sites, both gated on a "clean" verdict:
- * `processReviewingTasks`, at the moment that verdict is durably ingested,
- * and `attemptMerge`'s D1 self-heal, which re-checks the same
- * `lastReviewVerdict` column on already-`done` rows (see the comment at
- * that call site) — never fires off an "inconclusive"/crashed-reviewer
- * verdict, which is not corroborating evidence of anything.
- *
- * Bounded to `mullionLogins` (`resolveMullionReviewLogins`, same set D0's
- * fix uses) — a human's own review thread is NEVER a candidate here,
- * regardless of verdict. Independent review, round 3: ownership is judged
- * across EVERY comment in the thread, not just the first — a thread that
- * started as Mullion's own finding but later got a human reply pushing
- * back inside it (disagreeing the finding is real, adding context) must
- * stay unresolved too. Auto-resolving on `comments[0]` alone would dismiss
- * that objection right along with the original finding, which is exactly
- * the "don't paper over a human's input" bound this function exists to
- * hold. This is the one bound that actually matters: it's what keeps
- * `required_conversation_resolution` a real gate against a worker (or
- * Mullion itself) papering over a human's finding, while still closing the
- * self-inflicted deadlock this function exists to fix.
- *
- * Best-effort, matching every other GitHub write in this file's own
- * posture: a fetch/mint/resolve failure is logged and skipped, never
- * thrown — the verdict this call follows is already durably recorded by
- * the time this runs, so a failure here costs nothing but a stale thread
- * surviving to the next tick's `attemptMerge`, not a lost transition. Fails
- * closed on `truncated: true` (an incomplete thread enumeration must not
- * be read as "no threads to resolve").
- *
- * Returns the fetched thread result on success (even when nothing ended up
- * resolved) so `attemptMerge`'s own "blocked" diagnostic — the OTHER
- * consumer of this exact same fetch — can reuse it instead of paying for a
- * second GraphQL round trip in the same sweep tick; `null` on any early
- * return (no PR, no token, fetch failure, truncation), signaling "I
- * couldn't get you a usable result, fetch your own."
- */
-async function resolveMullionOwnThreadsIfClean(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  project: typeof projects.$inferSelect,
-): Promise<Awaited<ReturnType<typeof fetchPullRequestReviewThreads>> | null> {
-  if (task.prNumber === null) return null;
-
-  const repoRef = await resolveRepoRef(app, project);
-  if (!repoRef) return null;
-  const token = await resolveGitHubToken(app, repoRef, "write");
-  if (!token) return null;
-
-  let result: Awaited<ReturnType<typeof fetchPullRequestReviewThreads>>;
-  try {
-    result = await fetchPullRequestReviewThreads(token, repoRef.owner, repoRef.repo, task.prNumber);
-  } catch (err) {
-    app.log.warn(
-      { err, taskId: task.id },
-      "task reconcile: review-thread fetch failed while checking for Mullion's own threads to resolve",
-    );
-    return null;
-  }
-  if (result.truncated) {
-    app.log.warn(
-      { taskId: task.id, prNumber: task.prNumber },
-      "task reconcile: review threads/comments exceeded the fetch page size — skipping auto-resolve this tick rather than resolving an incomplete set",
-    );
-    return null;
-  }
-
-  // Independent review, round 2: cheap pre-filter before the reviewer
-  // identity lookup below, same reasoning as attemptReturnPrCommentsToWorker's
-  // own ordering (D0) — resolveMullionReviewLogins is a live, uncached
-  // GraphQL round trip, and this function is called from a merge-retry
-  // backoff loop, not a one-shot verdict ingestion, so paying for it on
-  // every tick even when nothing is unresolved would reproduce the exact
-  // pattern D0 fixed elsewhere in this file.
-  if (!result.threads.some((t) => !t.isResolved)) return result;
-
-  const mullionLogins = await resolveMullionReviewLogins(app, repoRef, result.viewerLogin);
-  const ownUnresolved = result.threads.filter(
-    (t) =>
-      !t.isResolved &&
-      t.comments.length > 0 &&
-      t.comments.every((c) => mullionLogins.has(c.author ?? "")),
-  );
-  if (ownUnresolved.length === 0) return result;
-
-  for (const thread of ownUnresolved) {
-    try {
-      await resolveReviewThread(token, thread.id);
-    } catch (err) {
-      app.log.warn(
-        { err, taskId: task.id, threadId: thread.id },
-        "task reconcile: failed to resolve one of Mullion's own review threads",
-      );
-    }
-  }
-  return result;
-}
 
 async function processReviewingTasks(app: FastifyInstance): Promise<void> {
   const allRows = app.db
@@ -4385,10 +4278,57 @@ async function ingestReviewOutcome(
     const cached = repoRef ? getPRsStatus(repoRef.owner, repoRef.repo) : null;
     reviewedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
   }
+  // #756 — a task that wanted another round but had none left gets one
+  // extra sentence folded into the SAME comment, rather than a second
+  // post: today's single-comment-per-round shape stays exactly that,
+  // shape, just occasionally longer. This is also the only place a
+  // human ever learns the round cap was the reason nothing moved —
+  // without it, a capped task looks identical to one that was never
+  // going to auto-return in the first place.
+  //
+  // Task 258971's investigation: this note must be appended to
+  // `reviewSummary` too, not just `body` — `postReviewFindingsComment`
+  // posts `reviewSummary` as the review's own text whenever there are
+  // anchored findings (`params.findings !== undefined && anchored.length
+  // > 0`), which is the common case for a real changes-requested
+  // verdict. Appending only to `body` meant the note was silently
+  // dropped on every review that actually had findings to anchor —
+  // exactly the capped-and-parked case this exists to surface.
+  const cappedNote =
+    wantsAutoReturn && capReached
+      ? `\n\n_Automatic round cap (${maxRounds}) reached for this task — it needs a human to take it from here._`
+      : stall === "finding-persisted"
+        ? "\n\n_The same earlier finding is still open after two rounds — the automatic loop has stopped; this task needs a human to take it from here._"
+        : stall === "no-progress"
+          ? "\n\n_The worker returned without pushing a change — the automatic loop has stopped; this task needs a human to take it from here._"
+          : "";
+
+  // The retry marker rides the SAME write as the verdict, so an approving
+  // verdict is never visible to auto-approve without the record that its
+  // review post is still owed. Nothing to post to (no PR and no issue) is no
+  // marker. A new round overwrites an older round's marker: its post is moot.
+  const pendingPost: PendingReviewPost | null =
+    task.prNumber !== null || task.issueNumber !== null
+      ? {
+          key: `${task.id}-${now}`,
+          body: commentBody + cappedNote,
+          ...(parsed
+            ? {
+                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
+                findings: parsed.findings,
+              }
+            : {}),
+          verdict,
+          posted: false,
+          createdAt: now,
+        }
+      : null;
+  const pendingRaw = pendingPost ? JSON.stringify(pendingPost) : null;
   const updated = app.db
     .update(tasks)
     .set({
       reviewFindings: appendedFindings,
+      reviewPostPending: pendingRaw,
       ...(latch.kind === "session"
         ? { reviewFindingsIngestedSessionId: latch.sessionId }
         : { reviewRunIngestedId: latch.runId }),
@@ -4444,52 +4384,19 @@ async function ingestReviewOutcome(
   // attempt, not the wait built up by earlier rounds' not-yet-eligible
   // visits.
   resetAutoApproveBackoff(task.id);
-  // #756 — a task that wanted another round but had none left gets one
-  // extra sentence folded into the SAME comment, rather than a second
-  // post: today's single-comment-per-round shape stays exactly that,
-  // shape, just occasionally longer. This is also the only place a
-  // human ever learns the round cap was the reason nothing moved —
-  // without it, a capped task looks identical to one that was never
-  // going to auto-return in the first place.
-  //
-  // Task 258971's investigation: this note must be appended to
-  // `reviewSummary` too, not just `body` — `postReviewFindingsComment`
-  // posts `reviewSummary` as the review's own text whenever there are
-  // anchored findings (`params.findings !== undefined && anchored.length
-  // > 0`), which is the common case for a real changes-requested
-  // verdict. Appending only to `body` meant the note was silently
-  // dropped on every review that actually had findings to anchor —
-  // exactly the capped-and-parked case this exists to surface.
-  const cappedNote =
-    wantsAutoReturn && capReached
-      ? `\n\n_Automatic round cap (${maxRounds}) reached for this task — it needs a human to take it from here._`
-      : stall === "finding-persisted"
-        ? "\n\n_The same earlier finding is still open after two rounds — the automatic loop has stopped; this task needs a human to take it from here._"
-        : stall === "no-progress"
-          ? "\n\n_The worker returned without pushing a change — the automatic loop has stopped; this task needs a human to take it from here._"
-          : "";
-  await postReviewFindingsComment(
-    app,
-    task,
-    project,
-    parsed
-      ? {
-          body: commentBody + cappedNote,
-          reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
-          findings: parsed.findings,
-          verdict,
-        }
-      : { body: commentBody + cappedNote, verdict },
-  );
-
-  // D1 — a "clean" verdict is corroborating evidence any of Mullion's
-  // own earlier anchored findings on this PR were actually addressed;
-  // resolve them now so a repo requiring conversation resolution
-  // doesn't deadlock on a self-inflicted stale thread. Never fires on
-  // "changes-requested" (there's nothing to corroborate yet) or
-  // "inconclusive" (a crashed/silent reviewer confirms nothing).
-  if (isApprovingVerdict(verdict)) {
-    await resolveMullionOwnThreadsIfClean(app, task, project);
+  // The post, then (approving verdicts) the own-thread resolution: both are
+  // tracked by the marker written above, so a transient failure in either is
+  // retried by a later tick (retryPendingReviewPosts) instead of being lost.
+  if (pendingPost && pendingRaw) {
+    await attemptPendingReviewPost(
+      app,
+      task,
+      project,
+      pendingPost,
+      pendingRaw,
+      false,
+      resetAutoApproveBackoff,
+    );
   }
 
   if (wantsSuggestionsRound) {
@@ -4751,6 +4658,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // outcome gets its seed typed if it never arrived (never spawns anything).
   await Promise.all([processHermesRuns(app), recheckAdoptedSeeds(app)]);
   await processReviewingTasks(app);
+  await retryPendingReviewPosts(app, resetAutoApproveBackoff);
   // Runs right after processReviewingTasks, same tick — both re-read from
   // the DB, so a verdict ingested earlier in this pass is already visible
   // and can be acted on immediately, not deferred to the next tick.
