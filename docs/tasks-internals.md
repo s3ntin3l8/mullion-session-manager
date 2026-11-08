@@ -1647,6 +1647,18 @@ the task's branch to fix the conflict instead of just backing off:
   checked out elsewhere), or the attempt cap is spent, the sweep falls back to
   today's plain `dirty` backoff — surfaced in `tasks.mergeError` for a human,
   same as `mergeOnApprove` without `autoApprove`.
+- **A rebase waits for other work in the worktree.** `attemptAutoRebase` does
+  not spawn while another worker round could push into the same worktree: the
+  task is neither `reviewing` nor `done` (a worker round is in flight), a
+  suggestions round is running (`approvalCarriedAt` set on a `reviewing` task
+  and its worker's `workFinishedAt` still null), or a review post is pending
+  (`tasks.reviewPostPending`, which may still change the verdict). It returns
+  before anything is terminated or counted, records the reason in
+  `tasks.mergeError`, and tries again on a later tick. The wait is bounded by
+  `REBASE_HOLD_MAX_MS` (30 minutes, tracked in memory from the first held
+  tick, so a restart only restarts the clock): after that the rebase proceeds
+  and logs a `warn` naming the task and the blocker. An unreadable worker
+  status fails open. It does not wait for CI: a conflicting PR runs none.
 - **A worker that exits within seconds is not an attempt.** An agent CLI that
   dies at once (agy on an exhausted quota, #1363) still reads as a finished
   worker. `src/services/worker-rapid-exit.ts` holds the one predicate for it:

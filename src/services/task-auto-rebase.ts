@@ -64,6 +64,52 @@ export const MAX_REBASE_ATTEMPTS = 2;
 // worktree is still active — see that file's own use of this constant.
 export const REBASE_ATTEMPT_STALE_MS = 30 * 60_000;
 
+// How long a rebase may be held back by findRebaseBlocker before it proceeds
+// anyway. In memory (a restart restarts the clock — it only ever delays by one
+// more window), keyed by task id.
+export const REBASE_HOLD_MAX_MS = 30 * 60_000;
+const rebaseHeldSince = new Map<number, number>();
+
+/** Test hook: forget every hold clock. */
+export function resetRebaseHolds(): void {
+  rebaseHeldSince.clear();
+}
+
+/**
+ * Why a rebase worker must not be spawned into the task's worktree right now,
+ * or null. Another worker round (a task not yet `reviewing`/`done`, or a
+ * suggestions round whose worker has not finished) or a pending review post
+ * (which may still change the verdict) would race the rebase's push.
+ */
+async function findRebaseBlocker(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  backend: ReturnType<typeof resolveBackend>,
+): Promise<string | null> {
+  if (task.reviewPostPending !== null) return "a review post is pending";
+  if (task.status !== "reviewing" && task.status !== "done") {
+    return `the task is ${task.status}, a worker round is in flight`;
+  }
+  // A rebase attempt of our own (past its window here) is not a suggestions round.
+  if (
+    task.status === "reviewing" &&
+    task.approvalCarriedAt !== null &&
+    task.rebaseStartedAt === null &&
+    task.sessionId !== null
+  ) {
+    try {
+      const idleMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+      const info = (await backend.liveStatus([String(task.sessionId)], idleMs))[
+        String(task.sessionId)
+      ];
+      if (info && info.workFinishedAt === null) return "a suggestions round is in flight";
+    } catch {
+      // No signal: fail open rather than hold forever.
+    }
+  }
+  return null;
+}
+
 /**
  * Judges the previous auto-rebase attempt once, when it has finished: a worker
  * that ended within RAPID_EXIT_MS of its spawn without moving the PR head (its
@@ -231,6 +277,21 @@ export async function attemptAutoRebase(
     );
     return;
   }
+
+  const blocker = await findRebaseBlocker(app, task, backend);
+  if (blocker !== null) {
+    const heldSince = rebaseHeldSince.get(task.id) ?? now;
+    rebaseHeldSince.set(task.id, heldSince);
+    if (now - heldSince < REBASE_HOLD_MAX_MS) {
+      recordMergeError(app, task.id, `Conflicts with main — auto-rebase waiting: ${blocker}`);
+      return;
+    }
+    app.log.warn(
+      { taskId: task.id, blocker, heldMs: now - heldSince },
+      "task auto-rebase: held back past the limit, proceeding anyway",
+    );
+  }
+  rebaseHeldSince.delete(task.id);
 
   if (task.rebaseStartedAt !== null && task.sessionId !== null) {
     // Reaching here means rebaseStartedAt is past its window (the withinWindow
