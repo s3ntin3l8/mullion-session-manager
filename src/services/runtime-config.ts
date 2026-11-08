@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { AppSettings, LogLevel } from "./settings.js";
+import type { AppSettings, LogLevel } from "./settings-types.js";
 import { DEFAULT_DEVICE_EMULATOR_GPU } from "./device-defaults.js";
 
 // Env-configured behaviour knobs that the Settings UI can override at

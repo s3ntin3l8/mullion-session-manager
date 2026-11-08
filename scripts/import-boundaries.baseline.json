@@ -37,14 +37,6 @@
         "src/services/pty-manager.ts -> src/services/dev-server-detect.ts"
       ],
       "files": ["src/services/dev-server-detect.ts", "src/services/pty-manager.ts"]
-    },
-    {
-      "note": "issue #2414 — the runtime config defaults and the settings module import each other's types.",
-      "edges": [
-        "src/services/runtime-config.ts -> src/services/settings.ts",
-        "src/services/settings.ts -> src/services/runtime-config.ts"
-      ],
-      "files": ["src/services/runtime-config.ts", "src/services/settings.ts"]
     }
   ],
   "inversions": [
