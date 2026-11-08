@@ -8,13 +8,19 @@ import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 
-const { mockHermesUsable, mockDispatchTaskReview, mockPollTaskReview, mockStopHermesRun } =
-  vi.hoisted(() => ({
-    mockHermesUsable: vi.fn().mockReturnValue(true),
-    mockDispatchTaskReview: vi.fn(),
-    mockPollTaskReview: vi.fn(),
-    mockStopHermesRun: vi.fn(),
-  }));
+const {
+  mockHermesUsable,
+  mockDispatchTaskReview,
+  mockPollTaskReview,
+  mockStopHermesRun,
+  mockCreatePrReview,
+} = vi.hoisted(() => ({
+  mockHermesUsable: vi.fn().mockReturnValue(true),
+  mockDispatchTaskReview: vi.fn(),
+  mockPollTaskReview: vi.fn(),
+  mockStopHermesRun: vi.fn(),
+  mockCreatePrReview: vi.fn(),
+}));
 vi.mock("../../src/services/hermes-integration.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   hermesTaskReviewerUsable: mockHermesUsable,
@@ -45,7 +51,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getPullRequestByNumber: mockGetPullRequestByNumber,
   // The PR review post is the network edge this test must not reach.
-  createPullRequestReview: vi.fn().mockResolvedValue({ id: 1 }),
+  createPullRequestReview: mockCreatePrReview,
 }));
 vi.mock("../../src/services/github.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -99,6 +105,7 @@ describe("re-armed review round heading (#2752)", () => {
   });
   beforeEach(() => {
     mockPollTaskReview.mockReset();
+    mockCreatePrReview.mockReset().mockResolvedValue({ id: 1 });
     mockResolveRepoRef.mockReset().mockResolvedValue({ owner: "o", repo: "r" });
     mockResolveGitHubToken.mockReset().mockResolvedValue("tok");
     mockGetPullRequestByNumber.mockReset().mockResolvedValue({
@@ -159,5 +166,8 @@ describe("re-armed review round heading (#2752)", () => {
     const stored = get(retry)?.reviewFindings ?? "";
     expect(stored).toContain("## Round 1\n\nfirst attempt");
     expect(stored).toContain("## Round 1 (retry 2)");
+    // The posted PR review body carries the same distinct heading.
+    expect(mockCreatePrReview.mock.calls.at(-1)?.[4].body).toMatch(/^## Round 1 \(retry 2\)\n\n/);
+    await app.close();
   });
 });
