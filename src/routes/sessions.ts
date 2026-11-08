@@ -61,6 +61,14 @@ import {
   resolveSessionHostIds,
   withLiveStatus,
 } from "../services/session-live-info.js";
+import { noteHostReachable, warnHostThrottled } from "../services/host-warn-throttle.js";
+
+// Throttled per (host, message) — see services/host-warn-throttle.ts.
+const LIVE_STATUS_BUSY_MESSAGE = "host busy, reporting default live status for its sessions";
+const LIVE_STATUS_UNREACHABLE_MESSAGE =
+  "host unreachable, reporting default live status for its sessions";
+const LIVE_STATUS_REFUSED_MESSAGE =
+  "host answered the live-status request with an error, reporting default live status for its sessions";
 
 interface RenameSessionBody {
   name: string;
@@ -395,16 +403,25 @@ export async function sessionsRoute(app: FastifyInstance) {
               hostId,
               await resolveBackend(app, hostId).liveStatus(ids, idleThresholdMs),
             );
+            noteHostReachable(
+              app.log,
+              hostId,
+              LIVE_STATUS_BUSY_MESSAGE,
+              LIVE_STATUS_UNREACHABLE_MESSAGE,
+              LIVE_STATUS_REFUSED_MESSAGE,
+            );
           } catch (err) {
             const isBusy = isHostBusyError(err);
             const refusedStatus = err instanceof HostRequestError ? err.statusCode : undefined;
-            app.log.warn(
-              { hostId, err },
+            warnHostThrottled(
+              app.log,
+              hostId,
+              { err },
               isBusy
-                ? "host busy, reporting default live status for its sessions"
+                ? LIVE_STATUS_BUSY_MESSAGE
                 : refusedStatus === undefined
-                  ? "host unreachable, reporting default live status for its sessions"
-                  : "host answered the live-status request with an error, reporting default live status for its sessions",
+                  ? LIVE_STATUS_UNREACHABLE_MESSAGE
+                  : LIVE_STATUS_REFUSED_MESSAGE,
             );
             failedHosts.set(hostId, { refusedStatus, busy: isBusy });
             liveByHost.set(hostId, Object.create(null));

@@ -5,6 +5,7 @@ import { listHosts } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { createMuxConnection, PONG_TIMEOUT_MS, type MuxConnection } from "./ssh-agent-mux.js";
 import { pipeFilteredChannelToChannel } from "./ssh-agent-relay.js";
+import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
 
 // Issue #820 — the primary-side subscriber that finally CONNECTS the two
 // ends PR5a (relay + local socket) and PR5b (agent route + connectedBridges
@@ -43,6 +44,7 @@ const FAILURE_RELOG_INTERVAL = 5;
 // openSshAgentStream() has no connect timeout of its own (same documented
 // gap as openEventsStream() — remote-host-client.ts) — bounded here so a
 // half-open handshake can't stall this host's fan-out indefinitely.
+const CONNECT_TIMEOUT_MESSAGE = "[ssh-agent-fanout] connect timed out, terminating and retrying";
 const CONNECT_TIMEOUT_MS = 10_000;
 
 interface HostFanout {
@@ -291,16 +293,14 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
     f.socket = socket;
 
     f.connectTimeoutTimer = setTimeout(() => {
-      app.log.warn(
-        { hostId: f.hostId },
-        "[ssh-agent-fanout] connect timed out, terminating and retrying",
-      );
+      warnHostThrottled(app.log, f.hostId, {}, CONNECT_TIMEOUT_MESSAGE);
       socket.terminate();
     }, CONNECT_TIMEOUT_MS);
     f.connectTimeoutTimer.unref();
 
     socket.on("open", () => {
       if (f.connectTimeoutTimer !== null) clearTimeout(f.connectTimeoutTimer);
+      noteHostReachable(app.log, f.hostId, CONNECT_TIMEOUT_MESSAGE);
       f.connectTimeoutTimer = null;
       f.attempt = 0; // reset backoff on a successful connect
       f.consecutiveFailureCount = 0;

@@ -30,6 +30,7 @@ import {
   type MuxChannel,
   type MuxConnection,
 } from "../services/ssh-agent-mux.js";
+import { noteHostReachable, warnHostThrottled } from "../services/host-warn-throttle.js";
 
 // Issue #1656 — the primary half of the control relay. One
 // `/internal/ws/control-relay` connection per enrolled, non-local agent host
@@ -48,6 +49,8 @@ import {
 
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 const FAILURE_RELOG_INTERVAL = 5;
+const CONNECT_TIMEOUT_MESSAGE =
+  "[control-relay-fanout] connect timed out, terminating and retrying";
 const CONNECT_TIMEOUT_MS = 10_000;
 /** How long a denied channel may linger before the primary closes it. */
 const DENIED_CHANNEL_LINGER_MS = 5_000;
@@ -229,10 +232,7 @@ export function startControlRelayFanout(app: FastifyInstance): ControlRelayFanou
     f.socket = socket;
 
     f.connectTimeoutTimer = setTimeout(() => {
-      app.log.warn(
-        { hostId: f.hostId },
-        "[control-relay-fanout] connect timed out, terminating and retrying",
-      );
+      warnHostThrottled(app.log, f.hostId, {}, CONNECT_TIMEOUT_MESSAGE);
       socket.terminate();
     }, CONNECT_TIMEOUT_MS);
     f.connectTimeoutTimer.unref();
@@ -252,6 +252,7 @@ export function startControlRelayFanout(app: FastifyInstance): ControlRelayFanou
 
     socket.on("open", () => {
       if (f.connectTimeoutTimer !== null) clearTimeout(f.connectTimeoutTimer);
+      noteHostReachable(app.log, f.hostId, CONNECT_TIMEOUT_MESSAGE);
       f.connectTimeoutTimer = null;
       f.attempt = 0;
       f.consecutiveFailureCount = 0;

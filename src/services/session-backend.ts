@@ -58,6 +58,7 @@ import {
 import type { PromoteDecision } from "../shared/promote-decision.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { compileOutputMatcher, waitForOutput } from "./output-wait.js";
+import { warnHostThrottled } from "./host-warn-throttle.js";
 import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
   deliverPrompt,
@@ -112,13 +113,20 @@ export function warnHostError(
   rejectedMsg: string,
   unreachableMsg: string,
   busyMsg?: string,
+  /** Poll-driven callers pass the host id so a host that stays down logs once
+   * per 10 minutes per message (host-warn-throttle.ts) instead of every poll. */
+  throttleHostId?: string,
 ): HostErrorClassification {
+  const emit = (fields: Record<string, unknown>, message: string): void => {
+    if (throttleHostId === undefined) log.warn(fields, message);
+    else warnHostThrottled(log, throttleHostId, fields, message);
+  };
   if (isHostBusyError(err)) {
-    log.warn({ ...bindings, err }, busyMsg ?? unreachableMsg.replace("unreachable", "busy"));
+    emit({ ...bindings, err }, busyMsg ?? unreachableMsg.replace("unreachable", "busy"));
     return "busy";
   }
   const rejected = err instanceof HostRequestError;
-  log.warn({ ...bindings, err }, rejected ? rejectedMsg : unreachableMsg);
+  emit({ ...bindings, err }, rejected ? rejectedMsg : unreachableMsg);
   return rejected ? "rejected" : "unreachable";
 }
 

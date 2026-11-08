@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { noteHostReachable } from "./host-warn-throttle.js";
 import { resolveBackend, warnHostError } from "./session-backend.js";
 import { removeCheckoutIfClean } from "./checkout-removal.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
@@ -10,6 +11,12 @@ import { cleanupPreviewWorktree } from "./git-worktree.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+
+const MSG_REJECTED =
+  "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions";
+const MSG_UNREACHABLE = "session reconcile: host unreachable, skipping its sessions";
+const MSG_BUSY =
+  "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick";
 
 /**
  * A row younger than this is never flipped to "exited" (see reconcileRow): the
@@ -99,16 +106,10 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // HostUnreachableError it will keep recurring every cycle without
         // ever resolving on its own. Logged distinctly so that's visible
         // to an operator rather than reading identically to "network blip."
-        warnHostError(
-          app.log,
-          { hostId },
-          err,
-          "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
-          "session reconcile: host unreachable, skipping its sessions",
-          "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick",
-        );
+        warnHostError(app.log, { hostId }, err, MSG_REJECTED, MSG_UNREACHABLE, MSG_BUSY, hostId);
         return;
       }
+      noteHostReachable(app.log, hostId, MSG_UNREACHABLE, MSG_BUSY, MSG_REJECTED);
 
       for (const row of rows) {
         try {
