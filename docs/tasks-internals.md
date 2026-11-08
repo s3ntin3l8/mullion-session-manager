@@ -934,9 +934,10 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   the inconclusive verdict (a human re-prompting the reviewer after its quota
   recovered is the motivating case); the round is labelled "late verdict".
   Every ingest unlinks the round's file, so a file present now was written
-  after it; the backend exposes no mtime. Freeform text is ingested as the
-  normal path does (`changes-requested`) but never counts as `finished`, so it
-  cannot spend an auto-return round. The write is a CAS on the verdict still
+  after it; the backend exposes no mtime. A freeform (unstructured) late
+  file is not ingested: the verdict stays `inconclusive`, nothing is posted, and
+  its content hash is remembered per task in memory so later ticks do not parse
+  it again (a changed file is looked at afresh). The write is a CAS on the verdict still
   being `inconclusive` for that
   session, so the re-arm sweep's fresh review cannot be ingested twice. An approving verdict with nothing
   to apply likewise stays put until the CI / auto-approve gates move it.
