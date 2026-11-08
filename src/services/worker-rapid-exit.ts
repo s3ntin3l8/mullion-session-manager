@@ -88,6 +88,21 @@ export async function readPrHeadAndMergeability(
 }
 
 /**
+ * When the worker's session ended, for the rapid-exit judgement:
+ * `workFinishedAt` when a turn-end hook stamped it, else the nearest signal a
+ * session that died without one still carries — its last turn end, or the
+ * time of the API error it died on (the `api_error` admission in the
+ * suggestions branch; a stop_failure sets no turn end). Null when none exists.
+ */
+export function sessionEndedAt(info: {
+  workFinishedAt: number | null;
+  lastTurnEndedAt: number | null;
+  errorAt: number | null;
+}): number | null {
+  return info.workFinishedAt ?? info.lastTurnEndedAt ?? info.errorAt;
+}
+
+/**
  * Did the worker end within RAPID_EXIT_MS of `spawnedAt` with the PR head
  * still at `headAtSpawn`? Fails open: any missing input, or a head that
  * cannot be read, answers false (an ordinary completion). Logs one `warn` per
@@ -100,12 +115,13 @@ export async function workerExitedRapidly(
   w: {
     sessionId: number;
     spawnedAt: Date | null;
-    workFinishedAt: number | null;
+    /** See {@link sessionEndedAt}. */
+    endedAt: number | null;
     headAtSpawn: string | null;
   },
 ): Promise<boolean> {
-  if (w.spawnedAt === null || w.workFinishedAt === null || w.headAtSpawn === null) return false;
-  const elapsedMs = w.workFinishedAt - w.spawnedAt.getTime();
+  if (w.spawnedAt === null || w.endedAt === null || w.headAtSpawn === null) return false;
+  const elapsedMs = w.endedAt - w.spawnedAt.getTime();
   if (elapsedMs < -CLOCK_SKEW_TOLERANCE_MS || elapsedMs >= RAPID_EXIT_MS) return false;
   const headNow = await readPrHeadSha(app, task, project);
   if (headNow === null || headNow !== w.headAtSpawn) return false;
