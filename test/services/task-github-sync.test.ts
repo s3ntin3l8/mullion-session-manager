@@ -1038,12 +1038,11 @@ describe("task-github-sync", () => {
       expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     });
 
-    it("is a no-op when no GitHub token is connected", async () => {
+    it("reports permanent and records githubSyncError when no GitHub token is connected", async () => {
       mockGetToken.mockReturnValue(null);
       const task = baseTask({ issueNumber: 5, prNumber: 9 });
-
-      await postReviewFindingsComment(app, task, project, { body: "## Round 1\n\nfindings" });
-
+      const out = await postReviewFindingsComment(app, task, project, { body: "## Round 1" });
+      expect(out).toBe("permanent");
       expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     });
 

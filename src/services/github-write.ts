@@ -1419,7 +1419,7 @@ export async function fetchPullRequestReviewThreads(
  * thread's own" scoping.
  *
  * Callers MUST bound which threads they resolve — see
- * `resolveMullionOwnThreadsIfClean` (task-reconciler.ts) for the actual
+ * `resolveMullionOwnThreadsIfClean` (task-own-threads.ts) for the actual
  * policy. This function itself does no authorization check of its own; it
  * resolves whatever thread id it's given, same posture as every other
  * write in this file (the caller decides what's safe to call it with, this

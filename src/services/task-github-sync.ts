@@ -872,7 +872,12 @@ export async function postReviewFindingsComment(
   const repoRef = repoResult.value;
   if (!repoRef) return "posted";
   const token = await resolveGitHubToken(app, repoRef);
-  if (!token) return "posted";
+  if (!token) {
+    // No retry can supply a missing token: record why and report the
+    // permanent outcome (which clears the pending marker) rather than "posted".
+    recordGithubSyncError(app, task.id, "No GitHub token connected");
+    return "permanent";
+  }
 
   // The failure that decided the outcome: a retryable one with a tracking
   // marker is not a githubSyncError (the marker shows it), anything else is.
