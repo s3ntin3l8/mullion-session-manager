@@ -9,6 +9,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks, type projects } from "../db/schema.js";
+import { clearMergeNeedsHumanReason } from "./task-merge-human.js";
 import { getDiffStats, getDefaultBaseRef } from "./git-diff.js";
 import { resolveCommitSha } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -102,7 +103,12 @@ export async function endReviewingTask(
 ): Promise<boolean> {
   const now = new Date();
   const terminal = end === "closed" ? ("failed" as const) : ("done" as const);
-  const common = { rebaseStartedAt: null, mergeError: null, completedAt: now };
+  const common = {
+    rebaseStartedAt: null,
+    mergeError: null,
+    needsHumanReason: clearMergeNeedsHumanReason,
+    completedAt: now,
+  };
   const patch =
     end === "closed"
       ? { ...common, status: "failed" as const, failureReason: CLOSED_WITHOUT_MERGE_REASON }

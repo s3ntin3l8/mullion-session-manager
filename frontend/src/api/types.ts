@@ -2169,7 +2169,8 @@ export interface Task {
   autoReturnCapAnnouncedAt: string | null;
   // Why the automatic loop stopped; only meaningful while the announce stamp
   // above is set. See needsHuman.ts.
-  needsHumanReason: "cap" | "no-progress" | "finding-persisted" | null;
+  needsHumanReason:
+    "cap" | "no-progress" | "finding-persisted" | "rebase-exhausted" | "blocked-threads" | null;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned

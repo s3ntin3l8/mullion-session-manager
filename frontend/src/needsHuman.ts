@@ -3,7 +3,16 @@ import { formatRelativeUntil } from "./relativeTime.js";
 // Why Task Master's automatic review loop stopped and is waiting on a human —
 // the board card and the task drawer share this wording so they can't drift.
 // `null`/"cap" is the original (and still most common) reason: the round cap.
-export type NeedsHumanReason = "cap" | "no-progress" | "finding-persisted";
+export type NeedsHumanReason =
+  "cap" | "no-progress" | "finding-persisted" | "rebase-exhausted" | "blocked-threads";
+
+/** The reasons tied to a merge that cannot proceed. Unlike the review-loop
+ * reasons they do not depend on the round cap or its announce stamp. */
+export function isMergeNeedsHumanReason(
+  reason: NeedsHumanReason | null | undefined,
+): reason is "rebase-exhausted" | "blocked-threads" {
+  return reason === "rebase-exhausted" || reason === "blocked-threads";
+}
 
 export function needsHumanText(reason: NeedsHumanReason | null | undefined): string {
   switch (reason) {
@@ -11,6 +20,10 @@ export function needsHumanText(reason: NeedsHumanReason | null | undefined): str
       return "worker returned without a change";
     case "finding-persisted":
       return "same finding still open after two rounds";
+    case "rebase-exhausted":
+      return "auto-rebase gave up, the PR still conflicts with main";
+    case "blocked-threads":
+      return "merge blocked on unresolved review conversations";
     default:
       return "round cap reached";
   }

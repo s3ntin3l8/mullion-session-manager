@@ -28,21 +28,10 @@ import {
   readPrHeadSha,
   workerExitedRapidly,
 } from "./worker-rapid-exit.js";
+import { recordMergeError } from "./task-merge-human.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 
 const CLOCK_SKEW_TOLERANCE_MS = 5_000;
-
-// A confirmed-merged task never carries a merge error: `mergedAt` wins over a
-// late failure from an in-flight request or a slow sweep (a webhook or a
-// concurrent reconcile may have recorded the merge while this one was still
-// waiting on a timeout), so the write is a no-op once `mergedAt` is set.
-export function recordMergeError(app: FastifyInstance, taskId: number, message: string): void {
-  app.db
-    .update(tasks)
-    .set({ mergeError: message })
-    .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))
-    .run();
-}
 
 // #758 — bounds how many times attemptAutoRebase spawns a worker for the
 // SAME task across its whole lifecycle. A separate counter/cap from
@@ -217,6 +206,7 @@ export async function attemptAutoRebase(
       app,
       task.id,
       `Conflicts with main — auto-rebase gave up after ${MAX_REBASE_ATTEMPTS} attempt(s), needs manual resolution`,
+      "rebase-exhausted",
     );
     return;
   }

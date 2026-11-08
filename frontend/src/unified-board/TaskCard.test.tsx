@@ -1051,6 +1051,15 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
 
+  it.each([
+    ["rebase-exhausted", /Needs a human: auto-rebase gave up, the PR still conflicts with main/],
+    ["blocked-threads", /Needs a human: merge blocked on unresolved review conversations/],
+  ] as const)("labels the merge reason %s on a done task", (reason, expected) => {
+    tasks = [makeTask({ id: 1, status: "done", needsHumanReason: reason })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
   // Issue #1038 — the round badge already covers "still working"/"needs a
   // human" once a round has been spent; the generic "Review in progress"
   // hint must not also render and repeat/contradict it.

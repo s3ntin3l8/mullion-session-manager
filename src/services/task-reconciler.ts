@@ -99,13 +99,13 @@ import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
+import { CLEARED_MERGE_ERROR, hasForeignOpenThread, recordMergeError } from "./task-merge-human.js";
 import { reseedTaskIfSessionExited, recheckAdoptedSeeds } from "./task-reseed.js";
 import {
   MAX_REBASE_ATTEMPTS,
   REBASE_ATTEMPT_STALE_MS,
   attemptAutoRebase,
   rebaseWorkerFinished,
-  recordMergeError,
   settleRapidRebaseExit,
 } from "./task-auto-rebase.js";
 import {
@@ -1525,7 +1525,7 @@ function clearMergeState(
 ): void {
   app.db
     .update(tasks)
-    .set({ mergeRequestedAt: null, mergeError: null, rebaseStartedAt: null })
+    .set({ mergeRequestedAt: null, rebaseStartedAt: null, ...CLEARED_MERGE_ERROR })
     .where(eq(tasks.id, task.id))
     .run();
   // Hermes review, PR #763 — without this, a resolved task's backoff entry
@@ -1922,6 +1922,7 @@ async function attemptMerge(
             : reviewDecision === "REVIEW_REQUIRED"
               ? "Waiting on a required approving review"
               : "Required checks are red or still pending";
+        let blockedByThreads = false;
         if (reviewDecision === null || reviewDecision === "APPROVED") {
           // Self-heals the D1 deadlock — but ONLY when this row's own last
           // ingested verdict is "clean". Independent review, round 2: an
@@ -1966,6 +1967,12 @@ async function attemptMerge(
               const unresolvedCount = threadsResult.threads.filter((t) => !t.isResolved).length;
               if (unresolvedCount > 0) {
                 message = `Blocked on ${unresolvedCount} unresolved review conversation${unresolvedCount === 1 ? "" : "s"}`;
+                // Only threads Mullion did not open need a human: its own are
+                // resolved above when the verdict allows, or belong to the
+                // review loop.
+                blockedByThreads = await hasForeignOpenThread(threadsResult, (viewer) =>
+                  resolveMullionReviewLogins(app, repoRef, viewer),
+                );
               }
             }
           } catch (err) {
@@ -1975,7 +1982,7 @@ async function attemptMerge(
             );
           }
         }
-        recordMergeError(app, task.id, message);
+        recordMergeError(app, task.id, message, blockedByThreads ? "blocked-threads" : undefined);
         return;
       }
       case "computing": {
@@ -3140,7 +3147,7 @@ async function attemptAutoApprove(
     current.mergeable === true &&
     current.mergeableState !== "dirty"
   ) {
-    app.db.update(tasks).set({ mergeError: null }).where(eq(tasks.id, task.id)).run();
+    app.db.update(tasks).set(CLEARED_MERGE_ERROR).where(eq(tasks.id, task.id)).run();
     task.mergeError = null;
     // Reset the backoff so the auto-approve attempt on the next tick is not
     // throttled by the attempts accumulated during the dirty/rebase period.
@@ -3165,6 +3172,7 @@ async function attemptAutoApprove(
       task.rebaseAttempts >= MAX_REBASE_ATTEMPTS
         ? `Conflicts with ${current.baseRef} — auto-rebase gave up after ${MAX_REBASE_ATTEMPTS} attempt(s), needs manual resolution`
         : `Conflicts with ${current.baseRef} — needs manual resolution`,
+      task.rebaseAttempts >= MAX_REBASE_ATTEMPTS ? "rebase-exhausted" : undefined,
     );
     return;
   }

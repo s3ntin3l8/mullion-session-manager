@@ -26,6 +26,7 @@ import { trimDiagnosticsForComment } from "./task-failure-diagnostics.js";
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
+import { clearMergeNeedsHumanReason } from "./task-merge-human.js";
 import {
   getIntegration,
   hasTransientMintFailure,
@@ -595,6 +596,7 @@ export async function syncUnlabeledIssueToLocal(
           prNumber: closingPr.number,
           mergedAt: closingPr.mergedAt ? new Date(closingPr.mergedAt) : now,
           archivedAt: now,
+          needsHumanReason: clearMergeNeedsHumanReason,
         })
         .where(and(eq(tasks.id, task.id), eq(tasks.status, task.status)))
         .run();

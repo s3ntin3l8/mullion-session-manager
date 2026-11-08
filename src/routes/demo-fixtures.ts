@@ -54,7 +54,9 @@ const taskFixtureProps = {
   status: { type: "string", enum: [...TASK_STATUSES] },
   ...Object.fromEntries(TEXT_COLUMNS.map((c) => [c, { type: ["string", "null"] }])),
   // An enum column (db/schema.ts), so a typo is a 400, not a silently bad row.
-  needsHumanReason: { enum: ["cap", "no-progress", "finding-persisted", null] },
+  needsHumanReason: {
+    enum: ["cap", "no-progress", "finding-persisted", "rebase-exhausted", "blocked-threads", null],
+  },
   ...Object.fromEntries(INTEGER_COLUMNS.map((c) => [c, { type: ["integer", "null"] }])),
   // ISO-8601 strings; the route turns them into Dates.
   ...Object.fromEntries(

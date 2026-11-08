@@ -1,5 +1,5 @@
 import type { Task } from "../api/types.js";
-import { approvalStateText, needsHumanText } from "../needsHuman.js";
+import { approvalStateText, isMergeNeedsHumanReason, needsHumanText } from "../needsHuman.js";
 
 // There is no "waiting" status: a task is waiting when it is `claimed` and
 // `failureReason` is set (dispatch held — host offline, parked).
@@ -37,6 +37,7 @@ export function needsYouReason(t: Task): string | null {
   if (t.approvalState === "awaiting-human") {
     return approvalStateText(t.approvalState, t.autoReturnRounds);
   }
+  if (isMergeNeedsHumanReason(t.needsHumanReason)) return needsHumanText(t.needsHumanReason);
   if (t.autoReturnCapped) return needsHumanText(t.needsHumanReason);
   if (t.mergeError) return `merge failed: ${t.mergeError}`;
   if (t.releaseError) return `release failed: ${t.releaseError}`;

@@ -1210,9 +1210,14 @@ export const tasks = sqliteTable(
     // — the reviewer marked the same earlier finding still open on two
     // consecutive rounds. Only meaningful while the announce stamp is set (a
     // stale value is harmless and the board ignores it), and cleared wherever
-    // that stamp is.
+    // that stamp is. Two more reasons are tied to `mergeError` instead and
+    // do NOT need the stamp: `rebase-exhausted` — the auto-rebase budget is
+    // spent and the PR still conflicts; `blocked-threads` — the merge is
+    // blocked on unresolved review conversations Mullion did not open.
+    // Those are set with the merge error, cleared wherever it is cleared and
+    // when the task merges (task-merge-human.ts).
     needsHumanReason: text("needs_human_reason", {
-      enum: ["cap", "no-progress", "finding-persisted"],
+      enum: ["cap", "no-progress", "finding-persisted", "rebase-exhausted", "blocked-threads"],
     }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
     // actually about, recorded at every ingest write alongside

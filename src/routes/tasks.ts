@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
+import { clearMergeNeedsHumanReason } from "../services/task-merge-human.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
@@ -1200,6 +1201,7 @@ export async function tasksRoute(app: FastifyInstance) {
           .set({
             mergedAt: task.mergedAt ?? (mergedAt ? new Date(mergedAt) : now),
             archivedAt: now,
+            needsHumanReason: clearMergeNeedsHumanReason,
           })
           .where(eq(tasks.id, task.id))
           .run();
@@ -1481,7 +1483,11 @@ export async function tasksRoute(app: FastifyInstance) {
 
     const [updated] = app.db
       .update(tasks)
-      .set({ mergeRequestedAt: new Date(), mergeError: null })
+      .set({
+        mergeRequestedAt: new Date(),
+        mergeError: null,
+        needsHumanReason: clearMergeNeedsHumanReason,
+      })
       .where(eq(tasks.id, taskId))
       .returning()
       .all();
@@ -1576,6 +1582,10 @@ export async function tasksRoute(app: FastifyInstance) {
           // "needs a human" the instant a human has, in fact, acted.
           autoReturnCapAnnouncedAt: null,
           needsHumanReason: null,
+          // A human sent it back to a worker that may well rebase this time:
+          // a spent auto-rebase budget must not outlive that, or the next
+          // conflict could never be auto-rebased again.
+          rebaseAttempts: 0,
           // A human sent it back: whatever approval a suggestions round was
           // carrying no longer covers the work, so the next finish re-reviews.
           approvalCarriedAt: null,

@@ -457,6 +457,24 @@ approval` (generic on purpose, no title: a notification tray is outside the
   handshake — a connection receives every task event install-wide the
   moment it opens, since the board is cross-project by design.
 
+### Needs a human
+
+A card is flagged "Needs a human" (card strip and drawer) when automation has
+stopped and only you can move it. `tasks.needsHumanReason` says why:
+
+- `cap`, `no-progress`, `finding-persisted` — the review loop stopped (round
+  cap, a worker that came back unchanged, the same finding open twice).
+- `rebase-exhausted` — the PR conflicts with main and the auto-rebase budget
+  (two attempts) is spent. Rebase it by hand, or **Reject** it: Reject resets
+  the budget, so a fresh conflict can be auto-rebased again.
+- `blocked-threads` — the merge is blocked on unresolved review conversations
+  that Mullion did not open (a code-scanning bot, a reviewer). Mullion resolves
+  only its own threads, so resolve these on GitHub.
+
+The last two are set whatever the task's status (`reviewing` or `done`) and
+clear themselves when the cause goes away: the conflict or the threads are
+gone, the merge error changes, or the PR merges.
+
 ### Board actions
 
 Every action below lives in the task detail drawer (Claim/Approve/Reject/
