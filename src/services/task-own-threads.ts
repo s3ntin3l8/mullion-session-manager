@@ -5,7 +5,7 @@ import type { FastifyInstance } from "fastify";
 import type { projects, tasks } from "../db/schema.js";
 import { resolveGitHubToken, resolveMullionReviewLogins } from "./github-integration.js";
 import { fetchPullRequestReviewThreads, resolveReviewThread } from "./github-write.js";
-import { resolveRepoRef } from "./host-git.js";
+import { resolveRepoRefResult } from "./host-git.js";
 import { isRetryableGitHubError } from "./task-github-sync.js";
 
 /**
@@ -89,7 +89,10 @@ export async function resolveMullionOwnThreadsWithOutcome(
 ): Promise<{ result: ThreadFetchResult | null; retry: boolean }> {
   if (task.prNumber === null) return { result: null, retry: false };
 
-  const repoRef = await resolveRepoRef(app, project);
+  const repoResult = await resolveRepoRefResult(app, project);
+  // A transient host failure is retried; "unsupported" and "no remote" are not.
+  if (!repoResult.ok) return { result: null, retry: repoResult.reason !== "unsupported" };
+  const repoRef = repoResult.value;
   if (!repoRef) return { result: null, retry: false };
   const token = await resolveGitHubToken(app, repoRef, "write");
   if (!token) return { result: null, retry: false };

@@ -9,6 +9,8 @@ import { EventEmitter } from "node:events";
 
 const {
   mockResolveRepoRef,
+  mockResolveRepoRefResult,
+  mockMergePullRequest,
   mockResolveGitHubToken,
   mockResolveReviewerToken,
   mockResolveMullionReviewLogins,
@@ -21,6 +23,8 @@ const {
   mockPromoteTaskToPR,
 } = vi.hoisted(() => ({
   mockResolveRepoRef: vi.fn(),
+  mockResolveRepoRefResult: vi.fn(),
+  mockMergePullRequest: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
   mockResolveReviewerToken: vi.fn(),
   mockResolveMullionReviewLogins: vi.fn(),
@@ -36,6 +40,7 @@ const {
 vi.mock("../../src/services/host-git.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   resolveRepoRef: mockResolveRepoRef,
+  resolveRepoRefResult: mockResolveRepoRefResult,
 }));
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -50,6 +55,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => ({
   listPullRequestReviews: mockListPullRequestReviews,
   fetchPullRequestReviewThreads: mockFetchPullRequestReviewThreads,
   resolveReviewThread: mockResolveReviewThread,
+  mergePullRequest: mockMergePullRequest,
 }));
 vi.mock("../../src/services/github.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -173,6 +179,10 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
   // finished and written an approving verdict that the next tick ingests.
   async function setup(name: string) {
     mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+    mockResolveRepoRefResult
+      .mockReset()
+      .mockResolvedValue({ ok: true, value: { owner: "o", repo: "r" } });
+    mockMergePullRequest.mockReset().mockResolvedValue({ merged: true, sha: "abc" });
     mockResolveGitHubToken.mockResolvedValue("tok");
     mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
     mockResolveMullionReviewLogins.mockResolvedValue(new Set(["mullion-reviewer[bot]"]));
@@ -358,6 +368,65 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     expect(mockResolveReviewThread).toHaveBeenCalledWith("tok", "thread-own");
     row = read();
     expect(row.reviewPostPending).toBeNull();
+    await app.close();
+  });
+
+  it("retries when the repo ref cannot be resolved because the host is unreachable", async () => {
+    const { app, read } = await setup("p-post-host");
+    mockResolveRepoRefResult.mockResolvedValueOnce({
+      ok: false,
+      reason: "unreachable",
+      detail: "host down",
+    });
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await reconcileTasks(app);
+
+    // Not "posted": the marker survives and nothing was sent.
+    expect(read().reviewPostPending).not.toBeNull();
+    expect(read().status).toBe("reviewing");
+    expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+
+    vi.setSystemTime(Date.now() + 61_000);
+    await reconcileTasks(app);
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    expect(read().reviewPostPending).toBeNull();
+    await app.close();
+  });
+
+  it("does not merge an approved done task while its review post is pending", async () => {
+    const { app, task, read } = await setup("p-post-merge");
+    const marker = JSON.stringify({
+      key: "1-1",
+      body: "<!-- mullion-review-post:1-1 -->\nbody",
+      verdict: "approved",
+      posted: false,
+      createdAt: Date.now(),
+    });
+    app.db
+      .update(tasks)
+      .set({
+        status: "done",
+        mergeRequestedAt: new Date(),
+        lastReviewVerdict: "approved",
+        reviewPostPending: marker,
+        reviewSessionId: null,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+    mockCreatePullRequestReview.mockRejectedValue(rateLimit());
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await reconcileTasks(app);
+    expect(read().reviewPostPending).not.toBeNull();
+    expect(mockMergePullRequest).not.toHaveBeenCalled();
+
+    mockCreatePullRequestReview.mockReset().mockResolvedValue({ id: 2, htmlUrl: "https://x" });
+    vi.setSystemTime(Date.now() + 3_600_000);
+    await reconcileTasks(app);
+    expect(read().reviewPostPending).toBeNull();
+    await reconcileTasks(app);
+    expect(mockMergePullRequest).toHaveBeenCalled();
     await app.close();
   });
 

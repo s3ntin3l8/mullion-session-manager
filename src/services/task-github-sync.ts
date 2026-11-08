@@ -27,7 +27,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
 import { getIntegration, resolveGitHubToken, resolveReviewerToken } from "./github-integration.js";
-import { resolveRepoRef } from "./host-git.js";
+import { resolveRepoRef, resolveRepoRefResult } from "./host-git.js";
 import {
   addLabels,
   removeLabel,
@@ -741,7 +741,9 @@ export function parsePendingReviewPost(raw: string | null): PendingReviewPost | 
   if (raw === null) return null;
   try {
     const v = JSON.parse(raw) as PendingReviewPost;
-    return typeof v?.key === "string" && typeof v.body === "string" ? v : null;
+    return typeof v?.key === "string" && typeof v.body === "string" && Number.isFinite(v.createdAt)
+      ? v
+      : null;
   } catch {
     return null;
   }
@@ -857,7 +859,17 @@ export async function postReviewFindingsComment(
   // hasn't succeeded yet and has no linked issue either).
   if (task.prNumber === null && task.issueNumber === null) return "posted";
 
-  const repoRef = await resolveRepoRef(app, project);
+  // `resolveRepoRefResult`, not the null-collapsing `resolveRepoRef`: a host
+  // blip must read as "retry", not as "no GitHub remote" (which clears the marker).
+  const repoResult = await resolveRepoRefResult(app, project);
+  if (!repoResult.ok) {
+    if (repoResult.reason === "unsupported") {
+      recordGithubSyncError(app, task.id, repoResult.detail);
+      return "permanent";
+    }
+    return "retry";
+  }
+  const repoRef = repoResult.value;
   if (!repoRef) return "posted";
   const token = await resolveGitHubToken(app, repoRef);
   if (!token) return "posted";

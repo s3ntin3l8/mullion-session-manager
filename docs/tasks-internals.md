@@ -816,7 +816,10 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   `githubSyncError`; and one on a task that is merged or no longer
   claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
   (rate limit) keeps the marker with `posted: true`, so only the resolution is
-  retried; it never marks the round finished. The review body carries a hidden
+  retried; a project on another host whose repo ref can't be resolved
+  (`busy`/`unreachable`/`outcome-unknown`) counts as transient too — it is read
+  through `resolveRepoRefResult`, not the null-collapsing `resolveRepoRef`, and
+  only a genuine "no GitHub remote" counts as posted; it never marks the round finished. The review body carries a hidden
   `<!-- mullion-review-post:<key> -->` marker, and a retry first looks for it
   among the PR's reviews, so a post whose response was lost is not duplicated
   (a task with no PR, whose round goes to an issue comment, has no such check).
