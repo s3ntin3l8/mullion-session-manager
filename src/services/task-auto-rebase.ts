@@ -33,7 +33,7 @@ import {
 import { recordMergeError } from "./task-merge-human.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 
-const CLOCK_SKEW_TOLERANCE_MS = 5_000;
+export const CLOCK_SKEW_TOLERANCE_MS = 5_000;
 
 // #758 — bounds how many times attemptAutoRebase spawns a worker for the
 // SAME task across its whole lifecycle. A separate counter/cap from

@@ -2,7 +2,7 @@
 // re-prompts the reviewer after its quota recovers): the reconciler re-reads
 // the findings file while that verdict stays latched. Its own file: the
 // reconciler's test file is at its file-size ceiling.
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -14,7 +14,9 @@ const {
   mockResolveGitHubToken,
   mockGetPullRequestByNumber,
   mockCreatePullRequestReview,
+  mockReadFindings,
 } = vi.hoisted(() => ({
+  mockReadFindings: vi.fn(),
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
   mockGetPullRequestByNumber: vi.fn(),
@@ -36,6 +38,27 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => ({
   getPullRequestByNumber: mockGetPullRequestByNumber,
   createPullRequestReview: mockCreatePullRequestReview,
 }));
+// Counts findings reads while delegating to the real backend.
+vi.mock("../../src/services/session-backend.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const resolve = actual.resolveBackend as (...a: unknown[]) => Record<string, unknown>;
+  return {
+    ...actual,
+    resolveBackend: (...args: unknown[]) => {
+      const backend = resolve(...args);
+      const read = (backend.readTaskReviewFindings as (...a: unknown[]) => unknown).bind(backend);
+      return new Proxy(backend, {
+        get: (t, k, r) =>
+          k === "readTaskReviewFindings"
+            ? (...a: unknown[]) => {
+                mockReadFindings(...a);
+                return read(...a);
+              }
+            : Reflect.get(t, k, r),
+      });
+    },
+  };
+});
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
     onData: () => ({ dispose: () => {} }),
@@ -65,7 +88,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
-const { tasks } = await import("../../src/db/schema.js");
+const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-late-findings-${process.pid}.db`);
@@ -111,7 +134,14 @@ describe("late review findings after an inconclusive ingest", () => {
     delete process.env.MULLION_TASK_MASTER_ENABLED;
   });
 
+  const openApps: Array<{ close: () => Promise<unknown> }> = [];
+  afterEach(async () => {
+    // A failed assertion must not leave the app (and its hook socket) open.
+    for (const a of openApps.splice(0)) await a.close().catch(() => {});
+  });
+
   beforeEach(() => {
+    mockReadFindings.mockReset();
     mockCreatePullRequestReview.mockReset();
     mockCreatePullRequestReview.mockResolvedValue({ id: 1, htmlUrl: "https://x/pr/9#r1" });
     mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
@@ -125,8 +155,16 @@ describe("late review findings after an inconclusive ingest", () => {
     });
   });
 
-  async function setup() {
+  async function setup(
+    opts: {
+      task?: Partial<typeof tasks.$inferInsert>;
+      info?: Record<string, unknown>;
+      sessionStatus?: "exited";
+      turnEndedOffsetMs?: number; // lastTurnEndedAt relative to the verdict
+    } = {},
+  ) {
     const app = await buildApp();
+    openApps.push(app);
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -142,6 +180,14 @@ describe("late review findings after an inconclusive ingest", () => {
       ).json().id as number;
     const workerId = await mk();
     const reviewId = await mk();
+    const verdictAt = new Date(Date.now() - 5 * 60_000);
+    if (opts.sessionStatus) {
+      app.db
+        .update(sessions)
+        .set({ status: opts.sessionStatus })
+        .where(eq(sessions.id, reviewId))
+        .run();
+    }
     const [task] = app.db
       .insert(tasks)
       .values({
@@ -152,16 +198,28 @@ describe("late review findings after an inconclusive ingest", () => {
         reviewSessionId: reviewId,
         reviewFindingsIngestedSessionId: reviewId,
         lastReviewVerdict: "inconclusive",
-        lastReviewVerdictAt: new Date(Date.now() - 5 * 60_000),
+        lastReviewVerdictAt: verdictAt,
         reviewFindings: "## Round 1\n\nReview agent ended without writing a findings file",
         worktreePath: "/tmp",
         agentCommand: "claude",
         prNumber: 9,
         claimedAt: new Date(),
+        ...opts.task,
       })
       .returning()
       .all();
-    vi.spyOn(app.pty, "get").mockImplementation(() => ({ toInfo: () => finishedInfo() }) as never);
+    vi.spyOn(app.pty, "get").mockImplementation(
+      () =>
+        ({
+          toInfo: () => ({
+            ...finishedInfo(),
+            ...(opts.turnEndedOffsetMs !== undefined
+              ? { lastTurnEndedAt: verdictAt.getTime() + opts.turnEndedOffsetMs }
+              : {}),
+            ...opts.info,
+          }),
+        }) as never,
+    );
     return { app, task };
   }
 
@@ -226,6 +284,56 @@ describe("late review findings after an inconclusive ingest", () => {
 
     expect(getTask(app, task.id).lastReviewVerdict).toBe("inconclusive");
     expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  // Tasks from earlier tests stay latched in the shared DB, so count per task.
+  const readsFor = (taskId: number) =>
+    mockReadFindings.mock.calls.filter((c) => c[0] === taskId).length;
+
+  const APPROVED = JSON.stringify({ verdict: "approved", summary: "Late OK." });
+
+  async function expectUntouched(opts: Parameters<typeof setup>[0]) {
+    const { app, task } = await setup(opts);
+    writeFindings(app, task.id, APPROVED);
+    await reconcileTasks(app);
+    const row = getTask(app, task.id);
+    expect(row.lastReviewVerdict).toBe("inconclusive");
+    expect(row.reviewFindings).toBe(task.reviewFindings);
+    expect(readsFor(task.id)).toBe(0);
+    await app.close();
+  }
+
+  it("skips a Hermes run (reviewRunId set)", async () => {
+    await expectUntouched({ task: { reviewRunId: "run-1" } });
+  });
+
+  it("does not read while the reviewer is mid-turn", async () => {
+    await expectUntouched({ info: { activity: "working", lastTurnEndedAt: null } });
+  });
+
+  it("does not read after a turn that ended well before the verdict", async () => {
+    await expectUntouched({ turnEndedOffsetMs: -60_000 });
+  });
+
+  it("does not read after a turn that ended just outside the skew tolerance", async () => {
+    await expectUntouched({ turnEndedOffsetMs: -6_000 });
+  });
+
+  it("still reads a turn end 3 s before the verdict (clock skew)", async () => {
+    const { app, task } = await setup({ turnEndedOffsetMs: -3_000 });
+    writeFindings(app, task.id, APPROVED);
+    await reconcileTasks(app);
+    expect(getTask(app, task.id).lastReviewVerdict).toBe("approved");
+    await app.close();
+  });
+
+  it("reads an exited reviewer with no file once across two ticks", async () => {
+    const { app, task } = await setup({ sessionStatus: "exited" });
+    await reconcileTasks(app);
+    await reconcileTasks(app);
+    expect(readsFor(task.id)).toBe(1);
+    expect(getTask(app, task.id).lastReviewVerdict).toBe("inconclusive");
     await app.close();
   });
 });

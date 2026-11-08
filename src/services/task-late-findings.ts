@@ -10,7 +10,17 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { SessionBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
+import { CLOCK_SKEW_TOLERANCE_MS } from "./task-auto-rebase.js";
 import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
+
+/**
+ * What the last successful late read looked at, per task. A re-read with the
+ * same key cannot find anything new (an exited reviewer writes nothing more; a
+ * finished one only writes in a new turn, which moves `turnEndedAt`), so it is
+ * skipped instead of paying a (possibly remote) read on every tick. In-memory:
+ * a restart costs at most one extra read per task.
+ */
+const lastLateReadKey = new Map<number, string>();
 
 /**
  * A review session whose findings were ingested as `inconclusive` (it died or
@@ -66,13 +76,26 @@ export async function ingestLateFindings(
   });
   if (derived.status !== "finished" && derived.status !== "exited") return;
   const turnEndedAt = info?.lastTurnEndedAt ?? null;
+  // The turn end may come from a remote host's clock and the verdict from
+  // this one, so a turn end within the skew tolerance of the verdict is still
+  // read (the same tolerance the rebase code applies to its comparison).
   if (
     derived.status === "finished" &&
     turnEndedAt !== null &&
-    turnEndedAt <= task.lastReviewVerdictAt.getTime()
+    turnEndedAt <= task.lastReviewVerdictAt.getTime() - CLOCK_SKEW_TOLERANCE_MS
   ) {
     return;
   }
+
+  const readKey = [
+    session.id,
+    derived.status,
+    // An exited reviewer writes nothing more, so its turn end is irrelevant:
+    // one read per task and session. A finished one only writes in a new turn.
+    derived.status === "finished" ? turnEndedAt : "",
+    task.lastReviewVerdictAt.getTime(),
+  ].join(":");
+  if (lastLateReadKey.get(task.id) === readKey) return;
 
   let findings: string | null;
   try {
@@ -84,6 +107,7 @@ export async function ingestLateFindings(
     );
     return;
   }
+  lastLateReadKey.set(task.id, readKey);
   if (findings === null) return;
   const key = `${session.id}:${createHash("sha256").update(findings).digest("hex")}`;
   if (ignoredUnstructured.get(task.id) === key) return;
