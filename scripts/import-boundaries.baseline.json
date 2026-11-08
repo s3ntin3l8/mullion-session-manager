@@ -39,14 +39,6 @@
       "files": ["src/services/dev-server-detect.ts", "src/services/pty-manager.ts"]
     },
     {
-      "note": "issue #2414 — the remote host client and its per-host cache import each other; the class is 33 code lines over the file-size ceiling, so it cannot move into its own module until the transport is extracted (#2714, and #2404 for that extraction).",
-      "edges": [
-        "src/services/remote-host-client-cache.ts -> src/services/remote-host-client.ts",
-        "src/services/remote-host-client.ts -> src/services/remote-host-client-cache.ts"
-      ],
-      "files": ["src/services/remote-host-client-cache.ts", "src/services/remote-host-client.ts"]
-    },
-    {
       "note": "issue #2414 — the runtime config defaults and the settings module import each other's types.",
       "edges": [
         "src/services/runtime-config.ts -> src/services/settings.ts",
