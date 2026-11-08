@@ -24,7 +24,9 @@ import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import { buildRebasePrompt, taskCommitTitlePath } from "./task-prompt.js";
 import {
   MAX_RAPID_REBASE_ABORTS,
+  MAX_REBASE_OUTRUNS,
   RAPID_EXIT_BACKOFF_MS,
+  readPrHeadAndMergeability,
   readPrHeadSha,
   workerExitedRapidly,
 } from "./worker-rapid-exit.js";
@@ -108,8 +110,26 @@ export async function settleRapidRebaseExit(
     headAtSpawn: task.rebaseSpawnHeadSha,
   });
   if (!rapid) {
-    app.db.update(tasks).set({ rebaseSpawnHeadSha: null }).where(eq(tasks.id, task.id)).run();
-    task.rebaseSpawnHeadSha = null;
+    // An attempt that landed a mergeable head, which main then outran, did its
+    // job: refund it (bounded by MAX_REBASE_OUTRUNS). The head must have moved
+    // off the spawn head (so the worker's push is what GitHub reports on) and
+    // GitHub must say mergeable; an unreadable or still-computing state fails
+    // open and leaves the attempt counted.
+    const headAtSpawn = task.rebaseSpawnHeadSha;
+    const patch: Partial<typeof tasks.$inferSelect> = { rebaseSpawnHeadSha: null };
+    if (task.rebaseOutrunCount < MAX_REBASE_OUTRUNS && task.rebaseAttempts > 0) {
+      const pr = await readPrHeadAndMergeability(app, task, project);
+      if (pr !== null && pr.headSha !== headAtSpawn && pr.mergeable) {
+        patch.rebaseAttempts = task.rebaseAttempts - 1;
+        patch.rebaseOutrunCount = task.rebaseOutrunCount + 1;
+        app.log.info(
+          { taskId: task.id, outruns: patch.rebaseOutrunCount },
+          "task auto-rebase: the worker landed a mergeable head — refunding the attempt",
+        );
+      }
+    }
+    app.db.update(tasks).set(patch).where(eq(tasks.id, task.id)).run();
+    Object.assign(task, patch);
     return;
   }
   const aborted = task.rebaseAbortedAttempts + 1;

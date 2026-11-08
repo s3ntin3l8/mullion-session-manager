@@ -1653,6 +1653,18 @@ async function attemptMerge(
     const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
     const readiness = classifyMergeReadiness(pr);
 
+    // A finished auto-rebase attempt is judged while the PR reads settled and
+    // not conflicting: on a later tick main may already have outrun it, and a
+    // `dirty` tick reads the post-outrun state (see settleRapidRebaseExit).
+    if (
+      project.autoApprove &&
+      task.rebaseSpawnHeadSha !== null &&
+      readiness !== "dirty" &&
+      readiness !== "already-done"
+    ) {
+      await settleRapidRebaseExit(app, task, project);
+    }
+
     switch (readiness) {
       case "already-done": {
         // Merged or closed out of band (a human merged it directly on

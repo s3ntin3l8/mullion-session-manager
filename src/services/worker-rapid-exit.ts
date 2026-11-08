@@ -21,6 +21,8 @@ export const RAPID_EXIT_BACKOFF_MS = 10 * 60_000;
 export const MAX_RAPID_REBASE_ABORTS = 3;
 /** Rapid exits a suggestions round tolerates: one re-seed, then a human. */
 export const MAX_RAPID_SUGGESTION_EXITS = 2;
+/** Rebase attempts that may be refunded because main outran a clean rebase, per task. */
+export const MAX_REBASE_OUTRUNS = 5;
 
 // Same tolerance the reconciler allows between this process's clock and a
 // remote host's, which stamps `workFinishedAt`.
@@ -47,6 +49,35 @@ export async function readPrHeadSha(
     app.log.warn(
       { err, taskId: task.id },
       "task reconcile: could not read the PR head to check for a rapid worker exit — not treating it as one",
+    );
+    return null;
+  }
+}
+
+/**
+ * The PR head and whether GitHub currently reports it conflict-free. Null when
+ * the PR cannot be read; `mergeable` is true only for a settled `mergeable ===
+ * true` that is not `dirty` (a still-computing `null` is not clean).
+ */
+export async function readPrHeadAndMergeability(
+  app: FastifyInstance,
+  task: Pick<TaskRow, "id" | "prNumber">,
+  project: ProjectRow,
+): Promise<{ headSha: string; mergeable: boolean } | null> {
+  if (task.prNumber === null) return null;
+  try {
+    const repoRef = await resolveRepoRef(app, project);
+    const token = repoRef ? await resolveGitHubToken(app, repoRef, "read") : null;
+    if (!repoRef || !token) return null;
+    const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+    return {
+      headSha: pr.headSha,
+      mergeable: pr.mergeable === true && pr.mergeableState !== "dirty",
+    };
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id },
+      "task reconcile: could not read the PR's mergeability to check for an outrun rebase — not refunding",
     );
     return null;
   }
