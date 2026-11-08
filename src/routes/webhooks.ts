@@ -6,6 +6,7 @@ import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
+import { clearMergeNeedsHumanReason } from "../services/task-merge-human.js";
 import { cleanupMergedTaskBranch } from "../services/task-approve.js";
 import { endReviewingOnPrState } from "../services/task-review-end.js";
 import { invalidateMergedPrs } from "../services/github-merged-prs.js";
@@ -296,8 +297,12 @@ export async function webhookRoutes(app: FastifyInstance) {
                   .update(tasks)
                   .set(
                     matchedTask.status === "done"
-                      ? { mergedAt: now, archivedAt: now }
-                      : { mergedAt: now },
+                      ? {
+                          mergedAt: now,
+                          archivedAt: now,
+                          needsHumanReason: clearMergeNeedsHumanReason,
+                        }
+                      : { mergedAt: now, needsHumanReason: clearMergeNeedsHumanReason },
                   )
                   .where(and(eq(tasks.id, matchedTask.id), isNull(tasks.mergedAt)))
                   .run();

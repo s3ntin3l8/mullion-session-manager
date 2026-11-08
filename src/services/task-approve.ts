@@ -10,6 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
 import { and, eq } from "drizzle-orm";
 import { tasks, type projects } from "../db/schema.js";
+import { clearMergeNeedsHumanReason } from "./task-merge-human.js";
 import { promoteTaskToPR } from "./task-promote.js";
 import { recordTaskTransition } from "./task-state.js";
 import { syncTaskTransition } from "./task-github-sync.js";
@@ -91,6 +92,7 @@ export async function approveTask(
       // never has yet.
       mergeRequestedAt: project.mergeOnApprove ? new Date() : null,
       mergeError: null,
+      needsHumanReason: clearMergeNeedsHumanReason,
       rebaseStartedAt: null,
     })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))

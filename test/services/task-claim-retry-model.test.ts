@@ -100,6 +100,7 @@ describe("retryTask task-level model (#2491)", () => {
           agent,
           modelOverride: "claude-opus-4-5",
           model: "stale",
+          rebaseAttempts: 2,
         })
         .where(eq(tasks.id, row.id))
         .run();
@@ -112,6 +113,8 @@ describe("retryTask task-level model (#2491)", () => {
     expect(load(same)).toMatchObject({
       model: "claude-opus-4-5",
       modelOverride: "claude-opus-4-5",
+      // A human retry gets a fresh auto-rebase budget.
+      rebaseAttempts: 0,
     });
 
     // A bare retry after the project default agent moved to another family

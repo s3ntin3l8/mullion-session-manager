@@ -907,6 +907,19 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   of the human's own commit is never read as a stall. A human push
   re-arms the task through the same `reannounceCappedTasksAfterHumanPush` sweep
   as before, which clears the reason with the stamp.
+- **Two merge-tied reasons.** `tasks.needsHumanReason` also takes
+  `rebase-exhausted` (the merge path's `recordMergeError` in
+  `task-reconciler.ts` hit `MAX_REBASE_ATTEMPTS` with the PR still dirty) and
+  `blocked-threads` (the merge is blocked on unresolved conversations whose
+  authors are not Mullion's reviewer logins, i.e. not what
+  `resolveMullionOwnThreadsIfClean` can resolve). Unlike the review-loop
+  reasons they are set together with `mergeError`, on `reviewing` and `done`
+  tasks alike, and do not touch `autoReturnCapAnnouncedAt`; never over an
+  existing review-loop reason. `recordMergeError` clears them whenever it
+  records a different error, and `clearMergeNeedsHumanReason`
+  (`task-merge-human.ts`) clears them wherever `mergeError` is cleared and
+  when a merge is recorded. Reject also resets `rebaseAttempts` to 0, so a
+  worker that failed to rebase can be followed by a fresh auto-rebase.
 - An inconclusive verdict (or a review agent whose adapter can't receive a
   seed at all — see [Seed delivery](#seed-delivery) below) simply stays in
   `reviewing`; the review still posts, so a finished review is never silently

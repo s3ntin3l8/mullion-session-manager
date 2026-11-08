@@ -10,7 +10,12 @@ import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
-import { approvalStateText, needsHumanText, reviewPhaseText } from "../needsHuman.js";
+import {
+  approvalStateText,
+  isMergeNeedsHumanReason,
+  needsHumanText,
+  reviewPhaseText,
+} from "../needsHuman.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
@@ -496,6 +501,15 @@ export function TaskCard({
           reads as in-progress (a worker session or the confirming review may
           still be running), not "needs a human" — that wording is reserved
           for capAnnounced, the actual "the machine stopped" signal. */}
+      {isMergeNeedsHumanReason(task.needsHumanReason) && task.mergedAt === null && (
+        <div
+          className="task-card-review-round task-card-review-round-capped"
+          role="status"
+          data-testid="merge-needs-human"
+        >
+          {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
+        </div>
+      )}
       {task.status === "reviewing" && task.autoReturnRounds > 0 && !task.approvalState && (
         <div
           className={
