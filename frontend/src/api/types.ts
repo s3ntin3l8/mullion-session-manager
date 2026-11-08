@@ -2167,8 +2167,11 @@ export interface Task {
   // three states, not two: not capped / capped-but-not-announced (still
   // working) / capped-and-announced (needs a human).
   autoReturnCapAnnouncedAt: string | null;
-  // Why the automatic loop stopped; only meaningful while the announce stamp
-  // above is set. See needsHuman.ts.
+  // Why the automatic loop stopped. The review-loop reasons ("cap",
+  // "no-progress", "finding-persisted") are only meaningful while the announce
+  // stamp above is set; the merge-tied ones ("rebase-exhausted",
+  // "blocked-threads") are set with mergeError and stand on their own.
+  // See needsHuman.ts.
   needsHumanReason:
     "cap" | "no-progress" | "finding-persisted" | "rebase-exhausted" | "blocked-threads" | null;
   worktreePath: string | null;

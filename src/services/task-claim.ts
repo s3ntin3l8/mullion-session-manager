@@ -1298,6 +1298,10 @@ export async function retryTask(
       .set({
         status: "claimed",
         claimedAt: new Date(),
+        // A human retry resumes the same branch with a worker that may well
+        // rebase this time: a spent auto-rebase budget must not outlive it
+        // (same reasoning as the Reject route in routes/tasks.ts).
+        rebaseAttempts: 0,
         // Clearing the prior attempt's leftovers so the retried task
         // doesn't carry its old failure text / stale PR link / dead
         // session id forward. worktreePath/branchName are left as-is —

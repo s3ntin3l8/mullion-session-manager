@@ -1357,7 +1357,8 @@ export const tasks = sqliteTable(
     // never transitions the task out of `done` (there is no outgoing edge
     // from `done` — task-state.ts), so `autoReturnTask`'s CAS-on-"reviewing"
     // mechanism doesn't apply here, only the same shape (bounded counter,
-    // give-up once spent). Never reset. See `attemptAutoRebase`
+    // give-up once spent). A lifetime count: only a human Reject or Retry
+    // resets it to 0; a merge/rebase-clearing path must not. See `attemptAutoRebase`
     // (task-reconciler.ts) for the cap.
     rebaseAttempts: integer("rebase_attempts").notNull().default(0),
     // #758 — set when an auto-rebase worker is spawned, read back on the
