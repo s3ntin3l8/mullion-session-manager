@@ -6,7 +6,7 @@ import {
   BROWSER_ENDPOINTS_OPERATION,
   BROWSER_TARGETS_OPERATION,
   bindingBrowserTarget,
-} from "./browser-target.js";
+} from "./browser-binding-target.js";
 import { hostSupports, requireOperation } from "./host-agents.js";
 import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
