@@ -3665,6 +3665,17 @@ export async function autoReturnTask(
       // comment (schema.ts) calls this "when did its current spell start";
       // this IS a new spell.
       claimedAt: new Date(),
+      // A suggestions round starts its rapid-exit ledger over, for every
+      // caller that seeds one (nits and approved comment batches alike), and
+      // keeps its prompt so a rapid exit can re-seed the same text. The
+      // backoff stamp is shared with the rebase consumer, so it is cleared too.
+      ...(opts.reason === "suggestions"
+        ? {
+            suggestionsSeedPrompt: opts.seedPrompt,
+            suggestionsRapidExits: 0,
+            rapidExitRetryAfter: null,
+          }
+        : {}),
     })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
     .run();
@@ -4459,23 +4470,10 @@ async function ingestReviewOutcome(
         ? taskCommitTitlePath(sessionsDir, task.id)
         : undefined,
     });
-    const returned = await autoReturnTask(app, task, project, {
+    await autoReturnTask(app, task, project, {
       reason: "suggestions",
       seedPrompt: suggestionsPrompt,
     });
-    // A fresh round: its rapid-exit ledger starts over, and the prompt is
-    // kept so a rapid exit can be re-seeded with the same text.
-    if (returned.ok) {
-      app.db
-        .update(tasks)
-        .set({
-          suggestionsSeedPrompt: suggestionsPrompt,
-          suggestionsRapidExits: 0,
-          rapidExitRetryAfter: null,
-        })
-        .where(eq(tasks.id, task.id))
-        .run();
-    }
     return;
   }
 
@@ -5356,6 +5354,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // this lands, same as the sibling session-id fields above.
                 autoReturnCapAnnouncedAt: null,
                 needsHumanReason: null,
+                // The round is over either way: its stored seed prompt must not
+                // outlive it and be replayed into an unrelated round.
+                suggestionsSeedPrompt: null,
                 // Both rapid exits of a suggestions round: the nits were never
                 // applied. The approval stays carried; "no-progress" (the worker
                 // came back having changed nothing) is the nearest visible reason.

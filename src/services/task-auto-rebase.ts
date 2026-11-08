@@ -17,17 +17,6 @@ import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "./session-backend.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-// #2416 — the three-state "did the worker commit past the base" verdict.
-// "unknown" (the worktree could not be read) is a state of its own here, not
-// a synonym for "no commits"; see the module's header.
-// #2416 — one throttle policy for the reconciler's "this state is stuck"
-// warnings, instead of a copy per lookup.
-// #2416 — the PR's check runs, and whether GitHub answered the lookup. The
-// unstable path needs to tell "no checks" from "couldn't ask"; see the
-// module's header.
-// One bounded, exponential-backoff retry ledger behind every retry site in
-// this file (draft PR, merge, release, auto-approve) — see the module's
-// own header for what it does and does not decide.
 import { CLEARED_REVIEW_RUN, hasReviewHandle } from "./task-review-handle.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.js";

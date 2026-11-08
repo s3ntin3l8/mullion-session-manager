@@ -58,10 +58,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { reconcileTasks, resetMergeBackoff } = await import("../../src/services/task-reconciler.js");
+const { reconcileTasks, resetMergeBackoff, autoReturnTask } =
+  await import("../../src/services/task-reconciler.js");
 const lifecycle = await import("../../src/services/session-lifecycle.js");
 const reseedModule = await import("../../src/services/task-reseed.js");
-const { tasks, sessions } = await import("../../src/db/schema.js");
+const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-rapid-exit-${process.pid}.db`);
@@ -395,5 +396,39 @@ describe("a worker that exits within seconds", () => {
     expect(row.suggestionsRapidExits).toBe(0);
     expect(row.needsHumanReason).toBeNull();
     expect(reseed).not.toHaveBeenCalled();
+  });
+
+  it("resets the rapid-exit ledger whenever autoReturnTask seeds a suggestions round", async () => {
+    const { app, projectId, session } = await setupProject("p-seed-reset");
+    vi.spyOn(reseedModule, "reseedTaskIfSessionExited").mockResolvedValue(true);
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "batch",
+        status: "reviewing",
+        sessionId: session.id,
+        prNumber: 9,
+        branchName: "mullion/task-x",
+        worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
+        agentCommand: "claude",
+        suggestionsSeedPrompt: "OLD round prompt",
+        suggestionsRapidExits: 1,
+        rapidExitRetryAfter: new Date(Date.now() + 600_000),
+      })
+      .returning()
+      .all();
+    const project = app.db.select().from(projects).where(eq(projects.id, projectId)).get()!;
+
+    const res = await autoReturnTask(app, task, project, {
+      reason: "suggestions",
+      seedPrompt: "NEW comments-batch prompt",
+    });
+
+    expect(res.ok).toBe(true);
+    const row = getTask(app, task.id);
+    expect(row.suggestionsSeedPrompt).toBe("NEW comments-batch prompt");
+    expect(row.suggestionsRapidExits).toBe(0);
+    expect(row.rapidExitRetryAfter).toBeNull();
   });
 });
