@@ -1107,6 +1107,13 @@ describe("NotificationBell sticky group headers (issue #1229)", () => {
     // must NOT still claim sticky. Stay inside the content: virtual-core
     // >= 3.19.10 keeps a full viewport of rows when the offset is past the
     // end of the list, which would leave the range starting in session one.
+    // Boundary first: session two's header exactly at the top of the viewport
+    // must already hand the sticky slot over, not only a mid-group offset.
+    scrollFeedTo(1834);
+    await waitFor(() => {
+      expect(headerStyleFor("session two")?.position).toBe("sticky");
+    });
+    expect(headerStyleFor("session one")?.position ?? "absolute").not.toBe("sticky");
     scrollFeedTo(2000);
     await waitFor(() => {
       expect(headerStyleFor("session two")?.position).toBe("sticky");
