@@ -806,7 +806,7 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   (a rate limit, a 5xx/408/429, a network error) leaves it set, and
   `retryPendingReviewPosts` — right after `processReviewingTasks` and before
   `processAutoApprovals` in each tick — retries with a process-local backoff
-  (1 min doubling to 15 min), so a post that lands releases auto-approve in the
+  (1 min, doubling per failed attempt — 1m, 2m, 4m … — to a 15 min cap), so a post that lands releases auto-approve in the
   same tick. While the marker is set on an approving verdict,
   `processAutoApprovals` and `processMergeRequests` skip the task (GitHub may
   still hold an older `CHANGES_REQUESTED`), and the card reads "Review waiting

@@ -500,4 +500,84 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     expect(read().reviewPostPending).toBeNull();
     await app.close();
   });
+
+  function seedMarker(
+    app: Awaited<ReturnType<typeof setup>>["app"],
+    taskId: number,
+    patch: Record<string, unknown>,
+    reviewedHeadSha: string | undefined,
+  ) {
+    const marker = JSON.stringify({
+      key: "1-1",
+      body: "body",
+      verdict: "approved",
+      ...(reviewedHeadSha ? { reviewedHeadSha } : {}),
+      posted: false,
+      createdAt: Date.now(),
+    });
+    app.db
+      .update(tasks)
+      .set({ reviewPostPending: marker, reviewSessionId: null, ...patch })
+      .where(eq(tasks.id, taskId))
+      .run();
+  }
+
+  it("posts a retried review with the stored reviewed head, even though the PR head moved", async () => {
+    const { app, task, read } = await setup("p-post-stored-sha");
+    seedMarker(app, task.id, { lastReviewVerdict: "approved" }, "sha-reviewed");
+
+    await reconcileTasks(app);
+
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    const sent = mockCreatePullRequestReview.mock.calls[0]?.[4] as { commitId: string };
+    expect(sent.commitId).toBe("sha-reviewed");
+    expect(read().reviewPostPending).toBeNull();
+    await app.close();
+  });
+
+  it("drops a retried review whose task left review and whose PR head moved, posting nothing", async () => {
+    const { app, task, read } = await setup("p-post-stale-head");
+    seedMarker(app, task.id, { status: "in_progress", lastReviewVerdict: "approved" }, "sha-old");
+
+    await reconcileTasks(app);
+
+    expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+    const row = read();
+    expect(row.reviewPostPending).toBeNull();
+    expect(row.githubSyncError).toContain("head moved");
+    await app.close();
+  });
+
+  it("still posts for a task that left review when the PR head is the reviewed one", async () => {
+    const { app, task, read } = await setup("p-post-same-head");
+    seedMarker(app, task.id, { status: "in_progress" }, "sha-head");
+
+    await reconcileTasks(app);
+
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    expect(read().reviewPostPending).toBeNull();
+    await app.close();
+  });
+
+  it("records the retry backoff once per failed attempt: 1m, 2m, 4m", async () => {
+    const { app, read } = await setup("p-post-backoff");
+    mockCreatePullRequestReview.mockRejectedValue(rateLimit());
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await reconcileTasks(app); // ingest + failed post (attempt 1)
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+
+    let calls = 1;
+    for (const waitMs of [60_000, 120_000, 240_000]) {
+      vi.setSystemTime(Date.now() + waitMs - 1_000);
+      await reconcileTasks(app);
+      expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(calls);
+      vi.setSystemTime(Date.now() + 1_000);
+      await reconcileTasks(app);
+      calls++;
+      expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(calls);
+    }
+    expect(read().reviewPostPending).not.toBeNull();
+    await app.close();
+  });
 });

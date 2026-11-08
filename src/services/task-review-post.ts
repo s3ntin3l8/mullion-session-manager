@@ -71,7 +71,20 @@ export async function attemptPendingReviewPost(
   let currentRaw = raw;
   let again = false;
   if (!current.posted) {
-    const base = { body: current.body, verdict: current.verdict, dedupeKey: current.key, isRetry };
+    const base = {
+      body: current.body,
+      verdict: current.verdict,
+      dedupeKey: current.key,
+      isRetry,
+      ...(current.reviewedHeadSha !== undefined
+        ? {
+            commitId: current.reviewedHeadSha,
+            // A retry after the task left review (an auto-return, a worker push)
+            // must not put the old verdict on a head nobody reviewed.
+            dropIfHeadMoved: isRetry && task.status !== "reviewing",
+          }
+        : {}),
+    };
     const outcome = await postReviewFindingsComment(
       app,
       task,
@@ -81,7 +94,17 @@ export async function attemptPendingReviewPost(
         : base,
     );
     if (outcome === "retry") again = true;
-    else if (outcome === "posted") {
+    else if (outcome === "stale") {
+      if (writeReviewPostPending(app, task.id, currentRaw, null)) {
+        recordGithubSyncError(
+          app,
+          task.id,
+          "Dropped this round's unposted review: the PR head moved past the commit it reviewed and the task is no longer in review",
+        );
+      }
+      reviewPostRetryBackoff.clear(task.id);
+      return;
+    } else if (outcome === "posted") {
       current = { ...current, posted: true };
       const nextRaw = JSON.stringify(current);
       // Lost the marker to a newer round or a concurrent tick: that owner settles it.
@@ -174,7 +197,6 @@ export async function retryPendingReviewPosts(
     if (attempted >= MAX_REVIEW_POST_RETRIES_PER_SWEEP) return;
     if (!reviewPostRetryBackoff.shouldAttempt(task.id, now)) continue;
     attempted++;
-    reviewPostRetryBackoff.record(task.id, now);
     await attemptPendingReviewPost(app, task, project, pending, raw, true, onLanded);
   }
 }
