@@ -1214,10 +1214,20 @@ export const tasks = sqliteTable(
     // do NOT need the stamp: `rebase-exhausted` — the auto-rebase budget is
     // spent and the PR still conflicts; `blocked-threads` — the merge is
     // blocked on unresolved review conversations Mullion did not open.
+    // `review-post-failed` also needs no stamp: an approving review could not be
+    // posted to GitHub; it holds auto-approve and auto-merge and is cleared by the
+    // next review ingest.
     // Those are set with the merge error, cleared wherever it is cleared and
     // when the task merges (task-merge-human.ts).
     needsHumanReason: text("needs_human_reason", {
-      enum: ["cap", "no-progress", "finding-persisted", "rebase-exhausted", "blocked-threads"],
+      enum: [
+        "cap",
+        "no-progress",
+        "finding-persisted",
+        "rebase-exhausted",
+        "blocked-threads",
+        "review-post-failed",
+      ],
     }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
     // actually about, recorded at every ingest write alongside

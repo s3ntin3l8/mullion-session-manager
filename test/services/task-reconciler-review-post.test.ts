@@ -386,10 +386,39 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     const row = read();
     expect(row.reviewPostPending).toBeNull();
     expect(row.githubSyncError).toContain("Not Found");
+    // An approving verdict that never reached GitHub flags the task for a human
+    // and is not auto-approved against GitHub's standing CHANGES_REQUESTED.
+    expect(row.needsHumanReason).toBe("review-post-failed");
+    expect(row.status).toBe("reviewing");
+    expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
 
     vi.setSystemTime(Date.now() + 3_600_000);
     await reconcileTasks(app);
     expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    expect(read().status).toBe("reviewing");
+    expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("does not merge an approved done task after its review post failed permanently", async () => {
+    const { app, task, read } = await setup("p-post-permanent-merge");
+    app.db
+      .update(tasks)
+      .set({
+        status: "done",
+        mergeRequestedAt: new Date(),
+        lastReviewVerdict: "approved",
+        needsHumanReason: "review-post-failed",
+        reviewPostPending: null,
+        reviewSessionId: null,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await reconcileTasks(app);
+    expect(mockMergePullRequest).not.toHaveBeenCalled();
+    expect(read().needsHumanReason).toBe("review-post-failed");
     await app.close();
   });
 

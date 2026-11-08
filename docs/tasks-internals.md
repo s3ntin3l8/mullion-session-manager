@@ -812,7 +812,14 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   still hold an older `CHANGES_REQUESTED`), and the card reads "Review waiting
   to be posted to GitHub". The marker cannot outlive its cause: a permanent
   failure (a 4xx other than 429, a token without write scope) clears it and is
-  recorded in `githubSyncError`; a marker older than 24 hours is dropped with a
+  recorded in `githubSyncError`. On an **approving** verdict that same
+  permanent failure also sets `tasks.needsHumanReason = "review-post-failed"`
+  (the card and drawer show it with the `githubSyncError` text), because
+  clearing the marker alone would release auto-approve against GitHub's standing
+  `CHANGES_REQUESTED`: `processAutoApprovals` and `processMergeRequests` keep
+  skipping the task (`holdsForReviewPost`) until a human acts — approve or merge
+  it manually — or the next review ingest overwrites the reason. A
+  non-approving verdict just clears the marker. A marker older than 24 hours is dropped with a
   `githubSyncError`; and one on a task that is merged or no longer
   claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
   (rate limit) keeps the marker with `posted: true`, so only the resolution is

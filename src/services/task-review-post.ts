@@ -50,6 +50,24 @@ function writeReviewPostPending(
 }
 
 /**
+ * True while an approving verdict has not (or could not be) put on GitHub: the
+ * post is still pending, or it failed permanently and `needsHumanReason` is
+ * `review-post-failed`. GitHub may still hold an older CHANGES_REQUESTED, so
+ * auto-approve and auto-merge must both stand down until a human acts.
+ */
+export function holdsForReviewPost(
+  task: Pick<
+    typeof tasks.$inferSelect,
+    "reviewPostPending" | "needsHumanReason" | "lastReviewVerdict"
+  >,
+): boolean {
+  return (
+    (task.reviewPostPending !== null || task.needsHumanReason === "review-post-failed") &&
+    isApprovingVerdict(task.lastReviewVerdict)
+  );
+}
+
+/**
  * One attempt at what a round still owes GitHub: its review post, then (an
  * approving verdict) the resolution of Mullion's own earlier threads. Settles
  * the `reviewPostPending` marker: cleared when both are done, or when the post
@@ -70,6 +88,7 @@ export async function attemptPendingReviewPost(
   let current = pending;
   let currentRaw = raw;
   let again = false;
+  let permanentFailure = false;
   if (!current.posted) {
     const base = {
       body: current.body,
@@ -110,7 +129,7 @@ export async function attemptPendingReviewPost(
       // Lost the marker to a newer round or a concurrent tick: that owner settles it.
       if (!writeReviewPostPending(app, task.id, currentRaw, nextRaw)) return;
       currentRaw = nextRaw;
-    }
+    } else permanentFailure = true;
     // "permanent": already recorded in githubSyncError — nothing to retry, but
     // the thread resolution below does not depend on the post.
   }
@@ -128,6 +147,21 @@ export async function attemptPendingReviewPost(
   }
   if (again) {
     reviewPostRetryBackoff.record(task.id, Date.now());
+    return;
+  }
+  if (permanentFailure && isApprovingVerdict(current.verdict)) {
+    // The approving review will never reach GitHub, which may still hold a
+    // CHANGES_REQUESTED: clearing the marker alone would release auto-approve
+    // against it. Flag the task for a human instead (githubSyncError, already
+    // recorded, is the text the card shows).
+    if (writeReviewPostPending(app, task.id, currentRaw, null)) {
+      app.db
+        .update(tasks)
+        .set({ needsHumanReason: "review-post-failed" })
+        .where(eq(tasks.id, task.id))
+        .run();
+    }
+    reviewPostRetryBackoff.clear(task.id);
     return;
   }
   writeReviewPostPending(app, task.id, currentRaw, null);

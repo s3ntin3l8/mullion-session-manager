@@ -4,7 +4,12 @@ import { formatRelativeUntil } from "./relativeTime.js";
 // the board card and the task drawer share this wording so they can't drift.
 // `null`/"cap" is the original (and still most common) reason: the round cap.
 export type NeedsHumanReason =
-  "cap" | "no-progress" | "finding-persisted" | "rebase-exhausted" | "blocked-threads";
+  | "cap"
+  | "no-progress"
+  | "finding-persisted"
+  | "rebase-exhausted"
+  | "blocked-threads"
+  | "review-post-failed";
 
 /** The reasons tied to a merge that cannot proceed. Unlike the review-loop
  * reasons they do not depend on the round cap or its announce stamp. */
@@ -24,6 +29,8 @@ export function needsHumanText(reason: NeedsHumanReason | null | undefined): str
       return "auto-rebase gave up, the PR still conflicts with main";
     case "blocked-threads":
       return "merge blocked on unresolved review conversations";
+    case "review-post-failed":
+      return "approving review could not be posted to GitHub";
     default:
       return "round cap reached";
   }
