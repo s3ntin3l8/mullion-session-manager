@@ -2,7 +2,6 @@
 // `review_findings`. The reconciler's own test file is at its size ceiling, so
 // the ingest → re-arm → ingest check lives here with a small harness: the
 // Hermes poll is the only edge faked.
-import { repoRefMocks } from "../helpers/pr-review-defaults.js";
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
