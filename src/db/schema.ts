@@ -1370,6 +1370,23 @@ export const tasks = sqliteTable(
     // reviewing sweep clears it. Session status alone was never safe (a
     // finished worker stays "active"); `workFinishedAt` is the signal.
     rebaseStartedAt: integer("rebase_started_at", { mode: "timestamp" }),
+    // Rapid-exit guard (src/services/worker-rapid-exit.ts). The PR head when
+    // the auto-rebase worker was spawned; non-null means that attempt has not
+    // been judged yet. Judged once, then cleared.
+    rebaseSpawnHeadSha: text("rebase_spawn_head_sha"),
+    // Rebase attempts that ended within RAPID_EXIT_MS without moving the PR
+    // head. Refunded from `rebaseAttempts` until the cap, so a dead agent does
+    // not spend the real attempts.
+    rebaseAbortedAttempts: integer("rebase_aborted_attempts").notNull().default(0),
+    // Suggestions-round workers that ended within RAPID_EXIT_MS with the PR
+    // head unchanged.
+    suggestionsRapidExits: integer("suggestions_rapid_exits").notNull().default(0),
+    // Not before this moment is a rapid-exit worker (rebase or suggestions)
+    // spawned or re-seeded again.
+    rapidExitRetryAfter: integer("rapid_exit_retry_after", { mode: "timestamp" }),
+    // The seed prompt of the running suggestions round, kept so a rapid exit
+    // can be re-seeded with the same text after the backoff.
+    suggestionsSeedPrompt: text("suggestions_seed_prompt"),
     // #744 — durable intent to cut a release covering this task, armed by
     // task-reconciler.ts's attemptMerge the moment this task's OWN PR
     // actually merges (case "clean" only — never on "already-done", which
