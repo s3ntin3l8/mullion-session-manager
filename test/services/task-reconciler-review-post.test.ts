@@ -329,6 +329,53 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     await app.close();
   });
 
+  it("keeps the marker on a 5xx on the initial post, records no sync error, and retries", async () => {
+    const { app, read } = await setup("p-post-5xx");
+    mockCreatePullRequestReview.mockRejectedValueOnce(new GitHubApiError("Bad Gateway", 502));
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await reconcileTasks(app);
+
+    let row = read();
+    expect(row.reviewPostPending).not.toBeNull();
+    expect(JSON.parse(row.reviewPostPending!).posted).toBe(false);
+    expect(row.githubSyncError).toBeNull();
+    expect(row.status).toBe("reviewing");
+    expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+
+    vi.setSystemTime(Date.now() + 61_000);
+    await reconcileTasks(app);
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
+    row = read();
+    expect(row.reviewPostPending).toBeNull();
+    expect(row.status).toBe("done");
+    await app.close();
+  });
+
+  it("the initial post does not look for an earlier review; the retry finds it by its hidden marker", async () => {
+    const { app, read } = await setup("p-post-initial-dedupe");
+    mockCreatePullRequestReview.mockRejectedValueOnce(new GitHubApiError("socket hang up", 0));
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await reconcileTasks(app);
+    expect(mockListPullRequestReviews).not.toHaveBeenCalled();
+
+    // The review the lost response belonged to is on the PR under the key the marker carries.
+    const key = JSON.parse(read().reviewPostPending!).key as string;
+    const sent = mockCreatePullRequestReview.mock.calls[0]?.[4] as { body: string };
+    expect(sent.body).toContain(`<!-- mullion-review-post:${key} -->`);
+    mockListPullRequestReviews.mockResolvedValue([
+      { author: "mullion-reviewer", body: `<!-- mullion-review-post:${key} -->\nreview` },
+    ]);
+    vi.setSystemTime(Date.now() + 61_000);
+    await reconcileTasks(app);
+
+    expect(mockListPullRequestReviews).toHaveBeenCalled();
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    expect(read().reviewPostPending).toBeNull();
+    await app.close();
+  });
+
   it("clears the marker and records githubSyncError on a permanent failure, without retrying", async () => {
     const { app, read } = await setup("p-post-permanent");
     mockCreatePullRequestReview.mockRejectedValue(new GitHubApiError("Not Found", 404));

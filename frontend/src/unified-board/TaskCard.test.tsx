@@ -990,6 +990,19 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.queryByText(/Round/)).toBeNull();
   });
 
+  // #2749 — a review post lost to a transient GitHub failure is retried; the
+  // card says so while the retry marker is set.
+  it("shows the waiting-to-be-posted text only while reviewPostPending is true", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewPostPending: true })];
+    const { unmount } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("Review waiting to be posted to GitHub")).toBeInTheDocument();
+    unmount();
+
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewPostPending: false })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText(/waiting to be posted/)).toBeNull();
+  });
+
   // Issue #1038 — capped but not yet announced: autoReturnRounds hit the
   // cap at the START of the last permitted round, while a worker session
   // (or the confirming review that follows it) may still be running. The
