@@ -1082,15 +1082,13 @@ describe("NotificationBell sticky group headers (issue #1229)", () => {
         ts: 2_000_000 + i,
         payload: { attention: true, signal: "question", header: `S1-Q${i}` },
       })),
-      2: [
-        {
-          seq: 1,
-          sessionId: 2,
-          kind: "attention" as const,
-          ts: 1_000_000,
-          payload: { attention: true, signal: "question", header: "S2-Q0" },
-        },
-      ],
+      2: Array.from({ length: 30 }, (_, i) => ({
+        seq: i + 1,
+        sessionId: 2,
+        kind: "attention" as const,
+        ts: 1_000_000 + i,
+        payload: { attention: true, signal: "question", header: `S2-Q${i}` },
+      })),
     };
     await openPanel();
 
@@ -1104,9 +1102,19 @@ describe("NotificationBell sticky group headers (issue #1229)", () => {
     });
     expect(screen.queryByText("session two")).not.toBeInTheDocument();
 
-    // Scroll into session two's own group — session one's header, if still
-    // rendered nearby, must NOT still claim sticky.
-    scrollFeedTo(10_000);
+    // Scroll into session two's own group (it starts at 1834px and has enough
+    // events to scroll inside) — session one's header, if still rendered nearby,
+    // must NOT still claim sticky. Stay inside the content: virtual-core
+    // >= 3.19.10 keeps a full viewport of rows when the offset is past the
+    // end of the list, which would leave the range starting in session one.
+    // Boundary first: session two's header exactly at the top of the viewport
+    // must already hand the sticky slot over, not only a mid-group offset.
+    scrollFeedTo(1834);
+    await waitFor(() => {
+      expect(headerStyleFor("session two")?.position).toBe("sticky");
+    });
+    expect(headerStyleFor("session one")?.position ?? "absolute").not.toBe("sticky");
+    scrollFeedTo(2000);
     await waitFor(() => {
       expect(headerStyleFor("session two")?.position).toBe("sticky");
     });
