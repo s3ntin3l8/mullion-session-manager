@@ -702,4 +702,45 @@ describe("BrowserManager", () => {
       expect(managed.downloads).toHaveLength(1);
     });
   });
+
+  describe("forgetProject while a browser is still opening", () => {
+    it("waits for the open, closes its context and leaves no file or pooled context", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let blocked!: () => void;
+      const inOpen = new Promise<void>((r) => (blocked = r));
+      const withHook = new BrowserManager({
+        enabled: true,
+        maxContexts: 2,
+        dataDir,
+        loadCookies: async () => {
+          blocked();
+          await gate;
+          return [];
+        },
+      });
+
+      const opening = withHook.getOrLaunch(target(7));
+      await inOpen; // the open is parked inside openTarget, in `pending`
+      expect(withHook.instanceCount).toBe(0);
+
+      let forgotten = false;
+      const forgetting = withHook.forgetProject(7).then(() => {
+        forgotten = true;
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(forgotten).toBe(false); // it waits for the open to settle
+
+      release();
+      await opening;
+      await forgetting;
+
+      const left = (dir: string) =>
+        fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith("project-7")) : [];
+      expect(left(dataDir)).toEqual([]);
+      expect(left(path.join(dataDir, "downloads"))).toEqual([]);
+      expect(withHook.instanceCount).toBe(0);
+      expect(launchedBrowsers[0].contexts[0].closeSpy).toHaveBeenCalled();
+    });
+  });
 });
