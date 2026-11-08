@@ -1483,7 +1483,12 @@ export async function tasksRoute(app: FastifyInstance) {
 
     const [updated] = app.db
       .update(tasks)
-      .set({ mergeRequestedAt: new Date(), ...CLEARED_MERGE_ERROR })
+      .set({
+        mergeRequestedAt: new Date(),
+        ...CLEARED_MERGE_ERROR,
+        // A human merge request acts on the review-post hold (holdsForReviewPost).
+        ...(existing.needsHumanReason === "review-post-failed" ? { needsHumanReason: null } : {}),
+      })
       .where(eq(tasks.id, taskId))
       .returning()
       .all();

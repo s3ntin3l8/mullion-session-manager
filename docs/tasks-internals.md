@@ -818,7 +818,9 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   clearing the marker alone would release auto-approve against GitHub's standing
   `CHANGES_REQUESTED`: `processAutoApprovals` and `processMergeRequests` keep
   skipping the task (`holdsForReviewPost`) until a human acts — approve or merge
-  it manually — or the next review ingest overwrites the reason. A
+  it manually (`approveTask` and `POST /api/tasks/:id/merge` clear the reason) —
+  or the next review ingest overwrites it. `deriveApprovalState` reports
+  `awaiting-human` for such a task even on an auto-approving project. A
   non-approving verdict just clears the marker. A marker older than 24 hours is dropped with a
   `githubSyncError`; and one on a task that is merged or no longer
   claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
