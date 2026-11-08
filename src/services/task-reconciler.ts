@@ -556,6 +556,14 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         ) {
           continue;
         }
+        // A rapid-exit rebase abort nulls rebaseStartedAt (settleRapidRebaseExit)
+        // and parks the retry until rapidExitRetryAfter. A reviewer spawned in
+        // that gap would be terminated by the retry's pre-removal cleanup, so
+        // hold until the backoff ends. attemptAutoRebase's own use of
+        // rebaseStartedAt is unchanged.
+        if (task.rapidExitRetryAfter !== null && now < task.rapidExitRetryAfter.getTime()) {
+          continue;
+        }
         const reviewCommand = resolveReviewAgentCommand(app, {
           taskReviewAgent: task.reviewAgent,
           issueBody: task.body,
