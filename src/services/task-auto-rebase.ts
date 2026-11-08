@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { forceRemoveCheckout } from "./checkout-removal.js";
 import type { FastifyInstance } from "fastify";
 import type { projects } from "../db/schema.js";
