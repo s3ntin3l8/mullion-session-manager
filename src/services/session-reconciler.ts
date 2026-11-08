@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { noteHostReachable } from "./host-warn-throttle.js";
 import { resolveBackend, warnHostError } from "./session-backend.js";
 import { removeCheckoutIfClean } from "./checkout-removal.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
@@ -106,9 +107,17 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
           "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
           "session reconcile: host unreachable, skipping its sessions",
           "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick",
+          hostId,
         );
         return;
       }
+      noteHostReachable(
+        app.log,
+        hostId,
+        "session reconcile: host unreachable, skipping its sessions",
+        "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick",
+        "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
+      );
 
       for (const row of rows) {
         try {

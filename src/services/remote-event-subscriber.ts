@@ -5,6 +5,7 @@ import { listHosts } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { getStoredSettings } from "./settings.js";
 import type { NotificationEvent } from "./pty-manager.js";
+import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
 
 // Issue #213 cross-host capture — the piece that makes session_events
 // genuinely "unified" rather than primary-local-only (see event-store.ts's
@@ -38,6 +39,8 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 // remote-host-client.ts's openPreviewWs comment notes the same gap for a
 // sibling method) — bounded here so a half-open handshake can't stall this
 // host's history capture indefinitely.
+const CONNECT_TIMEOUT_MESSAGE =
+  "[remote-event-subscriber] connect timed out, terminating and retrying";
 const CONNECT_TIMEOUT_MS = 10_000;
 
 function isNotificationEvent(value: unknown): value is NotificationEvent {
@@ -175,16 +178,14 @@ export function startRemoteEventSubscriber(
     sub.socket = socket;
 
     sub.connectTimeoutTimer = setTimeout(() => {
-      app.log.warn(
-        { hostId: sub.hostId },
-        "[remote-event-subscriber] connect timed out, terminating and retrying",
-      );
+      warnHostThrottled(app.log, sub.hostId, {}, CONNECT_TIMEOUT_MESSAGE);
       socket.terminate();
     }, CONNECT_TIMEOUT_MS);
     sub.connectTimeoutTimer.unref();
 
     socket.on("open", () => {
       if (sub.connectTimeoutTimer !== null) clearTimeout(sub.connectTimeoutTimer);
+      noteHostReachable(app.log, sub.hostId, CONNECT_TIMEOUT_MESSAGE);
       sub.connectTimeoutTimer = null;
       sub.attempt = 0; // reset backoff on a successful connect
       sub.hasLoggedFailure = false; // a fresh failure streak should log again

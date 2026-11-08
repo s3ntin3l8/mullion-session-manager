@@ -334,6 +334,47 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("logs an unreachable remote host once across repeated polls (#2753)", async () => {
+      const { resetHostWarnThrottle } = await import("../../src/services/host-warn-throttle.js");
+      resetHostWarnThrottle();
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "batch-throttle-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          allowDuplicate: true,
+          name: "batch-throttle",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
+      });
+      const projectId = project.json().id as number;
+      const warn = vi.spyOn(app.log, "warn");
+
+      for (let i = 0; i < 3; i++) {
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/git-statuses?ids=${projectId}`,
+        });
+        // The omitting behaviour is unchanged by the throttle.
+        expect(res.json()).toEqual({ projects: {}, sessions: {}, problems: {} });
+      }
+
+      const omitted = warn.mock.calls.filter(
+        ([, msg]) => msg === "batch git-status: remote host unreachable, omitting project",
+      );
+      expect(omitted).toHaveLength(1);
+      expect(omitted[0]?.[0]).toMatchObject({ hostId: host.json().id });
+
+      resetHostWarnThrottle();
+      await app.close();
+    });
+
     describe("remote host git status problems (issue #1612)", () => {
       async function remoteProject(app: FastifyInstance) {
         const host = await app.inject({

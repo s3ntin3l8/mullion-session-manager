@@ -12,6 +12,13 @@ import { resolveBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { isHostBusyError } from "./remote-host-errors.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
+import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
+
+// Throttled per (host, message) — see host-warn-throttle.ts.
+const LIVE_INFO_BUSY_MESSAGE = "host busy, reporting default live status";
+const LIVE_INFO_REFUSED_MESSAGE =
+  "host answered the live-status request with an error, reporting default live status";
+const LIVE_INFO_UNREACHABLE_MESSAGE = "host unreachable, reporting default live status";
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
 // under the same name (id/cwd/command/createdAt) or that are never exposed
@@ -395,6 +402,13 @@ export async function readSessionLiveInfo(
       opts.fresh === true
         ? await backend.liveStatus([id], idleThresholdMs, undefined, { fresh: true })
         : await backend.liveStatus([id], idleThresholdMs);
+    noteHostReachable(
+      app.log,
+      hostId,
+      LIVE_INFO_BUSY_MESSAGE,
+      LIVE_INFO_REFUSED_MESSAGE,
+      LIVE_INFO_UNREACHABLE_MESSAGE,
+    );
     return outcome(map[id] ?? null);
   } catch (err) {
     // Issue #1727 — the host did not answer. That is not "the session is
@@ -409,13 +423,15 @@ export async function readSessionLiveInfo(
       : err instanceof HostRequestError
         ? "refused"
         : "unreachable";
-    app.log.warn(
-      { hostId, sessionId: row.id, err },
+    warnHostThrottled(
+      app.log,
+      hostId,
+      { sessionId: row.id, err },
       failure === "busy"
-        ? "host busy, reporting default live status"
+        ? LIVE_INFO_BUSY_MESSAGE
         : failure === "refused"
-          ? "host answered the live-status request with an error, reporting default live status"
-          : "host unreachable, reporting default live status",
+          ? LIVE_INFO_REFUSED_MESSAGE
+          : LIVE_INFO_UNREACHABLE_MESSAGE,
     );
     return outcome(null, failure, err);
   }

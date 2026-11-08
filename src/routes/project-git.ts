@@ -64,6 +64,13 @@ import { getPRsStatus, getCachedDefaultBranchCi } from "../services/github.js";
 import { overlayRelayRuns } from "../services/relay-review-state.js";
 import { annotatePrTasks } from "../services/mullion-links.js";
 import path from "node:path";
+import { noteHostReachable, warnHostThrottled } from "../services/host-warn-throttle.js";
+
+// Throttled per (host, message) — see services/host-warn-throttle.ts.
+const MSG_STATUS_PROJECT = "batch git-status: remote host unreachable, omitting project";
+const MSG_STATUS_SESSION = "batch git-status: remote host unavailable for session cwd, omitting";
+const MSG_DIFF_STATS = "batch git-diff-stats: remote host unavailable, omitting";
+const MSG_REFS = "batch git-refs: remote host unavailable for branches, omitting";
 
 /** Shared by every `?ids=`/`?sessionIds=` batch query param below (git-
  * statuses, git-diff-stats) — a comma-separated list of positive integers,
@@ -224,6 +231,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               const remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(
                 project.cwd,
               );
+              noteHostReachable(app.log, project.hostId, MSG_STATUS_PROJECT);
               if (!remoteResult.isRepo) {
                 projectsResult[project.id] = null;
               } else if (remoteResult.status) {
@@ -233,9 +241,11 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
                 problemsResult[project.id] = remoteResult.problem;
               }
             } catch (err) {
-              app.log.warn(
-                { hostId: project.hostId, projectId: project.id, err },
-                "batch git-status: remote host unreachable, omitting project",
+              warnHostThrottled(
+                app.log,
+                project.hostId,
+                { projectId: project.id, err },
+                MSG_STATUS_PROJECT,
               );
             }
           }
@@ -264,6 +274,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitStatus(
                 target.cwd,
               );
+              noteHostReachable(app.log, target.hostId, MSG_STATUS_SESSION);
               if (!remoteResult.isRepo) {
                 sessionsResult[target.sessionId] = null;
               } else if (remoteResult.status) {
@@ -275,9 +286,11 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               // surfaces here as a 4xx HostRequestError, not just the usual
               // HostUnreachableError — both just mean "omit this session,"
               // same as the project loop above.
-              app.log.warn(
-                { hostId: target.hostId, sessionId: target.sessionId, err },
-                "batch git-status: remote host unavailable for session cwd, omitting",
+              warnHostThrottled(
+                app.log,
+                target.hostId,
+                { sessionId: target.sessionId, err },
+                MSG_STATUS_SESSION,
               );
             }
           }
@@ -341,15 +354,18 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               target.cwd,
               base,
             );
+            noteHostReachable(app.log, target.hostId, MSG_DIFF_STATS);
             if (!remoteResult.isRepo) {
               result[target.sessionId] = null;
             } else if (remoteResult.stats) {
               result[target.sessionId] = remoteResult.stats;
             }
           } catch (err) {
-            app.log.warn(
-              { hostId: target.hostId, sessionId: target.sessionId, err },
-              "batch git-diff-stats: remote host unavailable, omitting",
+            warnHostThrottled(
+              app.log,
+              target.hostId,
+              { sessionId: target.sessionId, err },
+              MSG_DIFF_STATS,
             );
           }
         }
@@ -421,11 +437,11 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
             // isMerged enrichment).
             try {
               branchesResult[project.id] = await resolveProjectGitBranches(app, project, false);
+              if (project.hostId !== LOCAL_HOST_ID) {
+                noteHostReachable(app.log, project.hostId, MSG_REFS);
+              }
             } catch (err) {
-              app.log.warn(
-                { hostId: project.hostId, projectId: project.id, err },
-                "batch git-refs: remote host unavailable for branches, omitting",
-              );
+              warnHostThrottled(app.log, project.hostId, { projectId: project.id, err }, MSG_REFS);
             }
           })();
 
