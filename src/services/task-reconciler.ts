@@ -112,6 +112,7 @@ import {
   MAX_RAPID_SUGGESTION_EXITS,
   RAPID_EXIT_BACKOFF_MS,
   workerExitedRapidly,
+  sessionEndedAt,
 } from "./worker-rapid-exit.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { deriveTaskBranchName } from "./git-worktree.js";
@@ -3182,7 +3183,7 @@ async function attemptAutoApprove(
     // take the task back under the cap.
     await settleRapidRebaseExit(app, task, project);
     if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
-      await attemptAutoRebase(app, task, project, current.baseRef);
+      await attemptAutoRebase(app, task, project, current.baseRef, { alreadySettled: true });
       return;
     }
     recordMergeError(
@@ -5169,7 +5170,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 await workerExitedRapidly(app, task, project, {
                   sessionId: session.id,
                   spawnedAt: task.claimedAt,
-                  workFinishedAt: info.workFinishedAt,
+                  endedAt: sessionEndedAt(info),
                   headAtSpawn: task.lastReviewedHeadSha,
                 })
               ) {
@@ -5221,6 +5222,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // The round is over either way: its stored seed prompt must not
                 // outlive it and be replayed into an unrelated round.
                 suggestionsSeedPrompt: null,
+                // The backoff stamp is shared with the rebase consumer: a round that
+                // ends (or any other in_progress -> reviewing exit) must not leave it
+                // to delay a later auto-rebase.
+                rapidExitRetryAfter: null,
                 // Both rapid exits of a suggestions round: the nits were never
                 // applied. The approval stays carried; "no-progress" (the worker
                 // came back having changed nothing) is the nearest visible reason.

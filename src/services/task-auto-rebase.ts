@@ -28,6 +28,7 @@ import {
   RAPID_EXIT_BACKOFF_MS,
   readPrHeadAndMergeability,
   readPrHeadSha,
+  sessionEndedAt,
   workerExitedRapidly,
 } from "./worker-rapid-exit.js";
 import { recordMergeError } from "./task-merge-human.js";
@@ -99,7 +100,7 @@ export async function settleRapidRebaseExit(
   const rapid = await workerExitedRapidly(app, task, project, {
     sessionId: session.id,
     spawnedAt: task.rebaseStartedAt,
-    workFinishedAt: info.workFinishedAt,
+    endedAt: sessionEndedAt(info),
     headAtSpawn: task.rebaseSpawnHeadSha,
   });
   // `outrunOnly` (the auto-approve tick's post-push read): judge only a
@@ -182,13 +183,16 @@ export async function attemptAutoRebase(
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   baseRef: string,
+  // The caller already judged the previous attempt this tick (settleRapidRebaseExit),
+  // so judging it again would cost a second liveStatus call.
+  opts: { alreadySettled?: boolean } = {},
 ): Promise<void> {
   if (!project.autoApprove) {
     recordMergeError(app, task.id, "Conflicts with main — needs manual resolution");
     return;
   }
 
-  await settleRapidRebaseExit(app, task, project);
+  if (opts.alreadySettled !== true) await settleRapidRebaseExit(app, task, project);
   const now = Date.now();
   // Issue #1724 — the auto-rebase worker works in the task's EXISTING
   // worktree, and that worktree lives on the host the worker was placed

@@ -437,6 +437,95 @@ describe("a worker that exits within seconds", () => {
     });
   });
 
+  it("settles a reviewing task's rapid rebase exit through auto-approve", async () => {
+    const { app, projectId, session } = await setupProject("p-rapid-reviewing");
+    const [reviewer] = app.db
+      .insert(sessions)
+      .values({ projectId, command: "claude", cwd: "/tmp", status: "active" })
+      .returning()
+      .all();
+    const spawnedAt = new Date(Math.floor(Date.now() / 1000) * 1000 - 10 * 60_000);
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "reviewing conflict",
+        status: "reviewing",
+        claimedAt: spawnedAt,
+        prNumber: 9,
+        prUrl: "https://github.com/o/r/pull/9",
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+        sessionId: session.id,
+        reviewSessionId: reviewer.id,
+        reviewFindingsIngestedSessionId: reviewer.id,
+        lastReviewVerdict: "approved",
+        lastReviewVerdictAt: new Date(spawnedAt.getTime() - 60_000),
+        lastReviewedHeadSha: "sha-head",
+        rebaseAttempts: 1,
+        rebaseStartedAt: spawnedAt,
+        rebaseSpawnHeadSha: "sha-head",
+      })
+      .returning()
+      .all();
+    const finishedAt = spawnedAt.getTime() + 3_000;
+    const toInfo = vi.fn(() =>
+      fakeInfo({ lastTurnEndedAt: finishedAt, workFinishedAt: finishedAt }),
+    );
+    vi.spyOn(app.pty, "get").mockReturnValue({ toInfo } as never);
+    const create = vi.spyOn(lifecycle, "createSessionRecord");
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, task.id);
+    expect(row.rebaseAttempts).toBe(0);
+    expect(row.rebaseAbortedAttempts).toBe(1);
+    expect(row.rapidExitRetryAfter!.getTime()).toBeGreaterThan(Date.now() + 9 * 60_000);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("looks at a still-running rebase worker once per tick on the auto-approve path", async () => {
+    const { app, projectId, session } = await setupProject("p-settle-once");
+    const [reviewer] = app.db
+      .insert(sessions)
+      .values({ projectId, command: "claude", cwd: "/tmp", status: "active" })
+      .returning()
+      .all();
+    const spawnedAt = new Date(Date.now() - 60_000);
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "running rebase",
+        status: "reviewing",
+        claimedAt: spawnedAt,
+        prNumber: 9,
+        prUrl: "https://github.com/o/r/pull/9",
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+        sessionId: session.id,
+        reviewSessionId: reviewer.id,
+        reviewFindingsIngestedSessionId: reviewer.id,
+        lastReviewVerdict: "approved",
+        lastReviewVerdictAt: new Date(spawnedAt.getTime() - 60_000),
+        lastReviewedHeadSha: "sha-head",
+        rebaseAttempts: 1,
+        rebaseStartedAt: spawnedAt,
+        rebaseSpawnHeadSha: "sha-head",
+      })
+      .returning()
+      .all();
+    const get = vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => fakeInfo({ workFinishedAt: null }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    expect(getTask(app, task.id).rebaseAttempts).toBe(1);
+    const workerLookups = get.mock.calls.filter((c) => String(c[0]) === String(session.id));
+    expect(workerLookups).toHaveLength(1);
+  });
+
   // A suggestions round: the approved review's nits sent back to the worker,
   // approval carried, and a worker whose turn "finished" `ranMs` after the
   // round was seeded.
@@ -501,6 +590,63 @@ describe("a worker that exits within seconds", () => {
     expect(row.status).toBe("in_progress");
     expect(row.rapidExitRetryAfter).toBeNull();
     expect(row.claimedAt!.getTime()).toBeGreaterThan(Date.now() - 60_000);
+  });
+
+  it("judges a null-workFinishedAt api_error death by its error time, not by failing open", async () => {
+    const { app, task } = await suggestionsTask("p-null-finish-suggestions", { ranMs: 20_000 });
+    const errorAt = task.claimedAt!.getTime() + 20_000;
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          errorState: "api_error",
+          errorDetail: "overloaded",
+          errorAt,
+          workFinishedAt: null,
+        }),
+    } as never);
+    vi.spyOn(reseedModule, "reseedTaskIfSessionExited").mockResolvedValue(true);
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("in_progress");
+    expect(row.suggestionsRapidExits).toBe(1);
+    expect(row.rapidExitRetryAfter).not.toBeNull();
+  });
+
+  it("still completes the round for a null-workFinishedAt api_error death that ran long", async () => {
+    const { app, task } = await suggestionsTask("p-null-finish-long", { ranMs: 20_000 });
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          errorState: "api_error",
+          errorDetail: "overloaded",
+          errorAt: task.claimedAt!.getTime() + 5 * 60_000,
+          workFinishedAt: null,
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("reviewing");
+    expect(row.suggestionsRapidExits).toBe(0);
+  });
+
+  it("leaves no backoff stamp behind a round that completes, so a following rebase is not delayed", async () => {
+    const { app, task } = await suggestionsTask("p-stamp-cleared", { ranMs: 5 * 60_000 });
+    // A stamp left by an earlier consumer, on a task whose round is not the
+    // suggestions kind that would honour and clear it.
+    app.db
+      .update(tasks)
+      .set({ rapidExitRetryAfter: new Date(Date.now() + 600_000), lastAutoReturnReason: null })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    await reconcileTasks(app);
+
+    expect(getTask(app, task.id).status).toBe("reviewing");
+    expect(getTask(app, task.id).rapidExitRetryAfter).toBeNull();
   });
 
   it("flags a second rapid exit for a human and keeps the approval carried", async () => {
