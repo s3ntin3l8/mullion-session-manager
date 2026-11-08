@@ -9,6 +9,14 @@ updates:
         patterns:
           - "*"
 
+  # The visual-kit image the screenshots and visual checks render in (visual/Dockerfile).
+  # Pinned to an exact release on purpose: the renderer is part of the baselines, so a
+  # bump is a reviewed PR (run `make visual-baseline` on it if the shots move).
+  - package-ecosystem: "docker"
+    directory: "/visual"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
