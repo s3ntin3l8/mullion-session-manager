@@ -4,10 +4,10 @@
   "recordedAt": "0ceb2f02",
   "recordedAtMeaning": "the commit whose tree these sizes were measured from — the fork point this branch started from. The baseline is the RECORD of the giants and the fallback reference when there is no git reference commit; when there is one, the guard measures against the reference commit instead, and that already absorbs the default branch's own growth.",
   "counts": {
-    "production": 13,
+    "production": 12,
     "test": 43,
     "tooling": 0,
-    "total": 56
+    "total": 55
   },
   "files": {
     "frontend/src/api/types.ts": 1507,
