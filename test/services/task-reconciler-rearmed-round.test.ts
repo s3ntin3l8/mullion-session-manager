@@ -170,7 +170,7 @@ describe("re-armed review round heading (#2752)", () => {
     // The posted PR review body carries the same distinct heading, after the
     // hidden dedupe marker the review post adds (#2749).
     expect(mockCreatePrReview.mock.calls.at(-1)?.[4].body).toMatch(
-      /^<!-- mullion-review-post:[^>]*-->\n## Round 1 \(retry 2\)\n\n/,
+      /^<!-- mullion-review-post:\d+-\d+ -->\n## Round 1 \(retry 2\)\n\n/,
     );
     await app.close();
   });
