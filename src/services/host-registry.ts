@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
 import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
+import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 // Used only inside listHosts (call time). The constant lives in its own
 // module because the pairing flow needs it too, and importing host-pairing.ts
@@ -351,6 +352,9 @@ export function deleteHost(app: FastifyInstance, id: string, opts: { cascade?: b
   }
   const deleted = app.db.delete(hosts).where(eq(hosts.id, id)).returning().all();
   if (deleted.length === 0) throw new UnknownHostError(id);
+  // The unreachable-host log throttle keys by host id; a removed host never
+  // recovers, so nothing else would ever clear its entries.
+  forgetHostWarnings(id);
 }
 
 // Issue #245 / roadmap 7.1 — agent-initiated registration & rotation.

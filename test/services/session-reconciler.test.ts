@@ -1227,6 +1227,46 @@ describe("reconcileExitedSessions", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     });
 
+    it("logs a host that stays unreachable once across repeated ticks, then again after it recovers (#2778)", async () => {
+      const { resetHostWarnThrottle } = await import("../../src/services/host-warn-throttle.js");
+      resetHostWarnThrottle();
+      const app = await openTestApp();
+      mockMasterAlive(app, true);
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "throttled-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { allowDuplicate: true, name: "p", cwd: "/x", hostId: host.json().id },
+      });
+      const { sessions } = await import("../../src/db/schema.js");
+      app.db.insert(sessions).values({ projectId: project.json().id, command: "bash" }).run();
+
+      const warnSpy = vi.spyOn(app.log, "warn");
+      const unreachable = () =>
+        warnSpy.mock.calls.filter(
+          ([fields, msg]) =>
+            msg === "session reconcile: host unreachable, skipping its sessions" &&
+            (fields as { hostId?: string }).hostId === host.json().id,
+        );
+      for (let i = 0; i < 3; i++) await reconcileExitedSessions(app);
+      expect(unreachable()).toHaveLength(1);
+
+      // A recovery (the host answers) clears the throttle, so the next outage warns at once.
+      const { noteHostReachable } = await import("../../src/services/host-warn-throttle.js");
+      noteHostReachable(
+        app.log,
+        host.json().id,
+        "session reconcile: host unreachable, skipping its sessions",
+      );
+      await reconcileExitedSessions(app);
+      expect(unreachable()).toHaveLength(2);
+      resetHostWarnThrottle();
+    });
+
     it("logs a HostRequestError distinctly from unreachable, without exiting the session (Hermes review, PR #34)", async () => {
       const app = await openTestApp();
       mockMasterAlive(app, true);
