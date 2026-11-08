@@ -4575,7 +4575,11 @@ async function ingestReviewOutcome(
   // A suggestions round spends no round, so a re-review after one (the
   // worker asked for it) shares its counter with the review before it.
   const roundLabel = `## Round ${task.autoReturnRounds + 1}${
-    task.lastAutoReturnReason === "suggestions" ? " (re-review after suggestions)" : ""
+    input.supersedeInconclusive
+      ? " (late verdict — supersedes the inconclusive ingest)"
+      : task.lastAutoReturnReason === "suggestions"
+        ? " (re-review after suggestions)"
+        : ""
   }`;
 
   const commentBody = parsed

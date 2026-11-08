@@ -1701,7 +1701,7 @@ export async function tasksRoute(app: FastifyInstance) {
     // (#2369); whichever it is decides which ingest marker to look at below.
     const reviewIsRun = typeof existing.reviewRunId === "string";
     // Hermes review finding — the automatic sweep's own eligibility query
-    // (reannounceInconclusiveReviewsAfterGrace, task-reconciler.ts)
+    // (reannounceInconclusiveReviewsAfterGrace, task-late-findings.ts)
     // requires isNotNull(reviewFindingsIngestedSessionId), and this route
     // must too: a PRIOR re-review (this route, or the automatic sweep)
     // already nulled it, and a review agent's own findings-ingest is what

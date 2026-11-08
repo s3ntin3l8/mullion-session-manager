@@ -885,13 +885,16 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   still `inconclusive`, and `reviewFindingsIngestedSessionId` equals the current
   `reviewSessionId` (never for a Hermes run), each tick re-reads that session's
   findings file through the same `readTaskReviewFindings` (so a remote host
-  works). A file holding a structured verdict, once the reviewer has finished its
-  turn, is ingested through the normal path and replaces the inconclusive
-  verdict (a human re-prompting the reviewer after its quota recovered is the
-  motivating case). Every ingest unlinks the round's file, so a file present
-  now was written after it; the backend exposes no mtime. Freeform or
-  half-written text is ignored (and logged once per content hash), never posted,
-  and the write is a CAS on the verdict still being `inconclusive` for that
+  works). The read is skipped while the reviewer is mid-turn, or after a turn
+  that ended no later than the verdict. Once the reviewer has finished its
+  turn (or exited), the file is ingested through the normal path and replaces
+  the inconclusive verdict (a human re-prompting the reviewer after its quota
+  recovered is the motivating case); the round is labelled "late verdict".
+  Every ingest unlinks the round's file, so a file present now was written
+  after it; the backend exposes no mtime. Freeform text is ingested as the
+  normal path does (`changes-requested`) but never counts as `finished`, so it
+  cannot spend an auto-return round. The write is a CAS on the verdict still
+  being `inconclusive` for that
   session, so the re-arm sweep's fresh review cannot be ingested twice. An approving verdict with nothing
   to apply likewise stays put until the CI / auto-approve gates move it.
 

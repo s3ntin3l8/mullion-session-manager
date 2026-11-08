@@ -1134,7 +1134,7 @@ extensive design comments.
   all (unlike a reported `rate_limit`, which the rate-limit grace window
   already covers) is ingested as `lastReviewVerdict = "inconclusive"` once
   the review-findings grace period elapses. The automatic sweep
-  (`reannounceInconclusiveReviewsAfterGrace`, `task-reconciler.ts`) re-arms
+  (`reannounceInconclusiveReviewsAfterGrace`, `task-late-findings.ts`) re-arms
   such a task once `tasks.lastReviewVerdictAt` is more than an hour old,
   bounded to `tasks.inconclusiveReviewRearmCount < 1` so a genuinely-broken
   review adapter can't loop forever unattended. See

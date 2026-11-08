@@ -188,15 +188,18 @@ describe("late review findings after an inconclusive ingest", () => {
     await app.close();
   });
 
-  it("ignores an unstructured late file on repeat ticks", async () => {
+  it("ingests a freeform late file once, without spending an auto-return round", async () => {
     const { app, task } = await setup();
-    writeFindings(app, task.id, "half-written freeform text");
+    writeFindings(app, task.id, "Looks fine to me, no blocking issues.");
 
     await reconcileTasks(app);
     await reconcileTasks(app);
 
-    expect(getTask(app, task.id).lastReviewVerdict).toBe("inconclusive");
-    expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+    const row = getTask(app, task.id);
+    expect(row.lastReviewVerdict).toBe("changes-requested");
+    expect(row.autoReturnRounds).toBe(task.autoReturnRounds);
+    expect(row.reviewFindings).toContain("late verdict");
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
     await app.close();
   });
 

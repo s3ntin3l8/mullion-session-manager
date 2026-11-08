@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks, type sessions } from "../db/schema.js";
@@ -11,12 +10,6 @@ import type { SessionInfo } from "./pty-manager.js";
 import type { SessionBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
-
-// Log-once memory for a late findings file that is not a structured verdict,
-// keyed by task id -> content hash, so a repeat tick neither re-logs nor
-// re-parses it. In-memory only: after a restart the file is evaluated (and
-// ignored) once more, which posts nothing.
-const ignoredLateFindings = new Map<number, string>();
 
 /**
  * A review session whose findings were ingested as `inconclusive` (it died or
@@ -32,8 +25,10 @@ const ignoredLateFindings = new Map<number, string>();
  * was present but unstructured is not ingested here. So any structured file
  * now present was written after that ingest. The backend exposes no mtime;
  * the same `readTaskReviewFindings` is used, so a remote host works too.
- * Freeform text is deliberately ignored, unlike the normal path: a
- * half-written or stray file must not overturn the verdict. A re-arm clears
+ * Freeform text is ingested too, as the normal path does (the parser maps it
+ * to `changes-requested`), but never as `finished`, so a possibly torn file
+ * cannot spend an auto-return round; the readiness gate below (a finished
+ * turn or an exit) is what keeps a half-written file out. A re-arm clears
  * the review handle so this stops matching, and `ingest` is a CAS on the
  * verdict still being `inconclusive` for that session.
  */
@@ -54,6 +49,25 @@ export async function ingestLateFindings(
   if (task.reviewSessionId !== session.id) return;
   if (task.reviewFindingsIngestedSessionId !== task.reviewSessionId) return;
 
+  // Nothing can be ingested while the reviewer is mid-turn, and this runs on
+  // every tick for every latched task: decide readiness BEFORE paying for a
+  // (possibly remote) read. Same rule as the normal path — a finished turn or
+  // an exit. A finished turn that ended no later than the verdict cannot have
+  // written anything new; an exit is always worth a read.
+  const derived = deriveSessionStatus({
+    dbStatus: session.status,
+    info: defaultDeriveStatusInfo(info),
+  });
+  if (derived.status !== "finished" && derived.status !== "exited") return;
+  const turnEndedAt = info?.lastTurnEndedAt ?? null;
+  if (
+    derived.status === "finished" &&
+    turnEndedAt !== null &&
+    turnEndedAt <= task.lastReviewVerdictAt.getTime()
+  ) {
+    return;
+  }
+
   let findings: string | null;
   try {
     findings = await backend.readTaskReviewFindings(task.id, task.autoReturnRounds);
@@ -64,31 +78,9 @@ export async function ingestLateFindings(
     );
     return;
   }
-  if (findings === null) {
-    ignoredLateFindings.delete(task.id);
-    return;
-  }
-  const hash = createHash("sha256").update(findings).digest("hex");
-  if (ignoredLateFindings.get(task.id) === hash) return;
+  if (findings === null) return;
   const parsed = parseReviewFindings(findings);
-  if (!parsed.structured) {
-    ignoredLateFindings.set(task.id, hash);
-    app.log.warn(
-      { taskId: task.id },
-      "task reconcile: late review findings file is not a structured verdict — ignoring",
-    );
-    return;
-  }
-  // Same readiness rule as the normal path for a real file: the reviewer has
-  // finished its turn (or exited), so the file is complete.
-  const derived = deriveSessionStatus({
-    dbStatus: session.status,
-    info: defaultDeriveStatusInfo(info),
-  });
-  if (derived.status !== "finished" && derived.status !== "exited") return;
-
-  ignoredLateFindings.delete(task.id);
-  await input.ingest(parsed, derived.status === "finished");
+  await input.ingest(parsed, parsed.structured && derived.status === "finished");
 }
 
 // Task 409707 — a review agent can stall silently: no reported
