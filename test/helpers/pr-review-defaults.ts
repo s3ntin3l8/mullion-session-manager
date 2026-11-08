@@ -30,3 +30,11 @@ export const PR_REVIEW_DEFAULTS: Pick<
   ciFetched: false,
   prPhase: "unknown",
 };
+
+// The two host-git entry points as one mock pair: `resolveRepoRefResult`
+// (the review-post and own-thread helpers use this non-collapsing variant)
+// returns the `{ ok, value }` shape around the same `resolveRepoRef` stub.
+export const repoRefMocks = (fn: (...args: unknown[]) => unknown) => ({
+  resolveRepoRef: fn,
+  resolveRepoRefResult: async (...args: unknown[]) => ({ ok: true, value: await fn(...args) }),
+});

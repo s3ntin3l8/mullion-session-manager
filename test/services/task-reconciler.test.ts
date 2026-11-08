@@ -9,7 +9,7 @@ import type * as TaskPromoteModule from "../../src/services/task-promote.js";
 import type * as GitHubIntegrationModule from "../../src/services/github-integration.js";
 import type * as GitHubWriteModule from "../../src/services/github-write.js";
 import type * as GitHubModule from "../../src/services/github.js";
-import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
+import { PR_REVIEW_DEFAULTS, repoRefMocks } from "../helpers/pr-review-defaults.js";
 
 // #2252 — the approval push goes through notifyTaskNeedsAttention; mocked the
 // way task-promote.test.ts mocks it for the workflow-hold push.
@@ -271,7 +271,7 @@ vi.mock("../../src/services/host-git.js", async (importOriginal) => {
     // #738 follow-up — resolveRepoRef is the first call resolveReviewCi
     // makes; pass-through wired in below (once the real modules can be
     // imported), overridden only in the dedicated CI-gating tests.
-    resolveRepoRef: mockResolveRepoRef,
+    ...repoRefMocks(mockResolveRepoRef),
     // Issue #1100 — failReviewingGate's WIP-salvage probe. Mocked at this
     // level (not left to fall through to the real dispatch, which for a
     // local host would in turn shell out to git-worktree.js's real

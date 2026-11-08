@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vites
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { repoRefMocks } from "../helpers/pr-review-defaults.js";
 
 const mockGetToken = vi.fn();
 const mockGetIntegration = vi.fn();
@@ -23,9 +24,7 @@ vi.mock("../../src/services/github-integration.js", () => ({
   resolveReviewerToken: mockResolveReviewerToken,
   getIntegration: mockGetIntegration,
 }));
-vi.mock("../../src/services/host-git.js", () => ({
-  resolveRepoRef: mockResolveRepoRef,
-}));
+vi.mock("../../src/services/host-git.js", () => repoRefMocks(mockResolveRepoRef));
 vi.mock("../../src/services/github-write.js", () => ({
   addLabels: mockAddLabels,
   removeLabel: mockRemoveLabel,
