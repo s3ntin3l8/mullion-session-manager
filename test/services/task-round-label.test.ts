@@ -49,4 +49,15 @@ describe("reviewRoundLabel", () => {
       ),
     ).toBe("## Round 1 (retry 2, late verdict — supersedes the inconclusive ingest)");
   });
+
+  it("numbers a heading that is already stored (human re-review)", () => {
+    const stored = "## Round 1\n\nx";
+    expect(reviewRoundLabel(base, false, stored)).toBe("## Round 1 (re-review 2)");
+    expect(reviewRoundLabel(base, false, `${stored}\n\n## Round 1 (re-review 2)\n\ny`)).toBe(
+      "## Round 1 (re-review 3)",
+    );
+    expect(reviewRoundLabel({ ...base, inconclusiveReviewRearmCount: 1 }, false, stored)).toBe(
+      "## Round 1 (retry 2)",
+    );
+  });
 });

@@ -174,4 +174,47 @@ describe("re-armed review round heading (#2752)", () => {
     );
     await app.close();
   });
+
+  it("gives a human re-review of an approved round a distinct heading (#2776)", async () => {
+    const app = await buildApp();
+    mockPollTaskReview.mockResolvedValue({ status: "error", terminal: true, gone: false });
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { allowDuplicate: true, createDir: true, name: "p-rereview", cwd: "/tmp" },
+    });
+    const projectId = project.json().id as number;
+    app.db
+      .update(projects)
+      .set({ defaultReviewAgent: "hermes" })
+      .where(eq(projects.id, projectId))
+      .run();
+    const id = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "hermes re-reviewed",
+        body: "some spec",
+        status: "reviewing",
+        reviewingAt: new Date(),
+        prNumber: 9,
+        worktreePath: "/tmp",
+        agentCommand: "codex",
+        reviewRunId: "run_3",
+        reviewRunDispatchedAt: new Date(),
+        reviewRunHeadSha: "sha1",
+        lastReviewVerdict: "approved",
+        inconclusiveReviewRearmCount: 0,
+        reviewFindings: "## Round 1\n\nfirst verdict",
+      })
+      .returning()
+      .get().id;
+
+    await reconcileTasks(app);
+
+    const stored = app.db.select().from(tasks).where(eq(tasks.id, id)).get()?.reviewFindings ?? "";
+    const headings = stored.split("\n").filter((l) => l.startsWith("## Round "));
+    expect(headings).toEqual(["## Round 1", "## Round 1 (re-review 2)"]);
+    await app.close();
+  });
 });
