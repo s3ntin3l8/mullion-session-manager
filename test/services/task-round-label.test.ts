@@ -34,4 +34,19 @@ describe("reviewRoundLabel", () => {
       }),
     ).toBe("## Round 1 (retry 2, re-review after suggestions)");
   });
+
+  it("notes a late verdict that supersedes the inconclusive ingest", () => {
+    expect(reviewRoundLabel(base, true)).toBe(
+      "## Round 1 (late verdict — supersedes the inconclusive ingest)",
+    );
+  });
+
+  it("lets a late verdict win over the suggestions note and stacks the retry note", () => {
+    expect(
+      reviewRoundLabel(
+        { ...base, lastAutoReturnReason: "suggestions", inconclusiveReviewRearmCount: 1 },
+        true,
+      ),
+    ).toBe("## Round 1 (retry 2, late verdict — supersedes the inconclusive ingest)");
+  });
 });

@@ -4,6 +4,11 @@
  *
  * A suggestions round and a re-armed inconclusive review both spend no round,
  * so they would otherwise repeat the previous heading; each gets a suffix.
+ * Three notes exist: `retry N` (re-armed inconclusive review), `re-review after
+ * suggestions`, and `late verdict — supersedes the inconclusive ingest` (the
+ * `supersedeInconclusive` flag). The last two are mutually exclusive — a late
+ * verdict wins over the suggestions note — while the retry note stacks with
+ * either, in one parenthetical.
  * A never-re-armed round keeps the plain heading, and every heading must stay
  * prefix-compatible with `^## Round (\d+)` and the `\n\n(?=## Round )` split:
  * `parseReviewRounds` (frontend/src/lib/reviewRounds.ts) and
