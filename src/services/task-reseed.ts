@@ -272,6 +272,10 @@ export async function reseedTaskIfSessionExited(
   // unattended as an autonomous claim.
   const seedCapable = commandSupportsSeed(task.agentCommand);
   const taskMasterConfig = resolveTaskMasterConfig(app);
+  // Issue #1724 — the re-seed runs on the host that holds the task's worktree, so
+  // that is the host the spawn joins AND the host whose version skew decides
+  // whether the seed's delivery can be trusted. One value for all three uses.
+  const workerHostId = resolveTaskWorkerHost(app, task);
   const result = await createSessionRecord(app, {
     projectId: project.id,
     command: task.agentCommand,
@@ -291,7 +295,7 @@ export async function reseedTaskIfSessionExited(
     // (`cwd: task.worktreePath`), which lives on the host the worker was
     // placed on, so the re-seed joins that host.
     unattended: true,
-    hostId: resolveTaskWorkerHost(app, task),
+    hostId: workerHostId,
   });
   if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
     // #2637 — the spawn may have landed: createSessionRecord kept the row. Bind
@@ -317,6 +321,9 @@ export async function reseedTaskIfSessionExited(
       prompt,
       adoptedAt: Date.now(),
       logContext,
+      // No applied-echo exists after an unknown outcome, so only the local host
+      // (same build) makes delivery certain.
+      seedCertain: resolveSeedDelivered(seedCapable, workerHostId, undefined),
     });
     app.log.warn(
       { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.sessionId },
@@ -337,9 +344,6 @@ export async function reseedTaskIfSessionExited(
   }
   // Same version-skew guard as task-claim.ts's own — see
   // resolveSeedDelivered's doc comment.
-  // Issue #1724 — the re-seed runs on the host that holds the task's
-  // worktree, so that is the host whose version skew matters here.
-  const workerHostId = resolveTaskWorkerHost(app, task);
   const seedDelivered = resolveSeedDelivered(
     seedCapable,
     workerHostId,
@@ -398,12 +402,30 @@ export async function reseedTaskIfSessionExited(
  * one that was lost), nothing else would ever send it. Remembered here, in
  * memory only: a restart forgets the entry and the task falls back to the
  * ordinary dead/idle-session handling, which is the safe direction.
+ *
+ * Typing the seed again is the dangerous move (the worker does the task twice),
+ * so where delivery was certain (`seedCertain`) it needs positive evidence the
+ * seed is absent: a transcript that answered, about a seed it can measure, and
+ * holds no matching user turn. A screen that does not show it (a collapsed
+ * "pasted text" placeholder, a scrolled-off line), a transcript that cannot
+ * answer, or a seed too terse to look for is not that evidence. Where delivery
+ * was not certain (a remote host, whose old agent build may have dropped the
+ * argv, and whose 404/501 transcript is the same old build) "cannot say" falls
+ * back to the screen's verdict and the seed is typed.
  */
 interface PendingAdoptedSeed {
   sessionId: number;
   prompt: string;
   adoptedAt: number;
   logContext: string;
+  /** Delivery of the seed by the spawn itself was guaranteed: a seed-capable
+   * agent on the LOCAL host, where this build is the one that attached it as
+   * argv. Not merely "capable": a remote agent build too old for `initialPrompt`
+   * strips it silently (#538), and with the outcome unknown there is no
+   * `initialPromptApplied` to tell (`resolveSeedDelivered`). A live, quiet
+   * session started by a request that certainly carried the seed has it,
+   * whatever its screen shows. */
+  seedCertain: boolean;
 }
 const pendingAdoptedSeeds = new Map<number, PendingAdoptedSeed>();
 
@@ -528,18 +550,36 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
     if (state.kind !== "quiet") continue;
 
     let hasSeed: boolean;
+    let absenceShown: boolean;
     try {
       const screen = await resolveBackend(app, state.hostId).getRenderedScrollback(
         String(task.sessionId),
       );
-      hasSeed = screenShowsSeed(screen, pending.prompt);
-      // Not on screen is not "not delivered": ask the transcript before typing
-      // the seed a second time (#2703). It cannot say (null) -> trust the screen.
-      if (!hasSeed) {
-        hasSeed =
-          (await transcriptShowsSeed(app, state.hostId, task.sessionId!, pending.prompt).catch(
-            () => null,
-          )) === true;
+      // true: the seed is there. false: the transcript answered, about a seed it
+      // can measure, and it is not there. null: nothing here can say.
+      let verdict: boolean | null = screenShowsSeed(screen, pending.prompt) ? true : null;
+      if (verdict === null) {
+        const fromTranscript = await transcriptShowsSeed(
+          app,
+          state.hostId,
+          task.sessionId!,
+          pending.prompt,
+        ).catch(() => null);
+        // A prompt too terse to yield a fragment shows up nowhere, so "absent"
+        // would be a guess: it is cannot-say, not false.
+        const measurable = seedFragments(pending.prompt).length > 0;
+        verdict =
+          fromTranscript === true ? true : fromTranscript === false && measurable ? false : null;
+      }
+      hasSeed = verdict ?? pending.seedCertain;
+      // Typed because absence was shown, or only because delivery could not be
+      // confirmed: the log says which.
+      absenceShown = verdict === false;
+      if (verdict === null && pending.seedCertain) {
+        app.log.info(
+          { taskId, sessionId: task.sessionId },
+          `${pending.logContext}: nothing shows the seed on the adopted session and nothing can say it is missing; not typing it again (the spawn certainly carried it)`,
+        );
       }
     } catch (err) {
       app.log.warn(
@@ -559,7 +599,9 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
       if (outcome !== "typed") continue;
       app.log.warn(
         { taskId, sessionId: task.sessionId },
-        `${pending.logContext}: the adopted re-seed session had no seed — typed it`,
+        absenceShown
+          ? `${pending.logContext}: the adopted re-seed session had no seed — typed it`
+          : `${pending.logContext}: could not confirm the seed reached the adopted re-seed session (delivery was not certain) — typed it`,
       );
     }
     app.db

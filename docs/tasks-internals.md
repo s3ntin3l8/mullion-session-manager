@@ -1028,6 +1028,30 @@ handler has no idea the field exists and simply never includes it. A
 local-hosted spawn skips this uncertainty entirely (same process/build as
 the primary, so there's nothing to skew).
 
+**An adopted re-seed session (#2726).** When a re-seed's spawn request is lost
+after it was sent, `createSessionRecord` keeps the row and the task adopts it
+with `seedDelivered: false` (`reseedTaskIfSessionExited`, `task-reseed.ts`),
+remembering the prompt, the session and whether the agent is seed-capable in
+memory (`pendingAdoptedSeeds`; a restart forgets it and the ordinary dead or
+idle-session handling takes over). Every reconcile tick `recheckAdoptedSeeds`
+looks at each such session once its 30 s boot grace has passed and it is quiet:
+it checks the rendered screen for the seed (a majority of up to three short
+fragments, compared as letters and digits only, so wrapping, borders and
+indentation do not matter) and then the session's transcript (user turns only).
+Typing the seed again is the dangerous move (the worker would do the task
+twice), so where the spawn **certainly** carried the seed (a seed-capable agent
+on the local host, where this build attached it as argv; a remote agent build too
+old for `initialPrompt` strips it silently, and after an unknown outcome there is
+no applied-echo to tell) it needs positive evidence of absence: a transcript that
+answered, about a seed it can measure, and holds no matching user turn. A screen
+that does not show the seed (a collapsed "pasted text" placeholder, a line that
+scrolled off), a transcript that cannot answer, or a seed too terse to yield a
+fragment to look for is "cannot say": the seed is marked `seedDelivered: true`
+without typing. Where delivery was not certain (a remote host, an agent whose
+spawn carried no seed), "cannot say" falls back to the screen's verdict, so the
+seed is typed; a 404/501 transcript on a remote host is the same old build that
+may have dropped the argv. The check gives up after 30 minutes.
+
 ## GitHub sync
 
 **Issue import is per repo, not per project (#2233).** `pollOnce` resolves
