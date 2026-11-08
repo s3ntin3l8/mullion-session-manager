@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks, type sessions } from "../db/schema.js";
@@ -25,13 +26,18 @@ import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js
  * was present but unstructured is not ingested here. So any structured file
  * now present was written after that ingest. The backend exposes no mtime;
  * the same `readTaskReviewFindings` is used, so a remote host works too.
- * Freeform text is ingested too, as the normal path does (the parser maps it
- * to `changes-requested`), but never as `finished`, so a possibly torn file
- * cannot spend an auto-return round; the readiness gate below (a finished
- * turn or an exit) is what keeps a half-written file out. A re-arm clears
+ * An unstructured (freeform) late file is NOT ingested: a chatty re-prompt
+ * reply would otherwise replace `inconclusive` with `changes-requested`, which
+ * blocks auto-approve with nothing to auto-return it. The verdict stays
+ * `inconclusive`, nothing is posted, and the file's content hash is remembered
+ * per task (in memory) so later ticks skip parsing it again; a changed file is
+ * looked at afresh. The readiness gate below (a finished turn or an exit) is
+ * what keeps a half-written file out. A re-arm clears
  * the review handle so this stops matching, and `ingest` is a CAS on the
  * verdict still being `inconclusive` for that session.
  */
+const ignoredUnstructured = new Map<(typeof tasks.$inferSelect)["id"], string>();
+
 export async function ingestLateFindings(
   app: FastifyInstance,
   input: {
@@ -79,8 +85,15 @@ export async function ingestLateFindings(
     return;
   }
   if (findings === null) return;
+  const key = `${session.id}:${createHash("sha256").update(findings).digest("hex")}`;
+  if (ignoredUnstructured.get(task.id) === key) return;
   const parsed = parseReviewFindings(findings);
-  await input.ingest(parsed, parsed.structured && derived.status === "finished");
+  if (!parsed.structured) {
+    ignoredUnstructured.set(task.id, key);
+    return;
+  }
+  ignoredUnstructured.delete(task.id);
+  await input.ingest(parsed, derived.status === "finished");
 }
 
 // Task 409707 — a review agent can stall silently: no reported

@@ -189,7 +189,7 @@ describe("late review findings after an inconclusive ingest", () => {
     await app.close();
   });
 
-  it("ingests a freeform late file once, without spending an auto-return round", async () => {
+  it("leaves the verdict inconclusive for an unstructured late file and posts nothing", async () => {
     const { app, task } = await setup();
     writeFindings(app, task.id, "Looks fine to me, no blocking issues.");
 
@@ -197,10 +197,9 @@ describe("late review findings after an inconclusive ingest", () => {
     await reconcileTasks(app);
 
     const row = getTask(app, task.id);
-    expect(row.lastReviewVerdict).toBe("changes-requested");
+    expect(row.lastReviewVerdict).toBe("inconclusive");
     expect(row.autoReturnRounds).toBe(task.autoReturnRounds);
-    expect(row.reviewFindings).toContain("late verdict");
-    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     await app.close();
   });
 
