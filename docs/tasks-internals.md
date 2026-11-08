@@ -1674,7 +1674,10 @@ the task's branch to fix the conflict instead of just backing off:
   the normal give-up applies. A head that is still `dirty` leaves the attempt
   counted. An unreadable or still-computing (`mergeable === null`) read is
   undetermined: the attempt marker is kept and a later tick reads again, so a
-  flaky GET never costs the refund. It is judged best effort, on the first tick
+  flaky GET never costs the refund. On a `reviewing` task the auto-rebase
+  hold-back (`rebaseStartedAt`) is kept too, since every later judge is gated on
+  it (`settleRapidRebaseExit` returns `"undetermined"` and the caller skips
+  `clearRebaseHoldIfWorkerFinished`). It is judged best effort, on the first tick
   that reads a settled PR after the worker finishes: the merge sweep (a `done`
   task, on its retry backoff) and the auto-approve tick (a `reviewing` task, when
   the PR reads mergeable) both run it before main can re-conflict the PR.

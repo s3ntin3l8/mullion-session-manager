@@ -385,6 +385,40 @@ describe("a worker that exits within seconds", () => {
       expect(row.rebaseSpawnHeadSha).toBeNull();
     });
 
+    it("keeps the hold-back and marker on a reviewing task when the settle read is still computing", async () => {
+      const { app, task } = await rebaseTask("p-outrun-reviewing-null", pushed);
+      app.db
+        .update(tasks)
+        .set({
+          status: "reviewing",
+          reviewingAt: new Date(),
+          lastReviewVerdict: "clean",
+          mergeRequestedAt: null,
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      // First read (the tick's) is clean; the settle re-read is still computing.
+      mockPr("sha-after", { mergeable: null, mergeableState: "unknown" });
+      const computing = await mockGetPullRequestByNumber();
+      mockPr("sha-after", { mergeable: true, mergeableState: "clean" });
+      const clean = await mockGetPullRequestByNumber();
+      mockGetPullRequestByNumber.mockReset();
+      mockGetPullRequestByNumber.mockResolvedValueOnce(clean).mockResolvedValue(computing);
+      await reconcileTasks(app);
+      let row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBe("sha-before");
+      expect(row.rebaseStartedAt).not.toBeNull();
+
+      mockGetPullRequestByNumber.mockReset();
+      mockGetPullRequestByNumber.mockResolvedValue(clean);
+      await reconcileTasks(app);
+      row = getTask(app, task.id);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseOutrunCount).toBe(1);
+      expect(row.rebaseSpawnHeadSha).toBeNull();
+    });
+
     it("keeps the attempt marker when the PR cannot be read", async () => {
       const { app, task } = await rebaseTask("p-outrun-unreadable", pushed);
       mockGetPullRequestByNumber.mockRejectedValue(new Error("github down"));

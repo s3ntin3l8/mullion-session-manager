@@ -3159,10 +3159,12 @@ async function attemptAutoApprove(
     resetAutoApproveBackoff(task.id);
     // Judge the finished attempt while this post-push read is clean: main may
     // outrun the head before a later (dirty) tick could see it.
-    if (project.autoApprove) {
-      await settleRapidRebaseExit(app, task, project, { outrunOnly: true });
-    }
-    await clearRebaseHoldIfWorkerFinished(app, task);
+    const verdict = project.autoApprove
+      ? await settleRapidRebaseExit(app, task, project, { outrunOnly: true })
+      : "settled";
+    // An undetermined read keeps the hold-back (rebaseStartedAt) too: every
+    // later judge is gated on it, so ending it now would lose the refund.
+    if (verdict !== "undetermined") await clearRebaseHoldIfWorkerFinished(app, task);
   }
 
   if (!hasIngestedCurrentReview(task)) return;

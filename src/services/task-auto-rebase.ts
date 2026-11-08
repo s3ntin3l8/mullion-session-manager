@@ -73,7 +73,9 @@ export const REBASE_ATTEMPT_STALE_MS = 30 * 60_000;
  * attempt is refunded and the next one waits RAPID_EXIT_BACKOFF_MS. After
  * MAX_RAPID_REBASE_ABORTS such aborts the refund stops and the normal give-up
  * applies. Fails open: an unreadable session or PR head leaves the attempt
- * counted. Also refunds a finished attempt that landed a mergeable head
+ * counted. Returns "undetermined" when it could not reach a verdict (flaky or
+ * still-computing read): the caller must then keep the in-flight marker so a
+ * later tick judges again. Also refunds a finished attempt that landed a mergeable head
  * (main outran it), see MAX_REBASE_OUTRUNS. Mutates `task` in memory like clearRebaseHoldIfWorkerFinished.
  */
 export async function settleRapidRebaseExit(
@@ -81,16 +83,16 @@ export async function settleRapidRebaseExit(
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   opts: { outrunOnly?: boolean } = {},
-): Promise<void> {
+): Promise<"undetermined" | "settled"> {
   if (
     task.rebaseSpawnHeadSha === null ||
     task.rebaseStartedAt === null ||
     task.sessionId === null
   ) {
-    return;
+    return "settled";
   }
   const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
-  if (session === undefined) return;
+  if (session === undefined) return "settled";
   const hostId = resolveSessionHostId(app, session);
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
   let info: SessionInfo | null | undefined;
@@ -101,10 +103,10 @@ export async function settleRapidRebaseExit(
     );
     info = liveMap[String(session.id)];
   } catch {
-    return;
+    return "settled";
   }
   // Still running (or no signal yet): judge it on a later tick.
-  if (!info || !rebaseWorkerFinished(info, task)) return;
+  if (!info || !rebaseWorkerFinished(info, task)) return "settled";
   const rapid = await workerExitedRapidly(app, task, project, {
     sessionId: session.id,
     spawnedAt: task.rebaseStartedAt,
@@ -114,7 +116,7 @@ export async function settleRapidRebaseExit(
   // `outrunOnly` (the auto-approve tick's post-push read): judge only a
   // pushed, mergeable head. A rapid exit or an unmoved head is left for the
   // dirty tick, so this never clears a marker the hold-back still depends on.
-  if (rapid && opts.outrunOnly) return;
+  if (rapid && opts.outrunOnly) return "settled";
   if (!rapid) {
     // An attempt that landed a mergeable head, which main then outran, did its
     // job: refund it (bounded by MAX_REBASE_OUTRUNS). The head must have moved
@@ -127,8 +129,10 @@ export async function settleRapidRebaseExit(
       const pr = await readPrHeadAndMergeability(app, task, project);
       // Undetermined (unreadable, or GitHub still computing): keep the marker
       // so a later tick judges the attempt again instead of counting it for good.
-      if (pr === null || (pr.headSha !== headAtSpawn && pr.mergeable === null)) return;
-      if (opts.outrunOnly && pr.headSha === headAtSpawn) return;
+      if (pr === null || (pr.headSha !== headAtSpawn && pr.mergeable === null)) {
+        return "undetermined";
+      }
+      if (opts.outrunOnly && pr.headSha === headAtSpawn) return "undetermined";
       if (pr.headSha !== headAtSpawn && pr.mergeable) {
         patch.rebaseAttempts = task.rebaseAttempts - 1;
         patch.rebaseOutrunCount = task.rebaseOutrunCount + 1;
@@ -140,7 +144,7 @@ export async function settleRapidRebaseExit(
     }
     app.db.update(tasks).set(patch).where(eq(tasks.id, task.id)).run();
     Object.assign(task, patch);
-    return;
+    return "settled";
   }
   const aborted = task.rebaseAbortedAttempts + 1;
   const patch = {
@@ -169,6 +173,7 @@ export async function settleRapidRebaseExit(
       );
     }
   }
+  return "settled";
 }
 
 /**
