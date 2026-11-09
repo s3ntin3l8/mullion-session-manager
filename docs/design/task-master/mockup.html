@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Mullion — Task Master tab redesign: mockup · rev 1</title>
+    <title>Mullion — Task Master tab redesign: mockup · rev 2</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* ───────── Tokens ─────────
@@ -906,11 +906,181 @@
         background: var(--status-success-bg);
         border-color: var(--status-success-border);
       }
+
+      .btn.on {
+        border-color: var(--ring);
+        color: var(--fg);
+      }
+      .lnk {
+        color: var(--accent);
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+        font-size: 11px;
+      }
+      .ept {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 10.5px;
+        color: var(--dim);
+        border: 1px solid var(--border-soft);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+      .sessrow {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+      }
+      .sess {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1px 6px;
+        background: var(--sidebar-2);
+        color: var(--muted);
+      }
+      .sess.run {
+        color: var(--status-success-fg);
+        border-color: var(--status-success-border);
+        background: var(--status-success-bg);
+      }
+      .sess.fin {
+        color: var(--status-info-fg);
+        border-color: var(--status-info-border);
+        background: var(--status-info-bg);
+      }
+      .sess.wait {
+        color: var(--status-warn-fg);
+        border-color: var(--status-warn-border);
+        background: var(--status-warn-bg);
+      }
+      .lanes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        padding: 0 12px 12px;
+      }
+      .lc {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        background: var(--surface);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 6px 9px;
+        font-size: 12px;
+      }
+      .lc .lt {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .stat {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .stat .r1 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .stat .big {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        border-radius: 6px;
+        padding: 2px 8px;
+      }
+      .stat .big.info {
+        color: var(--status-info-fg);
+        background: var(--status-info-bg);
+        border: 1px solid var(--status-info-border);
+      }
+      .stat .big.warn {
+        color: var(--status-warn-fg);
+        background: var(--status-warn-bg);
+        border: 1px solid var(--status-warn-border);
+      }
+      .stat .next {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .steps {
+        display: flex;
+        gap: 2px;
+        font-size: 10px;
+        color: var(--dim);
+      }
+      .step {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        border-top: 2px solid var(--border);
+        padding-top: 3px;
+        min-width: 0;
+      }
+      .step em {
+        font-style: normal;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .step.d {
+        border-color: var(--g);
+        color: var(--status-success-fg);
+      }
+      .step.c {
+        border-color: var(--b);
+        color: var(--status-info-fg);
+        font-weight: 700;
+      }
+      .kv0 {
+        display: grid;
+        grid-template-columns: 70px 1fr;
+        gap: 4px 8px;
+        font-size: 12px;
+        margin: 0;
+      }
+      .kv0 dt {
+        color: var(--dim);
+      }
+      .kv0 dd {
+        margin: 0;
+        min-width: 0;
+      }
+      @container (max-width: 300px) {
+        .kv0 {
+          grid-template-columns: 1fr;
+        }
+        .kv0 dt {
+          display: none;
+        }
+        .steps .step em {
+          display: none;
+        }
+      }
+      .card .cm > * {
+        white-space: nowrap;
+      }
+      .card .cm .proj {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+        flex: 0 1 auto;
+      }
+      .card .cm .lnk {
+        flex: none;
+      }
     </style>
   </head>
   <body>
     <div class="page">
-      <h1>Task Master tab redesign — design mockup <span class="new">REV 1</span></h1>
+      <h1>Task Master tab redesign — design mockup <span class="new">REV 2</span></h1>
       <p class="lede">
         Approval gate before any implementation. Static HTML; tokens are the real
         <code>tokens.css</code> values. Every view renders in dark + light. The data mirrors the
@@ -946,7 +1116,8 @@
       const chip = (tone, t) => `<span class="chip ${tone}">${t}</span>`;
       const btn = (t, c = "") => `<span class="btn ${c}">${t}</span>`;
 
-      /* ───────── data (mirrors the real board) ───────── */
+      /* ───────── data (mirrors the real board; several projects, linked PRs, sessions) ───────── */
+      const DEF = "mullion-session-manager";
       const PROJECTS = [
         ".github",
         "aerie-media-dashboard",
@@ -961,7 +1132,7 @@
         "investment-ideas",
         "macbook-work",
         "mullion-helper",
-        "mullion-session-manager",
+        DEF,
         "personal-landing",
         "pocket-portfolio-tracker",
         "runway-ai-usage-tracker",
@@ -972,20 +1143,34 @@
       ];
       const EPICS = {
         proj: {
+          num: 2400,
           n: "feat(projects): projects, worktrees & storage",
           c: "var(--lane-1)",
           done: 3,
           total: 9,
         },
-        sess: { n: "feat(sessions): agent control surface", c: "var(--lane-2)", done: 5, total: 8 },
+        sess: {
+          num: 2300,
+          n: "feat(sessions): agent control surface",
+          c: "var(--lane-2)",
+          done: 5,
+          total: 8,
+        },
         dock: {
+          num: 2200,
           n: "feat(dock): dock, previews & dev servers",
           c: "var(--lane-3)",
           done: 2,
           total: 6,
         },
-        tasks: { n: "feat(tasks): Task Master", c: "var(--lane-5)", done: 11, total: 18 },
-        ui: { n: "feat(uiux): UI/UX & sidebar", c: "var(--lane-6)", done: 4, total: 7 },
+        tasks: {
+          num: 2600,
+          n: "feat(tasks): Task Master",
+          c: "var(--lane-5)",
+          done: 11,
+          total: 18,
+        },
+        ui: { num: 2100, n: "feat(uiux): UI/UX & sidebar", c: "var(--lane-6)", done: 4, total: 7 },
       };
       const T = (id, st, title, ep, age, o = {}) => ({
         id,
@@ -994,6 +1179,7 @@
         ep,
         age,
         agent: "claude",
+        p: DEF,
         ...o,
       });
       const TASKS = [
@@ -1026,7 +1212,6 @@
         ),
         T(2178, "backlog", "feat: decide whether devices can be set up on first run", "ui", "13d", {
           agent: "auto",
-          proj: 1,
         }),
         T(
           2819,
@@ -1083,8 +1268,9 @@
           "2h",
         ),
         T(2825, "ready", "test(tasks): the reviewer-then-terminal ordering", "tasks", "2h"),
-        T(2824, "ready", "ci: the Windows MSYS socket test is flaky", "tasks", "3h"),
-        T(2823, "ready", "docs(tasks): document the Hermes review relay", "tasks", "3h"),
+        T(310, "ready", "feat(helper): sync the per-host config on connect", null, "1h", {
+          p: "mullion-helper",
+        }),
         T(
           2402,
           "claimed",
@@ -1107,7 +1293,7 @@
           "refactor(sessions): split the internal agent API into per-domain modules",
           "sess",
           "5m",
-          { w: "Working" },
+          { ws: "Working" },
         ),
         T(
           2822,
@@ -1115,7 +1301,7 @@
           "fix(tasks): an approving review that never posted keeps holding auto-approve",
           "tasks",
           "7m",
-          { w: "Working" },
+          { ws: "Working", pr: 2834 },
         ),
         T(
           2820,
@@ -1123,7 +1309,7 @@
           "fix(tasks): a mid-loop turn end or a recovered API error is not a rebase",
           "tasks",
           "2m",
-          { w: "Working" },
+          { ws: "Working", pr: 2835 },
         ),
         T(
           2418,
@@ -1131,8 +1317,14 @@
           "refactor(projects): forbid new route → db imports with a ratcheted baseline",
           "proj",
           "2m",
-          { w: "Finished", rv: "Waiting for the review to start" },
+          { ws: "Finished", rs: "Waiting to start", pr: 2833, needs: "Awaiting approval" },
         ),
+        T(88, "review", "fix(skills): version-keyed updates for mcode copy-not-link", null, "9m", {
+          p: "ai-agent-skills",
+          ws: "Finished",
+          rs: "Reviewing",
+          pr: 61,
+        }),
       ];
       const COLS = [
         ["backlog", "Backlog"],
@@ -1145,47 +1337,56 @@
       ];
 
       /* ───────── board pieces ───────── */
-      const strip = (t) =>
-        (t.by ? "" : "") +
-        (t.q ? chip("warn", "Queued · waiting for a free slot") : "") +
-        (t.w
-          ? chip(t.w === "Finished" ? "info" : "ok", `<span class="dot"></span> worker · ${t.w}`)
-          : "") +
-        (t.rv ? chip("info", t.rv) : "") +
-        (t.by ? chip("warn", `${I("block", 11)} Blocked by #${t.by}`) : "");
+      const lnk = (t) => `<span class="lnk">${t}</span>`;
+      const sess = (kind, state) =>
+        `<span class="sess ${state === "Working" || state === "Reviewing" ? "run" : state === "Finished" ? "fin" : "wait"}"><span class="dot"></span>${kind} · ${state} ${I("popout", 10)}</span>`;
       const card = (t, o = {}) => {
-        const ep = EPICS[t.ep];
-        return `<div class="card${o.sel === t.id ? " sel" : ""}" style="--ep:${ep.c}">
+        const ep = t.ep ? EPICS[t.ep] : null;
+        return `<div class="card${o.sel === t.id ? " sel" : ""}" style="--ep:${ep ? ep.c : "var(--border)"}">
           <div class="ct">${t.title}</div>
-          <div class="cm"><span class="mono">#${t.id}</span><span>${t.agent}</span>${o.multi || t.proj ? `<span class="proj">${t.proj ? "another-project" : "mullion-session-manager"}</span>` : ""}<span class="sp"></span><span>${t.age}</span></div>
-          ${strip(t) ? `<div>${strip(t)}</div>` : ""}</div>`;
+          <div class="cm">${lnk("#" + t.id + " ↗")}${t.pr ? lnk("PR #" + t.pr) : ""}<span class="sp"></span>${t.needs ? chip("warn", t.needs) : ""}<span>${t.age}</span></div>
+          <div class="cm"><span class="proj">${t.p}</span><span>· ${t.agent}</span><span class="sp"></span>${ep ? `<span class="ept" title="${ep.n}">↳ #${ep.num}</span>` : ""}</div>
+          ${t.ws || t.rs ? `<div class="sessrow">${t.ws ? sess("worker", t.ws) : ""}${t.rs ? sess("reviewer", t.rs) : ""}</div>` : ""}
+          ${t.q ? `<div>${chip("warn", "Queued · waiting for a free slot")}</div>` : ""}
+          ${t.by && o.blockedChip !== false ? `<div>${chip("warn", I("block", 11) + " Blocked by #" + t.by)}</div>` : ""}</div>`;
       };
       const col = (key, name, items, o = {}) => {
-        if (!items.length && o.rails !== false) {
-          return `<div class="rail"><span>${name} · 0</span></div>`;
-        }
-        let body = "";
+        if (!items.length) return `<div class="rail"><span>${name} · 0</span></div>`;
         const blocked = items.filter((t) => t.by);
         const rest = items.filter((t) => !t.by);
+        let body = "";
         if (o.stack && blocked.length > 2) {
-          body += `<details class="stack"><summary>${I("block", 13)} <b>${blocked.length} blocked by #${blocked[0].by}</b><span class="sp"></span>${I("chevr", 12)}</summary><div class="inner">${blocked.map((t) => card(t, o)).join("")}</div></details>`;
+          body += `<details class="stack"><summary>${I("block", 13)} <b>${blocked.length} blocked by #${blocked[0].by}</b><span class="sp"></span>${I("chevr", 12)}</summary><div class="inner">${blocked.map((t) => card(t, { ...o, blockedChip: false })).join("")}</div></details>`;
         } else body += blocked.map((t) => card(t, o)).join("");
         body += rest.map((t) => card(t, o)).join("");
-        const label = o.mergeQueued && key === "doing" ? `${name}` : name;
-        return `<div class="col"><div class="col-h">${label}<span class="n">${items.length}</span></div><div class="col-b">${body || '<div class="cap">No tasks</div>'}</div></div>`;
+        return `<div class="col"><div class="col-h">${name}<span class="n">${items.length}</span></div><div class="col-b">${body}</div></div>`;
       };
       const boardCols = (tasks, o = {}) =>
         COLS.filter(([k]) => !(o.mergeQueued && k === "claimed"))
-          .map(([k, n]) => {
-            let items = tasks.filter(
-              (t) => t.st === k || (o.mergeQueued && k === "doing" && t.st === "claimed"),
-            );
-            return col(k, n, items, o);
-          })
+          .map(([k, n]) =>
+            col(
+              k,
+              n,
+              tasks.filter(
+                (t) => t.st === k || (o.mergeQueued && k === "doing" && t.st === "claimed"),
+              ),
+              o,
+            ),
+          )
           .join("");
       const board = (tasks, o = {}) => `<div class="board">${boardCols(tasks, o)}</div>`;
-      const adhoc = (open) =>
-        `<div class="adhoc">${I(open ? "chevd" : "chevr", 12)} <b style="color:var(--fg);letter-spacing:.06em;font-size:11px">AD-HOC SESSIONS</b><span class="chip">20</span><span class="dots">${'<i style="background:var(--g)"></i>'.repeat(9)}${'<i style="background:var(--y)"></i>'.repeat(3)}${'<i style="background:var(--dim)"></i>'.repeat(8)}</span><span>9 running · 3 need you · 8 idle</span></div>`;
+      const ADHOC = [
+        ["fix flaky windows socket test", "run", "claude", "3m"],
+        ["investigate theme bug", "need", "codex", "12m"],
+        ["review #2833 locally", "run", "claude", "20m"],
+        ["spike: mcode runtime", "idle", "opencode", "2h"],
+        ["docs pass", "idle", "claude", "1d"],
+        ["dock preview poke", "need", "claude", "5h"],
+      ];
+      const adhoc = (
+        open,
+      ) => `<div style="border-top:1px solid var(--border-soft)"><div class="adhoc" style="border-top:0">${I(open ? "chevd" : "chevr", 12)} <b style="color:var(--fg);letter-spacing:.06em;font-size:11px">AD-HOC SESSIONS (NO TASK)</b><span class="chip">20</span><span class="dots">${'<i style="background:var(--g)"></i>'.repeat(9)}${'<i style="background:var(--y)"></i>'.repeat(3)}${'<i style="background:var(--dim)"></i>'.repeat(8)}</span><span>9 running · 3 need you · 8 idle</span></div>
+        ${open ? `<div class="lanes">${ADHOC.map(([n, s, a, age]) => `<div class="lc"><span class="dot" style="color:${s === "run" ? "var(--g)" : s === "need" ? "var(--y)" : "var(--dim)"}"></span><div style="min-width:0"><div class="lt">${n}</div><div class="cm"><span>${a}</span><span class="sp"></span><span>${age}</span></div></div></div>`).join("")}</div>` : ""}</div>`;
       const dockbar = `<div class="adhoc" style="color:var(--dim)">${I("chevr", 12)} <b style="letter-spacing:.06em;font-size:11px">DOCK</b> collapsed</div>`;
       const checkRow = (label, on, extra = "") =>
         `<div class="it"><span class="cb${on ? " on" : ""}"></span>${label}${extra}</div>`;
@@ -1204,106 +1405,121 @@
           {},
         )}${adhoc(false)}${dockbar}</div>`;
 
-      /* ───────── 1a · Scope + views + display ───────── */
+      ic.panel = '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>';
+      ic.check = '<path d="M5 12.5l4.5 4.5L19 7"/>';
+
+      /* ───────── 1 · Filter bar (1a) + optional facet rail (from 1c) ───────── */
       const barA = (o = {}) => `<div class="bar" style="position:relative">
-          ${btn(`mullion-session-manager <span class="n">+2</span> ${I("chevd", 12)}`)}
+          ${btn(I("panel", 13) + (o.rail ? ' <span class="n">on</span>' : ""), o.rail ? "on" : "")}
+          ${btn(`${DEF} <span class="n">+2</span> ${I("chevd", 12)}`)}
           <div class="tabs"><span class="tab on">All <span class="n">24</span></span><span class="tab warn">Needs me <span class="n">3</span></span><span class="tab">Running <span class="n">3</span></span><span class="tab">Blocked <span class="n">7</span></span><span class="tab">Awaiting merge <span class="n">1</span></span></div>
           ${btn(I("filter", 12) + " Filter " + I("chevd", 11))}${btn(I("sliders", 12) + " Display " + I("chevd", 11))}
           <span class="sp"></span>${btn(I("plus") + " New task", "primary")}</div>
-          <div class="bar" style="border-bottom:0;padding-top:6px"><span class="cap" style="margin:0">Filters</span><span class="tok">Epic: feat(projects) <span class="x">×</span></span><span class="tok">Agent: claude <span class="x">×</span></span><span class="btn ghost">Clear all</span><span class="sp"></span><span class="cap" style="margin:0">22 of 24 tasks · board rows: 1 instead of 4+</span></div>`;
-      const popProject = `<div class="pop" style="left:12px;top:44px;width:300px"><input class="s" value="" placeholder="Search 21 projects…" />
-          <div class="h">Recent</div>${checkRow("mullion-session-manager", 1, '<span class="n">24</span>')}${checkRow("mullion-helper", 1, '<span class="n">3</span>')}${checkRow("visual-kit", 1, '<span class="n">1</span>')}
-          <div class="h">All projects</div>${checkRow(".github", 0, '<span class="n">0</span>')}${checkRow("aerie-media-dashboard", 0, '<span class="n">2</span>')}${checkRow("ai-agent-skills", 0, '<span class="n">5</span>')}${checkRow("ansible-playbooks", 0, '<span class="n">1</span>')}
-          <div class="it" style="color:var(--dim)">… 14 more · type to search</div>
-          <div class="it" style="border-top:1px solid var(--border-soft);margin-top:4px"><span class="chip">Default</span> follow the sidebar's project</div></div>`;
-      const popDisplay = `<div class="pop" style="left:470px;top:44px;width:280px"><div class="h">Columns</div>${switchRow("Hide Done &amp; Failed", 0)}${switchRow("Show archived", 0)}${switchRow("Claimed as its own column", 0)}
-          <div class="h">Layout</div><div class="it">Group by <span class="n">None · <b style="color:var(--fg)">Epic</b> · Project</span></div><div class="it">Card density <span class="n"><b style="color:var(--fg)">Compact</b> · Comfortable</span></div>
-          <div class="h">Maintenance</div><div class="it">Clear done tasks <span class="n">12</span></div></div>`;
-      const vA =
-        () => `<p class="cap">1a · closed, with two filters active</p><div class="app">${barA()}${board(
-          TASKS.filter((t) => t.ep === "proj" || t.ep === "tasks"),
-          { stack: true, mergeQueued: false },
-        )}${adhoc(false)}</div>
-        <div class="row" style="margin-top:12px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden">${barA()}${popProject}</div></div></div>
-        <div class="row" style="margin-top:12px"><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden">${barA()}${popDisplay}</div></div></div>`;
-
-      /* ───────── 1b · Query bar ───────── */
-      const vB =
-        () => `<div class="app"><div class="bar"><div class="qbar">${I("search", 13)}<span class="tok">project:mullion-session-manager <span class="x">×</span></span><span class="tok">epic:#2418 <span class="x">×</span></span><span class="tok">is:blocked <span class="x">×</span></span><span class="q">is:awaiting-merge …</span></div>${btn(I("sliders", 12) + " Display " + I("chevd", 11))}${btn(I("plus") + " New task", "primary")}</div>
-        <div class="bar" style="border-bottom:0"><div class="tabs"><span class="tab on">All</span><span class="tab">Needs me <span class="n">3</span></span><span class="tab">Blocked <span class="n">7</span></span><span class="tab">My epics</span><span class="tab">+ save view</span></div></div>
-        <div class="pop" style="left:34px;top:46px;min-width:300px"><div class="h">is:</div><div class="it hi">blocked<span class="n">7</span></div><div class="it">awaiting-merge<span class="n">1</span></div><div class="it">running<span class="n">3</span></div><div class="it">needs-me<span class="n">3</span></div><div class="h">Also</div><div class="it">project: · epic: · agent: · text</div></div>
-        <div style="height:150px"></div>${board(
-          TASKS.filter((t) => t.by),
-          { stack: false },
-        )}</div>
-        <p class="cap" style="margin-top:8px">Most powerful and densest (one 40px row). Costs discoverability: users must learn the syntax; the autocomplete menu teaches it. Saved views replace the quick tabs.</p>`;
-
-      /* ───────── 1c · Facet rail ───────── */
-      const vC =
-        () => `<div class="app"><div class="bar">${btn(I("plus") + " New task", "primary")}<div class="tabs"><span class="tab on">Board</span><span class="tab">List</span></div><span class="sp"></span>${btn(I("sliders", 12) + " Display " + I("chevd", 11))}</div>
-        <div style="display:flex"><div class="facets">
+          <div class="bar" style="border-bottom:0;padding-top:6px"><span class="cap" style="margin:0">Filters</span><span class="tok">Agent: claude <span class="x">×</span></span><span class="btn ghost">Clear all</span><span class="sp"></span><span class="cap" style="margin:0">23 of 24 tasks</span></div>`;
+      const facets = () => `<div class="facets">
           <div class="h">State</div><div class="it on"><span class="cb on"></span>All<span class="n">24</span></div><div class="it"><span class="cb"></span>Needs me<span class="n">3</span></div><div class="it"><span class="cb"></span>Blocked<span class="n">7</span></div><div class="it"><span class="cb"></span>Awaiting merge<span class="n">1</span></div>
-          <div class="h">Projects · 21</div><div class="it"><input class="s" placeholder="Filter projects…" style="width:100%;background:var(--sidebar-2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--fg);font:inherit"></div><div class="it on"><span class="cb on"></span>mullion-session-manager<span class="n">24</span></div><div class="it"><span class="cb"></span>mullion-helper<span class="n">3</span></div><div class="it"><span class="cb"></span>ai-agent-skills<span class="n">5</span></div><div class="it" style="color:var(--dim)">+ 18 more</div>
-          <div class="h">Epics</div>${Object.values(EPICS)
+          <div class="h">Projects · 21</div><div class="it"><input placeholder="Filter projects…" style="width:100%;background:var(--sidebar-2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--fg);font:inherit"></div><div class="it on"><span class="cb on"></span>${DEF}<span class="n">22</span></div><div class="it on"><span class="cb on"></span>mullion-helper<span class="n">1</span></div><div class="it on"><span class="cb on"></span>ai-agent-skills<span class="n">1</span></div><div class="it" style="color:var(--dim)">+ 18 more</div>
+          <div class="h">Epics · by number</div>${Object.values(EPICS)
             .map(
               (e) =>
-                `<div class="it" title="${e.n}"><span class="dot" style="color:${e.c}"></span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:104px">${e.n.replace(/^[a-z]+\(([a-z]+)\): /, "$1 · ")}</span><span class="mini"><i style="width:${(e.done / e.total) * 100}%;background:${e.c}"></i></span></div>`,
+                `<div class="it" title="${e.n}"><span class="dot" style="color:${e.c}"></span><span class="mono" style="color:var(--dim)">#${e.num}</span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70px">${e.n.replace(/^[a-z]+\(([a-z]+)\): /, "")}</span><span class="mini"><i style="width:${(e.done / e.total) * 100}%;background:${e.c}"></i></span></div>`,
             )
-            .join("")}
-        </div><div style="flex:1;min-width:0"><div class="app narrow" style="width:auto;border:0">${board(TASKS, { stack: true, mergeQueued: true })}</div></div></div></div>
-        <p class="cap" style="margin-top:8px">Best for many projects and epics: every scope is visible with counts and progress. Costs 214px of board width, so Claimed is merged into In progress here. Collapses to an icon rail below 1280px.</p>`;
+            .join(
+              "",
+            )}<div class="it" style="color:var(--dim)">No epic<span class="n">2</span></div></div>`;
+      const popProject = `<div class="pop" style="left:100px;top:44px;width:300px"><input class="s" placeholder="Search 21 projects…" />
+          <div class="h">Recent</div>${checkRow(DEF, 1, '<span class="n">22</span>')}${checkRow("mullion-helper", 1, '<span class="n">1</span>')}${checkRow("ai-agent-skills", 1, '<span class="n">1</span>')}
+          <div class="h">All projects</div>${checkRow(".github", 0, '<span class="n">0</span>')}${checkRow("aerie-media-dashboard", 0, '<span class="n">2</span>')}${checkRow("ansible-playbooks", 0, '<span class="n">1</span>')}
+          <div class="it" style="color:var(--dim)">… 15 more · type to search</div>
+          <div class="it" style="border-top:1px solid var(--border-soft);margin-top:4px"><span class="chip">Default</span> follow the sidebar's project</div></div>`;
+      const popDisplay = `<div class="pop" style="left:560px;top:44px;width:290px"><div class="h">Columns</div>${switchRow("Hide Done &amp; Failed", 0)}${switchRow("Show archived", 0)}${switchRow("Claimed as its own column", 1)}
+          <div class="h">Layout</div><div class="it">Group by <span class="n">None · <b style="color:var(--fg)">Epic</b> · Project</span></div><div class="it">Card density <span class="n"><b style="color:var(--fg)">Compact</b> · Comfortable</span></div><div class="it">Facets panel <span class="n">Off · <b style="color:var(--fg)">On</b> · Auto</span></div>
+          <div class="h">Maintenance</div><div class="it">Clear done tasks <span class="n">12</span></div></div>`;
+      const vA =
+        () => `<p class="cap">Facets off (default): one filter row, full board width</p><div class="app">${barA()}${board(TASKS, { stack: true })}${adhoc(false)}</div>
+        <p class="cap" style="margin-top:14px">Facets on (the 1c rail, one click on the bar; remembered; “Auto” opens it above ~1440px or &gt;8 projects). Claimed is merged into In progress here to buy back width.</p><div class="app" style="width:1280px">${barA({ rail: 1 })}<div style="display:flex">${facets()}<div style="flex:1;min-width:0">${board(TASKS, { stack: true, mergeQueued: true })}</div></div>${adhoc(false)}</div>
+        <div class="row" style="margin-top:14px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden;width:900px">${barA()}${popProject}</div></div><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden;width:900px">${barA()}${popDisplay}</div></div></div>`;
 
-      /* ───────── 2 · Columns & cards ───────── */
+      /* ───────── 2 · Cards & columns ───────── */
       const vBoard = (
         merged,
-      ) => `<p class="cap">${merged ? "Claimed merged into In progress as a “Queued” badge (4 columns of work instead of 5)" : "Claimed kept as its own column (today)"} — one project in scope, so the project label is dropped from the cards.</p>
+      ) => `<p class="cap">${merged ? "Claimed merged into In progress as a “Queued” badge" : "Claimed kept as its own column (today)"} · three projects in scope · ad-hoc lane expanded</p>
         <div class="app">${barA()}${board(
           TASKS.filter((t) => t.ep !== "ui"),
           { stack: true, mergeQueued: merged, sel: 2822 },
-        )}${adhoc(false)}</div>
-        <div class="note" style="margin-top:12px;border-left-color:var(--y)"><b>Card changes:</b> 2-line title; one meta row (#issue · agent · age); a single state chip; the epic is the coloured left edge (hover = full title) instead of a truncated “↳ feat(projects): projects, worktre…” line; project label only when &gt;1 project is in scope. <b>Blocked stack:</b> the 7 cards blocked by #2418 collapse into one summary; click to expand in place. <b>Empty columns</b> (Done, Failed) become 34px rails. <b>Ad-hoc</b> collapses to a count plus status dots.</div>`;
+        )}${adhoc(true)}</div>
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)"><b>Kept from today:</b> issue and PR numbers on every card, as links (↗ opens GitHub); the project name, always shown (it is the only thing telling a #310 from a #2310 across projects); the worker and reviewer session pills, clickable to open that session; the ad-hoc overview. <b>Changed:</b> the truncated “↳ feat(projects): projects, worktre…” line becomes the epic's colour edge plus a <code>↳ #2400</code> tag (hover = full title); the 7 cards blocked by #2418 collapse into one stack; empty Done/Failed (and any empty column) shrink to a 34px rail; a card that needs you carries one amber chip.</div>`;
       const vEpic = () => {
-        const lanes = ["proj", "sess", "tasks"]
-          .map((k) => {
-            const e = EPICS[k];
-            const ts = TASKS.filter((t) => t.ep === k);
-            return `<div class="lane-h" style="--ep:${e.c}"><span class="dot" style="color:${e.c}"></span><b>${e.n}</b><span class="lane-p bar-p" style="width:90px;height:5px;background:var(--border);border-radius:9px;overflow:hidden;display:inline-block"><i style="display:block;height:100%;width:${(e.done / e.total) * 100}%;background:${e.c}"></i></span><span class="cap" style="margin:0">${e.done}/${e.total} closed</span></div>${board(ts, { stack: true, mergeQueued: true })}`;
-          })
-          .join("");
-        return `<p class="cap">Group by epic replaces the “Phase” select: one lane per parent issue, progress from <code>subIssueCompleted / subIssueTotal</code>. Dragging between columns changes status; dragging into another lane is refused (it would change the parent).</p><div class="app">${barA()}${lanes}</div>`;
+        const mk = (e, ts, key) =>
+          `<div class="lane-h"><span class="dot" style="color:${e ? e.c : "var(--dim)"}"></span>${e ? `<b class="mono">#${e.num}</b> <b>${e.n}</b><span class="bar-p" style="width:90px;height:5px;background:var(--border);border-radius:9px;overflow:hidden;display:inline-block"><i style="display:block;height:100%;width:${(e.done / e.total) * 100}%;background:${e.c}"></i></span><span class="cap" style="margin:0">${e.done}/${e.total} closed</span>${lnk("↗")}` : "<b>No epic</b>"}</div>${board(ts, { stack: true, mergeQueued: true })}`;
+        return `<p class="cap">Group by epic replaces the “Phase” select: one lane per parent issue, titled <b>#number + title</b>, with sub-issue progress (<code>subIssueCompleted / subIssueTotal</code>) and a link to the issue. Dragging between columns changes status; dragging into another lane is refused (it would change the parent).</p><div class="app">${barA()}${[
+          "proj",
+          "sess",
+          "tasks",
+        ]
+          .map((k) =>
+            mk(
+              EPICS[k],
+              TASKS.filter((t) => t.ep === k),
+            ),
+          )
+          .join("")}${mk(
+          null,
+          TASKS.filter((t) => !t.ep),
+        )}</div>`;
       };
 
-      /* ───────── 3 · Sidebar ───────── */
+      /* ───────── 3 · Sidebar (status first, then details) ───────── */
+      const STEPS = ["Backlog", "Ready", "Claimed", "In progress", "Reviewing", "Done"];
+      const steps = (at) =>
+        `<div class="steps">${STEPS.map((s, i) => `<span class="step ${i < at ? "d" : i === at ? "c" : ""}">${i < at ? "✓" : i === at ? "●" : "○"}<em>${s}</em></span>`).join("")}</div>`;
       const sbList = (
         w,
         sel,
-      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="title">Tasks<span class="sub">18 active · mullion-session-manager</span></span><span class="ibtn">${I("popout")}</span></div>
-        <div class="chips">${chip("on", "All 18")}${chip("warn", "1 reviewing")}${chip("ok", "3 running")}${chip("info", "12 ready")}</div>
+      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="title">Tasks<span class="sub">18 active · ${DEF}</span></span><span class="ibtn">${I("popout")}</span></div>
+        <div class="chips">${chip("on", "All 18")}${chip("warn", "1 needs you")}${chip("info", "1 reviewing")}${chip("ok", "3 running")}${chip("", "12 ready")}</div>
         ${["review", "doing", "claimed", "ready"]
           .flatMap((k) => TASKS.filter((t) => t.st === k))
           .slice(0, 9)
           .map(
             (t) =>
-              `<div class="srow${sel === t.id ? " sel" : ""}"><span class="st" style="color:${t.st === "doing" ? "var(--g)" : t.st === "review" ? "var(--b)" : "var(--dim)"}"><span class="dot"></span></span><div><div class="tt">#${t.id} ${t.title.replace(/^[a-z]+\([a-z]+\): /, "")}</div><div class="mm"><span>${t.st === "doing" ? "running" : t.st}</span><span class="opt">· ${t.age}</span>${t.by ? `<span class="chip warn">blocked #${t.by}</span>` : ""}</div></div></div>`,
+              `<div class="srow${sel === t.id ? " sel" : ""}"><span class="st" style="color:${t.st === "doing" ? "var(--g)" : t.st === "review" ? "var(--b)" : "var(--dim)"}"><span class="dot"></span></span><div style="min-width:0"><div class="tt">#${t.id} ${t.title.replace(/^[a-z]+\([a-z]+\): /, "")}</div><div class="mm"><span>${t.st === "doing" ? "running" : t.st}</span><span class="opt">· ${t.age}</span>${t.needs ? chip("warn", t.needs) : ""}${t.rs ? chip("info", "review: " + t.rs.toLowerCase()) : ""}${t.by ? `<span class="chip warn">blocked #${t.by}</span>` : ""}</div></div></div>`,
           )
           .join("")}</div>`;
-      const sbDetail = (
-        w,
-      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="ibtn">${I("back")}</span><span class="title">#2418 forbid new route → db imports<span class="sub">REVIEWING</span></span><span class="ibtn" title="Pop out to a docked panel">${I("popout")}</span></div>
-        <div class="acts">${btn("Approve task", "primary")}${btn("Reject")}${btn("Give up")}</div>
-        <dl class="kv"><dt>Project</dt><dd>mullion-session-manager</dd><dt>Issue</dt><dd>#2418 · PR #2833</dd><dt>Agent</dt><dd>claude · worker finished</dd><dt>Session</dt><dd style="color:var(--accent)">Open session</dd></dl>
-        <div class="body"><b style="color:var(--fg)">Context</b> The intended layering is routes → services → db. check-import-boundaries.mjs enforces the other inversions… <span class="more">Show more</span></div>
-        <div class="sec"><div class="sec-h">Hierarchy</div><div style="font-size:12px">${chip("", "epic")} feat(projects): projects, worktrees &amp; storage <span class="cap">3/9</span><div style="margin-top:6px">${chip("warn", "blocks 7")} <span style="color:var(--muted)">#2819 #2818 #2817 #2816 #2815 #2814 #2812</span></div></div></div>
+      const detailReview =
+        () => `<div class="stat"><div class="r1"><span class="big info">REVIEWING</span><span class="cap" style="margin:0">for 2m</span><span class="sp"></span><span class="chip warn">Awaiting your approval</span></div>${steps(4)}
+          <div class="next"><b>Next:</b> the reviewer session has not started yet. Approve to merge, or Reject to send it back.</div></div>
+        <div class="sec"><div class="sec-h">Review <span class="sp"></span><span class="chip">round 1 of 3</span></div>
+          <dl class="kv0"><dt>Verdict</dt><dd><span class="chip">pending</span> <span class="cap" style="margin:0">no previous round</span></dd><dt>Reviewer</dt><dd>${sess("reviewer", "Waiting to start")}</dd><dt>Worker</dt><dd>${sess("worker", "Finished")}</dd><dt>Approval</dt><dd>human — auto-return 0/3</dd></dl></div>
+        <div class="sec"><div class="sec-h">Pull request</div><div style="font-size:12px">${lnk("PR #2833 ↗")} <span class="chip ok">${I("check", 10)} CI 12/12</span> <span class="chip ok">mergeable</span> <span class="chip">up to date</span></div></div>
+        <div class="acts">${btn("Approve task", "primary")}${btn("Reject")}${btn("Give up")}</div>`;
+      const detailBlocked =
+        () => `<div class="stat"><div class="r1"><span class="big warn">BLOCKED</span><span class="cap" style="margin:0">ready · 37m</span></div>${steps(1)}
+          <div class="next"><b>Next:</b> starts automatically when ${lnk("#2418 ↗")} is done. ${chip("info", "#2418 reviewing · awaiting approval")}</div></div>
+        <div class="sec"><div class="sec-h">Review</div><div class="cap" style="margin:0">Not started — no worker yet.</div></div>
+        <div class="acts">${btn("Start now", "primary")}${btn("Edit")}${btn("Move to backlog")}</div>`;
+      const detailDetails = (
+        title,
+      ) => `<div class="sec"><div class="sec-h">Details</div><dl class="kv0"><dt>Project</dt><dd>${DEF}</dd><dt>Issue</dt><dd>${lnk("#" + title + " ↗")}</dd><dt>Agent</dt><dd>claude</dd></dl><div class="body" style="padding:6px 0 0"><b style="color:var(--fg)">Context</b> The intended layering is routes → services → db… <span class="more">Show more</span></div></div>
+        <div class="sec"><div class="sec-h">Hierarchy</div><div style="font-size:12px">${chip("", "epic")} <b class="mono">#2400</b> feat(projects): projects, worktrees &amp; storage <span class="cap" style="margin:0">3/9</span><div style="margin-top:6px">${chip("warn", "blocks 7")} <span style="color:var(--muted)">#2819 #2818 #2817 #2816 #2815 #2814 #2812</span></div></div></div>
         <div class="sec"><div class="sec-h">Timeline <span class="sp"></span><span class="tabs" style="text-transform:none;letter-spacing:0"><span class="tab on">Important</span><span class="tab">All</span><span class="tab">Custom</span></span></div></div>
-        <div class="tl"><span class="t">4m</span><span class="k">Status</span><span>Agent: done</span><span class="t">4m</span><span class="k">Status</span><span>Entered full-screen mode</span><span class="t">4m</span><span class="k">Status</span><span>Agent: generating</span></div></div>`;
+        <div class="tl"><span class="t">4m</span><span class="k">Status</span><span>Agent: done</span><span class="t">4m</span><span class="k">Status</span><span>Entered full-screen mode</span><span class="t">4m</span><span class="k">Status</span><span>Agent: generating</span></div>`;
+      const detailBody = (kind) =>
+        kind === "blocked"
+          ? detailBlocked() + detailDetails("2819")
+          : detailReview() + detailDetails("2418");
+      const detailHead = (kind) =>
+        `<div class="vh"><span class="ibtn">${I("back")}</span><span class="title">${kind === "blocked" ? "#2819 move the host, preview and device routes' DB access" : "#2418 forbid new route → db imports"}</span><span class="ibtn" title="Pop out to a docked panel">${I("popout")}</span></div>`;
+      const sbDetail = (w, kind) =>
+        `<div class="sbf" style="width:${w}px">${detailHead(kind)}${detailBody(kind)}</div>`;
       const vSide =
-        () => `<div class="row"><div><p class="cap">List · 340px</p>${sbList(340, 2418)}</div><div><p class="cap">Detail · 340px</p>${sbDetail(340)}</div><div><p class="cap">List · 260px (compact via container query)</p>${sbList(260, 2418)}</div><div><p class="cap">Detail · 260px</p>${sbDetail(260)}</div></div>
+        () => `<div class="row"><div><p class="cap">List · 340px</p>${sbList(340, 2418)}</div><div><p class="cap">Detail · reviewing · 340px</p>${sbDetail(340)}</div><div><p class="cap">Detail · blocked · 340px</p>${sbDetail(340, "blocked")}</div><div><p class="cap">Detail · 260px (compact)</p>${sbDetail(260)}</div></div>
         <h2>Board + sidebar together (no drawer, no horizontal scroll)</h2>
-        <div class="row"><div class="app narrow" style="width:760px">${barA().replace(/Awaiting merge <span class="n">1<\/span>/, "Awaiting merge")}${board(
-          TASKS.filter((t) => t.ep !== "ui" && t.ep !== "dock"),
+        <div class="row"><div class="app narrow" style="width:760px">${barA()}${board(
+          TASKS.filter((t) => t.ep !== "ui" && t.ep !== "dock" && t.st !== "backlog"),
           { stack: true, mergeQueued: true, sel: 2418 },
         )}</div>${sbDetail(340)}</div>
-        <div class="note" style="margin-top:12px;border-left-color:var(--y)"><b>Rules:</b> clicking a card selects it and opens this detail; selection is shared state, so the board highlights what the sidebar shows. Detail does <b>not</b> depend on the list's scope: a Backlog, Done, archived or other-project card opens too. The pop-out icon keeps today's docked panel for people who want it beside a terminal.</div>`;
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)"><b>Status first, details second.</b> The detail opens on a status block: the big status, a step tracker, one “Next:” sentence, and the single thing waiting on you. Then Review (round, verdict, reviewer and worker sessions), then the pull request (CI, mergeability), then the actions, and only then details, hierarchy and the timeline. The list rows carry the same hints (“Awaiting approval”, “review: reviewing”). Clicking a card selects it and opens this view; detail does <b>not</b> depend on the list's scope, so a Backlog, Done, archived or other-project task opens too. Pop-out keeps today's docked panel.</div>`;
 
       /* ───────── 4 · Timeline filters ───────── */
       const KINDS = [
@@ -1340,19 +1556,25 @@
         <div class="pop" style="left:150px;top:44px;min-width:330px"><div class="h">Agent</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["Attention", "Status", "Tool", "Plan", "Question", "Todo", "Permission"].map((k) => chip("ok", k)).join("")}</div><div class="h">Session</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["Title", "Files", "Stop", "Exit", "Message Sent", "Message"].map((k) => chip("", k)).join("")}</div><div class="h">Git &amp; PR</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["PR CI", "PR Review", "PR Comments", "PR Merged", "PR Conflicts", "Diff"].map((k) => chip("ok", k)).join("")}</div><div class="h">Review &amp; promote</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px;padding-bottom:6px">${["Review", "Promote", "Elicitation", "Dev Server"].map((k) => chip("", k)).join("")}</div></div></div></div></div>
         <p class="cap" style="margin-top:8px">The same component serves the session timeline, so it benefits more than tasks. “Important” = today's default-on set; the agent-isolate row (<code>abd4a351</code>, Unattributed) moves into the popover as an “Agent” group.</p>`;
 
-      /* ───────── 5 · Phone ───────── */
+      /* ───────── 6 · Phone ───────── */
       const vPhone =
-        () => `<div class="row"><div class="phone"><div class="bar"><b>Tasks</b><span class="sp"></span>${btn(I("filter", 12) + " Filter · 2")}${btn(I("plus"), "primary")}</div>
-        <div class="bar"><div class="tabs" style="width:100%;justify-content:space-between"><span class="tab">Backlog 5</span><span class="tab on">Ready 12</span><span class="tab">Active 6</span><span class="tab">Done</span></div></div>
+        () => `<div class="row"><div class="phone"><div class="bar"><b>Tasks</b><span class="sp"></span>${btn(I("filter", 12) + " Filter · 1")}${btn(I("plus"), "primary")}</div>
+        <div class="bar">${btn(`${DEF} <span class="n">+2</span> ${I("chevd", 12)}`)}${btn("Needs me <span class='n'>3</span>")}</div>
+        <div class="bar"><div class="tabs" style="width:100%;justify-content:space-between"><span class="tab">Backlog 5</span><span class="tab on">Ready 13</span><span class="tab">Active 6</span><span class="tab">Done</span></div></div>
         <div class="cards"><details class="stack" open><summary>${I("block", 13)} <b>7 blocked by #2418</b></summary></details>${TASKS.filter(
           (t) => t.st === "ready" && !t.by,
         )
           .slice(0, 3)
           .map((t) => card(t))
+          .join("")}</div>${adhoc(false)}</div>
+        <div class="phone"><div class="bar"><b>Tasks · Active</b><span class="sp"></span>${btn("Needs me <span class='n'>3</span>")}</div><div class="cards">${TASKS.filter(
+          (t) => t.st === "doing" || t.st === "review",
+        )
+          .slice(0, 4)
+          .map((t) => card(t, { sel: 2418 }))
           .join("")}</div></div>
-        <div class="phone"><div class="vh" style="display:flex;gap:6px;align-items:center;padding:10px;border-bottom:1px solid var(--border-soft)"><span class="ibtn">${I("back")}</span><b style="flex:1;font-size:12.5px">#2826 every merge-recording path…</b>${chip("info", "READY")}</div>
-        <div class="acts">${btn("Start now", "primary")}${btn("Edit")}</div><dl class="kv" style="grid-template-columns:78px 1fr"><dt>Epic</dt><dd>feat(tasks): Task Master · 11/18</dd><dt>Issue</dt><dd>#2826</dd><dt>Agent</dt><dd>claude</dd></dl><div class="sec"><div class="sec-h">Timeline</div></div></div></div>
-        <p class="cap" style="margin-top:8px">Phone has no right rail: one status column at a time via the segmented control, and detail is the full-screen docked-panel path (today's <code>usePhoneTasksNavigator</code> flow). Filters collapse into one sheet with a count badge.</p>`;
+        <div class="phone">${detailHead()}${detailBody()}</div></div>
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)">Phone applies the desktop decisions unchanged: the same card (linked #issue / PR, project, session pills, epic tag), the same 1a filter controls (project picker, quick views, one Filter sheet with a count badge, Display in the overflow), Claimed merged into In progress, and the ad-hoc strip. The “single rail” is the full-screen sheet: tapping a card opens the same status-first detail as the sidebar, with a back arrow in place of the rail's; pop-out does not exist on phone.</div>`;
 
       /* ───────── nav ───────── */
       const VIEWS = [
@@ -1360,58 +1582,42 @@
           "today",
           "0 · Today (for contrast)",
           vToday,
-          "<b>Reference.</b> What the tab looks like now, annotated. Four filter rows, project chips that grow with every project, and a “Phase” select that really means epic.",
+          "<b>Reference.</b> What the tab looks like now, annotated: four filter rows, project chips that grow with every project, and a “Phase” select that really means epic.",
         ],
         [
           "a",
-          "1a · Scope + views + display ★",
+          "1 · Filter bar (1a) + facets ★",
           vA,
-          "<b>Recommended filter bar.</b> Where each control lives: <ul><li><b>Project</b> → picker button (searchable, counts, defaults to the sidebar's project)</li><li><b>Epic</b> → Filter ▾ (renamed from “Phase”), shown as a removable token</li><li><b>Blocked / Awaiting merge</b> → quick-view tabs with counts</li><li><b>Hide done / Show archived</b> → Display ▾</li></ul>One row instead of four; active filters are visible tokens; “Clear all” only appears when something is on.",
-        ],
-        [
-          "b",
-          "1b · Query bar",
-          vB,
-          "<b>Alternative.</b> One token input (<code>project: epic: is: agent:</code>) with autocomplete and saved views. Same six controls, all expressed as tokens; Display ▾ stays for layout.",
-        ],
-        [
-          "c",
-          "1c · Facet rail",
-          vC,
-          "<b>Alternative.</b> Scope and state live in a left rail with counts and epic progress; the top bar only holds New task, Board/List and Display. Best when the number of projects and epics keeps growing.",
+          "<b>Decided: 1a, with 1c as an optional panel.</b> One row: <ul><li><b>Facets</b> → toggle for the 1c rail (state, projects, epics with progress); off by default so the board keeps full width</li><li><b>Project</b> → searchable picker (counts, defaults to the sidebar's project)</li><li><b>Blocked / Awaiting merge</b> → quick-view tabs with counts</li><li><b>Epic / agent / text</b> → Filter ▾, shown as removable tokens (“Phase” renamed Epic)</li><li><b>Hide done / archived / group by / Claimed</b> → Display ▾</li></ul>",
         ],
         [
           "board",
           "2 · Cards & columns",
           () => vBoard(false),
-          "<b>Cards, blocked stack, empty-column rails.</b> Toggle below to see Claimed merged into In progress.",
+          "<b>Cards, blocked stack, empty-column rails, ad-hoc lane.</b> Toggle to see Claimed merged into In progress.",
           true,
         ],
-        [
-          "epic",
-          "3 · Group by epic",
-          vEpic,
-          "<b>Epic swimlanes.</b> Replaces the Phase select and gives sub-issue progress a home.",
-        ],
+        ["epic", "3 · Group by epic", vEpic, "<b>Epic swimlanes titled with the epic number.</b>"],
         [
           "side",
-          "4 · Sidebar list → detail",
+          "4 · Sidebar: status first",
           vSide,
-          "<b>The sidebar is the task detail.</b> Four entry points all land here: card click, notification click, the sidebar list, and “Open task”. Pop-out remains for the docked panel.",
+          "<b>The sidebar is the task detail — status first, then details.</b>",
         ],
         [
           "tl",
           "5 · Timeline filters",
           vTL,
-          "<b>Timeline filter chips.</b> 26 chips → a preset switch and a grouped popover.",
+          "<b>Timeline filter chips.</b> 26 chips → a preset switch and a grouped popover (approved).",
         ],
         [
           "phone",
           "6 · Phone",
           vPhone,
-          "<b>Phone (390px).</b> Segmented status control, filter sheet, full-screen detail.",
+          "<b>Phone (390px).</b> Same decisions as desktop, aligned with the single-rail design.",
         ],
       ];
+
       let cur = location.hash.slice(1) || "a";
       let merged = false;
       function render() {
