@@ -1,0 +1,1763 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Design record for epic #2847 (Task Master tab redesign). The shipped UI is authoritative once built; epic numbers in the mock data are fictional. -->
+    <title>Mullion — Task Master tab redesign: mockup · rev 2</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      /* ───────── Tokens ─────────
+         Values copied from frontend/src/styles/tokens.css as of this commit. The
+         sidebar-kit tokens (--surface, --surface-hover, --border-soft, --accent,
+         the status tokens; B1, #1971) already exist there. Nothing in this
+         mockup is a new token; what is new is layout only (see each view's note). */
+      .t-dark {
+        --sidebar: #161617;
+        --sidebar-2: #1b1b1d;
+        --pane-hd: #242426;
+        --chrome: #1c1c1e;
+        --fg: #ededed;
+        --muted: #9b9ba5;
+        --dim: #8a8a94;
+        --g: #5ec27a;
+        --r: #e5575a;
+        --b: #5c9bf5;
+        --c: #43c1c1;
+        --y: #d7b06a;
+        --p: #b884db;
+        --o: #e0965a;
+        --accent-solid: #0e9f6e; /* base; white text on it is 3.39:1 — known debt, B1 darkens button fill */
+        --ring: #12b981;
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --surface: #1e1e21;
+        --surface-hover: #242427; /* #26262a put --dim at 4.41:1 (tokens.css) */
+        --accent-fill: #0a7a53;
+        --accent: #34d399;
+        --lane-1: #5c9bf5;
+        --lane-2: #5ec27a;
+        --lane-3: #d7b06a;
+        --lane-4: #e66fb0;
+        --lane-5: #43c1c1;
+        --lane-6: #b884db;
+        --lane-more: #6a6a74;
+        color-scheme: dark;
+      }
+      .t-light {
+        --sidebar: #f4f4f2;
+        --sidebar-2: #efefec;
+        --pane-hd: #e9e9e6;
+        --chrome: #eeeeec;
+        --fg: #171717;
+        --muted: #5a5a5a;
+        --dim: #666666;
+        --g: #1a7f37;
+        --r: #cf222e;
+        --b: #0969da;
+        --c: #0e7490;
+        --y: #9a6700;
+        --p: #8250df;
+        --o: #bc5215;
+        --accent-solid: #0b6e4b;
+        --ring: #0b6e4b;
+        --border: #c9c9c4;
+        --border-soft: #dcdcd8;
+        --surface: #ffffff;
+        --surface-hover: #f0f0ed;
+        --accent-fill: #0b6e4b;
+        --accent: #0b6e4b;
+        --lane-1: #0969da;
+        --lane-2: #1a7f37;
+        --lane-3: #9a6700;
+        --lane-4: #bf3989;
+        --lane-5: #0e7490;
+        --lane-6: #8250df;
+        --lane-more: #9a9a9a;
+        color-scheme: light;
+      }
+      /* Semantic status tokens: one vocabulary (success/danger/warn/info/merged/neutral). */
+      .t-dark,
+      .t-light {
+        --status-success-fg: var(--g);
+        --status-danger-fg: var(--r);
+        --status-warn-fg: var(--y);
+        --status-info-fg: var(--b);
+        --status-merged-fg: var(--p);
+        --status-neutral-fg: var(--muted);
+      }
+      .t-dark {
+        --tint: 16%;
+        --status-danger-fg: #ff7b7e;
+        --tint-border: 42%;
+      }
+      .t-light {
+        --tint: 11%;
+        --status-success-fg: #187533;
+        --status-danger-fg: #c1202b;
+        --status-warn-fg: #8a5c00;
+        --status-info-fg: #0862cb;
+        --status-merged-fg: #7649cb;
+        --status-neutral-fg: var(--muted);
+        --tint-border: 38%;
+      }
+      .t-dark,
+      .t-light {
+        --status-success-bg: color-mix(in srgb, var(--g) var(--tint), var(--sidebar));
+        --status-danger-bg: color-mix(in srgb, var(--r) var(--tint), var(--sidebar));
+        --status-warn-bg: color-mix(in srgb, var(--y) var(--tint), var(--sidebar));
+        --status-info-bg: color-mix(in srgb, var(--b) var(--tint), var(--sidebar));
+        --status-merged-bg: color-mix(in srgb, var(--p) var(--tint), var(--sidebar));
+        --status-neutral-bg: color-mix(in srgb, var(--fg) 8%, var(--sidebar));
+        --status-success-border: color-mix(in srgb, var(--g) var(--tint-border), var(--sidebar));
+        --status-danger-border: color-mix(in srgb, var(--r) var(--tint-border), var(--sidebar));
+        --status-warn-border: color-mix(in srgb, var(--y) var(--tint-border), var(--sidebar));
+        --status-info-border: color-mix(in srgb, var(--b) var(--tint-border), var(--sidebar));
+        --status-merged-border: color-mix(in srgb, var(--p) var(--tint-border), var(--sidebar));
+        --status-neutral-border: var(--border);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          13px/1.45 -apple-system,
+          "Inter",
+          system-ui,
+          sans-serif;
+        background: #0c0c0d;
+        color: #ddd;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+      }
+      .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 13px;
+        margin: 18px 0 6px;
+        color: #aaa;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .lede {
+        color: #aaa;
+        max-width: 980px;
+        margin: 0 0 14px;
+      }
+      .new {
+        background: #0e9f6e;
+        color: #fff;
+        border-radius: 4px;
+        padding: 1px 6px;
+        font-size: 11px;
+        vertical-align: middle;
+      }
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 12px 0;
+        position: sticky;
+        top: 0;
+        background: #0c0c0d;
+        padding: 8px 0;
+        z-index: 5;
+      }
+      .nav button {
+        background: #1c1c1e;
+        color: #ccc;
+        border: 1px solid #3b3b41;
+        border-radius: 6px;
+        padding: 5px 10px;
+        font: inherit;
+        cursor: pointer;
+      }
+      .nav button.on {
+        background: #0e9f6e;
+        border-color: #0e9f6e;
+        color: #fff;
+      }
+      .note {
+        background: #161617;
+        border: 1px solid #2b2b30;
+        border-left: 3px solid #0e9f6e;
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin: 0 0 14px;
+        max-width: 1100px;
+        color: #bbb;
+      }
+      .note b {
+        color: #eee;
+      }
+      .note ul {
+        margin: 6px 0 0;
+        padding-left: 18px;
+      }
+      .themes {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .pane {
+        border-radius: 8px;
+        padding: 14px;
+        background: var(--sidebar);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        overflow-x: auto;
+      }
+      .pane > .lbl {
+        font-size: 11px;
+        color: var(--dim);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .cap {
+        font-size: 11px;
+        color: var(--dim);
+        margin: 0 0 4px;
+      }
+      .i {
+        width: 14px;
+        height: 14px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        vertical-align: -2px;
+      }
+
+      /* ───────── App frame (the main tab) ───────── */
+      .app {
+        background: var(--sidebar);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        width: 1160px;
+        flex: none;
+        position: relative;
+      }
+      .app.narrow {
+        width: 760px;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-soft);
+        flex-wrap: wrap;
+      }
+      .btn {
+        background: var(--surface);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 4px 10px;
+        font: inherit;
+        font-size: 12px;
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        cursor: default;
+        white-space: nowrap;
+      }
+      .btn.primary {
+        background: var(--accent-fill);
+        border-color: transparent;
+        color: #fff;
+      }
+      .btn.ghost {
+        background: transparent;
+        border-color: transparent;
+        color: var(--muted);
+      }
+      .btn .n {
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .sp {
+        flex: 1;
+      }
+      .tabs {
+        display: inline-flex;
+        gap: 2px;
+        background: var(--sidebar-2);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 2px;
+      }
+      .tabs .tab {
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--muted);
+        display: inline-flex;
+        gap: 6px;
+      }
+      .tabs .tab.on {
+        background: var(--surface);
+        color: var(--fg);
+        box-shadow: 0 0 0 1px var(--border);
+      }
+      .tabs .tab .n {
+        font-size: 11px;
+        color: var(--dim);
+      }
+      .tabs .tab.warn .n {
+        color: var(--status-warn-fg);
+      }
+      .tok {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--status-info-bg);
+        border: 1px solid var(--status-info-border);
+        color: var(--status-info-fg);
+        border-radius: 999px;
+        padding: 1px 4px 1px 9px;
+        font-size: 11.5px;
+      }
+      .tok .x {
+        opacity: 0.7;
+        padding: 0 4px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0 7px;
+        font-size: 11px;
+        line-height: 17px;
+        color: var(--muted);
+        background: var(--surface);
+        white-space: nowrap;
+      }
+      .chip.on {
+        color: var(--fg);
+        background: var(--surface-hover);
+        border-color: var(--ring);
+      }
+      .chip.warn {
+        color: var(--status-warn-fg);
+        background: var(--status-warn-bg);
+        border-color: var(--status-warn-border);
+      }
+      .chip.info {
+        color: var(--status-info-fg);
+        background: var(--status-info-bg);
+        border-color: var(--status-info-border);
+      }
+      .chip.ok {
+        color: var(--status-success-fg);
+        background: var(--status-success-bg);
+        border-color: var(--status-success-border);
+      }
+      .chip.bad {
+        color: var(--status-danger-fg);
+        background: var(--status-danger-bg);
+        border-color: var(--status-danger-border);
+      }
+      .chip.merged {
+        color: var(--status-merged-fg);
+        background: var(--status-merged-bg);
+        border-color: var(--status-merged-border);
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+        display: inline-block;
+      }
+      .pop {
+        position: absolute;
+        z-index: 3;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 10px 30px #0007;
+        padding: 6px;
+        min-width: 250px;
+        font-size: 12px;
+      }
+      .pop .h {
+        font-size: 10.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        padding: 6px 8px 2px;
+      }
+      .pop .it {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 5px 8px;
+        border-radius: 6px;
+      }
+      .pop .it:hover,
+      .pop .it.hi {
+        background: var(--surface-hover);
+      }
+      .pop .it .n {
+        margin-left: auto;
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .pop input.s {
+        width: 100%;
+        background: var(--sidebar-2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 5px 8px;
+        color: var(--fg);
+        font: inherit;
+        margin-bottom: 4px;
+      }
+      .cb {
+        width: 14px;
+        height: 14px;
+        border: 1.5px solid var(--border);
+        border-radius: 4px;
+        display: inline-grid;
+        place-items: center;
+        flex: none;
+      }
+      .cb.on {
+        background: var(--accent-solid);
+        border-color: var(--accent-solid);
+        color: #fff;
+      }
+      .cb.on::after {
+        content: "✓";
+        font-size: 10px;
+        line-height: 1;
+      }
+      .sw {
+        width: 26px;
+        height: 15px;
+        border-radius: 99px;
+        background: var(--border);
+        position: relative;
+        margin-left: auto;
+        flex: none;
+      }
+      .sw::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: #fff;
+      }
+      .sw.on {
+        background: var(--accent-solid);
+      }
+      .sw.on::after {
+        left: 13px;
+      }
+
+      /* ───────── Board ───────── */
+      .board {
+        display: flex;
+        gap: 10px;
+        padding: 12px;
+        align-items: flex-start;
+        overflow-x: auto;
+      }
+      .col {
+        width: 248px;
+        flex: none;
+      }
+      .app.narrow .col {
+        width: 196px;
+      }
+      .col-h {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 2px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .col-h .n {
+        margin-left: auto;
+        font-weight: 500;
+        background: var(--surface);
+        border: 1px solid var(--border-soft);
+        border-radius: 99px;
+        padding: 0 7px;
+      }
+      .col-b {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .rail {
+        width: 34px;
+        flex: none;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        padding: 8px 0;
+        text-align: center;
+        color: var(--dim);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .rail span {
+        writing-mode: vertical-rl;
+        display: inline-block;
+        margin-top: 6px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border-soft);
+        border-left: 3px solid var(--ep, var(--border));
+        border-radius: 8px;
+        padding: 7px 9px;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .card.sel {
+        border-color: var(--ring);
+        box-shadow: 0 0 0 1px var(--ring);
+      }
+      .card .ct {
+        font-size: 12.5px;
+        line-height: 1.3;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .card .cm {
+        display: flex;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--dim);
+        align-items: center;
+      }
+      .card .proj {
+        color: var(--muted);
+      }
+      .stack {
+        position: relative;
+        margin-bottom: 8px;
+      }
+      .stack summary {
+        list-style: none;
+        cursor: default;
+        background: var(--status-warn-bg);
+        border: 1px solid var(--status-warn-border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        color: var(--status-warn-fg);
+        font-size: 12px;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        box-shadow:
+          0 4px 0 -2px var(--status-warn-border),
+          0 8px 0 -4px var(--status-warn-border);
+      }
+      .stack summary::-webkit-details-marker {
+        display: none;
+      }
+      .stack[open] summary {
+        box-shadow: none;
+      }
+      .stack .inner {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .lane-h {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-top: 1px solid var(--border-soft);
+        background: var(--sidebar-2);
+      }
+      .lane-h .bar-p {
+        width: 90px;
+        height: 5px;
+        border-radius: 9px;
+        background: var(--border);
+        overflow: hidden;
+      }
+      .lane-h .bar-p i {
+        display: block;
+        height: 100%;
+        background: var(--ep);
+      }
+      .adhoc {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-top: 1px solid var(--border-soft);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .adhoc .dots {
+        display: inline-flex;
+        gap: 3px;
+      }
+      .adhoc .dots i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        display: block;
+      }
+      .facets {
+        width: 214px;
+        flex: none;
+        border-right: 1px solid var(--border-soft);
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+      }
+      .facets .h {
+        font-size: 10.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin: 8px 0 2px;
+      }
+      .facets .it {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 6px;
+        border-radius: 6px;
+      }
+      .facets .it.on {
+        background: var(--surface);
+        box-shadow: 0 0 0 1px var(--border);
+      }
+      .facets .it .n {
+        margin-left: auto;
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .facets .mini {
+        width: 44px;
+        height: 4px;
+        background: var(--border);
+        border-radius: 9px;
+        overflow: hidden;
+        margin-left: auto;
+      }
+      .facets .mini i {
+        display: block;
+        height: 100%;
+      }
+      .qbar {
+        flex: 1;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        background: var(--sidebar-2);
+        border: 1px solid var(--ring);
+        border-radius: 8px;
+        padding: 4px 8px;
+        min-width: 420px;
+        flex-wrap: wrap;
+      }
+      .qbar .q {
+        color: var(--dim);
+        font-size: 12px;
+      }
+      .old {
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .old .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .old .chips .chip {
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 12px;
+      }
+      .annot {
+        color: var(--status-warn-fg);
+        font-size: 11px;
+      }
+
+      /* ───────── Sidebar frames ───────── */
+      .sbf {
+        container-type: inline-size;
+        background: var(--sidebar);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        flex: none;
+        overflow: hidden;
+      }
+      .sbf .vh {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--pane-hd);
+      }
+      .sbf .vh .title {
+        font-weight: 600;
+        font-size: 12.5px;
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sbf .vh .sub {
+        color: var(--dim);
+        font-weight: 400;
+        margin-left: 6px;
+        font-size: 11px;
+      }
+      .ibtn {
+        width: 22px;
+        height: 22px;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 6px;
+        color: var(--muted);
+      }
+      .sbf .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 8px 10px;
+      }
+      .sbf .sec {
+        border-top: 1px solid var(--border-soft);
+        padding: 8px 10px;
+      }
+      .sbf .sec-h {
+        font-size: 10.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin-bottom: 6px;
+        display: flex;
+        gap: 6px;
+      }
+      .srow {
+        display: flex;
+        gap: 8px;
+        padding: 7px 10px;
+        border-top: 1px solid var(--border-soft);
+      }
+      .srow.sel {
+        background: var(--surface);
+        box-shadow: inset 2px 0 0 var(--ring);
+      }
+      .srow .tt {
+        font-size: 12.5px;
+        line-height: 1.3;
+      }
+      .srow .mm {
+        font-size: 11px;
+        color: var(--dim);
+        display: flex;
+        gap: 6px;
+        margin-top: 2px;
+        flex-wrap: wrap;
+      }
+      .srow .st {
+        padding-top: 5px;
+      }
+      .acts {
+        display: flex;
+        gap: 6px;
+        padding: 8px 10px;
+        flex-wrap: wrap;
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: 78px 1fr;
+        gap: 3px 8px;
+        font-size: 12px;
+        padding: 0 10px 8px;
+      }
+      .kv dt {
+        color: var(--dim);
+      }
+      .kv dd {
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .body {
+        font-size: 12px;
+        color: var(--muted);
+        padding: 0 10px 8px;
+        line-height: 1.4;
+      }
+      .body .more {
+        color: var(--accent);
+      }
+      .tl {
+        display: grid;
+        grid-template-columns: 38px 62px 1fr;
+        gap: 3px 6px;
+        font-size: 11.5px;
+        padding: 0 10px 8px;
+      }
+      .tl .t {
+        color: var(--dim);
+      }
+      .tl .k {
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 10.5px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      @container (max-width: 300px) {
+        .sbf .vh .sub,
+        .srow .mm .opt,
+        .kv dt {
+          display: none;
+        }
+        .kv {
+          grid-template-columns: 1fr;
+        }
+        .tl {
+          grid-template-columns: 62px 1fr;
+        }
+        .tl .t {
+          display: none;
+        }
+        .sbf .chips {
+          padding: 6px 8px;
+        }
+        .srow {
+          padding: 6px 8px;
+        }
+        .btn {
+          padding: 3px 7px;
+        }
+      }
+      .phone {
+        width: 390px;
+        background: var(--sidebar);
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        overflow: hidden;
+        flex: none;
+      }
+      .phone .cards {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px;
+      }
+      .tlf {
+        background: var(--sidebar);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        width: 520px;
+        position: relative;
+        padding-bottom: 10px;
+      }
+      .tlf .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 8px 10px;
+      }
+      .tlf .chips .chip.on {
+        color: var(--status-success-fg);
+        background: var(--status-success-bg);
+        border-color: var(--status-success-border);
+      }
+
+      .btn.on {
+        border-color: var(--ring);
+        color: var(--fg);
+      }
+      .lnk {
+        color: var(--accent);
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+        font-size: 11px;
+      }
+      .ept {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 10.5px;
+        color: var(--dim);
+        border: 1px solid var(--border-soft);
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+      .sessrow {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+      }
+      .sess {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1px 6px;
+        background: var(--sidebar-2);
+        color: var(--muted);
+      }
+      .sess.run {
+        color: var(--status-success-fg);
+        border-color: var(--status-success-border);
+        background: var(--status-success-bg);
+      }
+      .sess.fin {
+        color: var(--status-info-fg);
+        border-color: var(--status-info-border);
+        background: var(--status-info-bg);
+      }
+      .sess.wait {
+        color: var(--status-warn-fg);
+        border-color: var(--status-warn-border);
+        background: var(--status-warn-bg);
+      }
+      .lanes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        padding: 0 12px 12px;
+      }
+      .lc {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        background: var(--surface);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 6px 9px;
+        font-size: 12px;
+      }
+      .lc .lt {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .stat {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .stat .r1 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .stat .big {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        border-radius: 6px;
+        padding: 2px 8px;
+      }
+      .stat .big.info {
+        color: var(--status-info-fg);
+        background: var(--status-info-bg);
+        border: 1px solid var(--status-info-border);
+      }
+      .stat .big.warn {
+        color: var(--status-warn-fg);
+        background: var(--status-warn-bg);
+        border: 1px solid var(--status-warn-border);
+      }
+      .stat .next {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .steps {
+        display: flex;
+        gap: 2px;
+        font-size: 10px;
+        color: var(--dim);
+      }
+      .step {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        border-top: 2px solid var(--border);
+        padding-top: 3px;
+        min-width: 0;
+      }
+      .step em {
+        font-style: normal;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .step.d {
+        border-color: var(--g);
+        color: var(--status-success-fg);
+      }
+      .step.c {
+        border-color: var(--b);
+        color: var(--status-info-fg);
+        font-weight: 700;
+      }
+      .kv0 {
+        display: grid;
+        grid-template-columns: 70px 1fr;
+        gap: 4px 8px;
+        font-size: 12px;
+        margin: 0;
+      }
+      .kv0 dt {
+        color: var(--dim);
+      }
+      .kv0 dd {
+        margin: 0;
+        min-width: 0;
+      }
+      @container (max-width: 300px) {
+        .kv0 {
+          grid-template-columns: 1fr;
+        }
+        .kv0 dt {
+          display: none;
+        }
+        .steps .step em {
+          display: none;
+        }
+      }
+      .card .cm > * {
+        white-space: nowrap;
+      }
+      .card .cm .proj {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+        flex: 0 1 auto;
+      }
+      .card .cm .lnk {
+        flex: none;
+      }
+      .lnk:hover {
+        text-decoration: underline;
+        cursor: pointer;
+      }
+      .hier {
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .hier .hl {
+        font-size: 10.5px;
+        color: var(--dim);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-top: 4px;
+      }
+      .hier .hr {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+      }
+      .hier .ht {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Task Master tab redesign — design mockup <span class="new">REV 2</span></h1>
+      <p class="lede">
+        Approval gate before any implementation. Static HTML; tokens are the real
+        <code>tokens.css</code> values. Every view renders in dark + light. The data mirrors the
+        shapes that hurt today: <b>21 projects</b>, 7 tasks all blocked by <b>#2418</b> stacked in
+        Ready, two cards parked in Claimed as "queued", empty Done/Failed columns at full width, 20
+        ad-hoc sessions, and a task detail that lives in two unrelated places. Decided already: the
+        <b>right sidebar becomes the one task detail surface</b>. Open: which filter variant (1a /
+        1b / 1c) and Claimed as a column vs a badge.
+      </p>
+      <div class="nav" id="nav"></div>
+      <div class="note" id="note"></div>
+      <div class="themes" id="stage"></div>
+    </div>
+    <script>
+      /* ───────── helpers ───────── */
+      const ic = {
+        chevd: '<path d="M6 9l6 6 6-6"/>',
+        chevr: '<path d="M9 6l6 6-6 6"/>',
+        back: '<path d="M15 18l-6-6 6-6"/>',
+        plus: '<path d="M12 5v14M5 12h14"/>',
+        search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+        filter: '<path d="M4 5h16l-6 8v6l-4-2v-4z"/>',
+        sliders:
+          '<path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+        popout:
+          '<path d="M14 4h6v6M20 4l-8 8M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5"/>',
+        block: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
+        gh: '<circle cx="12" cy="12" r="9"/>',
+        x: '<path d="M6 6l12 12M18 6L6 18"/>',
+      };
+      const I = (n, s) =>
+        `<svg class="i" viewBox="0 0 24 24"${s ? ` style="width:${s}px;height:${s}px"` : ""}>${ic[n]}</svg>`;
+      const chip = (tone, t) => `<span class="chip ${tone}">${t}</span>`;
+      const btn = (t, c = "") => `<span class="btn ${c}">${t}</span>`;
+
+      /* ───────── data (mirrors the real board; several projects, linked PRs, sessions) ───────── */
+      const DEF = "mullion-session-manager";
+      const PROJECTS = [
+        ".github",
+        "aerie-media-dashboard",
+        "ai-agent-skills",
+        "ansible-playbooks",
+        "branchDAM",
+        "branchdam-agent",
+        "branchdam-mobile",
+        "constantin",
+        "friend-smarthome",
+        "harmonize",
+        "investment-ideas",
+        "macbook-work",
+        "mullion-helper",
+        DEF,
+        "personal-landing",
+        "pocket-portfolio-tracker",
+        "runway-ai-usage-tracker",
+        "sanctuary",
+        "traefik-viewer",
+        "visual-kit",
+        "scratch",
+      ];
+      const EPICS = {
+        proj: {
+          num: 2400,
+          n: "feat(projects): projects, worktrees & storage",
+          c: "var(--lane-1)",
+          done: 3,
+          total: 9,
+        },
+        sess: {
+          num: 2300,
+          n: "feat(sessions): agent control surface",
+          c: "var(--lane-2)",
+          done: 5,
+          total: 8,
+        },
+        dock: {
+          num: 2200,
+          n: "feat(dock): dock, previews & dev servers",
+          c: "var(--lane-3)",
+          done: 2,
+          total: 6,
+        },
+        tasks: {
+          num: 2600,
+          n: "feat(tasks): Task Master",
+          c: "var(--lane-5)",
+          done: 11,
+          total: 18,
+        },
+        ui: { num: 2100, n: "feat(uiux): UI/UX & sidebar", c: "var(--lane-6)", done: 4, total: 7 },
+      };
+      const T = (id, st, title, ep, age, o = {}) => ({
+        id,
+        st,
+        title,
+        ep,
+        age,
+        agent: "claude",
+        p: DEF,
+        ...o,
+      });
+      const TASKS = [
+        T(1339, "backlog", "fix(sessions): investigate and fix theme propagation", "sess", "52d", {
+          agent: "auto",
+        }),
+        T(
+          2494,
+          "backlog",
+          "feat(dock): let an agent session start and stop its dev server",
+          "dock",
+          "9d",
+          { agent: "auto" },
+        ),
+        T(
+          2070,
+          "backlog",
+          "feat(dock): central dev-server port inventory and conflict check",
+          "dock",
+          "14d",
+          { agent: "auto" },
+        ),
+        T(
+          2075,
+          "backlog",
+          "docs(uiux): decide whether the sidebar project tree replaces the project list",
+          "ui",
+          "14d",
+          { agent: "auto" },
+        ),
+        T(2178, "backlog", "feat: decide whether devices can be set up on first run", "ui", "13d", {
+          agent: "auto",
+        }),
+        T(
+          2819,
+          "ready",
+          "refactor(hosts): move the host, preview and device routes' DB access",
+          "proj",
+          "37m",
+          { by: 2418 },
+        ),
+        T(
+          2818,
+          "ready",
+          "refactor(browser): move the browser and device routes' DB access",
+          "proj",
+          "37m",
+          { by: 2418 },
+        ),
+        T(
+          2817,
+          "ready",
+          "refactor(tasks): move the task, review-relay and workflow routes' DB access",
+          "proj",
+          "37m",
+          { by: 2418 },
+        ),
+        T(
+          2816,
+          "ready",
+          "refactor(sessions): move the session, terminal and agent routes' DB access",
+          "proj",
+          "37m",
+          { by: 2418 },
+        ),
+        T(
+          2815,
+          "ready",
+          "refactor(projects): move the project-* routes' DB access",
+          "proj",
+          "37m",
+          { by: 2418 },
+        ),
+        T(2814, "ready", "refactor(projects): move projects.ts's DB access", "proj", "37m", {
+          by: 2418,
+        }),
+        T(2812, "ready", "refactor(storage): move the storage routes' DB access", "proj", "37m", {
+          by: 2418,
+        }),
+        T(2415, "ready", "chore(deps): remove the unused runtime dependency", "proj", "1h"),
+        T(
+          2826,
+          "ready",
+          "fix(tasks): every merge-recording path must record the release",
+          "tasks",
+          "2h",
+        ),
+        T(2825, "ready", "test(tasks): the reviewer-then-terminal ordering", "tasks", "2h"),
+        T(310, "ready", "feat(helper): sync the per-host config on connect", null, "1h", {
+          p: "mullion-helper",
+        }),
+        T(
+          2402,
+          "claimed",
+          "refactor(sessions): split the control-socket operations",
+          "sess",
+          "5m",
+          { q: true },
+        ),
+        T(
+          2404,
+          "claimed",
+          "refactor(hosts): move the remote host client's git builders",
+          "proj",
+          "5m",
+          { q: true },
+        ),
+        T(
+          2401,
+          "doing",
+          "refactor(sessions): split the internal agent API into per-domain modules",
+          "sess",
+          "5m",
+          { ws: "Working" },
+        ),
+        T(
+          2822,
+          "doing",
+          "fix(tasks): an approving review that never posted keeps holding auto-approve",
+          "tasks",
+          "7m",
+          { ws: "Working", pr: 2834 },
+        ),
+        T(
+          2820,
+          "doing",
+          "fix(tasks): a mid-loop turn end or a recovered API error is not a rebase",
+          "tasks",
+          "2m",
+          { ws: "Working", pr: 2835 },
+        ),
+        T(
+          2418,
+          "review",
+          "refactor(projects): forbid new route → db imports with a ratcheted baseline",
+          "proj",
+          "2m",
+          { ws: "Finished", rs: "Waiting to start", pr: 2833, needs: "Awaiting approval" },
+        ),
+        T(
+          2827,
+          "review",
+          "fix(tasks): a worker that finished is not rebased onto the new base",
+          "tasks",
+          "12m",
+          { ws: "Finished", rs: "Reviewing", pr: 2836, am: true },
+        ),
+        T(88, "review", "fix(skills): version-keyed updates for mcode copy-not-link", null, "9m", {
+          p: "ai-agent-skills",
+          ws: "Finished",
+          rs: "Reviewing",
+          pr: 61,
+        }),
+      ];
+      const N = {
+        all: TASKS.length,
+        needs: TASKS.filter((t) => t.needs).length,
+        running: TASKS.filter((t) => t.st === "doing").length,
+        blocked: TASKS.filter((t) => t.by).length,
+        am: TASKS.filter((t) => t.am).length,
+        ready: TASKS.filter((t) => t.st === "ready").length,
+        review: TASKS.filter((t) => t.st === "review").length,
+        backlog: TASKS.filter((t) => t.st === "backlog").length,
+        active: TASKS.filter((t) => ["claimed", "doing", "review"].includes(t.st)).length,
+        list: TASKS.filter((t) => ["claimed", "doing", "review", "ready"].includes(t.st)).length,
+        helper: TASKS.filter((t) => t.p === "mullion-helper").length,
+        skills: TASKS.filter((t) => t.p === "ai-agent-skills").length,
+        noEpic: TASKS.filter((t) => !t.ep).length,
+        epicClaude: TASKS.filter((t) => t.ep === "proj" && t.agent === "claude").length,
+        claude: TASKS.filter((t) => t.agent === "claude").length,
+      };
+      N.def = TASKS.filter((t) => t.p === DEF).length;
+      const COLS = [
+        ["backlog", "Backlog"],
+        ["ready", "Ready"],
+        ["claimed", "Claimed"],
+        ["doing", "In progress"],
+        ["review", "Reviewing"],
+        ["done", "Done"],
+        ["failed", "Failed"],
+      ];
+
+      /* ───────── board pieces ───────── */
+      const lnk = (t) => `<span class="lnk">${t}</span>`;
+      const sess = (kind, state) =>
+        `<span class="sess ${state === "Working" || state === "Reviewing" ? "run" : state === "Finished" ? "fin" : "wait"}"><span class="dot"></span>${kind} · ${state} ${I("popout", 10)}</span>`;
+      const card = (t, o = {}) => {
+        const ep = t.ep ? EPICS[t.ep] : null;
+        return `<div class="card${o.sel === t.id ? " sel" : ""}" style="--ep:${ep ? ep.c : "var(--border)"}">
+          <div class="ct">${t.title}</div>
+          <div class="cm">${lnk("#" + t.id + " ↗")}${t.pr ? lnk("PR #" + t.pr) : ""}<span class="sp"></span><span>${t.agent} · ${t.age}</span></div>
+          <div class="cm"><span class="proj">${t.p}</span><span class="sp"></span>${ep ? `<span class="ept" title="Epic: ${ep.n}"><span class="dot" style="color:${ep.c}"></span>epic #${ep.num}</span>` : ""}</div>
+          ${t.needs || t.am ? `<div>${t.needs ? chip("warn", t.needs) : ""}${t.am ? chip("ok", "Approved · awaiting merge") : ""}</div>` : ""}
+          ${t.ws || t.rs ? `<div class="sessrow">${t.ws ? sess("worker", t.ws) : ""}${t.rs ? sess("reviewer", t.rs) : ""}</div>` : ""}
+          ${t.q ? `<div>${chip("warn", "Queued · waiting for a free slot")}</div>` : ""}
+          ${t.by && o.blockedChip !== false ? `<div>${chip("warn", I("block", 11) + " Blocked by #" + t.by)}</div>` : ""}</div>`;
+      };
+      const col = (key, name, items, o = {}) => {
+        if (!items.length) return `<div class="rail"><span>${name} · 0</span></div>`;
+        const blocked = items.filter((t) => t.by);
+        const rest = items.filter((t) => !t.by);
+        let body = "";
+        if (o.stack && blocked.length > 2) {
+          body += `<details class="stack"><summary>${I("block", 13)} <b>${blocked.length} blocked by #${blocked[0].by}</b><span class="sp"></span>${I("chevr", 12)}</summary><div class="inner">${blocked.map((t) => card(t, { ...o, blockedChip: false })).join("")}</div></details>`;
+        } else body += blocked.map((t) => card(t, o)).join("");
+        body += rest.map((t) => card(t, o)).join("");
+        return `<div class="col"><div class="col-h">${name}<span class="n">${items.length}</span></div><div class="col-b">${body}</div></div>`;
+      };
+      const boardCols = (tasks, o = {}) =>
+        COLS.filter(([k]) => !(o.mergeQueued && k === "claimed"))
+          .map(([k, n]) =>
+            col(
+              k,
+              n,
+              tasks.filter(
+                (t) => t.st === k || (o.mergeQueued && k === "doing" && t.st === "claimed"),
+              ),
+              o,
+            ),
+          )
+          .join("");
+      const board = (tasks, o = {}) => `<div class="board">${boardCols(tasks, o)}</div>`;
+      const ADHOC = [
+        ["fix flaky windows socket test", "run", "claude", "3m"],
+        ["investigate theme bug", "need", "codex", "12m"],
+        ["review #2833 locally", "run", "claude", "20m"],
+        ["spike: mcode runtime", "idle", "opencode", "2h"],
+        ["docs pass", "idle", "claude", "1d"],
+        ["dock preview poke", "need", "claude", "5h"],
+      ];
+      const adhoc = (
+        open,
+      ) => `<div style="border-top:1px solid var(--border-soft)"><div class="adhoc" style="border-top:0">${I(open ? "chevd" : "chevr", 12)} <b style="color:var(--fg);letter-spacing:.06em;font-size:11px">AD-HOC SESSIONS (NO TASK)</b><span class="chip">20</span><span class="dots">${'<i style="background:var(--g)"></i>'.repeat(9)}${'<i style="background:var(--y)"></i>'.repeat(3)}${'<i style="background:var(--dim)"></i>'.repeat(8)}</span><span>9 running · 3 need you · 8 idle</span></div>
+        ${open ? `<div class="lanes">${ADHOC.map(([n, s, a, age]) => `<div class="lc"><span class="dot" style="color:${s === "run" ? "var(--g)" : s === "need" ? "var(--y)" : "var(--dim)"}"></span><div style="min-width:0"><div class="lt">${n}</div><div class="cm"><span>${a}</span><span class="sp"></span><span>${age}</span></div></div></div>`).join("")}</div>` : ""}</div>`;
+      const dockbar = `<div class="adhoc" style="color:var(--dim)">${I("chevr", 12)} <b style="letter-spacing:.06em;font-size:11px">DOCK</b> collapsed</div>`;
+      const checkRow = (label, on, extra = "") =>
+        `<div class="it"><span class="cb${on ? " on" : ""}"></span>${label}${extra}</div>`;
+      const switchRow = (label, on) =>
+        `<div class="it">${label}<span class="sw${on ? " on" : ""}"></span></div>`;
+
+      /* ───────── 0 · Today ───────── */
+      const vToday =
+        () => `<div class="app"><div class="bar">${btn(I("plus") + " New task")}${btn("Hide done")}${btn("Show archived")}${btn(`Awaiting merge (${N.am})`)}${btn("Clear done")}</div>
+        <div class="old">${btn(I("block", 12) + " Blocked only")}
+        <div class="chips">${PROJECTS.map((p, i) => chip(i === 13 ? "info" : "", p)).join("")}</div>
+        <div class="annot">◀ four stacked rows ≈ 200px before the first card. Scope (project, “Phase”), state (blocked, awaiting merge) and display (hide done, archived) are mixed and in no order.</div>
+        <div style="display:flex;gap:8px;align-items:center"><span class="cap">Phase</span>${btn("All " + I("chevd", 12))}<span class="annot">“Phase” is really the parent epic (#701)</span></div></div>
+        ${board(TASKS, {})}${adhoc(false)}${dockbar}</div>`;
+
+      ic.panel = '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>';
+      ic.check = '<path d="M5 12.5l4.5 4.5L19 7"/>';
+
+      /* ───────── 1 · Filter bar (1a) + optional facet rail (from 1c) ───────── */
+      const barA = (o = {}) => `<div class="bar" style="position:relative">
+          ${btn(I("panel", 13) + (o.rail ? ' <span class="n">on</span>' : ""), o.rail ? "on" : "")}
+          ${btn(`${DEF} <span class="n">+2</span> ${I("chevd", 12)}`)}
+          <div class="tabs"><span class="tab on">All <span class="n">${N.all}</span></span><span class="tab warn">Needs me <span class="n">${N.needs}</span></span><span class="tab">Running <span class="n">${N.running}</span></span><span class="tab">Blocked <span class="n">${N.blocked}</span></span><span class="tab">Awaiting merge <span class="n">${N.am}</span></span></div>
+          ${btn(I("filter", 12) + " Filter " + I("chevd", 11))}${btn(I("sliders", 12) + " Display " + I("chevd", 11))}
+          <span class="sp"></span>${btn(I("plus") + " New task", "primary")}</div>
+          <div class="bar" style="border-bottom:0;padding-top:6px"><span class="cap" style="margin:0">Filters</span>${o.epicTok ? `<span class="tok">Epic: #2400 projects, worktrees &amp; storage <span class="x">×</span></span><span class="tok">Agent: claude <span class="x">×</span></span><span class="btn ghost">Clear all</span>` : '<span class="cap" style="margin:0">none</span>'}<span class="sp"></span><span class="cap" style="margin:0">${o.epicTok ? `${N.epicClaude} of ${N.all} tasks` : `${N.all} tasks`}</span></div>`;
+      const facets = () => `<div class="facets">
+          <div class="h">State</div><div class="it on"><span class="cb on"></span>All<span class="n">${N.all}</span></div><div class="it"><span class="cb"></span>Needs me<span class="n">${N.needs}</span></div><div class="it"><span class="cb"></span>Blocked<span class="n">${N.blocked}</span></div><div class="it"><span class="cb"></span>Awaiting merge<span class="n">${N.am}</span></div>
+          <div class="h">Projects · 21</div><div class="it"><input placeholder="Filter projects…" style="width:100%;background:var(--sidebar-2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--fg);font:inherit"></div><div class="it on"><span class="cb on"></span>${DEF}<span class="n">${N.def}</span></div><div class="it on"><span class="cb on"></span>mullion-helper<span class="n">${N.helper}</span></div><div class="it on"><span class="cb on"></span>ai-agent-skills<span class="n">${N.skills}</span></div><div class="it" style="color:var(--dim)">+ 18 more</div>
+          <div class="h">Epics · by number</div>${Object.values(EPICS)
+            .map(
+              (e) =>
+                `<div class="it" title="${e.n}"><span class="dot" style="color:${e.c}"></span><span class="mono" style="color:var(--dim)">#${e.num}</span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70px">${e.n.replace(/^[a-z]+\(([a-z]+)\): /, "")}</span><span class="mini"><i style="width:${(e.done / e.total) * 100}%;background:${e.c}"></i></span></div>`,
+            )
+            .join(
+              "",
+            )}<div class="it" style="color:var(--dim)">No epic<span class="n">${N.noEpic}</span></div></div>`;
+      const popProject = `<div class="pop" style="left:100px;top:44px;width:300px"><input class="s" placeholder="Search 21 projects…" />
+          <div class="h">Recent</div>${checkRow(DEF, 1, `<span class="n">${N.def}</span>`)}${checkRow("mullion-helper", 1, `<span class="n">${N.helper}</span>`)}${checkRow("ai-agent-skills", 1, `<span class="n">${N.skills}</span>`)}
+          <div class="h">All projects</div>${checkRow(".github", 0, '<span class="n">0</span>')}${checkRow("aerie-media-dashboard", 0, '<span class="n">2</span>')}${checkRow("ansible-playbooks", 0, '<span class="n">1</span>')}
+          <div class="it" style="color:var(--dim)">… 15 more · type to search</div>
+          <div class="it" style="border-top:1px solid var(--border-soft);margin-top:4px"><span class="chip">Default</span> follow the sidebar's project</div></div>`;
+      const popFilter = `<div class="pop" style="left:470px;top:44px;width:340px"><input class="s" placeholder="Filter by epic, agent, text…" />
+          <div class="h">Epic · parent issue</div>${Object.values(EPICS)
+            .map((e, i) =>
+              checkRow(
+                `<span class="dot" style="color:${e.c}"></span><span class="mono" style="color:var(--dim)">#${e.num}</span> ${e.n.replace(/^[a-z]+\([a-z]+\): /, "")}`,
+                i === 0,
+                `<span class="n">${e.done}/${e.total}</span>`,
+              ),
+            )
+            .join("")}${checkRow("No epic", 0, '<span class="n">2</span>')}
+          <div class="h">Agent</div>${checkRow("claude", 1, '<span class="n">19</span>')}${checkRow("auto", 0, '<span class="n">5</span>')}
+          <div class="h">Text</div><div class="it" style="color:var(--dim)">search title, issue #, PR #</div></div>`;
+      const popDisplay = `<div class="pop" style="left:560px;top:44px;width:290px"><div class="h">Columns</div>${switchRow("Hide Done &amp; Failed", 0)}${switchRow("Show archived", 0)}${switchRow("Claimed as its own column", 0)}
+          <div class="h">Layout</div><div class="it">Group by <span class="n">None · <b style="color:var(--fg)">Epic</b> · Project</span></div><div class="it">Card density <span class="n"><b style="color:var(--fg)">Compact</b> · Comfortable</span></div><div class="it">Facets panel <span class="n">Off · <b style="color:var(--fg)">On</b> · Auto</span></div>
+          <div class="h">Maintenance</div><div class="it">Clear done tasks <span class="n">12</span></div></div>`;
+      const vA =
+        () => `<p class="cap">Facets off (default): one filter row, full board width</p><div class="app">${barA()}${board(TASKS, { stack: true, mergeQueued: true })}${adhoc(false)}</div>
+        <p class="cap" style="margin-top:14px">Facets on (the 1c rail, one click on the bar; remembered; “Auto” opens it above ~1440px or &gt;8 projects). Claimed is merged into In progress everywhere (decided).</p><div class="app" style="width:1280px">${barA({ rail: 1 })}<div style="display:flex">${facets()}<div style="flex:1;min-width:0">${board(TASKS, { stack: true, mergeQueued: true })}</div></div>${adhoc(false)}</div>
+        <div class="row" style="margin-top:14px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popProject}</div></div><div><p class="cap">Filter menu open (epic is filtered here, shown as a token)</p><div class="app" style="height:380px;overflow:hidden;width:1100px">${barA({ epicTok: 1 })}${popFilter}</div></div><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popDisplay}</div></div></div>`;
+
+      /* ───────── 2 · Cards & columns ───────── */
+      const vBoard = (
+        merged,
+      ) => `<p class="cap">${merged ? "Claimed merged into In progress as a “Queued” badge" : "Claimed kept as its own column (today)"} · three projects in scope · ad-hoc lane expanded</p>
+        <div class="app">${barA()}${board(
+          TASKS.filter((t) => t.ep !== "ui"),
+          { stack: true, mergeQueued: merged, sel: 2822 },
+        )}${adhoc(true)}</div>
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)"><b>Kept from today:</b> issue and PR numbers on every card, as links (↗ opens GitHub); the project name, always shown (it is the only thing telling a #310 from a #2310 across projects); the worker and reviewer session pills, clickable to open that session; the ad-hoc overview. <b>Changed:</b> the truncated “↳ feat(projects): projects, worktre…” line becomes the epic's colour edge plus a <code>↳ #2400</code> tag (hover = full title); the 7 cards blocked by #2418 collapse into one stack; empty Done/Failed (and any empty column) shrink to a 34px rail; a card that needs you carries one amber chip.</div>`;
+      const vEpic = () => {
+        const mk = (e, ts, key) =>
+          `<div class="lane-h"><span class="dot" style="color:${e ? e.c : "var(--dim)"}"></span>${e ? `<b class="mono">#${e.num}</b> <b>${e.n}</b><span class="bar-p" style="width:90px;height:5px;background:var(--border);border-radius:9px;overflow:hidden;display:inline-block"><i style="display:block;height:100%;width:${(e.done / e.total) * 100}%;background:${e.c}"></i></span><span class="cap" style="margin:0">${e.done}/${e.total} closed</span>${lnk("↗")}` : "<b>No epic</b>"}</div>${board(ts, { stack: true, mergeQueued: true })}`;
+        return `<p class="cap">Group by epic replaces the “Phase” select: one lane per parent issue, titled <b>#number + title</b>, with sub-issue progress (<code>subIssueCompleted / subIssueTotal</code>) and a link to the issue. Dragging between columns changes status; dragging into another lane is refused (it would change the parent).</p><div class="app">${barA()}${[
+          "proj",
+          "sess",
+          "tasks",
+        ]
+          .map((k) =>
+            mk(
+              EPICS[k],
+              TASKS.filter((t) => t.ep === k),
+            ),
+          )
+          .join("")}${mk(
+          null,
+          TASKS.filter((t) => !t.ep),
+        )}</div>`;
+      };
+
+      /* ───────── 3 · Sidebar (status first, then details) ───────── */
+      const STEPS = ["Backlog", "Ready", "Claimed", "In progress", "Reviewing", "Done"];
+      const steps = (at) =>
+        `<div class="steps">${STEPS.map((s, i) => `<span class="step ${i < at ? "d" : i === at ? "c" : ""}">${i < at ? "✓" : i === at ? "●" : "○"}<em>${s}</em></span>`).join("")}</div>`;
+      const sbList = (
+        w,
+        sel,
+      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="title">Tasks<span class="sub">${N.list} active · ${DEF}</span></span><span class="ibtn">${I("popout")}</span></div>
+        <div class="chips">${chip("on", `All ${N.list}`)}${chip("warn", `${N.needs} needs you`)}${chip("info", `${N.review} reviewing`)}${chip("ok", `${N.running} running`)}${chip("", `${N.ready} ready`)}</div>
+        ${["review", "doing", "claimed", "ready"]
+          .flatMap((k) => TASKS.filter((t) => t.st === k))
+          .slice(0, 9)
+          .map(
+            (t) =>
+              `<div class="srow${sel === t.id ? " sel" : ""}"><span class="st" style="color:${t.st === "doing" ? "var(--g)" : t.st === "review" ? "var(--b)" : "var(--dim)"}"><span class="dot"></span></span><div style="min-width:0"><div class="tt">#${t.id} ${t.title.replace(/^[a-z]+\([a-z]+\): /, "")}</div><div class="mm"><span>${t.st === "doing" ? "running" : t.st}</span><span class="opt">· ${t.age}</span>${t.needs ? chip("warn", t.needs) : ""}${t.rs ? chip("info", "review: " + t.rs.toLowerCase()) : ""}${t.by ? `<span class="chip warn">blocked #${t.by}</span>` : ""}</div></div></div>`,
+          )
+          .join("")}</div>`;
+      const detailReview =
+        () => `<div class="stat"><div class="r1"><span class="big info">REVIEWING</span><span class="cap" style="margin:0">for 2m</span><span class="sp"></span><span class="chip warn">Awaiting your approval</span></div>${steps(4)}
+          <div class="next"><b>Next:</b> the reviewer session has not started yet. Approve to merge, or Reject to send it back.</div></div>
+        <div class="sec"><div class="sec-h">Review <span class="sp"></span><span class="chip">round 1 of 3</span></div>
+          <dl class="kv0"><dt>Verdict</dt><dd><span class="chip">pending</span> <span class="cap" style="margin:0">no previous round</span></dd><dt>Reviewer</dt><dd>${sess("reviewer", "Waiting to start")}</dd><dt>Worker</dt><dd>${sess("worker", "Finished")}</dd><dt>Approval</dt><dd>human — auto-return 0/3</dd></dl></div>
+        <div class="sec"><div class="sec-h">Pull request</div><div style="font-size:12px">${lnk("PR #2833 ↗")} <span class="chip ok">${I("check", 10)} CI 12/12</span> <span class="chip ok">mergeable</span> <span class="chip">up to date</span></div></div>
+        <div class="acts">${btn("Approve task", "primary")}${btn("Reject")}${btn("Give up")}</div>`;
+      const detailBlocked =
+        () => `<div class="stat"><div class="r1"><span class="big warn">BLOCKED</span><span class="cap" style="margin:0">ready · 37m</span></div>${steps(1)}
+          <div class="next"><b>Next:</b> starts automatically when ${lnk("#2418 ↗")} is done. ${chip("info", "#2418 reviewing · awaiting approval")}</div></div>
+        <div class="sec"><div class="sec-h">Review</div><div class="cap" style="margin:0">Not started — no worker yet.</div></div>
+        <div class="acts">${btn("Start now", "primary")}${btn("Edit")}${btn("Move to backlog")}</div>`;
+      const titleOf = (id) =>
+        (TASKS.find((t) => t.id === id) || {}).title.replace(/^[a-z]+\([a-z]+\): /, "");
+      const hrow = (id, st, tone) =>
+        `<div class="hr">${lnk("#" + id + " ↗")}<span class="ht">${titleOf(id)}</span>${chip(tone, st)}</div>`;
+      const hierarchy = (
+        kind,
+      ) => `<div class="hier"><div class="hr">${chip("", "epic")}${lnk("#2400 ↗")}<span class="ht">projects, worktrees &amp; storage</span><span class="cap" style="margin:0">3/9</span></div>
+        ${kind === "blocked" ? `<div class="hl">Blocked by</div>${hrow(2418, "reviewing", "info")}<div class="hl">Siblings blocked by the same task</div>${hrow(2818, "ready", "warn")}${hrow(2817, "ready", "warn")}<div class="hr">${lnk("+ 4 more")}</div>` : `<div class="hl">Blocks 7</div>${hrow(2819, "ready", "warn")}${hrow(2818, "ready", "warn")}${hrow(2817, "ready", "warn")}<div class="hr">${lnk("+ 4 more")}</div>`}</div>`;
+      const detailDetails = (
+        title,
+        kind,
+      ) => `<div class="sec"><div class="sec-h">Details</div><dl class="kv0"><dt>Project</dt><dd>${DEF}</dd><dt>Issue</dt><dd>${lnk("#" + title + " ↗")}</dd><dt>Agent</dt><dd>claude</dd></dl><div class="body" style="padding:6px 0 0"><b style="color:var(--fg)">Context</b> The intended layering is routes → services → db… <span class="more">Show more</span></div></div>
+        <div class="sec"><div class="sec-h">Hierarchy</div>${hierarchy(kind)}</div>
+        <div class="sec"><div class="sec-h">Timeline <span class="sp"></span><span class="tabs" style="text-transform:none;letter-spacing:0"><span class="tab on">Important</span><span class="tab">All</span><span class="tab">Custom</span></span></div></div>
+        <div class="tl"><span class="t">4m</span><span class="k">Status</span><span>Agent: done</span><span class="t">4m</span><span class="k">Status</span><span>Entered full-screen mode</span><span class="t">4m</span><span class="k">Status</span><span>Agent: generating</span></div>`;
+      const detailBody = (kind) =>
+        kind === "blocked"
+          ? detailBlocked() + detailDetails("2819", "blocked")
+          : detailReview() + detailDetails("2418", "review");
+      const detailHead = (kind) =>
+        `<div class="vh"><span class="ibtn">${I("back")}</span><span class="title">${kind === "blocked" ? "#2819 move the host, preview and device routes' DB access" : "#2418 forbid new route → db imports"}</span><span class="ibtn" title="Pop out to a docked panel">${I("popout")}</span></div>`;
+      const sbDetail = (w, kind) =>
+        `<div class="sbf" style="width:${w}px">${detailHead(kind)}${detailBody(kind)}</div>`;
+      const vSide =
+        () => `<div class="row"><div><p class="cap">List · 340px</p>${sbList(340, 2418)}</div><div><p class="cap">Detail · reviewing · 340px</p>${sbDetail(340)}</div><div><p class="cap">Detail · blocked · 340px</p>${sbDetail(340, "blocked")}</div><div><p class="cap">Detail · 260px (compact)</p>${sbDetail(260)}</div></div>
+        <h2>Board + sidebar together (no drawer, no horizontal scroll)</h2>
+        <div class="row"><div class="app narrow" style="width:760px">${barA()}${board(
+          TASKS.filter((t) => t.ep !== "ui" && t.ep !== "dock" && t.st !== "backlog"),
+          { stack: true, mergeQueued: true, sel: 2418 },
+        )}</div>${sbDetail(340)}</div>
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)"><b>Status first, details second.</b> The detail opens on a status block: the big status, a step tracker, one “Next:” sentence, and the single thing waiting on you. Then Review (round, verdict, reviewer and worker sessions), then the pull request (CI, mergeability), then the actions, and only then details, hierarchy and the timeline. The list rows carry the same hints (“Awaiting approval”, “review: reviewing”). Clicking a card selects it and opens this view; detail does <b>not</b> depend on the list's scope, so a Backlog, Done, archived or other-project task opens too. Pop-out keeps today's docked panel.</div>`;
+
+      /* ───────── 4 · Timeline filters ───────── */
+      const KINDS = [
+        "Attention",
+        "Status",
+        "Title",
+        "Files",
+        "Review",
+        "Promote",
+        "Permission",
+        "Stop",
+        "Tool",
+        "Exit",
+        "Plan",
+        "Elicitation",
+        "Question",
+        "Todo",
+        "Diff",
+        "Dev Server",
+        "PR CI",
+        "PR Review",
+        "PR Comments",
+        "PR Merged",
+        "PR Conflicts",
+        "Message Sent",
+        "Message",
+        "abd4a351",
+        "Unattributed",
+      ];
+      const vTL =
+        () => `<div class="row"><div><p class="cap">Today · ${KINDS.length} chips, 5 rows</p><div class="tlf"><div class="bar"><span class="chip">Search timeline…</span>${btn("Only attention")}</div><div class="chips">${KINDS.map((k, i) => chip(i < 16 ? "on" : "", k)).join("")}</div></div></div>
+        <div><p class="cap">Proposed · one row, grouped popover</p><div class="tlf" style="height:330px"><div class="bar"><span class="chip" style="flex:1">${I("search", 11)} Search timeline…</span><div class="tabs"><span class="tab on">Important</span><span class="tab">All</span><span class="tab">Custom ${I("chevd", 10)}</span></div>${btn("Only attention")}</div>
+        <div class="pop" style="left:150px;top:44px;min-width:330px"><div class="h">Agent</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["Attention", "Status", "Tool", "Plan", "Question", "Todo", "Permission"].map((k) => chip("ok", k)).join("")}</div><div class="h">Session</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["Title", "Files", "Stop", "Exit", "Message Sent", "Message"].map((k) => chip("", k)).join("")}</div><div class="h">Git &amp; PR</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["PR CI", "PR Review", "PR Comments", "PR Merged", "PR Conflicts", "Diff"].map((k) => chip("ok", k)).join("")}</div><div class="h">Review &amp; promote</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px;padding-bottom:6px">${["Review", "Promote", "Elicitation", "Dev Server"].map((k) => chip("", k)).join("")}</div></div></div></div></div>
+        <p class="cap" style="margin-top:8px">The same component serves the session timeline, so it benefits more than tasks. “Important” = today's default-on set; the agent-isolate row (<code>abd4a351</code>, Unattributed) moves into the popover as an “Agent” group.</p>`;
+
+      /* ───────── 6 · Phone ───────── */
+      const vPhone =
+        () => `<div class="row"><div class="phone"><div class="bar"><b>Tasks</b><span class="sp"></span>${btn(I("filter", 12) + " Filter · 1")}${btn(I("plus"), "primary")}</div>
+        <div class="bar">${btn(`${DEF} <span class="n">+2</span> ${I("chevd", 12)}`)}${btn(`Needs me <span class='n'>${N.needs}</span>`)}</div>
+        <div class="bar"><div class="tabs" style="width:100%;justify-content:space-between"><span class="tab">Backlog ${N.backlog}</span><span class="tab on">Ready ${N.ready}</span><span class="tab">Active ${N.active}</span><span class="tab">Done</span></div></div>
+        <div class="cards"><details class="stack" open><summary>${I("block", 13)} <b>${N.blocked} blocked by #2418</b></summary></details>${TASKS.filter(
+          (t) => t.st === "ready" && !t.by,
+        )
+          .slice(0, 3)
+          .map((t) => card(t))
+          .join("")}</div>${adhoc(false)}</div>
+        <div class="phone"><div class="bar"><b>Tasks · Active</b><span class="sp"></span>${btn(`Needs me <span class='n'>${N.needs}</span>`)}</div><div class="cards">${TASKS.filter(
+          (t) => ["claimed", "doing", "review"].includes(t.st),
+        )
+          .slice(0, 4)
+          .map((t) => card(t, { sel: 2418 }))
+          .join("")}</div></div>
+        <div class="phone">${detailHead()}${detailBody()}</div></div>
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)">Phone applies the desktop decisions unchanged: the same card (linked #issue / PR, project, session pills, epic tag), the same 1a filter controls (project picker, quick views, one Filter sheet with a count badge, Display in the overflow), Claimed merged into In progress, and the ad-hoc strip. The “single rail” is the full-screen sheet: tapping a card opens the same status-first detail as the sidebar, with a back arrow in place of the rail's; pop-out does not exist on phone.</div>`;
+
+      /* ───────── nav ───────── */
+      /* ───────── 4b · Overlap with the GitHub sidebar ───────── */
+      const taskStrip = (compact) =>
+        `<div class="stat" style="border:1px solid var(--status-info-border);border-radius:8px;margin:8px 10px;padding:8px"><div class="r1"><span class="cap" style="margin:0">Task ${lnk("#2418 ↗")}</span><span class="big info">REVIEWING</span><span class="sp"></span><span class="chip warn">Awaiting your approval</span></div>${compact ? "" : steps(4)}<div class="next"><b>Next:</b> reviewer has not started. Approve to merge, or Reject.</div><div style="display:flex;gap:6px;flex-wrap:wrap">${btn("Approve task", "primary")}${btn("Reject")}${btn("⋯")}<span class="sp"></span>${lnk("Open task →")}</div></div>`;
+      const prDetail = (
+        w,
+      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="ibtn">${I("back")}</span><span class="title">#2833 forbid new route → db imports<span class="sub">OPEN</span></span><span class="ibtn">${I("gh")}</span></div>
+        ${taskStrip(false)}
+        <div class="sec"><div class="sec-h">Status</div><div style="display:flex;gap:6px;flex-wrap:wrap">${chip("ok", I("check", 10) + " CI 12/12")}${chip("ok", "mergeable")}${chip("", "up to date")}${chip("warn", "0 approvals")}</div></div>
+        <div class="sec"><div class="sec-h">Checks</div><div class="hier"><div class="hr">${chip("ok", "pass")}<span class="ht">lint</span></div><div class="hr">${chip("ok", "pass")}<span class="ht">test-backend</span></div><div class="hr">${chip("ok", "pass")}<span class="ht">test-frontend</span></div></div></div>
+        <div class="sec"><div class="sec-h">Reviews &amp; threads</div><div class="cap" style="margin:0">No reviews yet · 0 open threads</div></div>
+        <div class="sec"><div class="sec-h">Description</div><div class="body" style="padding:0">The intended layering is routes → services → db…</div></div></div>`;
+      const vOverlap =
+        () => `<div class="row"><div><p class="cap">GitHub sidebar · PR detail of a task's PR</p>${prDetail(340)}</div><div><p class="cap">Task sidebar · detail (same status block on top)</p>${sbDetail(340)}</div>
+        <div style="max-width:440px"><p class="cap">Who owns what</p><div class="sbf" style="width:440px"><dl class="kv0" style="grid-template-columns:110px 1fr;padding:10px;gap:8px 10px">
+          <dt>Task view</dt><dd>Process: status, step tracker, next step, worker and reviewer sessions, review round and verdict, blockers and epic, task timeline</dd>
+          <dt>GitHub view</dt><dd>Artifact: PR diff, checks, review threads, mergeability, issue discussion and comments</dd>
+          <dt>Shared block</dt><dd>One <code>TaskStatus</code> component (status, steps, next, primary action, “Open task”) rendered in both; the PR view shows it only when the PR belongs to a task</dd>
+          <dt>Task view shows</dt><dd>A one-line PR summary (CI, mergeable) and “PR #2833 ↗”, which opens the GitHub PR detail</dd>
+          <dt>Strip ⋯ menu</dt><dd>The other task actions, shown only when they apply: Address changes, Fix conflicts, Merge, Re-review, Retry, Give up</dd><dt>Navigation</dt><dd>Task ↔ PR links both ways; Back returns to where you came from</dd></dl></div></div></div>
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)">No duplicated action sets: Approve / Reject / Give up are defined once in the shared block. The PR view keeps everything GitHub-shaped (checks list, threads, description) and the task view never reproduces it.</div>`;
+      const VIEWS = [
+        [
+          "today",
+          "0 · Today (for contrast)",
+          vToday,
+          "<b>Reference.</b> What the tab looks like now, annotated: four filter rows, project chips that grow with every project, and a “Phase” select that really means epic.",
+        ],
+        [
+          "a",
+          "1 · Filter bar (1a) + facets ★",
+          vA,
+          "<b>Decided: 1a, with 1c as an optional panel.</b> One row: <ul><li><b>Facets</b> → toggle for the 1c rail (state, projects, epics with progress); off by default so the board keeps full width</li><li><b>Project</b> → searchable picker (counts, defaults to the sidebar's project)</li><li><b>Blocked / Awaiting merge</b> → quick-view tabs with counts</li><li><b>Epic / agent / text</b> → Filter ▾, shown as removable tokens (“Phase” renamed Epic)</li><li><b>Hide done / archived / group by / Claimed</b> → Display ▾</li></ul>",
+        ],
+        [
+          "board",
+          "2 · Cards & columns",
+          () => vBoard(false),
+          "<b>Cards, blocked stack, empty-column rails, ad-hoc lane.</b> <b>Decided:</b> Claimed is merged into In progress; queued cards carry a “Queued” badge. The toggle shows the old separate column for comparison.",
+          true,
+        ],
+        ["epic", "3 · Group by epic", vEpic, "<b>Epic swimlanes titled with the epic number.</b>"],
+        [
+          "side",
+          "4 · Sidebar: status first",
+          vSide,
+          "<b>The sidebar is the task detail — status first, then details.</b>",
+        ],
+        [
+          "overlap",
+          "4b · Task ↔ GitHub overlap",
+          vOverlap,
+          "<b>Task view vs GitHub view.</b> Split by subject (process vs artifact), share one status block, link both ways.",
+        ],
+        [
+          "tl",
+          "5 · Timeline filters",
+          vTL,
+          "<b>Timeline filter chips.</b> 25 chips → a preset switch and a grouped popover (approved).",
+        ],
+        [
+          "phone",
+          "6 · Phone",
+          vPhone,
+          "<b>Phone (390px).</b> Same decisions as desktop, aligned with the single-rail design.",
+        ],
+      ];
+
+      let cur = location.hash.slice(1) || "a";
+      let merged = true;
+      function render() {
+        const v = VIEWS.find((x) => x[0] === cur) || VIEWS[1];
+        document.getElementById("nav").innerHTML = VIEWS.map(
+          (x) => `<button class="${x[0] === cur ? "on" : ""}" data-k="${x[0]}">${x[1]}</button>`,
+        ).join("");
+        document.getElementById("note").innerHTML =
+          v[3] +
+          (v[4]
+            ? ` <label style="margin-left:10px"><input type="checkbox" id="mg" ${merged ? "checked" : ""}> merge Claimed into In progress</label>`
+            : "");
+        const html = v[4] ? vBoard(merged) : v[2]();
+        document.getElementById("stage").innerHTML = ["dark", "light"]
+          .map((t) => `<div class="pane t-${t}"><div class="lbl">${t}</div>${html}</div>`)
+          .join("");
+        document.querySelectorAll("#nav button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              cur = b.dataset.k;
+              location.hash = cur;
+              render();
+            }),
+        );
+        const mg = document.getElementById("mg");
+        if (mg)
+          mg.onchange = () => {
+            merged = mg.checked;
+            render();
+          };
+      }
+      render();
+    </script>
+  </body>
+</html>
