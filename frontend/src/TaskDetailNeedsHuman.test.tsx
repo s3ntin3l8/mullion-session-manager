@@ -47,6 +47,34 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
 
+  it("shows the review-post-failed block with the sync error, and not once it is cleared", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        needsHumanReason: "review-post-failed",
+        githubSyncError: "Not Found",
+        reviewFindings: "## Round 1\nAll good.",
+      }),
+    ];
+    const { unmount } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(
+      screen.getByText(/approving review could not be posted to GitHub, needs a human — Not Found/),
+    ).toBeInTheDocument();
+    unmount();
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        needsHumanReason: null,
+        githubSyncError: "Not Found",
+        reviewFindings: "## Round 1\nAll good.",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/could not be posted to GitHub/)).toBeNull();
+  });
+
   it("shows nothing for a merged task", () => {
     tasks = [
       makeTask({

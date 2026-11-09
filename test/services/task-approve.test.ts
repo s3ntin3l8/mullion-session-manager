@@ -145,6 +145,25 @@ describe("approveTask", () => {
     await app.close();
   });
 
+  it("clears a review-post-failed hold so the merge sweep is not blocked", async () => {
+    const app = await buildApp();
+    const { task, project } = await createProjectAndReviewingTask(app, true);
+    app.db
+      .update(tasks)
+      .set({ needsHumanReason: "review-post-failed" })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
+
+    const outcome = await approveTask(app, held, project, "approve");
+
+    expect(outcome.ok).toBe(true);
+    const row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
+    expect(row.needsHumanReason).toBeNull();
+    expect(row.mergeRequestedAt).not.toBeNull();
+    await app.close();
+  });
+
   it("does not set mergeRequestedAt when the project's mergeOnApprove is off", async () => {
     const app = await buildApp();
     const { task, project } = await createProjectAndReviewingTask(app, false);
