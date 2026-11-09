@@ -29,7 +29,7 @@
     "frontend/src/UnifiedBoard.test.tsx": 1226,
     "src/cli/core.mjs": 1599,
     "src/mcp/tools.mjs": 1333,
-    "src/plugins/control-socket.ts": 2131,
+    "src/plugins/control-socket.ts": 360,
     "src/routes/internal.ts": 2210,
     "src/routes/projects.ts": 1403,
     "src/routes/tasks.ts": 1173,
