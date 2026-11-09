@@ -119,22 +119,31 @@ class FakeBrowser extends EventEmitter {
   }
 }
 
-// Lets a test park BrowserManager.openTarget inside its downloads sweep, which
-// runs before the endpoint is recorded: the earliest point of an open.
+// Lets a test park BrowserManager.openTarget right after its downloads sweep,
+// which runs before the endpoint is recorded: the earliest point of an open.
 const fsHooks = vi.hoisted(() => ({
   rm: null as null | ((target: string) => Promise<void>),
+  /** Every directory listing made while a test records them; only
+   * forgetProject lists directories, so this marks where its sweep starts. */
+  readdirCalls: [] as string[],
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof fsPromises>();
   return {
     ...actual,
+    readdir: (async (...args: Parameters<typeof actual.readdir>) => {
+      fsHooks.readdirCalls.push(String(args[0]));
+      return (actual.readdir as (...a: unknown[]) => Promise<unknown>)(...args);
+    }) as typeof actual.readdir,
     rm: async (...args: Parameters<typeof actual.rm>) => {
       const hook = fsHooks.rm;
-      if (hook && String(args[0]).includes(`${path.sep}downloads${path.sep}`)) {
-        fsHooks.rm = null; // park the first downloads sweep only
+      const isSweep = hook && String(args[0]).includes(`${path.sep}downloads${path.sep}`);
+      const result = await actual.rm(...args);
+      if (isSweep) {
+        fsHooks.rm = null; // park after the first downloads sweep only
         await hook(String(args[0]));
       }
-      return actual.rm(...args);
+      return result;
     },
   };
 });
@@ -725,10 +734,15 @@ describe("BrowserManager", () => {
   });
 
   describe("forgetProject while a browser is still opening", () => {
-    /** Lets every already-queued promise continuation run, without wall-clock time. */
-    async function microtaskTurns(n = 100) {
-      for (let i = 0; i < n; i++) await Promise.resolve();
-    }
+    beforeEach(() => {
+      fsHooks.readdirCalls.length = 0;
+    });
+
+    /** Lets every queued microtask (and so every non-I/O step forgetProject
+     * could take) run. The proof that it is waiting is the readdir spy: its
+     * directory sweep is the first thing forgetProject does after the wait. */
+    const settle = () => new Promise<void>((r) => setImmediate(r));
+    const sweepStarted = () => fsHooks.readdirCalls.length > 0;
 
     it("waits for the open, closes its context and leaves no file or pooled context", async () => {
       let release!: () => void;
@@ -750,16 +764,14 @@ describe("BrowserManager", () => {
       await inOpen; // the open is parked inside openTarget, in `pending`
       expect(withHook.instanceCount).toBe(0);
 
-      let forgotten = false;
-      const forgetting = withHook.forgetProject(7).then(() => {
-        forgotten = true;
-      });
-      await microtaskTurns();
-      expect(forgotten).toBe(false); // it waits for the open to settle
+      const forgetting = withHook.forgetProject(7);
+      await settle();
+      expect(sweepStarted()).toBe(false); // it waits for the open to settle
 
       release();
       await opening;
       await forgetting;
+      expect(sweepStarted()).toBe(true);
 
       const left = (dir: string) =>
         fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith("project-7")) : [];
@@ -774,12 +786,11 @@ describe("BrowserManager", () => {
       const gate = new Promise<void>((r) => (release = r));
       let blocked!: () => void;
       const inOpen = new Promise<void>((r) => (blocked = r));
-      // Files the project already has on disk when forgetProject runs, made
-      // for real so the assertions below can fail.
+      // The open parks after its own downloads sweep, so a file made now
+      // can only be removed by forgetProject's deletion.
       fsHooks.rm = async (downloads) => {
         fs.mkdirSync(downloads, { recursive: true });
         fs.writeFileSync(path.join(downloads, "old.csv"), "x");
-        fs.writeFileSync(path.join(dataDir, "project-7-0123456789abcdef.json"), "{}");
         blocked();
         await gate;
       };
@@ -791,16 +802,15 @@ describe("BrowserManager", () => {
       expect(launchedBrowsers).toHaveLength(0);
       expect(fs.readdirSync(path.join(dataDir, "downloads"))).toHaveLength(1);
 
-      let forgotten = false;
-      const forgetting = withEndpoint.forgetProject(7).then(() => {
-        forgotten = true;
-      });
-      await microtaskTurns();
-      expect(forgotten).toBe(false); // it waits for the open to settle
+      const forgetting = withEndpoint.forgetProject(7);
+      await settle();
+      expect(sweepStarted()).toBe(false); // it waits for the open to settle
+      expect(fs.readdirSync(path.join(dataDir, "downloads")).length).toBe(1);
 
       release();
       await opening;
       await forgetting;
+      expect(sweepStarted()).toBe(true);
 
       // The open recorded its endpoint after forgetProject was called; the
       // wait is what lets forgetProject remove it too.
@@ -822,17 +832,15 @@ describe("BrowserManager", () => {
       const closing = manager.closeTarget(target(7));
       await vi.waitFor(() => expect(ctx.closeSpy).toHaveBeenCalled());
       const parked = manager.getOrLaunch(target(7)); // parks on `closing`
-      let forgotten = false;
-      const forgetting = manager.forgetProject(7).then(() => {
-        forgotten = true;
-      });
-      await microtaskTurns();
-      expect(forgotten).toBe(false);
+      const forgetting = manager.forgetProject(7);
+      await settle();
+      expect(sweepStarted()).toBe(false);
 
       release();
       await closing;
       await parked;
       await forgetting;
+      expect(sweepStarted()).toBe(true);
 
       const left = (dir: string) =>
         fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith("project-7")) : [];
