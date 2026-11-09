@@ -57,46 +57,6 @@
       "note": "pending: moved behind a service by its route-family issue"
     },
     {
-      "from": "src/routes/project-docker.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/project-files.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/project-git-writes.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/project-git.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/project-github.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/project-setup.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/project-tooling.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/project-urls.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
       "from": "src/routes/review-relay.ts",
       "to": "src/db/schema.ts",
       "note": "pending: moved behind a service by its route-family issue"

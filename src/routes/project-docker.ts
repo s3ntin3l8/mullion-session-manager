@@ -19,8 +19,12 @@
 // project-docker.ts -> projects.ts).
 
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import {
+  findActiveDockSession,
+  getProjectById,
+  listLocalProjectCwds,
+  markActiveSessionExited,
+} from "../services/project-records.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../shared/constants.js";
 import { getStoredSettings } from "../services/settings.js";
@@ -107,12 +111,7 @@ export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Pro
 // doc comment for why the full list is needed rather than just the one
 // project's own cwd).
 export function localProjectCwds(app: FastifyInstance): string[] {
-  return app.db
-    .select({ cwd: projects.cwd })
-    .from(projects)
-    .where(eq(projects.hostId, LOCAL_HOST_ID))
-    .all()
-    .map((row) => row.cwd);
+  return listLocalProjectCwds(app.db);
 }
 
 // Issue #73 — this project's own discovered Compose services (never
@@ -190,7 +189,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app.db, projectId);
       if (!project) return reply.notFound();
       if (project.hostId !== LOCAL_HOST_ID) {
         return reply.badRequest("Docker service management is only available for local projects");
@@ -245,7 +244,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app.db, projectId);
       if (!project) return reply.notFound();
       if (project.hostId !== LOCAL_HOST_ID) {
         return reply.badRequest("Docker service management is only available for local projects");
@@ -385,18 +384,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
   const withStackLock = createKeyedLock();
 
   async function findActiveStackSession(projectId: number, composeProject: string) {
-    const [existing] = app.db
-      .select()
-      .from(sessions)
-      .where(
-        and(
-          eq(sessions.projectId, projectId),
-          eq(sessions.kind, "dock"),
-          eq(sessions.status, "active"),
-          eq(sessions.name, stackSessionName(composeProject)),
-        ),
-      )
-      .all();
+    const existing = findActiveDockSession(app.db, projectId, stackSessionName(composeProject));
     if (!existing) return null;
     // AGENTS.md's own invariant — `sessions.status` records INTENT, not live
     // process state; a `docker compose` process that finished on its own
@@ -556,18 +544,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
       // here: it collapses both "no row" and "dead-process row" to `null`,
       // giving no handle on the actual conflicting row to reconcile.
       // Select it directly instead.
-      const [conflictingRow] = app.db
-        .select()
-        .from(sessions)
-        .where(
-          and(
-            eq(sessions.projectId, projectId),
-            eq(sessions.name, sessionParams.name),
-            eq(sessions.kind, "dock"),
-            eq(sessions.status, "active"),
-          ),
-        )
-        .all();
+      const conflictingRow = findActiveDockSession(app.db, projectId, sessionParams.name);
 
       // Same primitive findActiveStackSession already trusts for this
       // identity. Issue #1232 — three-way, not a boolean: an "unknown"
@@ -593,11 +570,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
         // Confirmed dead — flip it, CAS'd exactly like session-reconciler.ts's
         // own sweep, so a concurrent reconciler pass touching the same row
         // can't race this update.
-        app.db
-          .update(sessions)
-          .set({ status: "exited" })
-          .where(and(eq(sessions.id, conflictingRow.id), eq(sessions.status, "active")))
-          .run();
+        markActiveSessionExited(app.db, conflictingRow.id);
       }
 
       // Retry once. If this ALSO hits unique-conflict, some other actor won
@@ -636,7 +609,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
         const projectId = Number(request.params.id);
         if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        const project = getProjectById(app.db, projectId);
         if (!project) return reply.notFound();
         if (project.hostId !== LOCAL_HOST_ID) {
           return reply.badRequest("Docker service management is only available for local projects");
@@ -734,7 +707,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
         const projectId = Number(request.params.id);
         if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        const project = getProjectById(app.db, projectId);
         if (!project) return reply.notFound();
         if (project.hostId !== LOCAL_HOST_ID) {
           return reply.badRequest("Docker service management is only available for local projects");

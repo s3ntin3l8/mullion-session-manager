@@ -23,8 +23,7 @@
 // arrangement project-github-writes.ts uses for loadProjectRepoContext.
 
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { eq, inArray } from "drizzle-orm";
-import { projects } from "../db/schema.js";
+import { getProjectById, getProjectsByIds, type ProjectRow } from "../services/project-records.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveSessionCwdTargets } from "../services/session-cwd-targets.js";
@@ -117,7 +116,7 @@ export interface ProjectGitBranchesResult {
  */
 export async function resolveProjectGitBranches(
   app: FastifyInstance,
-  project: typeof projects.$inferSelect,
+  project: ProjectRow,
   detail: boolean,
   opts?: { freshPrs?: boolean },
 ): Promise<ProjectGitBranchesResult | null> {
@@ -149,7 +148,7 @@ export async function resolveProjectGitBranches(
  */
 async function attachBranchPrState(
   app: FastifyInstance,
-  project: typeof projects.$inferSelect,
+  project: ProjectRow,
   branches: GitBranchInfo[],
   fresh = false,
 ): Promise<void> {
@@ -209,7 +208,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
       const projectOutcome = new HostOutcomes();
       const problemsResult: Record<string, GitStatusFailure> = {};
       if (ids.length > 0) {
-        const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
+        const rows = getProjectsByIds(app.db, ids);
 
         for (const project of rows) {
           if (project.hostId === LOCAL_HOST_ID) {
@@ -431,7 +430,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
         return { branches: branchesResult, prs: prsResult, defaultBranchCi: defaultBranchCiResult };
       }
 
-      const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
+      const rows = getProjectsByIds(app.db, ids);
 
       const refsOutcome = new HostOutcomes();
       await Promise.all(
@@ -563,7 +562,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
       } else {
         const projectId = Number(projectIdRaw);
         if (!Number.isInteger(projectId)) return reply.badRequest("Invalid projectId");
-        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        const project = getProjectById(app.db, projectId);
         if (!project) return reply.notFound("Project not found");
         target = { hostId: project.hostId, cwd: project.cwd };
       }
@@ -714,7 +713,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
   // project's own worktrees; it is accepted only if `git worktree list`
   // reports it, so it can never point git at an arbitrary directory.
   async function resolveGitLogCwd(
-    project: typeof projects.$inferSelect,
+    project: ProjectRow,
     requestedCwd: string | undefined,
   ): Promise<string | "forbidden"> {
     if (requestedCwd === undefined || requestedCwd === project.cwd) return project.cwd;
@@ -730,7 +729,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
   // git widgets), 503 when the host can't be reached, 400 for a worktree the
   // agent refused. `undefined` in the return means "reply already sent".
   async function remoteHistory<T>(
-    project: typeof projects.$inferSelect,
+    project: ProjectRow,
     reply: FastifyReply,
     call: () => Promise<HostGitResult<HostHistoryValue<T>>>,
   ): Promise<{ value: T } | undefined> {

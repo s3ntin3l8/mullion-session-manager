@@ -1,6 +1,14 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
-import { projects, projectUrls } from "../db/schema.js";
+import { getProjectById } from "../services/project-records.js";
+import {
+  createProjectUrl,
+  deleteProjectUrl,
+  findProjectUrl,
+  listProjectUrlIds,
+  listProjectUrls,
+  reorderProjectUrls,
+  updateProjectUrl,
+} from "../services/project-urls-store.js";
 
 interface CreateProjectUrlBody {
   label: string;
@@ -65,7 +73,7 @@ function isValidUrl(value: string): boolean {
 }
 
 function getProjectOr404(app: FastifyInstance, projectId: number) {
-  const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+  const project = getProjectById(app.db, projectId);
   return project ?? null;
 }
 
@@ -77,12 +85,7 @@ export async function projectUrlsRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       if (!getProjectOr404(app, projectId)) return reply.notFound("Project not found");
 
-      return app.db
-        .select()
-        .from(projectUrls)
-        .where(eq(projectUrls.projectId, projectId))
-        .orderBy(projectUrls.order)
-        .all();
+      return listProjectUrls(app.db, projectId);
     },
   );
 
@@ -99,18 +102,7 @@ export async function projectUrlsRoute(app: FastifyInstance) {
         return reply.badRequest("url must be a valid http(s) URL");
       }
 
-      const existing = app.db
-        .select({ order: projectUrls.order })
-        .from(projectUrls)
-        .where(eq(projectUrls.projectId, projectId))
-        .all();
-      const nextOrder = existing.length > 0 ? Math.max(...existing.map((r) => r.order)) + 1 : 0;
-
-      const [created] = app.db
-        .insert(projectUrls)
-        .values({ projectId, label, url, favorite: favorite ?? false, order: nextOrder })
-        .returning()
-        .all();
+      const created = createProjectUrl(app.db, projectId, { label, url, favorite });
       reply.code(201);
       return created;
     },
@@ -125,11 +117,7 @@ export async function projectUrlsRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       if (!Number.isInteger(urlId)) return reply.badRequest("Invalid url id");
 
-      const [existing] = app.db
-        .select()
-        .from(projectUrls)
-        .where(and(eq(projectUrls.id, urlId), eq(projectUrls.projectId, projectId)))
-        .all();
+      const existing = findProjectUrl(app.db, projectId, urlId);
       if (!existing) return reply.notFound();
 
       const { label, url, favorite } = request.body;
@@ -137,16 +125,7 @@ export async function projectUrlsRoute(app: FastifyInstance) {
         return reply.badRequest("url must be a valid http(s) URL");
       }
 
-      const [updated] = app.db
-        .update(projectUrls)
-        .set({
-          ...(label !== undefined ? { label } : {}),
-          ...(url !== undefined ? { url } : {}),
-          ...(favorite !== undefined ? { favorite } : {}),
-        })
-        .where(eq(projectUrls.id, urlId))
-        .returning()
-        .all();
+      const updated = updateProjectUrl(app.db, urlId, { label, url, favorite });
       if (!updated) return reply.notFound();
       return updated;
     },
@@ -160,14 +139,10 @@ export async function projectUrlsRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       if (!Number.isInteger(urlId)) return reply.badRequest("Invalid url id");
 
-      const [existing] = app.db
-        .select()
-        .from(projectUrls)
-        .where(and(eq(projectUrls.id, urlId), eq(projectUrls.projectId, projectId)))
-        .all();
+      const existing = findProjectUrl(app.db, projectId, urlId);
       if (!existing) return reply.notFound();
 
-      app.db.delete(projectUrls).where(eq(projectUrls.id, urlId)).run();
+      deleteProjectUrl(app.db, urlId);
       reply.code(204);
     },
   );
@@ -186,25 +161,14 @@ export async function projectUrlsRoute(app: FastifyInstance) {
         return reply.badRequest("ids must not contain duplicates");
       }
 
-      const existingIds = new Set(
-        app.db
-          .select({ id: projectUrls.id })
-          .from(projectUrls)
-          .where(eq(projectUrls.projectId, projectId))
-          .all()
-          .map((r) => r.id),
-      );
+      const existingIds = new Set(listProjectUrlIds(app.db, projectId));
       for (const id of ids) {
         if (!existingIds.has(id)) {
           return reply.badRequest(`URL id ${id} does not belong to this project`);
         }
       }
 
-      app.db.transaction((tx) => {
-        for (let i = 0; i < ids.length; i++) {
-          tx.update(projectUrls).set({ order: i }).where(eq(projectUrls.id, ids[i])).run();
-        }
-      });
+      reorderProjectUrls(app.db, ids);
 
       reply.code(204);
     },

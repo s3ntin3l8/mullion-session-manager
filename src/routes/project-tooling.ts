@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
+import { getProjectById } from "../services/project-records.js";
 import { parseSkillFrontmatter } from "../services/skills.js";
 import { isDangerousSkillName } from "../services/hook-adapters/skill-name.js";
 import {
@@ -104,7 +103,7 @@ function assertValidSkillLikeContent(raw: string): void {
 
 export async function projectToolingRoute(app: FastifyInstance) {
   function getProjectOr404(projectId: number) {
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    const project = getProjectById(app.db, projectId);
     return project ?? null;
   }
 

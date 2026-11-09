@@ -19,8 +19,12 @@
 // would make projects.ts -> project-github.ts -> projects.ts an import cycle.
 
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
-import { projects, tasks } from "../db/schema.js";
+import {
+  getProjectById,
+  getTaskStatusForIssue,
+  listTaskStatusesByIssue,
+  type ProjectRow,
+} from "../services/project-records.js";
 import { getStoredSettings } from "../services/settings.js";
 import type { GitHubRepoRef } from "../services/git-remote.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
@@ -85,7 +89,7 @@ import type {
 } from "../shared/types.js";
 
 interface ProjectRepoContext {
-  project: typeof projects.$inferSelect;
+  project: ProjectRow;
   repoRef: GitHubRepoRef;
   token: string;
 }
@@ -133,7 +137,7 @@ export async function loadProjectRepoContext(
     return null;
   }
 
-  const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+  const project = getProjectById(app.db, projectId);
   if (!project) {
     reply.notFound();
     return null;
@@ -365,13 +369,7 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
         });
         const numbers = result.issues.map((i) => i.number);
         const taskRows =
-          numbers.length === 0
-            ? []
-            : app.db
-                .select({ issueNumber: tasks.issueNumber, status: tasks.status })
-                .from(tasks)
-                .where(and(eq(tasks.projectId, projectId), inArray(tasks.issueNumber, numbers)))
-                .all();
+          numbers.length === 0 ? [] : listTaskStatusesByIssue(app.db, projectId, numbers);
         const taskStatus = new Map(taskRows.map((t) => [t.issueNumber, t.status]));
         return {
           ...result,
@@ -407,14 +405,10 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
       if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid issue number");
       try {
         const detail = await getIssueDetail(token, repoRef.owner, repoRef.repo, number);
-        const taskRow = app.db
-          .select({ status: tasks.status })
-          .from(tasks)
-          .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, number)))
-          .get();
+        const taskStatus = getTaskStatusForIssue(app.db, projectId, number);
         return {
           ...detail,
-          taskStatus: taskRow?.status ?? null,
+          taskStatus,
           triage: issueTriageFor(repoRef.owner, repoRef.repo, number),
           // #2049 — who a comment from the box posts as.
           writeIdentity: await describeSidebarWriteIdentity(app, repoRef),
@@ -1261,7 +1255,7 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const existing = getProjectById(app.db, projectId);
       if (!existing) return reply.notFound();
 
       const updated = await maybeAutoEnableConventionalTitles(app, existing, {
