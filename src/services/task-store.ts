@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNotNull, isNull, or, type SQL } from "drizzle-orm";
 import { TASK_MODEL_COLUMNS } from "./task-model-patch.js";
+import { getProjectById, listProjects } from "./project-store.js";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 
 // The DB access of the task, task-push, review-relay and webhook routes lives
@@ -9,6 +10,8 @@ import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 // ran inline: ordering, filtering and CAS guards are unchanged.
 
 export { TASK_STATUSES };
+// The projects table is owned by project-store; re-exported so task callers keep one import.
+export { getProjectById, listProjects };
 export type TaskRow = typeof tasks.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 type SessionRow = typeof sessions.$inferSelect;
@@ -205,11 +208,6 @@ export function getTaskRowById(app: FastifyInstance, taskId: number) {
   return row;
 }
 
-export function getProjectById(app: FastifyInstance, projectId: number): ProjectRow | undefined {
-  const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-  return project;
-}
-
 export function getTaskById(app: FastifyInstance, taskId: number): TaskRow | undefined {
   const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
   return task;
@@ -218,10 +216,6 @@ export function getTaskById(app: FastifyInstance, taskId: number): TaskRow | und
 export function getSessionById(app: FastifyInstance, sessionId: number): SessionRow | undefined {
   const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
   return session;
-}
-
-export function listProjects(app: FastifyInstance): ProjectRow[] {
-  return app.db.select().from(projects).all();
 }
 
 /** Every project's id/cwd/host, oldest first: the first project on a repo owns its issue import. */
