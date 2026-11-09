@@ -14,6 +14,8 @@ export interface ApprovalStateRow {
   projectAutoApprove: boolean | null;
   /** Optional so a row that omits it reads as none. */
   needsHumanReason?: string | null;
+  /** The terminal failed-post hold, which sits beside any other reason (withAutoReturnCapped). */
+  reviewPostFailed?: boolean;
 }
 
 // #2234 — an approving review whose findings are in leaves the task waiting
@@ -36,7 +38,9 @@ export function deriveApprovalState(
   if (!approved) return null;
   // The approving review never reached GitHub: the approve sweep stands down
   // (holdsForReviewPost) until a human acts.
-  if (row.needsHumanReason === "review-post-failed") return "awaiting-human";
+  if (row.needsHumanReason === "review-post-failed" || row.reviewPostFailed === true) {
+    return "awaiting-human";
+  }
   const sweepWillApprove = !!row.projectAutoApprove && row.prNumber !== null && taskMasterEnabled;
   return sweepWillApprove ? "auto-pending" : "awaiting-human";
 }

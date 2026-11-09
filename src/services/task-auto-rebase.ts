@@ -21,6 +21,7 @@ import { CLEARED_REVIEW_RUN, hasReviewHandle } from "./task-review-handle.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
+import { REVIEW_POST_FAILED_MARKER } from "./task-merge-human.js";
 import { buildRebasePrompt, taskCommitTitlePath } from "./task-prompt.js";
 import {
   MAX_RAPID_REBASE_ABORTS,
@@ -78,7 +79,10 @@ async function findRebaseBlocker(
   task: typeof tasks.$inferSelect,
   backend: ReturnType<typeof resolveBackend>,
 ): Promise<string | null> {
-  if (task.reviewPostPending !== null) return "a review post is pending";
+  // The terminal failed marker is a hold, not an in-flight post: nothing may change.
+  if (task.reviewPostPending !== null && task.reviewPostPending !== REVIEW_POST_FAILED_MARKER) {
+    return "a review post is pending";
+  }
   if (task.status !== "reviewing" && task.status !== "done") {
     return `the task is ${task.status}, a worker round is in flight`;
   }

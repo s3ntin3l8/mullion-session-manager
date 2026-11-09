@@ -385,7 +385,8 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     await reconcileTasks(app);
 
     const row = read();
-    expect(row.reviewPostPending).toBeNull();
+    expect(row.reviewPostPending).toBe("review-post-failed");
+    expect(holdsForReviewPost(row)).toBe(true);
     expect(row.githubSyncError).toContain("Not Found");
     // An approving verdict that never reached GitHub flags the task for a human
     // and is not auto-approved against GitHub's standing CHANGES_REQUESTED.
@@ -607,7 +608,10 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     vi.setSystemTime(Date.now() + 25 * 3_600_000);
     await reconcileTasks(app);
     const row = read();
-    expect(row.reviewPostPending).toBeNull();
+    // The verdict is approving, so giving up holds it instead of releasing it.
+    expect(row.reviewPostPending).toBe("review-post-failed");
+    expect(row.needsHumanReason).toBe("review-post-failed");
+    expect(holdsForReviewPost(row)).toBe(true);
     expect(row.githubSyncError).toContain("Gave up posting");
 
     app.db
@@ -662,7 +666,7 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
 
     expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
     const row = read();
-    expect(row.reviewPostPending).toBeNull();
+    expect(row.reviewPostPending).toBe("review-post-failed");
     expect(row.githubSyncError).toContain("head moved");
     await app.close();
   });
@@ -679,7 +683,7 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     await reconcileTasks(app);
 
     expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
-    expect(read().reviewPostPending).toBeNull();
+    expect(read().reviewPostPending).toBe("review-post-failed");
     expect(read().needsHumanReason).toBe("review-post-failed");
     expect(mockMergePullRequest).not.toHaveBeenCalled();
     await app.close();
@@ -692,8 +696,76 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
 
     await reconcileTasks(app);
 
-    expect(read().reviewPostPending).toBeNull();
+    // The reason is kept, and the hold survives beside it.
+    expect(read().reviewPostPending).toBe("review-post-failed");
     expect(read().needsHumanReason).toBe("cap");
+    expect(holdsForReviewPost(read())).toBe(true);
+    expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  for (const reason of ["cap", "rebase-exhausted", "blocked-threads"] as const) {
+    it(`a permanent failure on a task carrying ${reason} is neither auto-approved nor merged`, async () => {
+      const { app, task, read } = await setup(`p-post-hold-${reason}`);
+      app.db.update(tasks).set({ needsHumanReason: reason }).where(eq(tasks.id, task.id)).run();
+      mockCreatePullRequestReview.mockRejectedValue(new GitHubApiError("Not Found", 404));
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      await reconcileTasks(app);
+      vi.setSystemTime(Date.now() + 3_600_000);
+      await reconcileTasks(app);
+
+      expect(read().needsHumanReason).toBe(reason);
+      expect(read().status).toBe("reviewing");
+      expect(holdsForReviewPost(read())).toBe(true);
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+
+      // The same task after a human approved it elsewhere (done, merge requested).
+      app.db
+        .update(tasks)
+        .set({ status: "done", mergeRequestedAt: new Date(), reviewSessionId: null })
+        .where(eq(tasks.id, task.id))
+        .run();
+      vi.setSystemTime(Date.now() + 2 * 3_600_000);
+      await reconcileTasks(app);
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      expect(read().reviewPostPending).toBe("review-post-failed");
+      await app.close();
+    });
+  }
+
+  it("POST /merge on a task holding cap plus a failed post releases the post hold", async () => {
+    const { app, task, read } = await setup("p-post-route-cap");
+    app.db
+      .update(tasks)
+      .set({
+        status: "done",
+        needsHumanReason: "cap",
+        reviewPostPending: "review-post-failed",
+        lastReviewVerdict: "approved",
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/merge` });
+    expect(res.statusCode).toBe(200);
+    expect(read().reviewPostPending).toBeNull();
+    expect(holdsForReviewPost(read())).toBe(false);
+    await app.close();
+  });
+
+  it("drops the failed marker once the task leaves review or its PR is merged", async () => {
+    const { app, task, read } = await setup("p-post-marker-drop");
+    app.db
+      .update(tasks)
+      .set({
+        status: "in_progress",
+        reviewPostPending: "review-post-failed",
+        reviewSessionId: null,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+    await reconcileTasks(app);
+    expect(read().reviewPostPending).toBeNull();
     await app.close();
   });
 

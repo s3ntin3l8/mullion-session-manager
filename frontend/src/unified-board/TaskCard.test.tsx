@@ -1088,6 +1088,22 @@ describe("UnifiedBoard task columns", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the review-post-failed block beside another reason via reviewPostFailed", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        needsHumanReason: "rebase-exhausted",
+        reviewPostFailed: true,
+        githubSyncError: "Not Found",
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(
+      screen.getByText(/approving review could not be posted to GitHub, needs a human — Not Found/),
+    ).toBeInTheDocument();
+  });
+
   it("renders no review-post-failed block on a merged task", () => {
     tasks = [
       makeTask({

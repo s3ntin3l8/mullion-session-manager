@@ -15,6 +15,7 @@ import {
 import { resolveMullionOwnThreadsWithOutcome } from "./task-own-threads.js";
 import { isApprovingVerdict } from "./task-prompt.js";
 import { createRetryBackoff } from "./task-retry-backoff.js";
+import { REVIEW_POST_FAILED_MARKER } from "./task-merge-human.js";
 
 // A review post that keeps failing transiently is given up on after this long:
 // a marker must not outlive any plausible outage, or the task would wait on it
@@ -55,12 +56,17 @@ const SET_REVIEW_POST_FAILED = sql<
   string | null
 >`CASE WHEN needs_human_reason IS NULL THEN 'review-post-failed' ELSE needs_human_reason END`;
 
-/** Compare-and-set the marker away and, in the same statement, hold the task. */
+/** Compare-and-set the marker to the terminal failed state and, in the same
+ * statement, flag the task. The marker (not the reason column) is the hold, so
+ * it survives another reason (`cap`, `rebase-exhausted`, ...) being present. */
 function clearMarkerAndHold(app: FastifyInstance, taskId: number, expectedRaw: string): boolean {
   return (
     app.db
       .update(tasks)
-      .set({ reviewPostPending: null, needsHumanReason: SET_REVIEW_POST_FAILED })
+      .set({
+        reviewPostPending: REVIEW_POST_FAILED_MARKER,
+        needsHumanReason: SET_REVIEW_POST_FAILED,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.reviewPostPending, expectedRaw)))
       .run().changes > 0
   );
@@ -68,8 +74,9 @@ function clearMarkerAndHold(app: FastifyInstance, taskId: number, expectedRaw: s
 
 /**
  * True while an approving verdict has not (or could not be) put on GitHub: the
- * post is still pending, or it failed permanently and `needsHumanReason` is
- * `review-post-failed`. GitHub may still hold an older CHANGES_REQUESTED, so
+ * post is still pending, or it failed for good (`reviewPostPending` is the
+ * terminal failed marker, or a legacy row's `needsHumanReason` is
+ * `review-post-failed`). GitHub may still hold an older CHANGES_REQUESTED, so
  * auto-approve and auto-merge must both stand down until a human acts.
  */
 export function holdsForReviewPost(
@@ -217,6 +224,14 @@ export async function retryPendingReviewPosts(
   let attempted = 0;
   for (const { task, project } of rows) {
     const raw = task.reviewPostPending!;
+    if (raw === REVIEW_POST_FAILED_MARKER) {
+      // A terminal hold, never retried: kept while a human can still act on it
+      // (in review, or approved and awaiting the merge), dropped otherwise.
+      const held =
+        task.status === "reviewing" || (task.status === "done" && task.mergedAt === null);
+      if (!held) writeReviewPostPending(app, task.id, raw, null);
+      continue;
+    }
     const pending = parsePendingReviewPost(raw);
     const owed =
       task.status === "reviewing" ||
@@ -229,7 +244,12 @@ export async function retryPendingReviewPosts(
       continue;
     }
     if (now - pending.createdAt > REVIEW_POST_MAX_AGE_MS) {
-      if (writeReviewPostPending(app, task.id, raw, null)) {
+      // An approving verdict that never posted leaves GitHub's older
+      // CHANGES_REQUESTED standing: hold instead of releasing.
+      const gaveUp = isApprovingVerdict(pending.verdict)
+        ? clearMarkerAndHold(app, task.id, raw)
+        : writeReviewPostPending(app, task.id, raw, null);
+      if (gaveUp) {
         recordGithubSyncError(
           app,
           task.id,

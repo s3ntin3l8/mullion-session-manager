@@ -24,6 +24,30 @@ export const clearNeedsHumanOnMerge = sql<
   string | null
 >`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'review-post-failed') THEN NULL ELSE needs_human_reason END`;
 
+/**
+ * `tasks.reviewPostPending` value once an approving review's post failed for
+ * good (permanent failure, stale head, or the 24 h give-up). It is a terminal
+ * hold that lives beside whatever `needsHumanReason` the task carries, which a
+ * single column cannot (`holdsForReviewPost` honours it like a pending post);
+ * the retry sweep never posts it. Human exits (approve, merge request, the next
+ * round's ingest) clear it, and the sweep drops it once the task leaves review.
+ */
+export const REVIEW_POST_FAILED_MARKER = "review-post-failed";
+
+/** The board's two booleans for the raw `tasks.reviewPostPending` column. */
+export function reviewPostFlags(raw: string | null) {
+  return {
+    reviewPostPending: raw !== null && raw !== REVIEW_POST_FAILED_MARKER,
+    reviewPostFailed: raw === REVIEW_POST_FAILED_MARKER,
+  };
+}
+
+/** A `.set()` value for `tasks.reviewPostPending` that clears only the
+ * terminal failed marker, leaving a genuinely pending post untouched. */
+export const clearReviewPostFailedMarker = sql<
+  string | null
+>`CASE WHEN review_post_pending = 'review-post-failed' THEN NULL ELSE review_post_pending END`;
+
 /** The `.set()` fields that clear a merge error and its merge-tied reason. */
 export const CLEARED_MERGE_ERROR = {
   mergeError: null,
@@ -33,9 +57,12 @@ export const CLEARED_MERGE_ERROR = {
 /** Like CLEARED_MERGE_ERROR, for a human merge request: that also acts on a
  * `review-post-failed` hold (holdsForReviewPost), so it is released too. */
 export function clearedFor(reason: string | null | undefined) {
-  return reason === "review-post-failed"
-    ? { mergeError: null, needsHumanReason: null }
-    : CLEARED_MERGE_ERROR;
+  return {
+    ...(reason === "review-post-failed"
+      ? { mergeError: null, needsHumanReason: null }
+      : CLEARED_MERGE_ERROR),
+    reviewPostPending: clearReviewPostFailedMarker,
+  };
 }
 
 // A confirmed-merged task never carries a merge error: `mergedAt` wins over a

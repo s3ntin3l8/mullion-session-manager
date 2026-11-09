@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
-import { CLEARED_MERGE_ERROR, clearedFor } from "../services/task-merge-human.js";
+import { CLEARED_MERGE_ERROR, clearedFor, reviewPostFlags } from "../services/task-merge-human.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
@@ -389,12 +389,11 @@ function withAutoReturnCapped<
   installCap: number,
 ): Omit<T, "projectMaxAutoReturnRounds" | "reviewPostPending"> & {
   autoReturnCapped: boolean;
-  reviewPostPending: boolean;
-} {
+} & ReturnType<typeof reviewPostFlags> {
   const { projectMaxAutoReturnRounds, reviewPostPending, ...rest } = row;
   return {
     ...rest,
-    reviewPostPending: reviewPostPending !== null,
+    ...reviewPostFlags(reviewPostPending),
     autoReturnCapped:
       row.autoReturnRounds >=
       resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }, installCap),
