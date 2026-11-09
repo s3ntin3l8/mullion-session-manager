@@ -255,13 +255,15 @@ describe("UnifiedBoard task drag-and-drop", () => {
       .getByText("Backlog", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!
       .querySelector(".task-card")!;
+
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
+    act(() => backlogCard.dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    // Ready is empty, so it was a narrow rail; it opens once a card that can land
+    // there is being dragged, and only then has a body to drop on.
     const readyColumnBody = screen
       .getByText("Ready", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!
       .querySelector(".kanban-column-body")!;
-
-    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
-    act(() => backlogCard.dispatchEvent(createDragEvent("dragstart", dataTransfer)));
     readyColumnBody.dispatchEvent(createDragEvent("drop", dataTransfer));
 
     expect(updateTask).toHaveBeenCalledWith(1, { boardOrder: 0, status: "ready" });
@@ -275,14 +277,14 @@ describe("UnifiedBoard task drag-and-drop", () => {
       .getByText("Ready", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!
       .querySelector(".task-card")!;
-    const doneColumnBody = screen
-      .getByText("Done", { selector: ".kanban-column-title" })
-      .closest(".kanban-column")!
-      .querySelector(".kanban-column-body")!;
-
     const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
     act(() => readyCard.dispatchEvent(createDragEvent("dragstart", dataTransfer)));
-    doneColumnBody.dispatchEvent(createDragEvent("drop", dataTransfer));
+    // Done is empty and cannot take this card, so it stays a rail with no drop body.
+    const doneColumn = screen
+      .getByText("Done", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    expect(doneColumn.querySelector(".kanban-column-body")).toBeNull();
+    doneColumn.dispatchEvent(createDragEvent("drop", dataTransfer));
 
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -295,14 +297,15 @@ describe("UnifiedBoard task drag-and-drop", () => {
       .getByText("Done", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!
       .querySelector(".task-card")!;
-    const readyColumnBody = screen
-      .getByText("Ready", { selector: ".kanban-column-title" })
-      .closest(".kanban-column")!
-      .querySelector(".kanban-column-body")!;
 
     const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
     act(() => doneCard.dispatchEvent(createDragEvent("dragstart", dataTransfer)));
-    readyColumnBody.dispatchEvent(createDragEvent("drop", dataTransfer));
+    // A done card cannot land in Ready, whose empty column therefore stays a rail.
+    const readyColumn = screen
+      .getByText("Ready", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    expect(readyColumn.querySelector(".kanban-column-body")).toBeNull();
+    readyColumn.dispatchEvent(createDragEvent("drop", dataTransfer));
 
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -333,21 +336,22 @@ describe("UnifiedBoard task drag-and-drop", () => {
       .getByText("Ready", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!
       .querySelector(".task-card")!;
-    const doneColumnBody = screen
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
+    act(() => readyCard.dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+
+    // Done cannot take the card: it stays a rail and never becomes a drop target.
+    const doneColumn = screen
       .getByText("Done", { selector: ".kanban-column-title" })
-      .closest(".kanban-column")!
-      .querySelector(".kanban-column-body")!;
+      .closest(".kanban-column")!;
+    act(() => doneColumn.dispatchEvent(createDragEvent("dragover", dataTransfer)));
+    expect(doneColumn.querySelector(".kanban-column-body")).toBeNull();
+    expect(doneColumn.classList.contains("kanban-card-drop-target")).toBe(false);
+
+    // Backlog can: its empty rail opens and highlights.
     const backlogColumnBody = screen
       .getByText("Backlog", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!
       .querySelector(".kanban-column-body")!;
-
-    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
-    act(() => readyCard.dispatchEvent(createDragEvent("dragstart", dataTransfer)));
-
-    act(() => doneColumnBody.dispatchEvent(createDragEvent("dragover", dataTransfer)));
-    expect(doneColumnBody.classList.contains("kanban-card-drop-target")).toBe(false);
-
     act(() => backlogColumnBody.dispatchEvent(createDragEvent("dragover", dataTransfer)));
     expect(backlogColumnBody.classList.contains("kanban-card-drop-target")).toBe(true);
   });
@@ -403,16 +407,16 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
     expect(screen.queryByText(/mullion-task/)).toBeNull();
   });
 
-  it("keeps the seven columns underneath the error note, so the board's shape stays legible", () => {
+  it("keeps the six columns underneath the error note, so the board's shape stays legible", () => {
     tasks = [];
     tasksError = "Failed to fetch";
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     expect(
-      screen.getAllByText(/^Backlog$|^Ready$|^Claimed$|^In Progress$|^Reviewing$|^Done$|^Failed$/, {
+      screen.getAllByText(/^Backlog$|^Ready$|^In Progress$|^Reviewing$|^Done$|^Failed$/, {
         selector: ".kanban-column-title",
       }),
-    ).toHaveLength(7);
+    ).toHaveLength(6);
   });
 
   // The board keeps the last-known-good list on a failed refresh, so the
@@ -922,7 +926,7 @@ describe("UnifiedBoard phone layout", () => {
 
   it("is unchanged when not phone: every column, the lane, no strip or filter sheet", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect(shownTitles()).toHaveLength(7);
+    expect(shownTitles()).toHaveLength(6);
     expect(screen.getByText(/Ad-hoc sessions/)).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Task status" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: "Task filters" })).toBeNull();

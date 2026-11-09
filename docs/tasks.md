@@ -405,12 +405,35 @@ the original session board used.
   keys (`crs.taskBlockedOnlyFilter`, `crs.taskAwaitingMergeOnly`,
   `crs.taskParentFilter`) are migrated into the quick view and the epic filter
   the first time the board loads, then removed.
-- Cards show title, owning project, linked-issue number, resolved agent
-  name, and — nested directly on the card — its worker/review session's
-  live status dot and label, not just a static indicator. A session whose
+- **Columns** (`#2841`): Backlog, Ready, In progress, Reviewing, Done, Failed.
+  `claimed` (the queue state) is **not** a column: a queued task is listed in
+  In progress after the running ones, with its "Queued — waiting for a free
+  slot" hint, so the column holds everything a worker has been given. This is
+  display only — the status, the drag rules and every server transition are
+  unchanged. A column with no tasks shrinks to a narrow rail (its name and a
+  zero count) and opens again while a card that can land there is dragged. Cards
+  that are blocked by the same task(s) collapse into one "N blocked by #B"
+  summary once there are three of them; the summary links to the blocker, expands
+  in place, and a card dropped on it lands before the stack's first card.
+- **Group by** (Display menu, `crs.taskGroupBy`): None, **Epic** or **Project**.
+  Grouped, the board becomes swimlanes, each with its own columns. An epic lane
+  is titled `#N title` with a link to the issue and a progress bar — the epic
+  task's own `n/m closed` sub-issue counts when that task is on the board,
+  otherwise the done share of its child tasks — and a final "No epic" lane. A
+  card can be dragged between Backlog and Ready inside its lane, never into
+  another lane (that would change its parent or project). The phone board stays
+  flat. **Card density** (`crs.taskDensity`): Compact (default) or Comfortable.
+- Cards show the title; the linked **issue** number and the **PR** number as
+  links to GitHub, the resolved agent name and the time in status; the owning
+  **project** (always, since it is what tells one project's `#310` from
+  another's); an `epic #N` tag, whose dot matches the colour of the card's left
+  edge (a stable hash of the epic, one of `--lane-1…6`) and which links to the
+  epic issue; and — nested directly on the card — its worker/review session's
+  live status dot and label, which opens that session. A session whose
   id is still on the task but that's no longer live (killed or reaped)
   renders a muted "ended" chip instead. Status itself is the column a card
-  sits in, not repeated on the card.
+  sits in, not repeated on the card. The task the detail view is showing is
+  ringed.
 - A **host chip** on the card and in the drawer says where the task will run
   (`pinned · <host>`, `auto`, `needs <platform / host>` from its `Platform:` /
   `Host:` lines, or `on <host>` / `on this machine` once a worker session exists). It is read from

@@ -8,6 +8,10 @@ import {
   absoluteDropIndex,
   defaultPhoneColumn,
   visibleColumnWindow,
+  BOARD_COLUMNS,
+  boardColumnOf,
+  boardColumnTasks,
+  foldClaimedCounts,
 } from "./tasksBoard.js";
 import type { Task, TaskStatus } from "./api/index.js";
 
@@ -331,5 +335,57 @@ describe("visibleColumnWindow", () => {
 
   it("is a single column for count 1 (phone)", () => {
     expect(visibleColumnWindow(COLS, "reviewing", 1)).toEqual(["reviewing"]);
+  });
+});
+
+describe("Claimed folded into In progress (#2841)", () => {
+  it("BOARD_COLUMNS is every column except Claimed, in order", () => {
+    expect(BOARD_COLUMNS.map((c) => c.id)).toEqual([
+      "backlog",
+      "ready",
+      "in_progress",
+      "reviewing",
+      "done",
+      "failed",
+    ]);
+  });
+
+  it("shows a claimed task in the In progress column and every other status in its own", () => {
+    expect(boardColumnOf("claimed")).toBe("in_progress");
+    for (const status of [
+      "backlog",
+      "ready",
+      "in_progress",
+      "reviewing",
+      "done",
+      "failed",
+    ] as const) {
+      expect(boardColumnOf(status)).toBe(status);
+    }
+  });
+
+  it("lists running tasks before queued ones, each group in boardOrder", () => {
+    const tasks = [
+      makeTask({ id: 1, status: "claimed", boardOrder: 0 }),
+      makeTask({ id: 2, status: "in_progress", boardOrder: 9 }),
+      makeTask({ id: 3, status: "claimed", boardOrder: 1 }),
+      makeTask({ id: 4, status: "in_progress", boardOrder: 2 }),
+      makeTask({ id: 5, status: "ready" }),
+    ];
+    expect(boardColumnTasks(tasks, "in_progress").map((t) => t.id)).toEqual([4, 2, 1, 3]);
+    expect(boardColumnTasks(tasks, "ready").map((t) => t.id)).toEqual([5]);
+  });
+
+  it("folds the claimed count into In progress", () => {
+    const counts = {
+      backlog: 1,
+      ready: 2,
+      claimed: 3,
+      in_progress: 4,
+      reviewing: 5,
+      done: 6,
+      failed: 7,
+    };
+    expect(foldClaimedCounts(counts)).toEqual({ ...counts, claimed: 0, in_progress: 7 });
   });
 });

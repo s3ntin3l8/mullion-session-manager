@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { DragEvent } from "react";
+import type { CSSProperties, DragEvent } from "react";
 import { useDashboardStore } from "../store/index.js";
 import type { Theme } from "../store/index.js";
 import type { Session, Task } from "../api/index.js";
@@ -20,6 +20,7 @@ import { describeTaskHost } from "../lib/hostBadge.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
+import { epicColourVar, epicUrl } from "./taskLanes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
@@ -47,6 +48,8 @@ export function TaskCard({
   onReorder,
   onDragBegin,
   onDragFinish,
+  selected = false,
+  inStack = false,
 }: {
   task: Task;
   project:
@@ -65,8 +68,13 @@ export function TaskCard({
   onReorder: (draggedId: number) => void;
   onDragBegin: () => void;
   onDragFinish: () => void;
+  // #2841 — the task the sidebar detail is showing (#2842 wires it); rings the card.
+  selected?: boolean;
+  // Inside an expanded blocked stack, whose summary already says what blocks it.
+  inStack?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
+  const epicColour = epicColourVar(task);
   const hosts = useDashboardStore((s) => s.hosts);
   const hostChip = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []);
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
@@ -225,7 +233,9 @@ export function TaskCard({
 
   return (
     <div
-      className={`task-card${severityClass ? ` ${severityClass}` : ""}${task.blockedState === "blocked" ? " task-card-is-blocked" : ""}${dropTarget ? " kanban-card-drop-target" : ""}`}
+      className={`task-card${severityClass ? ` ${severityClass}` : ""}${task.blockedState === "blocked" ? " task-card-is-blocked" : ""}${dropTarget ? " kanban-card-drop-target" : ""}${selected ? " task-card-selected" : ""}`}
+      style={epicColour ? ({ "--task-epic-colour": epicColour } as CSSProperties) : undefined}
+      aria-current={selected ? "true" : undefined}
       draggable
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -248,13 +258,7 @@ export function TaskCard({
       <div className="task-card-title" title={task.title}>
         {task.title}
       </div>
-      <div className="task-card-meta">
-        {project && <span className="task-card-project">{project.name}</span>}
-        {hostChip && (
-          <span className="task-card-host" title={hostChip.title}>
-            {hostChip.label}
-          </span>
-        )}
+      <div className="task-card-meta task-card-meta-links">
         {task.issueNumber !== null &&
           (task.htmlUrl ? (
             // D2 — was a <span> whose only use of htmlUrl was as a tooltip;
@@ -278,28 +282,78 @@ export function TaskCard({
               <GitHubIcon size={11} />#{task.issueNumber}
             </span>
           ))}
-        {/* #701 — sub-issue hierarchy. Ambient context, not a blocker, so
-            this stays an inline meta chip rather than the promoted
-            full-width treatment `blocked` gets below. Falls back to a bare
-            `#N` until fillParentIssueTitles (task-watcher.ts) lazily fills
-            the title — that's not free the way parent_issue_url itself is,
-            so a brief `#N` is expected, not a bug. stopPropagation on click
-            for the same reason the issue/PR links above do: the card root
-            is itself a role="button" with its own onOpen handler, and a
-            drag-then-click still lands a trailing click here. */}
-        {task.parentIssueNumber !== null && (
+        {matchedPr && (
           <a
-            className="task-card-parent"
-            href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
+            className="task-card-pr"
+            href={matchedPr.htmlUrl}
             target="_blank"
             rel="noreferrer"
-            title={task.parentIssueTitle ?? `Parent issue #${task.parentIssueNumber}`}
+            title={matchedPr.title}
+            // Hermes review, PR #577/#580 — this badge sits inside the
+            // draggable card; a drag started on it still ends with the
+            // trailing post-drop click landing on this anchor.
+            // stopPropagation alone only stops handleClick (the card's own
+            // drawer-open handler) from firing — it doesn't stop the
+            // anchor's own default navigation, so the PR would still open
+            // in a new tab as an unwanted side effect of the drag. Same
+            // suppressClickRef guard the card's own handleClick uses above.
             onClick={(e) => {
               e.stopPropagation();
               if (suppressClickRef.current) e.preventDefault();
             }}
           >
-            ↳ {task.parentIssueTitle ?? `#${task.parentIssueNumber}`}
+            <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />
+            PR #{matchedPr.number}
+          </a>
+        )}
+        {!matchedPr && task.prNumber !== null && task.prUrl && (
+          <a
+            className="task-card-pr"
+            href={task.prUrl}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (suppressClickRef.current) e.preventDefault();
+            }}
+          >
+            PR #{task.prNumber}
+          </a>
+        )}
+        <span className="task-card-meta-spacer" />
+        {agentName && (
+          <span className="task-card-agent" title={`Agent: ${agentName}`}>
+            <BotIcon size={11} />
+            {agentName}
+          </span>
+        )}
+        {statusAgeLabel && <span className="task-card-age">{statusAgeLabel}</span>}
+      </div>
+      <div className="task-card-meta task-card-meta-context">
+        {project && <span className="task-card-project">{project.name}</span>}
+        {hostChip && (
+          <span className="task-card-host" title={hostChip.title}>
+            {hostChip.label}
+          </span>
+        )}
+        {/* #2841 — the epic is a colour edge on the card plus this tag, not a truncated
+            "↳ parent title" line that repeated on every card. The tag links to the epic
+            issue; the full title is its tooltip. stopPropagation + suppressClickRef for
+            the same drag-then-click reason the issue and PR links use. */}
+        {task.parentIssueNumber !== null && (
+          <a
+            className="task-card-epic"
+            href={epicUrl(task) ?? undefined}
+            target="_blank"
+            rel="noreferrer"
+            title={`Epic: ${task.parentIssueTitle ?? `#${task.parentIssueNumber}`}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (suppressClickRef.current) e.preventDefault();
+            }}
+          >
+            <span className="task-card-epic-dot" aria-hidden="true" />
+            epic #{task.parentIssueNumber}
           </a>
         )}
         {/* Only meaningful when this task is ITSELF someone's parent, which
@@ -328,37 +382,6 @@ export function TaskCard({
             Archived
           </span>
         )}
-        {matchedPr && (
-          <a
-            className="task-card-pr"
-            href={matchedPr.htmlUrl}
-            target="_blank"
-            rel="noreferrer"
-            title={matchedPr.title}
-            // Hermes review, PR #577/#580 — this badge sits inside the
-            // draggable card; a drag started on it still ends with the
-            // trailing post-drop click landing on this anchor.
-            // stopPropagation alone only stops handleClick (the card's own
-            // drawer-open handler) from firing — it doesn't stop the
-            // anchor's own default navigation, so the PR would still open
-            // in a new tab as an unwanted side effect of the drag. Same
-            // suppressClickRef guard the card's own handleClick uses above.
-            onClick={(e) => {
-              e.stopPropagation();
-              if (suppressClickRef.current) e.preventDefault();
-            }}
-          >
-            <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />#
-            {matchedPr.number}
-          </a>
-        )}
-        {agentName && (
-          <span className="task-card-agent" title={`Agent: ${agentName}`}>
-            <BotIcon size={11} />
-            {agentName}
-          </span>
-        )}
-        {statusAgeLabel && <span className="task-card-age">{statusAgeLabel}</span>}
         {/* #667 — the `unresolved` case only: a never-yet-checked task and
             a verified-clear one shouldn't look identical while genuinely
             different, so this stays a small inline chip in the meta row,
@@ -420,7 +443,7 @@ export function TaskCard({
           why `unresolved` stays an inline chip and `blocked` gets this
           full-width treatment instead. Same role="img"/aria-label/
           aria-hidden pattern as every other status badge on this card. */}
-      {task.blockedState === "blocked" && (
+      {task.blockedState === "blocked" && !inStack && (
         <div
           className="task-card-blocked-strip"
           role="img"
@@ -572,7 +595,7 @@ export function TaskCard({
           whose session was reaped. This is the "waiting for a slot" tell,
           following the same hint pattern as the ready/disabled case above. */}
       {task.status === "claimed" && task.sessionId === null && (
-        <div className="task-card-hint">Queued — waiting for a free slot</div>
+        <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
       )}
       {/* Issue #1038 — once a round badge is showing above (autoReturnRounds
           > 0), it already covers "still working" (capped-but-not-announced)

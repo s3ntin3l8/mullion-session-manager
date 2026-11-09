@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { DragEvent } from "react";
 import type { Project, Session, Task } from "../api/index.js";
 import type { Theme } from "../store/index.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskCard } from "./TaskCard.js";
-import { BlockedIcon } from "../ui/icons.js";
+import { columnItems } from "./taskLanes.js";
+import type { ColumnItem } from "./taskLanes.js";
+import { BlockedIcon, ChevronDownIcon, ChevronRightIcon } from "../ui/icons.js";
 import { Skeleton } from "../ui/Skeleton.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
@@ -30,6 +32,8 @@ export function TaskColumn({
   onDragFinish,
   collapsed,
   loading = false,
+  rail = false,
+  selectedTaskId = null,
 }: {
   title: string;
   tasks: Task[];
@@ -51,8 +55,18 @@ export function TaskColumn({
   // before we know that, which is the same lie as the board-level "No
   // tasks yet." flash. Card-shaped bones keep the column's shape instead.
   loading?: boolean;
+  // #2841 — an empty column shrinks to a narrow rail (name + count) instead of a
+  // full-width "No tasks" box. It opens again while a card that can land here is being
+  // dragged, so it stays a drop target. Off on phone, which shows one column at a time.
+  rail?: boolean;
+  // The task the detail view is showing; its card is ringed.
+  selectedTaskId?: number | null;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
+  // Which blocked stacks the user has opened, by stack key. Local to the column: a
+  // stack is a view of the list, not state anyone else reads.
+  const [openStacks, setOpenStacks] = useState<ReadonlySet<string>>(new Set());
+  const items = useMemo(() => columnItems(tasks), [tasks]);
 
   const acceptsDrag = (e: DragEvent<HTMLDivElement>) =>
     acceptsDrop && e.dataTransfer.types.includes(TASK_DRAG_MIME);
@@ -89,6 +103,104 @@ export function TaskColumn({
     return <div className="kanban-column kanban-column-collapsed">{header}</div>;
   }
 
+  if (rail && tasks.length === 0 && !pending && !acceptsDrop) {
+    return (
+      <div className="kanban-column kanban-column-rail" aria-label={`${title}, no tasks`}>
+        <span className="kanban-column-title">{title}</span>
+        <span className="kanban-column-count">0</span>
+      </div>
+    );
+  }
+
+  const renderCard = (task: Task, index: number, inStack = false) => (
+    <TaskCard
+      key={task.id}
+      task={task}
+      project={projectsById.get(task.projectId)}
+      workerSession={task.sessionId !== null ? sessionsById.get(task.sessionId) : null}
+      reviewSession={task.reviewSessionId !== null ? sessionsById.get(task.reviewSessionId) : null}
+      theme={theme}
+      taskMasterEnabled={taskMasterEnabled}
+      acceptsDrop={acceptsDrop}
+      onOpen={() => onOpen(task)}
+      onOpenSession={onOpenSession}
+      onReorder={(draggedId) => onDrop(draggedId, index)}
+      onDragBegin={() => onDragBegin(task.id)}
+      onDragFinish={onDragFinish}
+      selected={selectedTaskId === task.id}
+      inStack={inStack}
+    />
+  );
+
+  const toggleStack = (key: string) =>
+    setOpenStacks((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const renderStack = (item: Extract<ColumnItem, { kind: "stack" }>) => {
+    const open = openStacks.has(item.key);
+    const first = item.blockers[0];
+    const label = `${item.members.length} blocked by #${first.number}${
+      item.blockers.length > 1 ? ` +${item.blockers.length - 1}` : ""
+    }`;
+    return (
+      <div key={`stack:${item.key}`} className="task-stack">
+        <div
+          className="task-stack-head"
+          // A card dragged onto the summary lands before the stack's first member.
+          onDragOver={(e) => {
+            if (!acceptsDrag(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onDrop={(e) => {
+            if (!acceptsDrag(e)) return;
+            const draggedId = Number(e.dataTransfer.getData(TASK_DRAG_MIME));
+            if (!Number.isFinite(draggedId)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onDrop(draggedId, item.firstIndex);
+          }}
+        >
+          <button
+            type="button"
+            className="task-stack-summary"
+            aria-expanded={open}
+            onClick={() => toggleStack(item.key)}
+          >
+            <BlockedIcon size={12} aria-hidden="true" />
+            <span>{label}</span>
+            {open ? (
+              <ChevronDownIcon size={12} aria-hidden="true" />
+            ) : (
+              <ChevronRightIcon size={12} aria-hidden="true" />
+            )}
+          </button>
+          {first.htmlUrl && (
+            <a
+              className="task-stack-link"
+              href={first.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={first.title}
+              aria-label={`Open blocker #${first.number} on GitHub`}
+            >
+              #{first.number} ↗
+            </a>
+          )}
+        </div>
+        {open && (
+          <div className="task-stack-cards">
+            {item.members.map((m) => renderCard(m.task, m.index, true))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div
       className={`kanban-column${tasks.length === 0 && !pending ? " kanban-column-is-empty" : ""}`}
@@ -120,25 +232,9 @@ export function TaskColumn({
         ) : tasks.length === 0 ? (
           <div className="kanban-column-empty">No tasks</div>
         ) : (
-          tasks.map((task, index) => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              project={projectsById.get(task.projectId)}
-              workerSession={task.sessionId !== null ? sessionsById.get(task.sessionId) : null}
-              reviewSession={
-                task.reviewSessionId !== null ? sessionsById.get(task.reviewSessionId) : null
-              }
-              theme={theme}
-              taskMasterEnabled={taskMasterEnabled}
-              acceptsDrop={acceptsDrop}
-              onOpen={() => onOpen(task)}
-              onOpenSession={onOpenSession}
-              onReorder={(draggedId) => onDrop(draggedId, index)}
-              onDragBegin={() => onDragBegin(task.id)}
-              onDragFinish={onDragFinish}
-            />
-          ))
+          items.map((item) =>
+            item.kind === "card" ? renderCard(item.task, item.index) : renderStack(item),
+          )
         )}
       </div>
     </div>

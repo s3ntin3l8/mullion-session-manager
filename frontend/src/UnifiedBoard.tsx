@@ -3,12 +3,15 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
+  BOARD_COLUMNS,
   TASK_COLUMNS,
+  boardColumnOf,
+  boardColumnTasks,
   canDragToColumn,
-  orderTasksForColumn,
   computeTaskReorder,
   absoluteDropIndex,
   defaultPhoneColumn,
+  foldClaimedCounts,
   visibleColumnWindow,
 } from "./tasksBoard.js";
 import {
@@ -29,9 +32,18 @@ import { EmptyStateNote } from "./ui/EmptyState.js";
 import { TaskFilterBar } from "./unified-board/TaskFilterBar.js";
 import { TaskFacetsPanel } from "./unified-board/TaskFacetsPanel.js";
 import { useTaskFilters } from "./unified-board/useTaskFilters.js";
-import { facetsOpen } from "./unified-board/taskFilters.js";
+import { NO_EPIC, facetsOpen } from "./unified-board/taskFilters.js";
 import type { TaskFilters } from "./unified-board/taskFilters.js";
 import { TaskColumn } from "./unified-board/TaskColumn.js";
+import { DisplayLayoutControls } from "./unified-board/DisplayLayoutControls.js";
+import { TaskLaneHeader } from "./unified-board/TaskLaneHeader.js";
+import {
+  epicColourSlot,
+  epicProgress,
+  epicUrl,
+  groupLanes,
+  laneKeyOf,
+} from "./unified-board/taskLanes.js";
 import { LaneCard } from "./unified-board/LaneCard.js";
 
 // Detail drawer resize (see the drag-handle logic in UnifiedBoard below) —
@@ -99,6 +111,7 @@ export function UnifiedBoard({
   onSessionEnded,
   phone = false,
   columnCount = 1,
+  selectedTaskId = null,
 }: {
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
@@ -109,6 +122,9 @@ export function UnifiedBoard({
   // With `phone`: how many adjacent status columns show at once (1 on phone,
   // 2 on tablet, where the board has the width for a pair).
   columnCount?: number;
+  // The task the sidebar detail is showing (wired by the sidebar-detail work, #2842);
+  // its card is ringed. The board holds no selection of its own.
+  selectedTaskId?: number | null;
 }) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription). `refreshTasks`/`updateTask`/`createTask`/`deleteSession`/
@@ -160,7 +176,17 @@ export function UnifiedBoard({
   // the full, unfiltered column before computeTaskReorder ever sees it, whatever
   // combination of filters produced `visibleTasks`.
   const filterApi = useTaskFilters(tasks, projects);
-  const { visibleTasks, filters, effectiveHideDone: hideDone } = filterApi;
+  const { visibleTasks, filters, effectiveHideDone: hideDone, density } = filterApi;
+  // #2841 — grouping into lanes needs width and a second axis; phone shows one status
+  // column at a time and stays flat.
+  const groupBy = phone ? "none" : filterApi.groupBy;
+  // Nothing to group yet (empty board, or a filter hid everything): the flat columns
+  // still render so the board keeps its shape.
+  const grouped = groupBy !== "none" && visibleTasks.length > 0;
+  const lanes = useMemo(
+    () => groupLanes(visibleTasks, grouped ? groupBy : "none", projectsById),
+    [visibleTasks, grouped, groupBy, projectsById],
+  );
   const activeProjectIds = filters.projectIds;
   const viewportWidth = useViewportWidth();
   const facetsShown = !phone && facetsOpen(filterApi.facets, viewportWidth, projects.length);
@@ -208,9 +234,35 @@ export function UnifiedBoard({
   // itself must still run against the FULL `tasks`, so absoluteDropIndex
   // translates the index first; see its own doc comment in tasksBoard.ts
   // for why, and why that's provably a no-op when no filter is active.
-  const applyDrop = (draggedId: number, targetStatus: TaskStatus, visibleIndex: number) => {
+  // `scope` is the task list the dropped-on column rendered from: every visible task,
+  // or one lane's tasks when the board is grouped. `laneKey` is that lane's key (null
+  // when ungrouped). In progress also lists Claimed tasks, so a drop there is re-aimed
+  // at the dragged task's own status before the index is translated.
+  const applyDrop = (
+    draggedId: number,
+    columnId: TaskStatus,
+    visibleIndex: number,
+    scope: typeof visibleTasks = visibleTasks,
+    laneKey: string | null = null,
+  ) => {
     const dragged = tasks.find((t) => t.id === draggedId);
     if (!dragged) return;
+    // A lane is an epic or a project: dropping into another one would change the
+    // parent (or the project), which dragging never does. Refused, nothing written.
+    if (laneKey !== null && laneKeyOf(dragged, groupBy) !== laneKey) return;
+    let targetStatus = columnId;
+    let columnIndex = visibleIndex;
+    if (
+      columnId === "in_progress" &&
+      (dragged.status === "in_progress" || dragged.status === "claimed")
+    ) {
+      const running = scope.filter((t) => t.status === "in_progress").length;
+      targetStatus = dragged.status;
+      columnIndex =
+        dragged.status === "claimed"
+          ? Math.max(0, visibleIndex - running)
+          : Math.min(visibleIndex, running);
+    }
     if (
       dragged.status !== targetStatus &&
       !(canDragToColumn(dragged.status) && canDragToColumn(targetStatus))
@@ -218,7 +270,7 @@ export function UnifiedBoard({
       return;
     }
     setDragError(null);
-    const targetIndex = absoluteDropIndex(tasks, visibleTasks, targetStatus, visibleIndex);
+    const targetIndex = absoluteDropIndex(tasks, scope, targetStatus, columnIndex);
     const updates = computeTaskReorder(tasks, draggedId, targetStatus, targetIndex);
     for (const update of updates) {
       const patch: { status?: "backlog" | "ready"; boardOrder: number } = {
@@ -418,9 +470,10 @@ export function UnifiedBoard({
       number
     >;
     for (const task of visibleTasks) counts[task.status] += 1;
-    return counts;
+    // Queued tasks are listed under In progress (tasksBoard.ts BOARD_COLUMNS).
+    return foldClaimedCounts(counts);
   }, [visibleTasks]);
-  const phoneColumns = TASK_COLUMNS.filter(
+  const phoneColumns = BOARD_COLUMNS.filter(
     (c) => !(hideDone && (c.id === "done" || c.id === "failed")),
   );
   const phoneColumn =
@@ -461,7 +514,7 @@ export function UnifiedBoard({
           </span>
         )}
         <div
-          className="kanban-unified-tasks"
+          className={`kanban-unified-tasks task-density-${density}`}
           // Busy marks the columns in flux, not the announcement. The
           // status is a sibling of this element: aria-busy tells assistive
           // technology to defer anything inside the subtree, so nesting the
@@ -481,6 +534,15 @@ export function UnifiedBoard({
             }
             onCreated={() => setCreating(false)}
             clearDoneTasks={(opts) => useDashboardStore.getState().clearDoneTasks(opts)}
+            displayExtra={
+              <DisplayLayoutControls
+                groupBy={filterApi.groupBy}
+                onGroupBy={filterApi.setGroupBy}
+                density={density}
+                onDensity={filterApi.setDensity}
+                showGroupBy={!phone}
+              />
+            }
           />
           {phone && (
             <div ref={stripRef} className="tasks-phone-strip" role="group" aria-label="Task status">
@@ -621,36 +683,73 @@ export function UnifiedBoard({
           )}
           <div className={`task-board-body${facetsShown ? " task-board-body--facets" : ""}`}>
             {facetsShown && <TaskFacetsPanel api={filterApi} projects={projects} />}
-            <div
-              className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
-            >
-              {(phone
-                ? TASK_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
-                : TASK_COLUMNS
-              ).map((column) => {
-                const columnTasks = orderTasksForColumn(visibleTasks, column.id);
-                const acceptsDrop =
-                  draggingTask !== null &&
-                  (draggingTask.status === column.id ||
-                    (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+            <div className="task-board-lanes">
+              {lanes.map((lane) => {
+                const epicKey = groupBy === "epic" && lane.key !== NO_EPIC ? lane.key : null;
+                const sample = lane.tasks[0];
+                const progress = epicKey !== null ? epicProgress(tasks, epicKey) : null;
                 return (
-                  <TaskColumn
-                    key={column.id}
-                    title={column.title}
-                    projectsById={projectsById}
-                    sessionsById={sessionsById}
-                    theme={theme}
-                    tasks={columnTasks}
-                    taskMasterEnabled={taskMasterEnabled}
-                    acceptsDrop={acceptsDrop}
-                    onOpen={(task) => openDetail(task.id)}
-                    onOpenSession={onOpenSession}
-                    onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
-                    onDragBegin={setDraggingId}
-                    onDragFinish={() => setDraggingId(null)}
-                    collapsed={hideDone && (column.id === "done" || column.id === "failed")}
-                    loading={!tasksLoaded}
-                  />
+                  <section
+                    key={lane.key}
+                    className={grouped ? "task-lane" : "task-lane task-lane-flat"}
+                    aria-label={grouped ? lane.title : undefined}
+                  >
+                    {grouped && (
+                      <TaskLaneHeader
+                        title={lane.title}
+                        count={lane.tasks.length}
+                        colour={epicKey !== null ? `var(--lane-${epicColourSlot(epicKey)})` : null}
+                        progress={progress}
+                        href={epicKey !== null && sample ? epicUrl(sample) : null}
+                      />
+                    )}
+                    <div
+                      className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
+                    >
+                      {(phone
+                        ? BOARD_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
+                        : BOARD_COLUMNS
+                      ).map((column) => {
+                        const columnTasks = boardColumnTasks(lane.tasks, column.id);
+                        // A card can only be dropped in its own lane: a lane is an epic or
+                        // a project, and dragging never changes either.
+                        const acceptsDrop =
+                          draggingTask !== null &&
+                          (!grouped || laneKeyOf(draggingTask, groupBy) === lane.key) &&
+                          (boardColumnOf(draggingTask.status) === column.id ||
+                            (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+                        return (
+                          <TaskColumn
+                            key={column.id}
+                            title={column.title}
+                            projectsById={projectsById}
+                            sessionsById={sessionsById}
+                            theme={theme}
+                            tasks={columnTasks}
+                            taskMasterEnabled={taskMasterEnabled}
+                            acceptsDrop={acceptsDrop}
+                            onOpen={(task) => openDetail(task.id)}
+                            onOpenSession={onOpenSession}
+                            onDrop={(draggedId, index) =>
+                              applyDrop(
+                                draggedId,
+                                column.id,
+                                index,
+                                lane.tasks,
+                                grouped ? lane.key : null,
+                              )
+                            }
+                            onDragBegin={setDraggingId}
+                            onDragFinish={() => setDraggingId(null)}
+                            collapsed={hideDone && (column.id === "done" || column.id === "failed")}
+                            loading={!tasksLoaded}
+                            rail={!phone}
+                            selectedTaskId={selectedTaskId}
+                          />
+                        );
+                      })}
+                    </div>
+                  </section>
                 );
               })}
             </div>

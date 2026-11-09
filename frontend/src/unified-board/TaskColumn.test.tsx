@@ -124,7 +124,7 @@ beforeEach(() => {
 });
 
 describe("UnifiedBoard task columns", () => {
-  it("renders one column per TaskStatus with correct counts", () => {
+  it("renders one column per board status (Claimed is folded into In progress) with correct counts", () => {
     tasks = [
       makeTask({ id: 1, status: "backlog" }),
       makeTask({ id: 2, status: "ready" }),
@@ -133,10 +133,10 @@ describe("UnifiedBoard task columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const columns = screen.getAllByText(
-      /^Backlog$|^Ready$|^Claimed$|^In Progress$|^Reviewing$|^Done$|^Failed$/,
+      /^Backlog$|^Ready$|^In Progress$|^Reviewing$|^Done$|^Failed$/,
       { selector: ".kanban-column-title" },
     );
-    expect(columns).toHaveLength(7);
+    expect(columns).toHaveLength(6);
 
     const readyColumn = screen
       .getByText("Ready", { selector: ".kanban-column-title" })
@@ -162,15 +162,15 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.queryByText("No tasks yet.")).toBeNull();
   });
 
-  it("still renders the seven columns while tasksLoaded is false", () => {
+  it("still renders the six columns while tasksLoaded is false", () => {
     tasks = [];
     tasksLoaded = false;
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(
-      screen.getAllByText(/^Backlog$|^Ready$|^Claimed$|^In Progress$|^Reviewing$|^Done$|^Failed$/, {
+      screen.getAllByText(/^Backlog$|^Ready$|^In Progress$|^Reviewing$|^Done$|^Failed$/, {
         selector: ".kanban-column-title",
       }),
-    ).toHaveLength(7);
+    ).toHaveLength(6);
   });
 
   // Issue #1885 — before the first fetch lands the columns used to read as
@@ -185,7 +185,7 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.queryByText("No tasks")).not.toBeInTheDocument();
     const bones = container.querySelectorAll(".ui-skeleton");
     // One column, two bones — seven columns on the desktop board.
-    expect(bones.length).toBe(14);
+    expect(bones.length).toBe(12);
     for (const bone of bones) {
       expect(bone).toHaveAttribute("aria-hidden", "true");
     }
