@@ -2140,6 +2140,9 @@ export interface Task {
   // The round's review post has not landed on GitHub yet (a transient failure,
   // retried by the reconciler); auto-approve and merge wait for it.
   reviewPostPending?: boolean;
+  // The approving review's post failed for good: held for a human whatever
+  // other needs-human reason the task carries.
+  reviewPostFailed?: boolean;
   // #2234 — derived server-side (routes/tasks.ts withApprovalState): the last
   // review approved and its findings are ingested for the current review
   // session. `awaiting-human` = the project does not auto-approve, so the task
