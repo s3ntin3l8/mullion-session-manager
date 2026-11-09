@@ -55,6 +55,8 @@ export interface GitHubIssueOrPr {
 }
 
 export interface GitHubActionsRun {
+  /** Workflow run id; what `rerunFailedJobs` needs. Absent on synthesized runs. */
+  id?: number;
   name: string;
   status: string;
   conclusion: string | null;
@@ -900,6 +902,7 @@ function prsCacheSet(key: string, entry: PRsCacheEntry): void {
 }
 
 interface GitHubWorkflowRunItem {
+  id?: number;
   name: string | null;
   status: string;
   conclusion: string | null;
@@ -1037,6 +1040,7 @@ export async function fetchRunsForHeadChecked(
       if (seen.has(name)) continue;
       seen.add(name);
       latest.push({
+        ...(typeof run.id === "number" ? { id: run.id } : {}),
         name,
         status: run.status,
         conclusion: run.conclusion,

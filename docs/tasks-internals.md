@@ -2139,6 +2139,24 @@ ever runs for a genuine merge conflict, which rewrites code the reviewer saw,
 so it re-reviews; a clean "update branch" merge does not touch the review
 fields at all.
 
+**A red check on a head the worker was already returned for is not returned
+again.** `attemptReturnRedCiToWorker` stamps `ciReturnHeadSha` with the PR head
+each CI return was for. If the next sweep finds a red check on that same head,
+the worker came back without pushing — typically because nothing in the code is
+wrong (a lost runner, an abandoned shard, a run GitHub never created jobs for;
+tasks 1031536, 1031838 and 1031834 looped on exactly that, one reseed per
+~90 s, which an unlimited round cap does not stop). `holdRedCiWithoutProgress`
+then re-runs the failed Actions jobs itself (`rerunFailedJobs`, at most
+`MAX_CI_RERUNS_PER_HEAD` per head, spaced `CI_RERUN_SETTLE_MS` apart, counted in
+`ciRerunCount`). When GitHub refuses the rerun (it does for CodeQL and
+dependency-review runs and for runs without jobs), the budget is spent, or the
+red check is not an Actions run at all, it parks the task the way the review
+loop does for a worker that returned unchanged: `needsHumanReason: "no-progress"`
+plus `autoReturnCapAnnouncedAt`, and one PR comment. A human push moves the head,
+and `reannounceCappedTasksAfterHumanPush` re-arms the task. A rerun request that
+itself fails (rate limit, network) holds the tick without parking. A new head
+that is still red is a real round and returns the worker as before.
+
 **New PR review comments return the task to the worker (`#757`).** A human
 leaving inline review comments directly on GitHub — not through Mullion's
 own review agent — is a second real feedback channel Task Master used to

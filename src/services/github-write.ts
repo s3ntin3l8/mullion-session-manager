@@ -1153,6 +1153,33 @@ export async function updatePullRequestTitle(
 }
 
 /**
+ * Re-runs only the failed (and cancelled/abandoned) jobs of one workflow run
+ * (`POST /actions/runs/:id/rerun-failed-jobs`). The answer for a red check that
+ * no code change can fix — a lost runner, an abandoned shard — which the red-CI
+ * return to the worker cannot resolve.
+ *
+ * Returns `false` when GitHub REFUSES the rerun (403/404: "This workflow run
+ * cannot be retried", which it says of runs that never created jobs and of
+ * CodeQL / dependency-review runs, or a token without Actions write). That is a
+ * definite answer the caller acts on, unlike a thrown rate-limit or network
+ * error, which is "could not ask" and propagates.
+ */
+export async function rerunFailedJobs(
+  token: string,
+  owner: string,
+  repo: string,
+  runId: number,
+): Promise<boolean> {
+  try {
+    await githubRequest(token, owner, repo, "POST", `/actions/runs/${runId}/rerun-failed-jobs`);
+    return true;
+  } catch (err) {
+    if (err instanceof GitHubWriteScopeError) return false;
+    throw err;
+  }
+}
+
+/**
  * Minimal GraphQL POST — this repo's first GraphQL call (every other write
  * in this file is REST). Needed because REST's `PATCH /pulls/:number` has
  * no `draft` field: converting a draft PR to ready-for-review is

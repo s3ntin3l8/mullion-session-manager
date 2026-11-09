@@ -1405,6 +1405,15 @@ export const tasks = sqliteTable(
     // Rebase attempts refunded because the worker landed a mergeable head that
     // main then outran. Capped (MAX_REBASE_OUTRUNS) so the refund cannot loop.
     rebaseOutrunCount: integer("rebase_outrun_count").notNull().default(0),
+    // The PR head a red-CI auto-return last sent to the worker. A red check on
+    // this SAME head means the worker came back without pushing a fix (a lost
+    // runner or abandoned job is not something code can change), so Mullion
+    // re-runs the failed jobs itself and then parks the task, instead of
+    // spending another round per sweep tick on an identical prompt.
+    ciReturnHeadSha: text("ci_return_head_sha"),
+    // Re-runs of the failed Actions jobs on `ciReturnHeadSha` (capped by
+    // MAX_CI_RERUNS_PER_HEAD); reset whenever a new head is returned.
+    ciRerunCount: integer("ci_rerun_count").notNull().default(0),
     // Suggestions-round workers that ended within RAPID_EXIT_MS with the PR
     // head unchanged.
     suggestionsRapidExits: integer("suggestions_rapid_exits").notNull().default(0),
