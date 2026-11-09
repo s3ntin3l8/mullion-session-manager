@@ -616,7 +616,7 @@ describe("reseedTaskIfSessionExited", () => {
   // way reject's own path never was.
   it("does not clobber sessionId, and returns false, when a concurrent transition moves the task off 'in_progress' before the final write", async () => {
     const { task } = insertTaskWithSession("exited");
-    mockSuccessfulSpawn();
+    const spawnedId = mockSuccessfulSpawn();
     // Simulates a concurrent approve/reject/give-up landing between
     // createSessionRecord resolving and this function's own final CAS'd
     // write — the row itself has already moved off "in_progress".
@@ -634,6 +634,10 @@ describe("reseedTaskIfSessionExited", () => {
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(task.sessionId);
     expect(updated.status).toBe("done");
+    // Nothing points at the freshly spawned session, so it is ended rather than
+    // left live and promptable (#2804).
+    const [spawned] = app.db.select().from(sessions).where(eq(sessions.id, spawnedId)).all();
+    expect(spawned.status).toBe("killed");
   });
 
   describe("readLiveWorkerState", () => {

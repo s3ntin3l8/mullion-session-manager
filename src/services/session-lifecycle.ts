@@ -418,9 +418,11 @@ export type CreateSessionParams = CreateSessionBody & {
   // positive value to deny superpowers skills that gate on a human in the
   // loop (brainstorming / writing-plans / finishing-a-development-branch). See
   // CreateSessionOptions.taskId's own doc comment (pty-manager.ts) for the
-  // full rationale, including why this is spawn-time only (no sessions
-  // column, no migration). Not part of CreateSessionBody, no public route
-  // sets this — same posture as briefingOverride/projectSkill above.
+  // full rationale for the launch-time behaviour. It is ALSO persisted, as
+  // sessions.task_id (#2804), so a sweep can tell a task's session from a
+  // human's; the launch-time behaviour still reads the in-memory value. Not
+  // part of CreateSessionBody, no public route sets this — same posture as
+  // briefingOverride/projectSkill above.
   taskId?: number;
   // Issue #1724 / roadmap 8.10 — "this session is unattended" (a Task Master
   // worker or reviewer), which is what the placement policy scores on: an
@@ -1582,6 +1584,7 @@ function insertRow(
     model,
     smallModel,
     open,
+    taskId,
   } = params;
   let inserted;
   try {
@@ -1619,6 +1622,9 @@ function insertRow(
           ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(smallModel !== undefined ? { smallModel } : {}),
+          // #2804 — persist the spawning task so a sweep can find this session
+          // later (the spawn-time-only `taskId` is otherwise gone after launch).
+          ...(taskId !== undefined ? { taskId } : {}),
         })
         .returning()
         .all();

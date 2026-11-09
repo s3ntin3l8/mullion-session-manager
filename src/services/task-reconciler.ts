@@ -7,6 +7,7 @@ import type { SessionStatus } from "../shared/types.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { killSession } from "./session-lifecycle.js";
+import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
@@ -4630,7 +4631,7 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
     // human push anywhere in the cycle. Setting it here closes that gap:
     // the baseline is established the instant this fires, so only a
     // GENUINE subsequent head-SHA change can trigger another re-arm.
-    app.db
+    const rearmed = app.db
       .update(tasks)
       .set({
         autoReturnCapAnnouncedAt: null,
@@ -4649,6 +4650,17 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
         ),
       )
       .run();
+    // #2804 — the parked round's reviewer is an idle TUI that stays alive until
+    // something ends it; unlinking it above would orphan it. Only after a won CAS:
+    // a lost one means a concurrent decision still owns the link.
+    if (rearmed.changes > 0 && task.reviewSessionId !== null) {
+      void killSession(app, task.reviewSessionId).catch((err) => {
+        app.log.warn(
+          { err, taskId: task.id, reviewSessionId: task.reviewSessionId },
+          "task reconcile: failed to kill the parked review session on re-arm",
+        );
+      });
+    }
   }
 }
 
@@ -4736,6 +4748,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // to keep being retried regardless of what's currently claimed/in_progress.
   await processReleaseRequests(app);
   await reannounceCappedTasksAfterHumanPush(app);
+  // #2804 — safety net for a task session nothing links to (or whose task is
+  // archived). Not awaited: a slow terminate must not hold the tick; the sweep
+  // never throws and drops an overlapping call.
+  void sweepTaskSessions(app);
   // Task 409707 — same independence reasoning as the sweeps above: a task
   // stuck on a silently-stalled, never-capped inconclusive review needs to
   // keep being retried regardless of what's currently claimed/in_progress.

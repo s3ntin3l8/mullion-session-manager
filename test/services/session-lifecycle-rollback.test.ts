@@ -175,4 +175,27 @@ describe("createSessionRecord rollback (M5)", () => {
     expect(app.db.select().from(sessions).where(eq(sessions.id, kept!)).all()).toHaveLength(1);
     await app.close();
   });
+
+  // #2804 — the spawning task is persisted so a sweep can tell a task's session from
+  // a human's; a manual session carries none.
+  it("persists the spawning task id on the row, and leaves it NULL for a manual session", async () => {
+    const { app, projectId } = await setup();
+    const task = await createSessionRecord(app, { projectId, command: "bash", taskId: 42 });
+    const manual = await createSessionRecord(app, { projectId, command: "bash" });
+    expect(task.ok && manual.ok).toBe(true);
+    const idOf = (r: unknown) => (r as { row: { id: number } }).row.id;
+    const taskRow = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, idOf(task)))
+      .get();
+    const manualRow = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, idOf(manual)))
+      .get();
+    expect(taskRow?.taskId).toBe(42);
+    expect(manualRow?.taskId).toBeNull();
+    await app.close();
+  });
 });
