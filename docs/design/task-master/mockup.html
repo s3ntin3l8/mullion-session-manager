@@ -91,13 +91,13 @@
         --tint-border: 42%;
       }
       .t-light {
-        --tint: 7%;
-        --status-success-fg: #0f5a26;
-        --status-danger-fg: #a40e26;
-        --status-warn-fg: #6b4400;
-        --status-info-fg: #0550ae;
-        --status-merged-fg: #5a32a8;
-        --status-neutral-fg: #3d3d3d;
+        --tint: 11%;
+        --status-success-fg: #187533;
+        --status-danger-fg: #c1202b;
+        --status-warn-fg: #8a5c00;
+        --status-info-fg: #0862cb;
+        --status-merged-fg: #7649cb;
+        --status-neutral-fg: var(--muted);
         --tint-border: 38%;
       }
       .t-dark,
@@ -1389,7 +1389,7 @@
         epicClaude: TASKS.filter((t) => t.ep === "proj" && t.agent === "claude").length,
         claude: TASKS.filter((t) => t.agent === "claude").length,
       };
-      N.def = N.all - N.helper - N.skills;
+      N.def = TASKS.filter((t) => t.p === DEF).length;
       const COLS = [
         ["backlog", "Backlog"],
         ["ready", "Ready"],
@@ -1650,7 +1650,7 @@
           .map((t) => card(t))
           .join("")}</div>${adhoc(false)}</div>
         <div class="phone"><div class="bar"><b>Tasks · Active</b><span class="sp"></span>${btn(`Needs me <span class='n'>${N.needs}</span>`)}</div><div class="cards">${TASKS.filter(
-          (t) => t.st === "doing" || t.st === "review",
+          (t) => ["claimed", "doing", "review"].includes(t.st),
         )
           .slice(0, 4)
           .map((t) => card(t, { sel: 2418 }))
