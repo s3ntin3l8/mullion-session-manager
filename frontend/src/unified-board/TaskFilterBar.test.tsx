@@ -180,7 +180,7 @@ type User = ReturnType<typeof userEvent.setup>;
 /** Opens one of the bar's menus (Projects, Filter, Display) unless it is already open. */
 async function openMenu(user: User, name: string) {
   if (screen.queryByRole("group", { name })) return;
-  await user.click(screen.getByRole("button", { name }));
+  await user.click(screen.getByRole("button", { name: new RegExp(`^${name}\\b`) }));
 }
 async function pickProject(user: User, name: string) {
   await openMenu(user, "Projects");
@@ -465,7 +465,7 @@ describe("project picker", () => {
     projects = [makeProject({ id: 1, name: "demo" })];
     tasks = [makeTask({ id: 1, projectId: 1, status: "ready" })];
     renderBoard();
-    expect(screen.queryByRole("button", { name: "Projects" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Projects/ })).toBeNull();
   });
 
   it("hides tasks from unselected projects, names the selection on its button, and clears", async () => {
@@ -475,12 +475,12 @@ describe("project picker", () => {
     ];
     const user = userEvent.setup();
     renderBoard();
-    expect(screen.getByRole("button", { name: "Projects" })).toHaveTextContent("All projects");
+    expect(screen.getByRole("button", { name: /^Projects/ })).toHaveTextContent("All projects");
 
     await pickProject(user, "demo");
     expect(screen.getByText("demo task")).toBeInTheDocument();
     expect(screen.queryByText("other task")).toBeNull();
-    expect(screen.getByRole("button", { name: "Projects" })).toHaveTextContent("demo");
+    expect(screen.getByRole("button", { name: /^Projects/ })).toHaveTextContent("demo");
 
     await user.click(screen.getByRole("button", { name: "Show every project" }));
     expect(screen.getByText("other task")).toBeInTheDocument();

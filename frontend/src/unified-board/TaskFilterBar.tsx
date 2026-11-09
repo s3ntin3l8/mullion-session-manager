@@ -184,6 +184,7 @@ export function TaskFilterBar({
         {showProjects && (
           <FilterPopover
             ariaLabel="Projects"
+            buttonLabel={`Projects: ${projectSummary}`}
             label={projectSummary}
             active={filters.projectIds.length > 0}
           >
@@ -193,11 +194,17 @@ export function TaskFilterBar({
         {quickViews}
         <FilterPopover
           ariaLabel="Filter"
+          buttonLabel={filterDims > 0 ? `Filter ${filterDims} active` : "Filter"}
           label={
             <>
               <FilterIcon size={12} aria-hidden="true" />
               Filter
-              {filterDims > 0 && <span className="task-view-n">{filterDims}</span>}
+              {filterDims > 0 && (
+                <>
+                  {" "}
+                  <span className="task-view-n">{filterDims}</span>
+                </>
+              )}
             </>
           }
           active={filterDims > 0}

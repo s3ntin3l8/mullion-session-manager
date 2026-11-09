@@ -10,13 +10,18 @@ import { ChevronDownIcon } from "../ui/icons.js";
 export function FilterPopover({
   label,
   ariaLabel,
+  buttonLabel,
   active = false,
   className = "",
   children,
 }: {
   label: ReactNode;
-  /** Names both the button and the panel group. */
+  /** Names the panel group, and the button unless `buttonLabel` says otherwise. */
   ariaLabel: string;
+  /** The button's accessible name when it differs from the panel's. It must contain the
+   * button's visible text (WCAG 2.5.3, axe label-content-name-mismatch): a label of
+   * "Projects" on a button that reads "All projects" fails it. */
+  buttonLabel?: string;
   /** Something inside is narrowing the board: the button reads as "on". */
   active?: boolean;
   className?: string;
@@ -53,7 +58,7 @@ export function FilterPopover({
         type="button"
         ref={buttonRef}
         className={`task-pop-btn${active ? " active" : ""}`}
-        aria-label={ariaLabel}
+        aria-label={buttonLabel ?? ariaLabel}
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
