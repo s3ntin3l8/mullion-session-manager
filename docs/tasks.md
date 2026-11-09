@@ -1219,7 +1219,11 @@ extensive design comments.
   (`maxAutoReturnRounds`) is not already spent — once it is, the task stays in
   Reviewing with one PR comment naming the failing check(s), and "Merge now"
   is the override. A check that is only _pending_ never returns the worker, and
-  neither does a red check while the head's Actions runs are still going. See
+  neither does a red check while the head's Actions runs are still going. The
+  worker is also not sent back twice for the same commit: if the check is still
+  red and the head has not moved, Mullion re-runs the failed jobs itself and, if
+  that does not clear it, parks the task as "worker returned without a change"
+  with one PR comment. See
   [`tasks-internals.md`](tasks-internals.md#auto-approve).
 - **Retry says `no-worktree` and refuses.** The task failed before it ever
   had a branch/worktree (e.g. it failed while still `backlog`/`ready`, or

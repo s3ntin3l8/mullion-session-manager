@@ -159,6 +159,7 @@ import {
   isTaskInRateLimitGrace,
   recordRateLimitEvent,
 } from "./task-rate-limit-grace.js";
+import { holdRedCiWithoutProgress } from "./task-ci-return-hold.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
 export { REBASE_ATTEMPT_STALE_MS };
 
@@ -314,6 +315,9 @@ async function fetchCurrentCiStatus(
   // error): `status` is then `null`, which reads the same as "no Actions runs".
   // Only the red-CI gate's `unstable` arm needs to tell the two apart.
   runsAnswered: boolean;
+  // Ids of the head's latest workflow runs that finished red — what a rerun of
+  // the failed jobs targets (the same-head no-progress arm of the red-CI gate).
+  failedRunIds: number[];
   // #2103 — the PR's own lifecycle state, already in the payload: a closed or
   // merged PR is the end of a reviewing task, not something to keep polling.
   prState: "open" | "closed";
@@ -349,6 +353,11 @@ async function fetchCurrentCiStatus(
     mergeable: pr.mergeable,
     mergeableState: pr.mergeableState,
     runsAnswered,
+    failedRunIds: runs.flatMap((r) =>
+      r.id !== undefined && r.status === "completed" && isRedCheckConclusion(r.conclusion)
+        ? [r.id]
+        : [],
+    ),
     prState: pr.state,
     merged: pr.merged,
     mergedAt: pr.mergedAt,
@@ -2615,6 +2624,12 @@ async function attemptReturnRedCiToWorker(
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   if (!resolvedTaskMaster.enabled) return false;
 
+  // The worker was already returned for THIS head and the check is still red:
+  // it pushed nothing, so another identical return cannot help.
+  if (task.ciReturnHeadSha !== null && task.ciReturnHeadSha === current.headSha) {
+    return holdRedCiWithoutProgress(app, task, project, current, redChecks);
+  }
+
   const maxRounds = resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds);
   if (task.autoReturnRounds >= maxRounds) {
     if (ciCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
@@ -2702,11 +2717,20 @@ async function attemptReturnRedCiToWorker(
   // a CI loop); only the re-review is skipped. A worker whose fix grew into a
   // real change can ask for one the way a suggestions round can (the prompt
   // names the file).
-  await autoReturnTask(app, task, project, {
+  const returned = await autoReturnTask(app, task, project, {
     reason: "ci",
     seedPrompt: prompt,
     carryApproval,
   });
+  // Remember which head this round was for, so the next tick can tell "the
+  // worker pushed a fix" (a new head) from "it came back with nothing".
+  if (returned.ok) {
+    app.db
+      .update(tasks)
+      .set({ ciReturnHeadSha: current.headSha, ciRerunCount: 0 })
+      .where(eq(tasks.id, task.id))
+      .run();
+  }
   return true;
 }
 
