@@ -119,28 +119,53 @@ export type MsysSocketFileWriter = (socketPath: string, contents: string) => Pro
 export function writeMsysSocketFile(
   socketPath: string,
   contents: string,
-  opts: { execFile?: typeof execFile; env?: NodeJS.ProcessEnv } = {},
+  opts: { execFile?: typeof execFile; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
 ): Promise<void> {
   const run = opts.execFile ?? execFile;
   const env = windowsPowerShellEnv(opts.env, {
     [MSYS_SOCKET_PATH_ENV]: socketPath,
     [MSYS_SOCKET_COOKIE_ENV]: contents,
   });
-  return new Promise((resolve, reject) => {
-    run(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", MSYS_SOCKET_FILE_SCRIPT],
-      { timeout: MSYS_SOCKET_FILE_TIMEOUT_MS, windowsHide: true, env },
-      (err, _stdout, stderr) => {
-        if (!err) return resolve();
-        if ((err as { code?: unknown }).code === MSYS_SOCKET_FILE_EXISTS_EXIT) {
-          return reject(new SocketAlreadyListeningError(socketPath, "unknown"));
-        }
-        const detail = String(stderr ?? "").trim() || err.message;
-        reject(new Error(`could not create the MSYS socket file ${socketPath}: ${detail}`));
-      },
-    );
+  const attempt = () =>
+    new Promise<void>((resolve, reject) => {
+      run(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", MSYS_SOCKET_FILE_SCRIPT],
+        { timeout: opts.timeoutMs ?? MSYS_SOCKET_FILE_TIMEOUT_MS, windowsHide: true, env },
+        (err, _stdout, stderr) => {
+          if (!err) return resolve();
+          if ((err as { code?: unknown }).code === MSYS_SOCKET_FILE_EXISTS_EXIT) {
+            return reject(new SocketAlreadyListeningError(socketPath, "unknown"));
+          }
+          reject(new MsysSocketFileError(socketPath, err, String(stderr ?? "")));
+        },
+      );
+    });
+  return attempt().catch((err: unknown) => {
+    // Retry once, and only when powershell.exe never ran (EAGAIN, EMFILE, ... on
+    // a loaded host): nothing can have been created. A timeout or a non-zero
+    // exit may have made the file already, so a second CreateNew would report a
+    // false collision.
+    if (err instanceof MsysSocketFileError && err.startFailure) return attempt();
+    throw err;
   });
+}
+
+/** powershell.exe could not create the socket file; the message carries exit code and signal. */
+class MsysSocketFileError extends Error {
+  readonly startFailure: boolean;
+  constructor(socketPath: string, err: Error, stderr: string) {
+    const e = err as Error & { code?: unknown; signal?: unknown; killed?: unknown };
+    const facts = [
+      `exit code ${e.code === undefined || e.code === null ? "none" : String(e.code)}`,
+      `signal ${e.signal ? String(e.signal) : "none"}`,
+      ...(e.killed ? ["killed (timed out)"] : []),
+    ].join(", ");
+    const detail = stderr.trim() || err.message;
+    super(`could not create the MSYS socket file ${socketPath} (${facts}): ${detail}`);
+    this.name = "Error";
+    this.startFailure = typeof e.code === "string" && !e.killed;
+  }
 }
 
 /**

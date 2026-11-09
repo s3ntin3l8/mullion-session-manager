@@ -122,8 +122,50 @@ describe("writeMsysSocketFile", () => {
       cb(new Error("exit 1"), "", "Access is denied."),
     ) as unknown as typeof execFile;
     await expect(writeMsysSocketFile("D:\\s\\a.sock", "c", { execFile: run })).rejects.toThrow(
-      /could not create the MSYS socket file D:\\s\\a\.sock: Access is denied\./,
+      /could not create the MSYS socket file D:\\s\\a\.sock \(.*\): Access is denied\./,
     );
+  });
+});
+
+describe("writeMsysSocketFile diagnostics and retry", () => {
+  const fake = (...errs: (Error | null)[]) => {
+    const fn = vi.fn((_f, _a, _o, cb) => {
+      const err = errs.length > 1 ? errs.shift()! : errs[0];
+      cb(err, "", "");
+    });
+    return fn as unknown as typeof execFile & ReturnType<typeof vi.fn>;
+  };
+
+  it("names the signal and killed flag when PowerShell timed out (empty stderr)", async () => {
+    const run = fake(
+      Object.assign(new Error("Command failed"), { code: null, signal: "SIGTERM", killed: true }),
+    );
+    const p = writeMsysSocketFile("D:/s/a.sock", "c", { execFile: run, timeoutMs: 5 });
+    await expect(p).rejects.toThrow(/signal SIGTERM.*killed \(timed out\)/);
+    expect(run).toHaveBeenCalledTimes(1); // may have created the file: never retried
+    expect((run as unknown as ReturnType<typeof vi.fn>).mock.calls[0][2].timeout).toBe(5);
+  });
+
+  it("names the exit code of a failed run", async () => {
+    const run = fake(Object.assign(new Error("exit 1"), { code: 1 }));
+    await expect(writeMsysSocketFile("D:/s/a.sock", "c", { execFile: run })).rejects.toThrow(
+      /exit code 1/,
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries once when powershell.exe failed to start, then succeeds", async () => {
+    const run = fake(Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" }), null);
+    await writeMsysSocketFile("D:/s/a.sock", "c", { execFile: run });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a start failure naming its code when the retry fails too", async () => {
+    const run = fake(Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" }));
+    await expect(writeMsysSocketFile("D:/s/a.sock", "c", { execFile: run })).rejects.toThrow(
+      /exit code EAGAIN/,
+    );
+    expect(run).toHaveBeenCalledTimes(2);
   });
 });
 
