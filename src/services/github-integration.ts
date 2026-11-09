@@ -1350,3 +1350,13 @@ export function disconnect(app: FastifyInstance): void {
     .where(eq(integrations.provider, GITHUB_PROVIDER))
     .run();
 }
+
+/** Whether webhooks are switched on for the GitHub integration row. */
+export function isGithubWebhookEnabled(app: FastifyInstance): boolean {
+  const row = app.db
+    .select({ webhookEnabled: integrations.webhookEnabled })
+    .from(integrations)
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .get();
+  return row?.webhookEnabled ?? false;
+}

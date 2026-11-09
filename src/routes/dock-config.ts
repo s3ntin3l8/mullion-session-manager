@@ -20,13 +20,12 @@
 // is a property of whichever filesystem it lives on, so a remote-hosted
 // project's config has to round-trip through that host, never the primary's.
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
   executionContextErrorStatus,
   resolveExecutionContext,
 } from "../services/execution-context.js";
+import { getProjectRow } from "../services/session-host.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import {
@@ -73,8 +72,7 @@ const writeDockConfigSchema = {
 
 export async function dockConfigRoute(app: FastifyInstance) {
   function getProjectOr404(projectId: number) {
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-    return project ?? null;
+    return getProjectRow(app, projectId) ?? null;
   }
 
   // Where the config lives: the project's own checkout by default, or — with

@@ -481,3 +481,13 @@ async function remoteSessionsUsingWorktree(
   }
   return { active, alive, unknown };
 }
+
+/** Worktree paths of tasks still in a resumable state. */
+export function listResumableTaskWorktrees(app: FastifyInstance): Array<string | null> {
+  return app.db
+    .select({ worktreePath: tasks.worktreePath })
+    .from(tasks)
+    .where(inArray(tasks.status, RESUMABLE_TASK_STATUSES))
+    .all()
+    .map((task) => task.worktreePath);
+}

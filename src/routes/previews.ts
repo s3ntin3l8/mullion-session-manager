@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, projectPreviewTargets } from "../db/schema.js";
 import { resolveExecutionContext } from "../services/execution-context.js";
+import { getProjectCheckout } from "../services/session-host.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getPreviewWorktree } from "../services/git-worktree.js";
@@ -17,6 +16,7 @@ import {
   getPreviewBySlug,
   listPreviews,
   type PreviewSummary,
+  getPreviewTarget,
 } from "../services/preview-registry.js";
 import {
   BranchPreviewError,
@@ -142,11 +142,7 @@ async function resolvePreviewBranch(
     ({ hostId, cwd } = resolved.context);
   } else {
     // Session-less: explicitly project-scoped, the project's own checkout.
-    const [project] = app.db
-      .select({ cwd: projects.cwd, hostId: projects.hostId })
-      .from(projects)
-      .where(eq(projects.id, preview.projectId))
-      .all();
+    const project = getProjectCheckout(app, preview.projectId);
     if (!project) return null;
     ({ hostId, cwd } = project);
   }
@@ -190,11 +186,7 @@ export async function previewsRoute(app: FastifyInstance) {
           return reply.conflict(
             "Named targets require the preview proxy. Configure PREVIEW_BASE_HOST.",
           );
-        const [target] = app.db
-          .select()
-          .from(projectPreviewTargets)
-          .where(eq(projectPreviewTargets.id, request.body.targetId ?? ""))
-          .all();
+        const target = getPreviewTarget(app, request.body.targetId ?? "");
         if (!target || target.projectId !== request.body.projectId)
           return reply.notFound("Preview target not found");
         reply.code(201);

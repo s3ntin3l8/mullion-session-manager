@@ -8,9 +8,8 @@
 // everything via toggleSkillEnabled (skills.ts), which re-runs discovery
 // itself rather than trusting anything the caller sent beyond that pair.
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { getProjectRow } from "../services/session-host.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import {
@@ -74,7 +73,7 @@ export async function skillsRoute(app: FastifyInstance) {
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectRow(app, projectId);
       if (!project) return reply.notFound();
 
       if (project.hostId === LOCAL_HOST_ID) {
@@ -112,7 +111,7 @@ export async function skillsRoute(app: FastifyInstance) {
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectRow(app, projectId);
       if (!project) return reply.notFound();
 
       const { agent, name, enabled } = request.body;

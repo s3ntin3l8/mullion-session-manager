@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { asc, eq } from "drizzle-orm";
-import { projectPreviewTargets, projects } from "../db/schema.js";
 import { normalizePreviewDestination } from "../services/preview-targets.js";
+import {
+  getPreviewTarget,
+  readProjectPreviewTargets,
+  saveProjectPreviewTargets,
+} from "../services/preview-registry.js";
 
 interface TargetInput {
   id: string;
@@ -15,23 +18,13 @@ interface TargetsBody {
 }
 
 export async function previewTargetsRoute(app: FastifyInstance) {
-  const read = (projectId: number) => ({
-    devServerUrl: app.db.select().from(projects).where(eq(projects.id, projectId)).get()!
-      .devServerUrl,
-    targets: app.db
-      .select()
-      .from(projectPreviewTargets)
-      .where(eq(projectPreviewTargets.projectId, projectId))
-      .orderBy(asc(projectPreviewTargets.order))
-      .all(),
-  });
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/preview-targets",
     async (request, reply) => {
       const id = Number(request.params.id);
-      if (!Number.isInteger(id) || !app.db.select().from(projects).where(eq(projects.id, id)).get())
-        return reply.notFound("Project not found");
-      return read(id);
+      const current = Number.isInteger(id) ? readProjectPreviewTargets(app, id) : undefined;
+      if (!current) return reply.notFound("Project not found");
+      return current;
     },
   );
   app.put<{ Params: { id: string }; Body: TargetsBody }>(
@@ -63,7 +56,7 @@ export async function previewTargetsRoute(app: FastifyInstance) {
     },
     async (request, reply) => {
       const id = Number(request.params.id);
-      if (!Number.isInteger(id) || !app.db.select().from(projects).where(eq(projects.id, id)).get())
+      if (!Number.isInteger(id) || !readProjectPreviewTargets(app, id))
         return reply.notFound("Project not found");
       const { targets } = request.body;
       const rawDefault = request.body.devServerUrl?.trim() || null;
@@ -78,11 +71,7 @@ export async function previewTargetsRoute(app: FastifyInstance) {
           return reply.badRequest(
             "Targets need unique IDs, nonempty names and valid HTTP(S) destinations",
           );
-        const existing = app.db
-          .select()
-          .from(projectPreviewTargets)
-          .where(eq(projectPreviewTargets.id, target.id))
-          .get();
+        const existing = getPreviewTarget(app, target.id);
         if (existing && existing.projectId !== id)
           return reply.badRequest("Target belongs to another project");
         ids.add(target.id);
@@ -93,33 +82,13 @@ export async function previewTargetsRoute(app: FastifyInstance) {
           connectionOrigin: target.connectionOrigin,
         });
       }
-      app.db.transaction((tx) => {
-        tx.update(projects)
-          .set({
-            devServerUrl: rawDefault && /^\d+$/.test(rawDefault) ? rawDefault : normalizedDefault,
-          })
-          .where(eq(projects.id, id))
-          .run();
-        const old = tx
-          .select()
-          .from(projectPreviewTargets)
-          .where(eq(projectPreviewTargets.projectId, id))
-          .all();
-        // Update in place: retained target IDs keep their existing preview slugs.
-        old
-          .filter((target) => !ids.has(target.id))
-          .forEach((target) =>
-            tx.delete(projectPreviewTargets).where(eq(projectPreviewTargets.id, target.id)).run(),
-          );
-        normalized.forEach((target, order) =>
-          tx
-            .insert(projectPreviewTargets)
-            .values({ ...target, projectId: id, order })
-            .onConflictDoUpdate({ target: projectPreviewTargets.id, set: { ...target, order } })
-            .run(),
-        );
-      });
-      return read(id);
+      saveProjectPreviewTargets(
+        app,
+        id,
+        rawDefault && /^\d+$/.test(rawDefault) ? rawDefault : normalizedDefault,
+        normalized,
+      );
+      return readProjectPreviewTargets(app, id)!;
     },
   );
 }
