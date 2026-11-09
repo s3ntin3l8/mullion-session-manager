@@ -194,13 +194,20 @@ describe("projects route", () => {
           vi.mocked(cleanupMergedTaskBranch).mockClear();
           const [task] = app.db
             .insert(tasks)
-            .values({ projectId: id, title: "w", status: "in_progress", prNumber: 84 })
+            .values({
+              projectId: id,
+              title: "w",
+              status: "in_progress",
+              prNumber: 84,
+              needsHumanReason: "review-post-failed",
+            })
             .returning()
             .all();
           expect((await merge()).statusCode).toBe(200);
           const after = await readTask(app, task.id);
           expect(after.mergedAt).toBeTruthy();
           expect(after.status).toBe("in_progress");
+          expect(after.needsHumanReason).toBeNull();
           expect(cleanupMergedTaskBranch).not.toHaveBeenCalled();
           fs.rmSync(projectCwd, { recursive: true, force: true });
         });

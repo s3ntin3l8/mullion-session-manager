@@ -9,7 +9,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks, type projects } from "../db/schema.js";
-import { clearMergeNeedsHumanReason } from "./task-merge-human.js";
+import { clearMergeNeedsHumanReason, clearNeedsHumanOnMerge } from "./task-merge-human.js";
 import { getDiffStats, getDefaultBaseRef } from "./git-diff.js";
 import { resolveCommitSha } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -116,6 +116,7 @@ export async function endReviewingTask(
         ? {
             ...common,
             status: "done" as const,
+            needsHumanReason: clearNeedsHumanOnMerge,
             mergedAt: mergedAt ?? now,
             archivedAt: mergedAt ?? now,
           }

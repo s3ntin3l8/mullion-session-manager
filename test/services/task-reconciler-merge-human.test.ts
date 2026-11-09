@@ -17,6 +17,7 @@ const {
   mockMergePullRequest,
   mockFetchPullRequestReviewThreads,
   mockGetPullRequestReviewDecision,
+  mockGetMergedClosingPullRequest,
 } = vi.hoisted(() => ({
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
@@ -25,6 +26,7 @@ const {
   mockMergePullRequest: vi.fn(),
   mockFetchPullRequestReviewThreads: vi.fn(),
   mockGetPullRequestReviewDecision: vi.fn(),
+  mockGetMergedClosingPullRequest: vi.fn(),
 }));
 
 vi.mock("../../src/services/host-git.js", async (importOriginal) => ({
@@ -42,6 +44,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => ({
   mergePullRequest: mockMergePullRequest,
   fetchPullRequestReviewThreads: mockFetchPullRequestReviewThreads,
   getPullRequestReviewDecision: mockGetPullRequestReviewDecision,
+  getMergedClosingPullRequest: mockGetMergedClosingPullRequest,
 }));
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
@@ -73,6 +76,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { markTaskMerged } = await import("../../src/services/task-merged.js");
+const { syncUnlabeledIssueToLocal } = await import("../../src/services/task-github-sync.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
@@ -124,6 +128,7 @@ describe("#2750 — merges that need a human", () => {
     mockMergePullRequest.mockReset().mockResolvedValue(undefined);
     mockFetchPullRequestReviewThreads.mockReset();
     mockGetPullRequestReviewDecision.mockReset().mockResolvedValue(null);
+    mockGetMergedClosingPullRequest.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -318,6 +323,78 @@ describe("#2750 — merges that need a human", () => {
     expect(markTaskMerged(app, task, project)).toBe(true);
 
     expect(getTask(app, id).needsHumanReason).toBeNull();
+    await app.close();
+  });
+
+  it("polling a merged PR clears review-post-failed without autoApprove", async () => {
+    const app = await buildApp();
+    const id = await createTask(app, {
+      status: "reviewing",
+      mergeRequestedAt: null,
+      needsHumanReason: "review-post-failed",
+    });
+    const task = getTask(app, id);
+    app.db
+      .update(projects)
+      .set({ autoApprove: false })
+      .where(eq(projects.id, task.projectId))
+      .run();
+    mockGetPullRequestByNumber.mockResolvedValue(
+      mockPr({ state: "closed", merged: true, mergedAt: "2026-10-31T09:00:00Z" }),
+    );
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, id);
+    expect(row.status).toBe("done");
+    expect(row.mergedAt).not.toBeNull();
+    expect(row.archivedAt).not.toBeNull();
+    expect(row.needsHumanReason).toBeNull();
+    await app.close();
+  });
+
+  it("archive-merged clears review-post-failed after confirming the PR merged", async () => {
+    const app = await buildApp();
+    const id = await createTask(app, { needsHumanReason: "review-post-failed" });
+    const task = getTask(app, id);
+    mockGetPullRequestByNumber.mockResolvedValue({
+      merged: true,
+      mergedAt: "2026-10-31T09:00:00Z",
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/tasks/archive-merged",
+      payload: { projectIds: [task.projectId] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ archived: [id], failed: [], remaining: 0 });
+    expect(getTask(app, id).needsHumanReason).toBeNull();
+    await app.close();
+  });
+
+  it("closing-PR backfill clears review-post-failed", async () => {
+    const app = await buildApp();
+    const id = await createTask(app, {
+      status: "backlog",
+      issueNumber: 701,
+      prNumber: null,
+      needsHumanReason: "review-post-failed",
+    });
+    const task = getTask(app, id);
+    const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
+    mockGetMergedClosingPullRequest.mockResolvedValue({
+      number: 77,
+      mergedAt: "2026-10-31T09:00:00Z",
+    });
+
+    await syncUnlabeledIssueToLocal(app, task, project, "GitHub issue was closed");
+
+    const row = getTask(app, id);
+    expect(row).toMatchObject({ status: "done", prNumber: 77, needsHumanReason: null });
+    expect(row.mergedAt).toEqual(new Date("2026-10-31T09:00:00Z"));
+    expect(row.archivedAt).not.toBeNull();
     await app.close();
   });
 });
