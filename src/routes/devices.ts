@@ -1,6 +1,14 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
-import { devices } from "../db/schema.js";
+import {
+  deleteDeviceRow,
+  findActivePhysicalOwner,
+  getDeviceRow,
+  insertDevice,
+  listDeviceRows,
+  setDeviceStatus,
+  updateDeviceSerial,
+  type DeviceRow,
+} from "../services/device-store.js";
 import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
 import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
 
@@ -34,10 +42,7 @@ interface DeviceListItem {
   live: DeviceInfo | null;
 }
 
-function toListItem(
-  row: typeof devices.$inferSelect,
-  live: DeviceInfo | undefined,
-): DeviceListItem {
+function toListItem(row: DeviceRow, live: DeviceInfo | undefined): DeviceListItem {
   return {
     id: row.id,
     hostId: row.hostId,
@@ -231,34 +236,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // Synchronous, no `await` in between, and better-sqlite3 is
       // synchronous too — this check-then-insert can't interleave with
       // another request's.
-      const [existingActive] = app.db
-        .select({ id: devices.id })
-        .from(devices)
-        .where(
-          and(
-            eq(devices.status, "active"),
-            eq(devices.kind, "physical"),
-            eq(devices.serial, address),
-          ),
-        )
-        .all();
+      const existingActive = findActivePhysicalOwner(app, address);
       if (existingActive) {
         return reply.conflict(
           `device ${existingActive.id} is already active for address ${address}`,
         );
       }
 
-      const [row] = app.db
-        .insert(devices)
-        .values({
-          kind: "physical",
-          serial: address,
-          avdName: null,
-          projectId: projectId ?? null,
-          name: name ?? null,
-        })
-        .returning()
-        .all();
+      const row = insertDevice(app, {
+        kind: "physical",
+        serial: address,
+        avdName: null,
+        projectId: projectId ?? null,
+        name: name ?? null,
+      });
 
       // Same fire-and-forget-past-the-quick-check shape as the emulator
       // branch below — see that branch's own comment.
@@ -284,17 +275,13 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     }
     if (!avdName) return reply.badRequest("avdName is required");
 
-    const [row] = app.db
-      .insert(devices)
-      .values({
-        kind: "emulator",
-        avdName,
-        serial: null,
-        projectId: projectId ?? null,
-        name: name ?? null,
-      })
-      .returning()
-      .all();
+    const row = insertDevice(app, {
+      kind: "emulator",
+      avdName,
+      serial: null,
+      projectId: projectId ?? null,
+      name: name ?? null,
+    });
 
     // Only the isScopeAlive() pre-check inside getOrCreate is awaited
     // here — the emulator's actual boot is still fire-and-forget, same
@@ -468,34 +455,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // no-rollback posture as POST /api/devices), and the collision guard
     // remains airtight because there's still no `await` between check and
     // insert.
-    const [existingActive] = app.db
-      .select({ id: devices.id })
-      .from(devices)
-      .where(
-        and(
-          eq(devices.status, "active"),
-          eq(devices.kind, "physical"),
-          eq(devices.serial, resolvedConnect),
-        ),
-      )
-      .all();
+    const existingActive = findActivePhysicalOwner(app, resolvedConnect);
     if (existingActive) {
       return reply.conflict(
         `device ${existingActive.id} is already active for address ${resolvedConnect}`,
       );
     }
 
-    const [row] = app.db
-      .insert(devices)
-      .values({
-        kind: "physical",
-        serial: resolvedConnect,
-        avdName: null,
-        projectId: null,
-        name: name ?? null,
-      })
-      .returning()
-      .all();
+    const row = insertDevice(app, {
+      kind: "physical",
+      serial: resolvedConnect,
+      avdName: null,
+      projectId: null,
+      name: name ?? null,
+    });
 
     // Pairing is attempted UNLESS we have evidence the phone is NOT in
     // pairing mode: the discovery cache saw the connect service for this
@@ -541,7 +514,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         // before ours landed — either way this delete only removes OUR
         // row and doesn't reopen the race the insert-before-pair ordering
         // closed.
-        app.db.delete(devices).where(eq(devices.id, row.id)).run();
+        deleteDeviceRow(app, row.id);
         return reply.badRequest(err instanceof Error ? err.message : String(err));
       }
     }
@@ -566,7 +539,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/api/devices", async () => {
-    const rows = app.db.select().from(devices).all();
+    const rows = listDeviceRows(app);
     return rows.map((row) => toListItem(row, app.device.get(String(row.id))?.toInfo()));
   });
 
@@ -585,7 +558,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
     const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-    const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    const row = getDeviceRow(app, id);
     if (!row) return reply.notFound(`No device ${id}`);
     return toListItem(row, app.device.get(String(row.id))?.toInfo());
   });
@@ -607,7 +580,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       }
       const id = Number(request.params.id);
       if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-      const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+      const row = getDeviceRow(app, id);
       if (!row) return reply.notFound(`No device ${id}`);
       if (row.kind !== "physical") {
         return reply.badRequest("only a physical device's address can be edited");
@@ -628,17 +601,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // one phone work at all). Synchronous, no `await` in between, and
       // better-sqlite3 is synchronous too — this check-then-write can't
       // interleave with another request's.
-      const [owner] = app.db
-        .select({ id: devices.id })
-        .from(devices)
-        .where(
-          and(
-            eq(devices.status, "active"),
-            eq(devices.kind, "physical"),
-            eq(devices.serial, address),
-          ),
-        )
-        .all();
+      const owner = findActivePhysicalOwner(app, address);
       if (owner && owner.id !== id) {
         return reply.conflict(`device ${owner.id} is already active for address ${address}`);
       }
@@ -648,12 +611,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // reconnect fails: a transient adb hiccup must not discard the user's
       // edit, same reasoning Device.attach()'s own comment gives for why a
       // connection failure there doesn't tear down what it didn't create.
-      const [updated] = app.db
-        .update(devices)
-        .set({ serial: address })
-        .where(eq(devices.id, id))
-        .returning()
-        .all();
+      const updated = updateDeviceSerial(app, id, address);
 
       // A STOPPED row's edit persists only — no terminate(), no
       // getOrCreate(). Editing a phone's stale address is exactly what you
@@ -714,7 +672,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     }
     const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-    const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    const row = getDeviceRow(app, id);
     if (!row) return reply.notFound(`No device ${id}`);
     if (row.kind !== "physical" && !app.deviceEmulatorEnabled) {
       return reply.badRequest(app.deviceEmulatorUnavailableMessage);
@@ -731,17 +689,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // PATCH's own copy — no `await` between the select and the update below,
     // so it can't interleave with another request's.
     if (row.kind === "physical" && row.serial !== null) {
-      const [owner] = app.db
-        .select({ id: devices.id })
-        .from(devices)
-        .where(
-          and(
-            eq(devices.status, "active"),
-            eq(devices.kind, "physical"),
-            eq(devices.serial, row.serial),
-          ),
-        )
-        .all();
+      const owner = findActivePhysicalOwner(app, row.serial);
       if (owner && owner.id !== id) {
         return reply.conflict(`device ${owner.id} is already active for address ${row.serial}`);
       }
@@ -751,7 +699,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // ordering DELETE/stop use: a WS connect landing while we're still
     // starting must see an "active" row and attach, not reject on "killed".
     const wasKilled = row.status !== "active";
-    app.db.update(devices).set({ status: "active" }).where(eq(devices.id, id)).run();
+    setDeviceStatus(app, id, "active");
 
     try {
       await app.device.getOrCreate({
@@ -780,7 +728,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // own comment), so the two agree rather than start/stop behaving
       // differently from create for the same phone.
       if (wasKilled) {
-        app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+        setDeviceStatus(app, id, "killed");
       }
       return reply.badRequest(err instanceof Error ? err.message : String(err));
     }
@@ -793,7 +741,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // write wins): a scope spawned against a row that no longer exists has
     // no handle left to ever stop it, and a scope spawned behind a "killed"
     // row would be invisible state.
-    const [fresh] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    const fresh = getDeviceRow(app, id);
     if (!fresh) {
       // DELETE won: the row identifying the scope we just made is gone, so
       // tear the scope down rather than orphan it, then report what the API
@@ -823,14 +771,14 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>("/api/devices/:id/stop", async (request, reply) => {
     const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-    const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    const row = getDeviceRow(app, id);
     if (!row) return reply.notFound(`No device ${id}`);
 
     // Flip intent BEFORE awaiting the live teardown — same TOCTOU-avoidance
     // shape session-lifecycle.ts's killSession uses (see its own comment):
     // a concurrent WS connect that lands mid-terminate must see "killed",
     // not a stale "active" row.
-    app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+    setDeviceStatus(app, id, "killed");
 
     // Deliberately NOT caught: a failed teardown leaves the row "killed"
     // (retryable — it's still the only handle to a possibly-surviving
@@ -851,10 +799,10 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
     const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-    const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+    const row = getDeviceRow(app, id);
     if (!row) return reply.notFound(`No device ${id}`);
 
-    app.db.update(devices).set({ status: "killed" }).where(eq(devices.id, id)).run();
+    setDeviceStatus(app, id, "killed");
 
     try {
       await app.device.terminate(String(id), row.kind);
@@ -865,7 +813,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       );
     }
 
-    app.db.delete(devices).where(eq(devices.id, id)).run();
+    deleteDeviceRow(app, id);
 
     reply.code(204);
   });
@@ -878,7 +826,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       }
       const id = Number(request.params.id);
       if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-      const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
+      const row = getDeviceRow(app, id);
       if (!row) return reply.notFound(`No device ${id}`);
       if (!isDeviceAction(request.body)) return reply.badRequest("invalid action body");
 

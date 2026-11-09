@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Page } from "playwright";
-import { eq } from "drizzle-orm";
-import { sessions } from "../db/schema.js";
+import { getSessionRow } from "../services/browser-store.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
@@ -160,7 +159,7 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
   // project's host or checkout. `page` is null for a remote target (the
   // owning agent runs the browser).
   async function resolveSessionTarget(sessionId: number): Promise<Resolved> {
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const row = getSessionRow(app, sessionId);
     if (!row) return { ok: false, status: 404, message: `No session ${sessionId}` };
 
     const resolved = await resolveSessionBrowserTarget(app, row.projectId, sessionId);
