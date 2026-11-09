@@ -339,6 +339,9 @@ export async function attemptAutoRebase(
   // its worktree force-removed from under it. That covers a stale prior attempt
   // (rebaseStartedAt set), an expired hold on a live worker round (blocker),
   // and a first attempt where the original worker sits idle (neither set).
+  // Ending it precedes the non-retryable resumeTaskWorktree bail below: losing
+  // the only worker there is intended, since its worktree is removed either way
+  // and the task is surfaced for a human instead.
   if (task.sessionId !== null) {
     // Reaching here means rebaseStartedAt is past its window (the withinWindow
     // check above already returned otherwise) and a retry is going to happen
