@@ -1,12 +1,11 @@
 import { EXISTING_INSTRUCTIONS_MODES } from "../shared/constants.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { getProjectById, setProjectScaffoldStamp } from "../services/project-records.js";
 import { resolveGitIdentity } from "../services/git-identity.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
   computeScaffold,
@@ -1177,7 +1176,7 @@ function sendPreviewComputation(reply: FastifyReply, result: PreviewComputation)
 
 export async function projectSetupRoute(app: FastifyInstance) {
   function getProjectOr404(projectId: number) {
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    const project = getProjectById(app.db, projectId);
     return project ?? null;
   }
 
@@ -1437,14 +1436,10 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // workflowConventionsSection composition computeScaffold itself used
       // to build the committed region. Reusing that exact function is what
       // lets the drift check later compare like for like.
-      app.db
-        .update(projects)
-        .set({
-          slug: record.slug,
-          conventionsHash: hashWorkflowConventionsSection(record.workflowConventionsText),
-        })
-        .where(eq(projects.id, projectId))
-        .run();
+      setProjectScaffoldStamp(app.db, projectId, {
+        slug: record.slug,
+        conventionsHash: hashWorkflowConventionsSection(record.workflowConventionsText),
+      });
 
       const repoRef = await resolveRepoRef(app, project);
       if (!repoRef) {

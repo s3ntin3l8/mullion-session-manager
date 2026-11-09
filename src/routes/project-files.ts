@@ -6,8 +6,7 @@
 // (.env) — nothing here logs a request body or a file's content.
 import { Transform, type Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { getProjectById, getSessionById } from "../services/project-records.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { isHostBusyError } from "../services/remote-host-errors.js";
@@ -90,7 +89,7 @@ const writeSchema = {
 
 export async function projectFilesRoute(app: FastifyInstance) {
   function getProjectOr404(projectId: number) {
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    const project = getProjectById(app.db, projectId);
     return project ?? null;
   }
 
@@ -180,7 +179,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
       reply.badRequest("Invalid session id");
       return null;
     }
-    const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const session = getSessionById(app.db, sessionId);
     if (!session || session.projectId !== project.id) {
       reply.notFound("Session not found in this project");
       return null;

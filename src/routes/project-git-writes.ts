@@ -24,8 +24,15 @@
 
 import { removeListedCheckout } from "../services/checkout-removal.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
-import { projects, sessions, tasks } from "../db/schema.js";
+import {
+  findTaskIdByBranch,
+  getProjectById,
+  getSessionById,
+  listActiveSessionsWithProject,
+  listTaskWorktreeRefs,
+  type ProjectRow,
+  type SessionRow,
+} from "../services/project-records.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
   getRemoteHostClient,
@@ -80,18 +87,7 @@ function branchClaimedByResumableTask(
   projectId: number,
   branchName: string,
 ): number | null {
-  const [row] = app.db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.projectId, projectId),
-        eq(tasks.branchName, branchName),
-        inArray(tasks.status, RESUMABLE_TASK_STATUSES),
-      ),
-    )
-    .all();
-  return row?.id ?? null;
+  return findTaskIdByBranch(app.db, projectId, branchName, RESUMABLE_TASK_STATUSES);
 }
 
 /** Resumable tasks retain a durable reference even after their worker ends. */
@@ -102,11 +98,7 @@ function taskSessionsUnderWorktree(
 ): number[] {
   const matched = new Set<number>();
   const resolvedTarget = path.resolve(worktreePath);
-  const taskRows = app.db
-    .select({ sessionId: tasks.sessionId, worktreePath: tasks.worktreePath })
-    .from(tasks)
-    .where(and(eq(tasks.projectId, project.id), inArray(tasks.status, RESUMABLE_TASK_STATUSES)))
-    .all();
+  const taskRows = listTaskWorktreeRefs(app.db, project.id, RESUMABLE_TASK_STATUSES);
   for (const t of taskRows) {
     if (
       t.sessionId !== null &&
@@ -141,18 +133,7 @@ function sessionsInProjectCheckout(
   linkedWorktreePaths: string[],
   exceptSessionId?: number,
 ): number[] {
-  const rows = app.db
-    .select({
-      id: sessions.id,
-      cwd: sessions.cwd,
-      hostId: sessions.hostId,
-      projectCwd: projects.cwd,
-      projectHostId: projects.hostId,
-    })
-    .from(sessions)
-    .leftJoin(projects, eq(sessions.projectId, projects.id))
-    .where(eq(sessions.status, "active"))
-    .all();
+  const rows = listActiveSessionsWithProject(app.db);
   const matched: number[] = [];
   for (const row of rows) {
     if (row.id === exceptSessionId) continue;
@@ -498,7 +479,7 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
     opts: { movesHead: boolean; label: string },
     op: (
       backend: ReturnType<typeof resolveBackend>,
-      project: typeof projects.$inferSelect,
+      project: ProjectRow,
     ) => Promise<GitBranchOpResult>,
   ): Promise<GitBranchOpResult | FastifyReply> {
     const project = await loadScopedProject(app, projectId, sessionId, reply);
@@ -813,7 +794,7 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app.db, projectId);
       if (!project) return reply.notFound();
 
       const { worktreePath, force, sessionId } = request.body;
@@ -822,9 +803,9 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
       // session's own worktree — the session's host and the repository the
       // worktree was cut from.
       let target: { id: number; hostId: string; cwd: string } = project;
-      let owner: typeof sessions.$inferSelect | undefined;
+      let owner: SessionRow | undefined;
       if (sessionId !== undefined) {
-        [owner] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+        owner = getSessionById(app.db, sessionId) ?? undefined;
         if (!owner || owner.projectId !== project.id) {
           return reply.notFound("No such session in this project");
         }
@@ -956,7 +937,7 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app.db, projectId);
       if (!project) return reply.notFound();
 
       const backend = resolveBackend(app, project.hostId);
