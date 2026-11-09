@@ -1635,7 +1635,7 @@
       /* ───────── nav ───────── */
       /* ───────── 4b · Overlap with the GitHub sidebar ───────── */
       const taskStrip = (compact) =>
-        `<div class="stat" style="border:1px solid var(--status-info-border);border-radius:8px;margin:8px 10px;padding:8px"><div class="r1"><span class="cap" style="margin:0">Task ${lnk("#2418 ↗")}</span><span class="big info">REVIEWING</span><span class="sp"></span><span class="chip warn">Awaiting your approval</span></div>${compact ? "" : steps(4)}<div class="next"><b>Next:</b> reviewer has not started. Approve to merge, or Reject.</div><div style="display:flex;gap:6px;flex-wrap:wrap">${btn("Approve task", "primary")}${btn("Reject")}<span class="sp"></span>${lnk("Open task →")}</div></div>`;
+        `<div class="stat" style="border:1px solid var(--status-info-border);border-radius:8px;margin:8px 10px;padding:8px"><div class="r1"><span class="cap" style="margin:0">Task ${lnk("#2418 ↗")}</span><span class="big info">REVIEWING</span><span class="sp"></span><span class="chip warn">Awaiting your approval</span></div>${compact ? "" : steps(4)}<div class="next"><b>Next:</b> reviewer has not started. Approve to merge, or Reject.</div><div style="display:flex;gap:6px;flex-wrap:wrap">${btn("Approve task", "primary")}${btn("Reject")}${btn("⋯")}<span class="sp"></span>${lnk("Open task →")}</div></div>`;
       const prDetail = (
         w,
       ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="ibtn">${I("back")}</span><span class="title">#2833 forbid new route → db imports<span class="sub">OPEN</span></span><span class="ibtn">${I("gh")}</span></div>
@@ -1651,7 +1651,7 @@
           <dt>GitHub view</dt><dd>Artifact: PR diff, checks, review threads, mergeability, issue discussion and comments</dd>
           <dt>Shared block</dt><dd>One <code>TaskStatus</code> component (status, steps, next, primary action, “Open task”) rendered in both; the PR view shows it only when the PR belongs to a task</dd>
           <dt>Task view shows</dt><dd>A one-line PR summary (CI, mergeable) and “PR #2833 ↗”, which opens the GitHub PR detail</dd>
-          <dt>Navigation</dt><dd>Task ↔ PR links both ways; Back returns to where you came from</dd></dl></div></div></div>
+          <dt>Strip ⋯ menu</dt><dd>The other task actions, shown only when they apply: Address changes, Fix conflicts, Merge, Re-review, Retry, Give up</dd><dt>Navigation</dt><dd>Task ↔ PR links both ways; Back returns to where you came from</dd></dl></div></div></div>
         <div class="note" style="margin-top:12px;border-left-color:var(--y)">No duplicated action sets: Approve / Reject / Give up are defined once in the shared block. The PR view keeps everything GitHub-shaped (checks list, threads, description) and the task view never reproduces it.</div>`;
       const VIEWS = [
         [
