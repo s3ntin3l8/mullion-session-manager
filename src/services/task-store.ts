@@ -11,12 +11,12 @@ import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 export { TASK_STATUSES };
 export type TaskRow = typeof tasks.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
-export type SessionRow = typeof sessions.$inferSelect;
+type SessionRow = typeof sessions.$inferSelect;
 /** A partial task write, as handed to `updateTask`. */
 export type TaskPatch = {
   [K in keyof typeof tasks.$inferInsert]?: (typeof tasks.$inferInsert)[K] | SQL;
 };
-export type NewTask = typeof tasks.$inferInsert;
+type NewTask = typeof tasks.$inferInsert;
 
 // Shared row shape for GET /api/tasks and GET /api/tasks/:id — kept as one
 // column list rather than duplicated between the two so a newly-added
