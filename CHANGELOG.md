@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.3.60](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.59...v0.3.60) (2026-11-09)
+
+
+### Features
+
+* **tasks:** workers file an issue for what they skip, and the reviewer enforces it ([#2731](https://github.com/s3ntin3l8/mullion-session-manager/issues/2731)) ([202f29b](https://github.com/s3ntin3l8/mullion-session-manager/commit/202f29b978d11ed05bf9448b309e21ccd66d4140)), closes [#2724](https://github.com/s3ntin3l8/mullion-session-manager/issues/2724)
+
+
+### Bug Fixes
+
+* **browser:** forgetProject also waits for an open that is parked on a closing target ([30147a0](https://github.com/s3ntin3l8/mullion-session-manager/commit/30147a0ecf4e9095d70951c2e8832283f3806f4a))
+* **browser:** forgetProject waits for a browser that is still opening ([91e2590](https://github.com/s3ntin3l8/mullion-session-manager/commit/91e259076e527a38f848be6a1346788661056ee9))
+* **browser:** project merge deletes the browser files, and the removal guard and its tests are real ([#2733](https://github.com/s3ntin3l8/mullion-session-manager/issues/2733)) ([6aba4c1](https://github.com/s3ntin3l8/mullion-session-manager/commit/6aba4c1cc35993fe09e60081e60f3975f6eff404)), closes [#2725](https://github.com/s3ntin3l8/mullion-session-manager/issues/2725)
+* **hosts:** one unknown-outcome message everywhere, and every remote mutation surfaces it ([#2730](https://github.com/s3ntin3l8/mullion-session-manager/issues/2730)) ([35e35af](https://github.com/s3ntin3l8/mullion-session-manager/commit/35e35af6b9032dd21a366a6c9153555e24cd3db5)), closes [#2723](https://github.com/s3ntin3l8/mullion-session-manager/issues/2723)
+* **hosts:** ping no longer throws on a blocked URL, preview websockets get their own budget, and the preview tests are tightened ([#2728](https://github.com/s3ntin3l8/mullion-session-manager/issues/2728)) ([65b1f8e](https://github.com/s3ntin3l8/mullion-session-manager/commit/65b1f8e76c15cf8aab9b3e8a39f9d4ac7ed4418a)), closes [#2722](https://github.com/s3ntin3l8/mullion-session-manager/issues/2722)
+* **hosts:** the unreachable-host throttle drops removed hosts and its call sites are tested ([e3215df](https://github.com/s3ntin3l8/mullion-session-manager/commit/e3215dff31ab275028f83aa6755a444e58beedae))
+* **hosts:** throttle repeated unreachable-host warnings ([358e2c5](https://github.com/s3ntin3l8/mullion-session-manager/commit/358e2c5d2855811aa95c514ba1124cc1f3ae3386))
+* **skills:** map the remaining remote-host modules in the review references ([a095f20](https://github.com/s3ntin3l8/mullion-session-manager/commit/a095f2082c5478224903476ac5e70bf6ecd7173d))
+* **skills:** point the review references at the modules the remote-host-client and settings splits moved into ([894ed67](https://github.com/s3ntin3l8/mullion-session-manager/commit/894ed67c67d3e149440da841543ff3bf6dc0fd27))
+* **skills:** point the review references at the modules the task code moved into ([00fd84f](https://github.com/s3ntin3l8/mullion-session-manager/commit/00fd84f61762b7faeeb9beea50baf8d6305168da))
+* **tasks:** a human re-review of a concluded round gets a distinct round heading ([2382480](https://github.com/s3ntin3l8/mullion-session-manager/commit/23824802cd0abdd5907359adac5fddda21431ad5))
+* **tasks:** a retried review post uses the reviewed head and records its backoff once ([83f075f](https://github.com/s3ntin3l8/mullion-session-manager/commit/83f075f3b6fe3668c6506835b8d2c5ab81a6009e))
+* **tasks:** a worker that exits within seconds must not spend a rebase attempt or complete a suggestions round ([b4849d6](https://github.com/s3ntin3l8/mullion-session-manager/commit/b4849d664a5f8ba11a924a7b6f73154f71830ea9))
+* **tasks:** an adopted seed is not typed again without evidence it was lost ([#2736](https://github.com/s3ntin3l8/mullion-session-manager/issues/2736)) ([c82d1c2](https://github.com/s3ntin3l8/mullion-session-manager/commit/c82d1c285f2a930d2956225a391645104bd813fa)), closes [#2726](https://github.com/s3ntin3l8/mullion-session-manager/issues/2726)
+* **tasks:** an unparseable late findings file leaves the review inconclusive and is read once ([767c4a1](https://github.com/s3ntin3l8/mullion-session-manager/commit/767c4a105b53d7dca23d2e8701b9485be4cf4e31))
+* **tasks:** auto-rebase ends the previous worker instead of orphaning it ([#2805](https://github.com/s3ntin3l8/mullion-session-manager/issues/2805)) ([cb7effa](https://github.com/s3ntin3l8/mullion-session-manager/commit/cb7effa1b3f1f426c5f124fee4d821c5351bdbba))
+* **tasks:** flag rebase-exhausted and thread-blocked merges as needing a human ([#2760](https://github.com/s3ntin3l8/mullion-session-manager/issues/2760)) ([3efef3a](https://github.com/s3ntin3l8/mullion-session-manager/commit/3efef3a1fdb602b7406d2ad6b05902bb1222df44))
+* **tasks:** hold auto-approve and merge when an approving review post fails permanently ([2a84cf9](https://github.com/s3ntin3l8/mullion-session-manager/commit/2a84cf95d6f9844d092d37403923beab05907587))
+* **tasks:** hold auto-rebase while a worker round or a review post is in flight ([5f85f81](https://github.com/s3ntin3l8/mullion-session-manager/commit/5f85f81db3c2c28795e076f9977e7a267651ab03))
+* **tasks:** no reviewer is spawned during the backoff after a rapid-exit rebase abort ([c7d6279](https://github.com/s3ntin3l8/mullion-session-manager/commit/c7d627904f2398fded49dd418e739a4a1f9e7515))
+* **tasks:** number re-armed review rounds distinctly in the stored findings ([b971f5f](https://github.com/s3ntin3l8/mullion-session-manager/commit/b971f5f597bf606bdcec2c28ebfeefd96e50a179))
+* **tasks:** rapid-exit judgement covers the rebase path and Hermes dispatch and stops holding after exhaustion ([2d6f8eb](https://github.com/s3ntin3l8/mullion-session-manager/commit/2d6f8eb71f8d53dcf4d537f470e098b5b5998a68))
+* **tasks:** re-read a late findings file after an inconclusive review ingest ([ee627f2](https://github.com/s3ntin3l8/mullion-session-manager/commit/ee627f26520938c950edb4f7a4d97c45dd9a3c33))
+* **tasks:** refund an auto-rebase attempt that landed a mergeable head main then outran ([9f49363](https://github.com/s3ntin3l8/mullion-session-manager/commit/9f49363bcb2c36a59de0819cf5955fcb74fb0314))
+* **tasks:** repair the re-armed-round test after the review-post retry landed ([#2764](https://github.com/s3ntin3l8/mullion-session-manager/issues/2764)) ([a234c6b](https://github.com/s3ntin3l8/mullion-session-manager/commit/a234c6b854904de00bd705da623a158b0a8b7bfe))
+* **tasks:** retry a review post lost to a GitHub rate limit and hold auto-approve until it lands ([dbf9fad](https://github.com/s3ntin3l8/mullion-session-manager/commit/dbf9fad1fe4959314151557d5e6c463c225a319b))
+* **tasks:** tell the auto-rebase worker to regenerate generated files instead of hand-merging them ([9908293](https://github.com/s3ntin3l8/mullion-session-manager/commit/99082935bb869fc91b758d5110e3b2d2c3c2742b))
+* **tasks:** the late-findings read caches are pruned, resettable and recorded only after a successful ingest ([53cbd9c](https://github.com/s3ntin3l8/mullion-session-manager/commit/53cbd9c44bae0f58d3dcb8d5298704f43e582ee1))
+* **tasks:** the late-findings sweep reads an exited reviewer once and tolerates clock skew ([34f96ed](https://github.com/s3ntin3l8/mullion-session-manager/commit/34f96edefc0d47b0794fc792325a2f9b44b7c347))
+* **tasks:** the rapid-exit guard covers a shell-tail death with no turn end and its backoff stamp is cleared ([dc80778](https://github.com/s3ntin3l8/mullion-session-manager/commit/dc80778a817374bda1566a4a491fce5a174e5c2c))
+* **tasks:** the review-post-failed hold clears on an external merge, survives a stale-head drop and never overwrites another reason ([55f0838](https://github.com/s3ntin3l8/mullion-session-manager/commit/55f0838c404a3de7ead1abcad413bed4d968a438))
+* **uiux:** the demo reports a fixed version so screenshots and baselines survive a release ([#2721](https://github.com/s3ntin3l8/mullion-session-manager/issues/2721)) ([56a2e49](https://github.com/s3ntin3l8/mullion-session-manager/commit/56a2e49fe297cacf66b706f315fad2051b85885d))
+
 ## [0.3.59](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.58...v0.3.59) (2026-11-07)
 
 
