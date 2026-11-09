@@ -102,6 +102,12 @@ describe("task-github-sync: closing the issue", () => {
       expect(mockCloseIssue).not.toHaveBeenCalled();
     });
 
+    it("treats a prUrl with no prNumber (a row promoted before prNumber existed) as awaiting the merge", async () => {
+      const task = insertTask({ issueNumber: 10 });
+      await syncTaskTransition(app, task, project, "done", { prUrl: PR_URL });
+      expect(mockCloseIssue).not.toHaveBeenCalled();
+    });
+
     it("closes the issue when the PR is already merged", async () => {
       const task = insertTask({ issueNumber: 6, prNumber: 9, mergedAt: new Date() });
       await syncTaskTransition(app, task, project, "done", { prUrl: PR_URL });
@@ -132,6 +138,22 @@ describe("task-github-sync: closing the issue", () => {
       await expect(closeIssueOnMerge(app, task, project)).resolves.toBeUndefined();
       const row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
       expect(row.githubSyncError).toContain("boom");
+    });
+
+    it("records a sync error instead of dropping silently when there is no token or repo", async () => {
+      const noToken = insertTask({ issueNumber: 11, prNumber: 9 });
+      mockGetToken.mockReturnValue(null);
+      await closeIssueOnMerge(app, noToken, project);
+      expect(mockCloseIssue).not.toHaveBeenCalled();
+      const row = app.db.select().from(tasks).where(eq(tasks.id, noToken.id)).get()!;
+      expect(row.githubSyncError).toContain("no GitHub token");
+
+      const noRepo = insertTask({ issueNumber: 12, prNumber: 9 });
+      mockGetToken.mockReturnValue("ghp_token");
+      mockResolveRepoRef.mockResolvedValue(null);
+      await closeIssueOnMerge(app, noRepo, project);
+      const row2 = app.db.select().from(tasks).where(eq(tasks.id, noRepo.id)).get()!;
+      expect(row2.githubSyncError).toContain("could not be resolved");
     });
 
     it("is a no-op for a task with no linked issue", async () => {

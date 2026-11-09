@@ -1258,10 +1258,14 @@ GitHub, not a correctness problem.
 | `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                                                                                                                                                                                                                                                                                     |
 | reject          | Comment with the human's feedback text                                                                                                                                                                                                                                                                                                                                                           |
 
-`→ done`'s label swap/comment/issue-close all happen synchronously at approve,
-same as always — none of it waits on the PR actually merging. Whether the PR
-merges is a separate, asynchronous concern; see [Merge on approve](#merge-on-approve)
-below.
+`→ done`'s label swap and comment happen synchronously at approve, but the
+issue-close does not when a PR is waiting to merge: it stays open until the
+merge lands (the PR body's `Closes #N`, backed up by `closeIssueOnMerge` from
+`markTaskMerged` and the `pull_request` webhook), so `blocked_by` dependents
+stay blocked until then. A task with no PR to wait for still closes at approve.
+Whether the PR merges is a separate, asynchronous concern; see
+[Merge on approve](#merge-on-approve) below. A PR closed without merging
+leaves the issue open ([#2865](https://github.com/s3ntin3l8/mullion-session-manager/issues/2865)).
 
 A task can require a platform or host (`#1954`): `Platform:` / `Host:` lines in
 the issue body, parsed by `task-placement-resolve.ts` (same matching rules as

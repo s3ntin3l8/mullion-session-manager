@@ -220,7 +220,9 @@ async function runSync(
         owner,
         repo,
         issueNumber,
-        awaitingMerge ? `${approved} This issue closes when the pull request merges.` : approved,
+        awaitingMerge
+          ? `${approved} This issue closes when the pull request merges (if the PR is closed without merging it stays open, see #2865).`
+          : approved,
       );
       if (!awaitingMerge) await closeIssue(token, owner, repo, issueNumber);
       // Terminal — this task will never post another progress comment, so
@@ -368,9 +370,25 @@ export async function closeIssueOnMerge(
   if (task.issueNumber === null) return;
   try {
     const repoRef = await resolveRepoRef(app, project);
-    if (!repoRef) return;
-    const token = await resolveGitHubToken(app, repoRef);
-    if (!token) return;
+    const token = repoRef ? await resolveGitHubToken(app, repoRef) : null;
+    if (!repoRef || !token) {
+      // Not a silent drop (#485): a merge with no repo ref or token to close
+      // the issue with would otherwise strand it open, and its dependents
+      // blocked, with no trace.
+      const why = repoRef
+        ? "no GitHub token is connected"
+        : "the project's repo could not be resolved";
+      app.log.warn(
+        { taskId: task.id, issueNumber: task.issueNumber },
+        `[task-github-sync] could not close the issue after the merge: ${why}`,
+      );
+      recordGithubSyncError(
+        app,
+        task.id,
+        `Could not close issue #${task.issueNumber} after the merge: ${why}`,
+      );
+      return;
+    }
     const { state } = await getIssueState(token, repoRef.owner, repoRef.repo, task.issueNumber);
     if (state === "closed") return;
     await closeIssue(token, repoRef.owner, repoRef.repo, task.issueNumber);
