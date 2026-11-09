@@ -103,6 +103,7 @@ const { reconcileTasks } = await import("../../src/services/task-reconciler.js")
 const { GitHubRateLimitError } = await import("../../src/services/github-fetch.js");
 const { GitHubApiError } = await import("../../src/services/github.js");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
+const { holdsForReviewPost } = await import("../../src/services/task-review-post.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
@@ -397,6 +398,54 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
     expect(read().status).toBe("reviewing");
     expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("a permanent failure on a non-approving verdict clears the marker and holds nothing", async () => {
+    const { app, task, read } = await setup("p-post-permanent-nonapproving");
+    const marker = JSON.stringify({
+      key: "1-1",
+      body: "<!-- mullion-review-post:1-1 -->\nbody",
+      verdict: "changes-requested",
+      posted: false,
+      createdAt: Date.now(),
+    });
+    app.db
+      .update(tasks)
+      .set({
+        lastReviewVerdict: "changes-requested",
+        reviewPostPending: marker,
+        reviewSessionId: null,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+    mockCreatePullRequestReview.mockRejectedValue(new GitHubApiError("Not Found", 404));
+
+    await reconcileTasks(app);
+
+    const row = read();
+    expect(row.reviewPostPending).toBeNull();
+    expect(row.githubSyncError).toContain("Not Found");
+    expect(row.needsHumanReason).toBeNull();
+    expect(holdsForReviewPost(row)).toBe(false);
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it("a new review round's ingest clears a standing review-post-failed reason", async () => {
+    const { app, task, read } = await setup("p-post-ingest-clears");
+    app.db
+      .update(tasks)
+      .set({ needsHumanReason: "review-post-failed" })
+      .where(eq(tasks.id, task.id))
+      .run();
+    // Keep approveTask out of it: it also clears the reason, which would mask the ingest.
+    mockPromoteTaskToPR.mockResolvedValue({ ok: false, reason: "push-failed", detail: "nope" });
+
+    await reconcileTasks(app);
+
+    expect(read().lastReviewVerdict).toBe("approved");
+    expect(read().needsHumanReason).toBeNull();
     await app.close();
   });
 
