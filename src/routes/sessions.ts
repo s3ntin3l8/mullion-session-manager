@@ -4,12 +4,18 @@ import {
   MAX_LIMIT as MAX_TRANSCRIPT_LIMIT,
 } from "../services/session-transcript.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { and, eq, isNull } from "drizzle-orm";
 // Issue #1255 — only used for the rename route's `instanceof
 // BetterSqlite3.SqliteError` check below; see session-lifecycle.ts's
 // createSessionRecord for the empirical confirmation of this detection.
 import BetterSqlite3 from "better-sqlite3";
-import { projects, sessions } from "../db/schema.js";
+import {
+  getProjectRow,
+  getSessionModels,
+  getSessionRow,
+  listSessionRows,
+  renameSessionRow,
+  setProjectDevServerUrlIfUnset,
+} from "../services/session-store.js";
 import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend, unknownOutcomeMessage } from "../services/session-backend.js";
@@ -338,24 +344,13 @@ export async function sessionsRoute(app: FastifyInstance) {
       // rows, so an unfiltered list grows without bound; this lets a caller
       // (store.ts's poll loop) ask for only the rows it actually renders.
 
-      const conditions = [
-        request.query.projectId !== undefined
-          ? eq(sessions.projectId, request.query.projectId)
-          : undefined,
-        kind !== undefined ? eq(sessions.kind, kind) : undefined,
-        status !== undefined ? eq(sessions.status, status) : undefined,
+      const rows = listSessionRows(app.db, {
+        projectId: request.query.projectId,
+        kind,
+        status,
         // The parent→child listing (control socket's sessions.children).
-        parentSessionId !== undefined ? eq(sessions.parentSessionId, parentSessionId) : undefined,
-      ].filter((c) => c !== undefined);
-
-      const rows =
-        conditions.length > 0
-          ? app.db
-              .select()
-              .from(sessions)
-              .where(and(...conditions))
-              .all()
-          : app.db.select().from(sessions).all();
+        parentSessionId,
+      });
       // Settings -> Notifications & status' "Idle threshold" (default 30s) —
       // read once per request, not per row.
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
@@ -452,7 +447,7 @@ export async function sessionsRoute(app: FastifyInstance) {
     const sessionId = Number(request.params.id);
     if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const row = getSessionRow(app.db, sessionId);
     if (!row) return reply.notFound();
 
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
@@ -468,7 +463,7 @@ export async function sessionsRoute(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/api/sessions/:id/setup-log", async (request, reply) => {
     const sessionId = Number(request.params.id);
     if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const row = getSessionRow(app.db, sessionId);
     if (!row) return reply.notFound();
     const log = await readSessionSetupLog(app, resolveSessionHostId(app, row), sessionId);
     if (!log) return reply.notFound("No setup log for this session");
@@ -516,7 +511,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
 
       // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
@@ -565,7 +560,7 @@ export async function sessionsRoute(app: FastifyInstance) {
     async (request, reply) => {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
       const hostId = resolveSessionHostId(app, row);
       let result;
@@ -596,7 +591,7 @@ export async function sessionsRoute(app: FastifyInstance) {
     const sessionId = Number(request.params.id);
     if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const row = getSessionRow(app.db, sessionId);
     if (!row) return reply.notFound();
 
     // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
@@ -686,11 +681,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         request.body.parentSessionId !== undefined &&
         (explicitModel === undefined || explicitSmallModel === undefined)
       ) {
-        const [parentRow] = app.db
-          .select({ model: sessions.model, smallModel: sessions.smallModel })
-          .from(sessions)
-          .where(eq(sessions.id, request.body.parentSessionId))
-          .all();
+        const parentRow = getSessionModels(app.db, request.body.parentSessionId);
         if (parentRow) {
           // Issue #1423 — the parent's stored model predates this
           // validation, or could have been written by an older backend
@@ -964,14 +955,14 @@ export async function sessionsRoute(app: FastifyInstance) {
     if (promoting.has(sessionId)) return reply.conflict("Session is already being promoted");
     promoting.add(sessionId);
     try {
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
       if (row.status !== "active") return reply.conflict("Session is not active");
       if (row.kind === "dock") {
         return reply.conflict("Cannot promote a dock-managed session");
       }
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+      const project = getProjectRow(app.db, row.projectId);
       if (!project) return reply.notFound();
 
       // Anchor at the project root INSTEAD OF the source session's own cwd,
@@ -1338,7 +1329,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
 
       // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
@@ -1367,17 +1358,12 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      let updated;
+      let updated: ReturnType<typeof renameSessionRow>;
       try {
-        updated = app.db
-          .update(sessions)
-          // nameLocked pins this title against live OSC title updates (issue
-          // #69) — only an explicit rename through this route sets it; a
-          // launch-time name pattern (CommandPalette) never does.
-          .set({ name: request.body.name, nameLocked: true })
-          .where(eq(sessions.id, sessionId))
-          .returning()
-          .all();
+        // renameSessionRow pins the title against live OSC title updates
+        // (issue #69) — only an explicit rename through this route does; a
+        // launch-time name pattern (CommandPalette) never does.
+        updated = renameSessionRow(app.db, sessionId, request.body.name);
       } catch (err) {
         // Issue #1255 — this route wasn't in scope for #1223's DB-level
         // guard (sessions_stack_identity_unique, schema.ts), so a rename
@@ -1392,12 +1378,12 @@ export async function sessionsRoute(app: FastifyInstance) {
         }
         throw err;
       }
-      if (updated.length === 0) return reply.notFound();
+      if (!updated) return reply.notFound();
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
       // Issue #1722 / roadmap 8.8 — the SESSION's host, not its project's
       // (see the comment on the sibling route).
-      const hostId = resolveSessionHostId(app, updated[0]);
-      return withLiveStatus(app, updated[0], idleThresholdMs, hostId);
+      const hostId = resolveSessionHostId(app, updated);
+      return withLiveStatus(app, updated, idleThresholdMs, hostId);
     },
   );
 
@@ -1414,7 +1400,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
 
       // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
@@ -1455,7 +1441,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
 
       const { port } = request.body;
@@ -1489,12 +1475,8 @@ export async function sessionsRoute(app: FastifyInstance) {
       // some other accept already set it first — a 409 lets the frontend
       // tell the user their sibling offer is now stale, rather than
       // silently swapping the port on them.
-      const updated = app.db
-        .update(projects)
-        .set({ devServerUrl: port })
-        .where(and(eq(projects.id, row.projectId), isNull(projects.devServerUrl)))
-        .run();
-      if (updated.changes === 0) {
+      const updated = setProjectDevServerUrlIfUnset(app.db, row.projectId, port);
+      if (!updated) {
         return reply.conflict(
           "This project's devServerUrl was already set by another accepted offer",
         );
@@ -1521,7 +1503,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
 
       const { port } = request.body;
@@ -1552,7 +1534,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
 
       // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
@@ -1610,9 +1592,9 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app.db, sessionId);
       if (!row) return reply.notFound();
-      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+      const project = getProjectRow(app.db, row.projectId);
       if (!project) return reply.notFound();
 
       // Hermes review (PR #106): a bare exact-key match against the raw
@@ -1702,7 +1684,7 @@ export async function sessionsRoute(app: FastifyInstance) {
     const sessionId = Number(request.params.id);
     if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const row = getSessionRow(app.db, sessionId);
     if (!row) return reply.notFound();
 
     return listSessionBrowserBindings(app, sessionId);
@@ -1716,7 +1698,7 @@ export async function sessionsRoute(app: FastifyInstance) {
     const sessionId = Number(request.params.id);
     if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const row = getSessionRow(app.db, sessionId);
     if (!row) return reply.notFound();
 
     const had = listSessionBrowserBindings(app, sessionId).length;

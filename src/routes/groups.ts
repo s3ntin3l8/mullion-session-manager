@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { groups } from "../db/schema.js";
+import { createGroup, deleteGroup, listGroups, updateGroup } from "../services/groups-store.js";
 
 interface CreateGroupBody {
   name: string;
@@ -47,7 +46,7 @@ const updateGroupSchema = {
 
 export async function groupsRoute(app: FastifyInstance) {
   app.get("/api/groups", async () => {
-    return app.db.select().from(groups).all();
+    return listGroups(app.db);
   });
 
   app.post<{ Body: CreateGroupBody }>(
@@ -55,11 +54,7 @@ export async function groupsRoute(app: FastifyInstance) {
     { schema: createGroupSchema },
     async (request, reply) => {
       const { name, color } = request.body;
-      const [created] = app.db
-        .insert(groups)
-        .values({ name, ...(color !== undefined ? { color } : {}) })
-        .returning()
-        .all();
+      const created = createGroup(app.db, { name, color });
       reply.code(201);
       return created;
     },
@@ -73,20 +68,9 @@ export async function groupsRoute(app: FastifyInstance) {
       if (!Number.isInteger(groupId)) return reply.badRequest("Invalid group id");
 
       const { name, icon, color, collapsed, position } = request.body;
-      const updated = app.db
-        .update(groups)
-        .set({
-          ...(name !== undefined ? { name } : {}),
-          ...(icon !== undefined ? { icon } : {}),
-          ...(color !== undefined ? { color } : {}),
-          ...(collapsed !== undefined ? { collapsed } : {}),
-          ...(position !== undefined ? { position } : {}),
-        })
-        .where(eq(groups.id, groupId))
-        .returning()
-        .all();
-      if (updated.length === 0) return reply.notFound();
-      return updated[0];
+      const updated = updateGroup(app.db, groupId, { name, icon, color, collapsed, position });
+      if (!updated) return reply.notFound();
+      return updated;
     },
   );
 
@@ -97,8 +81,7 @@ export async function groupsRoute(app: FastifyInstance) {
     const groupId = Number(request.params.id);
     if (!Number.isInteger(groupId)) return reply.badRequest("Invalid group id");
 
-    const deleted = app.db.delete(groups).where(eq(groups.id, groupId)).returning().all();
-    if (deleted.length === 0) return reply.notFound();
+    if (!deleteGroup(app.db, groupId)) return reply.notFound();
     reply.code(204);
   });
 }

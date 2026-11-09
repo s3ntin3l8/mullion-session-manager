@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { getProjectRow, getSessionRow, touchSessionAttached } from "../services/session-store.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
 import { attachParamsFromRow, type AttachSessionParams } from "../services/session-adopt.js";
@@ -261,7 +260,7 @@ export function resolveAndAttach(
   if (!Number.isInteger(sessionId)) {
     return { ok: false, status: 400, error: "sessionId must be an integer" };
   }
-  const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  const row = getSessionRow(app.db, sessionId);
   if (!row) return { ok: false, status: 404, error: `No session ${sessionId}` };
   if (row.status === "killed") {
     return { ok: false, status: 400, error: `Session ${sessionId} was killed` };
@@ -274,7 +273,7 @@ export function resolveAndAttach(
     return { ok: false, status: 400, error: `Session ${sessionId} exited` };
   }
 
-  const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+  const project = getProjectRow(app.db, row.projectId);
   // B9 — currently unreachable given the DB's notNull FK + `foreign_keys =
   // ON` (a session row always has a real project), but every sibling lookup
   // in this codebase (routes/sessions.ts) guards a possibly-empty select
@@ -287,11 +286,7 @@ export function resolveAndAttach(
   if (!project) {
     return { ok: false, status: 404, error: `No project ${row.projectId}` };
   }
-  app.db
-    .update(sessions)
-    .set({ lastAttachedAt: new Date() })
-    .where(eq(sessions.id, sessionId))
-    .run();
+  touchSessionAttached(app.db, sessionId);
 
   const attachOpts = attachParamsFromRow(app, row, project, { cols, rows });
 
@@ -326,7 +321,7 @@ export async function terminalRoute(app: FastifyInstance) {
           return reply.badRequest("sessionId query param is required");
         }
 
-        const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+        const row = getSessionRow(app.db, sessionId);
         if (!row) return reply.notFound(`No session ${sessionId}`);
         if (row.status === "killed") {
           return reply.badRequest(`Session ${sessionId} was killed`);
