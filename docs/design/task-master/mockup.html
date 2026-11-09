@@ -1633,6 +1633,26 @@
         <div class="note" style="margin-top:12px;border-left-color:var(--y)">Phone applies the desktop decisions unchanged: the same card (linked #issue / PR, project, session pills, epic tag), the same 1a filter controls (project picker, quick views, one Filter sheet with a count badge, Display in the overflow), Claimed merged into In progress, and the ad-hoc strip. The “single rail” is the full-screen sheet: tapping a card opens the same status-first detail as the sidebar, with a back arrow in place of the rail's; pop-out does not exist on phone.</div>`;
 
       /* ───────── nav ───────── */
+      /* ───────── 4b · Overlap with the GitHub sidebar ───────── */
+      const taskStrip = (compact) =>
+        `<div class="stat" style="border:1px solid var(--status-info-border);border-radius:8px;margin:8px 10px;padding:8px"><div class="r1"><span class="cap" style="margin:0">Task ${lnk("#2418 ↗")}</span><span class="big info">REVIEWING</span><span class="sp"></span><span class="chip warn">Awaiting your approval</span></div>${compact ? "" : steps(4)}<div class="next"><b>Next:</b> reviewer has not started. Approve to merge, or Reject.</div><div style="display:flex;gap:6px;flex-wrap:wrap">${btn("Approve task", "primary")}${btn("Reject")}<span class="sp"></span>${lnk("Open task →")}</div></div>`;
+      const prDetail = (
+        w,
+      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="ibtn">${I("back")}</span><span class="title">#2833 forbid new route → db imports<span class="sub">OPEN</span></span><span class="ibtn">${I("gh")}</span></div>
+        ${taskStrip(false)}
+        <div class="sec"><div class="sec-h">Status</div><div style="display:flex;gap:6px;flex-wrap:wrap">${chip("ok", I("check", 10) + " CI 12/12")}${chip("ok", "mergeable")}${chip("", "up to date")}${chip("warn", "0 approvals")}</div></div>
+        <div class="sec"><div class="sec-h">Checks</div><div class="hier"><div class="hr">${chip("ok", "pass")}<span class="ht">lint</span></div><div class="hr">${chip("ok", "pass")}<span class="ht">test-backend</span></div><div class="hr">${chip("ok", "pass")}<span class="ht">test-frontend</span></div></div></div>
+        <div class="sec"><div class="sec-h">Reviews &amp; threads</div><div class="cap" style="margin:0">No reviews yet · 0 open threads</div></div>
+        <div class="sec"><div class="sec-h">Description</div><div class="body" style="padding:0">The intended layering is routes → services → db…</div></div></div>`;
+      const vOverlap =
+        () => `<div class="row"><div><p class="cap">GitHub sidebar · PR detail of a task's PR</p>${prDetail(340)}</div><div><p class="cap">Task sidebar · detail (same status block on top)</p>${sbDetail(340)}</div>
+        <div style="max-width:440px"><p class="cap">Who owns what</p><div class="sbf" style="width:440px"><dl class="kv0" style="grid-template-columns:110px 1fr;padding:10px;gap:8px 10px">
+          <dt>Task view</dt><dd>Process: status, step tracker, next step, worker and reviewer sessions, review round and verdict, blockers and epic, task timeline</dd>
+          <dt>GitHub view</dt><dd>Artifact: PR diff, checks, review threads, mergeability, issue discussion and comments</dd>
+          <dt>Shared block</dt><dd>One <code>TaskStatus</code> component (status, steps, next, primary action, “Open task”) rendered in both; the PR view shows it only when the PR belongs to a task</dd>
+          <dt>Task view shows</dt><dd>A one-line PR summary (CI, mergeable) and “PR #2833 ↗”, which opens the GitHub PR detail</dd>
+          <dt>Navigation</dt><dd>Task ↔ PR links both ways; Back returns to where you came from</dd></dl></div></div></div>
+        <div class="note" style="margin-top:12px;border-left-color:var(--y)">No duplicated action sets: Approve / Reject / Give up are defined once in the shared block. The PR view keeps everything GitHub-shaped (checks list, threads, description) and the task view never reproduces it.</div>`;
       const VIEWS = [
         [
           "today",
@@ -1659,6 +1679,12 @@
           "4 · Sidebar: status first",
           vSide,
           "<b>The sidebar is the task detail — status first, then details.</b>",
+        ],
+        [
+          "overlap",
+          "4b · Task ↔ GitHub overlap",
+          vOverlap,
+          "<b>Task view vs GitHub view.</b> Split by subject (process vs artifact), share one status block, link both ways.",
         ],
         [
           "tl",
