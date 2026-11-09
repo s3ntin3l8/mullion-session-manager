@@ -55,22 +55,32 @@ export async function holdRedCiWithoutProgress(
   if (lastRerunAt !== undefined && Date.now() - lastRerunAt < CI_RERUN_SETTLE_MS) return true;
 
   if (task.ciRerunCount < MAX_CI_RERUNS_PER_HEAD && current.failedRunIds.length > 0) {
-    const token = await resolveGitHubToken(app, current.repoRef, "write");
+    // `dispatch`, not `write`: re-running jobs needs `actions: write`, which only
+    // the dispatch permission set grants (github-app.ts's DISPATCH_PERMISSIONS).
+    // With the write token an App install 403s every rerun, which reads as a
+    // refusal and would park the task on the first tick.
+    const token = await resolveGitHubToken(app, current.repoRef, "dispatch");
     if (token) {
       let accepted = 0;
-      try {
-        for (const runId of current.failedRunIds) {
+      let failure: unknown;
+      // Per run: a throw on a later run must not discard a rerun GitHub already
+      // accepted for an earlier one, or the next tick would re-request it.
+      for (const runId of current.failedRunIds) {
+        try {
           if (await rerunFailedJobs(token, current.repoRef.owner, current.repoRef.repo, runId)) {
             accepted++;
           }
+        } catch (err) {
+          failure = err;
+          app.log.warn(
+            { err, taskId: task.id, headSha: current.headSha, runId },
+            "task reconcile: could not ask GitHub to re-run a failed Actions run",
+          );
         }
-      } catch (err) {
-        app.log.warn(
-          { err, taskId: task.id, headSha: current.headSha },
-          "task reconcile: could not re-run the failed Actions jobs — holding the red-CI return, not parking",
-        );
-        return true;
       }
+      // Nothing was accepted and at least one request could not be made: hold,
+      // do not park (a blip must not strand the task).
+      if (accepted === 0 && failure !== undefined) return true;
       if (accepted > 0) {
         const counted = app.db
           .update(tasks)
@@ -130,10 +140,10 @@ export async function holdRedCiWithoutProgress(
   ciRerunRequestedAt.delete(task.id);
   app.log.warn(
     { taskId: task.id, headSha: current.headSha, checks: redChecks.map((c) => c.name) },
-    "task reconcile: a check is still red on a head the worker was already returned for and a rerun did not help — parked for a human",
+    "task reconcile: a check is still red on a head the worker was already returned for and the jobs could not be re-run or a rerun did not clear it — parked for a human",
   );
   await postReviewFindingsComment(app, task, project, {
-    body: `A CI check is failing on this task's PR (${redChecks.map((c) => c.name).join(", ")}), but the worker was already sent back for this exact commit and pushed nothing — the failure does not look like something a code change fixes (a lost runner or an abandoned job), and re-running the failed jobs did not clear it. The automatic loop has stopped; this task needs a human to re-run the check or push a fix.`,
+    body: `A CI check is failing on this task's PR (${redChecks.map((c) => c.name).join(", ")}), but the worker was already sent back for this exact commit and pushed nothing, so the failure does not look like something a code change fixes (a lost runner or an abandoned job). Mullion could not re-run the failed jobs, or re-running them did not clear it. The automatic loop has stopped; this task needs a human to re-run the check or push a fix.`,
   });
   return true;
 }

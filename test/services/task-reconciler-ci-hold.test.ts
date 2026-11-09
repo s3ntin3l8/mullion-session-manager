@@ -250,6 +250,13 @@ describe("red CI on a head the worker was already returned for", () => {
     await reconcileTasks(app);
 
     expect(mockRerunFailedJobs).toHaveBeenCalledWith("tok", "o", "r", 4242);
+    // Re-running jobs needs `actions: write`, which only the dispatch token scope
+    // carries; a scope-blind mock would hide a token that always 403s.
+    expect(mockResolveGitHubToken).toHaveBeenCalledWith(
+      expect.anything(),
+      { owner: "o", repo: "r" },
+      "dispatch",
+    );
     const row = getTask(app, taskId);
     expect(row.status).toBe("reviewing");
     expect(row.autoReturnRounds).toBe(3);
@@ -316,6 +323,31 @@ describe("red CI on a head the worker was already returned for", () => {
 
     expect(mockRerunFailedJobs).not.toHaveBeenCalled();
     expect(getTask(app, taskId).needsHumanReason).toBe("no-progress");
+
+    await app.close();
+  });
+
+  it("records the spend when a later run's rerun throws after an earlier one was accepted", async () => {
+    const app = await buildApp();
+    const taskId = await createCandidate(app, { ciReturnHeadSha: "sha-head" });
+    mockFetchRunsForHeadChecked.mockResolvedValue({
+      ok: true,
+      runs: [
+        { ...workflowRun("failure", 4242)[0], name: "CI/CD" },
+        { ...workflowRun("failure", 4243)[0], name: "CodeQL" },
+      ],
+    });
+    mockRerunFailedJobs.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("boom"));
+
+    await reconcileTasks(app);
+
+    expect(mockRerunFailedJobs).toHaveBeenCalledTimes(2);
+    const row = getTask(app, taskId);
+    // The accepted rerun is counted (and settles), so the next tick does not
+    // re-request one that is already in flight.
+    expect(row.ciRerunCount).toBe(1);
+    expect(row.status).toBe("reviewing");
+    expect(row.autoReturnCapAnnouncedAt).toBeNull();
 
     await app.close();
   });
