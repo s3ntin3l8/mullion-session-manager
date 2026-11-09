@@ -49,25 +49,54 @@ export function getTerminalPalette(): TerminalPalette | null {
   return palette;
 }
 
-// Per-session palettes (#2528), each dropped once the session's startup-query
-// window has closed, so the map cannot outgrow the sessions still starting.
-const sessionPalettes = new Map<string, TerminalPalette>();
+// Per-session palettes (#2528). The startup-query window runs from the spawn,
+// which can trail the set by a slow create (a GitHub App token mint), so the
+// entry is not timed from the set: a long cap bounds one that never spawns, and
+// the first lookup (the session's first output, inside its window) re-arms a
+// short expiry. The map cannot outgrow the sessions still starting.
+interface SessionPaletteEntry {
+  palette: TerminalPalette;
+  timer: ReturnType<typeof setTimeout>;
+  armed: boolean;
+}
+const sessionPalettes = new Map<string, SessionPaletteEntry>();
+const SESSION_PALETTE_SPAWN_CAP_MS = 10 * 60_000;
 const SESSION_PALETTE_TTL_MS = 35_000;
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
-/** Answer `sessionId`'s startup queries from `next` instead of the process-wide palette. */
+function expireSessionPalette(sessionId: string, afterMs: number): ReturnType<typeof setTimeout> {
+  return setTimeout(() => sessionPalettes.delete(sessionId), afterMs).unref();
+}
+
+/**
+ * Answer `sessionId`'s startup queries from `next` instead of the process-wide
+ * palette. Anything that is not three `#rrggbb` colors is ignored: these
+ * strings are written into the PTY inside an OSC reply, so a non-route caller
+ * (Task Master, the control socket) must not be able to inject escape bytes.
+ */
 export function setSessionPalette(sessionId: string, next: TerminalPalette): void {
-  sessionPalettes.set(sessionId, { ...next });
-  setTimeout(() => sessionPalettes.delete(sessionId), SESSION_PALETTE_TTL_MS).unref();
+  if (![next.foreground, next.background, next.cursor].every((c) => HEX_COLOR.test(c))) return;
+  clearTimeout(sessionPalettes.get(sessionId)?.timer);
+  const timer = expireSessionPalette(sessionId, SESSION_PALETTE_SPAWN_CAP_MS);
+  sessionPalettes.set(sessionId, { palette: { ...next }, timer, armed: false });
 }
 
 /** The palette its spawning pane gave `sessionId`, or undefined to use the process-wide one. */
 export function getSessionPalette(sessionId: string): TerminalPalette | undefined {
-  return sessionPalettes.get(sessionId);
+  const entry = sessionPalettes.get(sessionId);
+  if (!entry) return undefined;
+  if (!entry.armed) {
+    entry.armed = true;
+    clearTimeout(entry.timer);
+    entry.timer = expireSessionPalette(sessionId, SESSION_PALETTE_TTL_MS);
+  }
+  return entry.palette;
 }
 
 /** Test seam: forget the cached palette. */
 export function resetTerminalPalette(): void {
   palette = null;
+  for (const entry of sessionPalettes.values()) clearTimeout(entry.timer);
   sessionPalettes.clear();
 }
 

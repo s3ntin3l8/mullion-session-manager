@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { sessionsApi } from "./sessions.js";
+import { setReportedPalette } from "../lib/reportedPalette.js";
 
 describe("sessionsApi.uploadSessionFile", () => {
   const fetchMock = vi.fn();
@@ -46,5 +47,30 @@ describe("sessionsApi.uploadSessionFile", () => {
 
     expect(lastHeaders().get("content-type")).toBe("application/octet-stream");
     expect(lastHeaders().get("x-upload-filename")).toBe("a.png");
+  });
+});
+
+describe("sessionsApi create/promote carry the dashboard's palette (#2528)", () => {
+  const fetchMock = vi.fn();
+  const PALETTE = { foreground: "#1d1d1d", background: "#f2f2f2", cursor: "#1d1d1d" };
+  beforeEach(() => {
+    fetchMock.mockReset().mockImplementation(async () => jsonResponse(201, {}));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  const lastBody = () =>
+    JSON.parse((fetchMock.mock.calls.at(-1) as [string, RequestInit])[1].body as string);
+
+  it("sends the reported palette on create and on promote", async () => {
+    setReportedPalette(PALETTE);
+    await sessionsApi.createSession(1, "bash");
+    expect(lastBody().palette).toEqual(PALETTE);
+    await sessionsApi.promoteSession(1, { baseRef: "main" });
+    expect(lastBody().palette).toEqual(PALETTE);
+  });
+
+  it("sends none when no palette has been reported", async () => {
+    setReportedPalette(undefined);
+    await sessionsApi.createSession(1, "bash");
+    expect("palette" in lastBody()).toBe(false);
   });
 });

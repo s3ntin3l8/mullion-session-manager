@@ -27,6 +27,9 @@ export function useReportTerminalPalette(opts: {
     const xterm = buildXtermTheme(colorScheme, theme);
     const { foreground, background, cursor } = xterm;
     if (!HEX.test(foreground ?? "") || !HEX.test(background ?? "") || !HEX.test(cursor ?? "")) {
+      // Not the previous theme's colors: a new session must not be created with
+      // a palette this dashboard no longer shows.
+      setReportedPalette(undefined);
       return;
     }
     // Best effort, but a transient failure (backend restarting, a rate-limit

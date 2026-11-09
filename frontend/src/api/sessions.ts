@@ -135,7 +135,7 @@ export const sessionsApi = {
   ) =>
     request<PromoteSessionResponse>(`/api/sessions/${id}/promote`, {
       method: "POST",
-      body: JSON.stringify(opts),
+      body: JSON.stringify({ palette: getReportedPalette(), ...opts }),
     }),
 
   declinePromote: (id: number, reason?: string) =>

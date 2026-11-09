@@ -4,7 +4,8 @@ import { renderHook } from "@testing-library/react";
 import { useReportTerminalPalette } from "./useReportTerminalPalette.js";
 import { settingsApi } from "../api/settings.js";
 import { buildXtermTheme } from "../terminalTheme.js";
-import { getReportedPalette } from "../lib/reportedPalette.js";
+import { getReportedPalette, setReportedPalette } from "../lib/reportedPalette.js";
+import * as terminalTheme from "../terminalTheme.js";
 
 vi.mock("../api/settings.js", () => ({
   settingsApi: { putTerminalPalette: vi.fn(() => Promise.resolve()) },
@@ -106,5 +107,19 @@ describe("useReportTerminalPalette", () => {
     vi.advanceTimersByTime(5_000);
     window.dispatchEvent(new Event("focus"));
     expect(put).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets the recorded palette when the new theme resolves to a non-hex color", () => {
+    vi.spyOn(terminalTheme, "buildXtermTheme").mockReturnValue({
+      foreground: "rgb(1,2,3)",
+      background: "#ffffff",
+      cursor: "#000000",
+    });
+    setReportedPalette({ foreground: "#111111", background: "#222222", cursor: "#333333" });
+    renderHook(() =>
+      useReportTerminalPalette({ settingsLoaded: true, colorScheme: "mullion", theme: "light" }),
+    );
+    expect(getReportedPalette()).toBeUndefined();
+    vi.restoreAllMocks();
   });
 });

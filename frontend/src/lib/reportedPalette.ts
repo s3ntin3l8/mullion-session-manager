@@ -10,7 +10,7 @@ export interface ReportedPalette {
 
 let current: ReportedPalette | undefined;
 
-export function setReportedPalette(palette: ReportedPalette): void {
+export function setReportedPalette(palette: ReportedPalette | undefined): void {
   current = palette;
 }
 
