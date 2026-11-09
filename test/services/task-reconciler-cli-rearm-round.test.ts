@@ -199,4 +199,68 @@ describe("CLI reviewer re-armed round heading", () => {
     expect(headings()).toEqual(["## Round 1", "## Round 1 (retry 2)"]);
     await app.close();
   });
+
+  it("gives a human re-review of a concluded round a distinct heading (#2776)", async () => {
+    const app = await buildApp();
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { allowDuplicate: true, createDir: true, name: "p-cli-rereview", cwd: "/tmp" },
+    });
+    const mk = async () =>
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId: project.json().id, command: "bash" },
+        })
+      ).json().id as number;
+    const workerId = await mk();
+    const firstReviewer = await mk();
+    const secondReviewer = await mk();
+    const task = app.db
+      .insert(tasks)
+      .values({
+        projectId: project.json().id,
+        title: "cli reviewer, human re-review",
+        status: "reviewing",
+        sessionId: workerId,
+        reviewSessionId: firstReviewer,
+        worktreePath: "/tmp",
+        agentCommand: "claude",
+        prNumber: 9,
+        claimedAt: new Date(),
+      })
+      .returning()
+      .get();
+    vi.spyOn(app.pty, "get").mockImplementation(() => ({ toInfo: () => finishedInfo() }) as never);
+    const get = () => app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
+    const headings = () =>
+      (get().reviewFindings ?? "").split("\n").filter((l) => l.startsWith("## Round "));
+    const findingsFile = () =>
+      taskReviewFindingsPath(path.dirname(app.pty.hookSocketPath), task.id, 0);
+
+    fs.writeFileSync(findingsFile(), JSON.stringify({ verdict: "approved", summary: "First." }));
+    await reconcileTasks(app);
+    expect(get().lastReviewVerdict).toBe("approved");
+    expect(headings()).toEqual(["## Round 1"]);
+
+    // A human re-reviews the concluded round: a fresh CLI reviewer answers.
+    app.db
+      .update(tasks)
+      .set({
+        status: "reviewing",
+        reviewSessionId: secondReviewer,
+        reviewFindingsIngestedSessionId: null,
+        lastReviewVerdict: null,
+        lastReviewVerdictAt: null,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+    fs.writeFileSync(findingsFile(), JSON.stringify({ verdict: "approved", summary: "Second." }));
+    await reconcileTasks(app);
+    expect(get().reviewFindings).toContain("Second.");
+    expect(headings()).toEqual(["## Round 1", "## Round 1 (re-review 2)"]);
+    await app.close();
+  });
 });

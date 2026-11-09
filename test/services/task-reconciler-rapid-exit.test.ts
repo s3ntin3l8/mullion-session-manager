@@ -312,6 +312,52 @@ describe("a worker that exits within seconds", () => {
     expect(create).toHaveBeenCalled();
   });
 
+  it("spawns nothing on a sweep inside the backoff, and retries the rebase once it ends", async () => {
+    const { app, task } = await rebaseTask("p-rapid-backoff-sweep", { ranMs: 3_000 });
+    // A configured review agent must not be spawned in the backoff either.
+    app.db
+      .update(projects)
+      .set({ defaultReviewAgent: "claude" })
+      .where(eq(projects.id, task.projectId))
+      .run();
+    const create = vi.spyOn(lifecycle, "createSessionRecord");
+
+    await reconcileTasks(app); // aborts the rapid-exit rebase, starts the backoff
+    expect(getTask(app, task.id).rebaseAbortedAttempts).toBe(1);
+
+    resetMergeBackoff(task.id);
+    await reconcileTasks(app); // a sweep inside the backoff
+    let row = getTask(app, task.id);
+    expect(create).not.toHaveBeenCalled();
+    expect(row.rebaseAttempts).toBe(0);
+    expect(row.rebaseAbortedAttempts).toBe(1);
+    expect(row.rapidExitRetryAfter).not.toBeNull();
+    expect(row.reviewSessionId).toBeNull();
+
+    app.db
+      .update(tasks)
+      .set({ rapidExitRetryAfter: new Date(Date.now() - 1000) })
+      .where(eq(tasks.id, task.id))
+      .run();
+    resetMergeBackoff(task.id);
+    const [respawned] = app.db
+      .insert(sessions)
+      .values({ projectId: task.projectId, command: "claude", cwd: "/tmp", status: "active" })
+      .returning()
+      .all();
+    create.mockResolvedValue({
+      ok: true,
+      row: { id: respawned.id },
+      initialPromptApplied: true,
+    } as never);
+    await reconcileTasks(app); // the backoff is over: the rebase is retried
+    row = getTask(app, task.id);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(row.rebaseAttempts).toBe(1);
+    expect(row.sessionId).toBe(respawned.id);
+    expect(row.rapidExitRetryAfter).toBeNull();
+  });
+
   it("still counts a normal rebase session", async () => {
     const { app, task } = await rebaseTask("p-normal-rebase", { ranMs: 5 * 60_000 });
     await reconcileTasks(app);
