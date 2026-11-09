@@ -10,7 +10,6 @@ import type { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import type { HostCapacityReport } from "./host-capacity.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS, type GenerationTurnResult } from "./scaffold-turn.js";
-import { GIT_CLONE_TIMEOUT_MS } from "./git-run.js";
 import type { CloneResult } from "./git-clone.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
@@ -19,7 +18,7 @@ import type { SkillInfo, SkillAgent } from "./skills.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
-import { toGitStatusFailure, type GitStatusResult } from "./git-status.js";
+import type { GitStatusResult } from "./git-status.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
@@ -36,6 +35,7 @@ import {
   type AgentChannelStreamKind,
 } from "../shared/agent-channel.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
+import * as git from "./remote-host-git.js";
 import { probeHealth } from "./host-health-probe.js";
 
 export {
@@ -209,10 +209,6 @@ export function overrideTransferIdleTimeoutForTests(ms: number): () => void {
  * push-failed/host-unreachable on a remote push that's still legitimately
  * running. */
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 140_000;
-/** git-clone.ts's GIT_CLONE_TIMEOUT_MS is 10 min (one `git clone`), plus the
- * round-trip and the post-clone branch lookup. Its own constant: nothing else
- * in this file runs anywhere near that long. */
-const GIT_CLONE_REQUEST_TIMEOUT_MS = GIT_CLONE_TIMEOUT_MS + 60_000;
 /** git-refs.ts's GIT_TIMEOUT_MS is 10s, and resolveDefaultBaseRef can run up
  * to 4 sequential git calls (fetch, symbolic-ref, 2x rev-parse candidates)
  * before this route's own resolveCommitSha adds a 5th. */
@@ -221,33 +217,6 @@ const GIT_BASE_REF_REQUEST_TIMEOUT_MS = 60_000;
 const GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS = 20_000;
 /** A bounded batch may resolve hundreds of paths on a slow agent filesystem. */
 const WORKTREE_PATH_COMPARE_TIMEOUT_MS = 30_000;
-/** git-status.ts's GIT_TIMEOUT_MS is 5s (one `git status`). */
-const GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS = 10_000;
-
-// Issue #1851 — the clone health check runs `git fsck --connectivity-only` on
-// the agent's own filesystem, and git-doctor.ts's per-call budget for it is
-// 30s. The default REQUEST_TIMEOUT_MS's 5s would abandon the request while
-// the agent is still checking, and the caller would report the host as
-// unreachable — for a host that is perfectly alive, doing a slow but
-// perfectly normal job. 2x the agent-side budget plus round-trip headroom,
-// following the same "real, non-error delay this proxy must not preempt"
-// reasoning as the other git constants above.
-const GIT_HEALTH_REQUEST_TIMEOUT_MS = 75_000;
-
-// Issue #1896 — the clone REPAIR, on the agent that hosts the clone. The
-// repair does more than the check — quarantine, `git fetch origin --prune`,
-// the index rebuild and a second `git fsck` — and the doctor's per-git-call
-// budget is 30s, so the worst case is several calls' worth. 180s, in family
-// with GIT_PUSH_REQUEST_TIMEOUT_MS below.
-const GIT_REPAIR_REQUEST_TIMEOUT_MS = 180_000;
-
-// Issue #1672 — the guarded checkout / create / rebase. A rebase fetches
-// (30s budget), rebases (60s) and runs a handful of 10s git calls around
-// them; checkout/create are several 10s calls. A proxy timeout that fires
-// first would report a healthy host as unreachable while the agent goes on
-// to move HEAD anyway, so both sit above the agent's own worst case.
-const GIT_BRANCH_OP_REQUEST_TIMEOUT_MS = 60_000;
-const GIT_REBASE_REQUEST_TIMEOUT_MS = 150_000;
 
 // Issue #345 — a dock-preview worktree's checkout/force-remove/sync
 // (`git worktree add`/`remove --force`/`reset --hard`) can take longer than
@@ -375,6 +344,10 @@ export class RemoteHostClient {
   ): Promise<T> {
     return this.transport.request<T>(path, init, timeoutMs);
   }
+
+  // `request`, bound, for the git path builders in remote-host-git.ts.
+  private readonly gitRequest: git.GitRequest = (path, init, timeoutMs) =>
+    this.request(path, init, timeoutMs);
 
   discover(): Promise<DiscoveredCandidate[]> {
     return this.request("/internal/discover");
@@ -547,11 +520,11 @@ export class RemoteHostClient {
   }
 
   resolveGitHubRepo(cwd: string): Promise<GitHubRepoRef | null> {
-    return this.request(`/internal/github-repo?cwd=${encodeURIComponent(cwd)}`);
+    return git.resolveGitHubRepo(this.gitRequest, cwd);
   }
 
   resolveGitBranch(cwd: string): Promise<string | null> {
-    return this.request(`/internal/git-branch?cwd=${encodeURIComponent(cwd)}`);
+    return git.resolveGitBranch(this.gitRequest, cwd);
   }
 
   /** Mirrors `/internal/git-status`'s `{ isRepo, status }` shape exactly (see
@@ -565,17 +538,7 @@ export class RemoteHostClient {
    * (see the route's own comment). Every existing caller (sidebar
    * polls) omits it and keeps the cached read, at the default timeout. */
   resolveGitStatus(cwd: string, opts?: { fresh?: boolean }): Promise<GitStatusResult> {
-    const url = `/internal/git-status?cwd=${encodeURIComponent(cwd)}${opts?.fresh ? "&fresh=1" : ""}`;
-    return this.request<Omit<GitStatusResult, "problem"> & { problem?: unknown }>(
-      url,
-      undefined,
-      opts?.fresh ? GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS : undefined,
-    ).then(({ problem, ...rest }) => {
-      // Issue #1612: `problem` is optional (old agents omit it) and validated
-      // here so nothing downstream trusts the agent's raw payload.
-      const validated = toGitStatusFailure(problem);
-      return validated ? { ...rest, problem: validated } : rest;
-    });
+    return git.resolveGitStatus(this.gitRequest, cwd, opts);
   }
 
   /** Local branches + worktrees (issue #162), plus remote-tracking branches
@@ -597,9 +560,7 @@ export class RemoteHostClient {
     // back to the current branch."
     defaultBranch?: string | null;
   } | null> {
-    return this.request(
-      `/internal/git-branches?cwd=${encodeURIComponent(cwd)}${detail ? "&detail=1" : ""}`,
-    );
+    return git.resolveGitBranches(this.gitRequest, cwd, detail);
   }
 
   /** Creates a worktree on this agent's own filesystem (issue #271's
@@ -785,10 +746,7 @@ export class RemoteHostClient {
     baseRef?: string,
     opts: { fresh?: boolean } = {},
   ): Promise<{ isRepo: boolean; stats: GitDiffStats | null; baseResolved?: boolean }> {
-    let url = `/internal/git-diff?cwd=${encodeURIComponent(cwd)}`;
-    if (baseRef) url += `&base=${encodeURIComponent(baseRef)}`;
-    if (opts.fresh) url += "&fresh=1";
-    return this.request(url);
+    return git.resolveGitDiffStats(this.gitRequest, cwd, baseRef, opts);
   }
 
   /** Per-file unified diff (issue #262) for a remote-hosted session's cwd —
@@ -799,9 +757,7 @@ export class RemoteHostClient {
     filePath: string,
     baseRef?: string,
   ): Promise<{ patch: string | null }> {
-    let url = `/internal/git-file-diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(filePath)}`;
-    if (baseRef) url += `&base=${encodeURIComponent(baseRef)}`;
-    return this.request(url);
+    return git.resolveGitFileDiff(this.gitRequest, cwd, filePath, baseRef);
   }
 
   /** Commit history (issue #1969) for a remote-hosted project's Git view —
@@ -811,9 +767,7 @@ export class RemoteHostClient {
     cwd: string,
     opts: { worktree?: string; skip: number; limit: number; scope: "all" | "head" },
   ): Promise<{ commits: CommitLogEntry[] | null; forbidden?: boolean }> {
-    let url = `/internal/git-log?cwd=${encodeURIComponent(cwd)}&skip=${opts.skip}&limit=${opts.limit}&scope=${opts.scope}`;
-    if (opts.worktree) url += `&worktree=${encodeURIComponent(opts.worktree)}`;
-    return this.request(url);
+    return git.resolveGitLog(this.gitRequest, cwd, opts);
   }
 
   /** One commit's message and changed files — mirrors /internal/git-commit. */
@@ -822,9 +776,7 @@ export class RemoteHostClient {
     sha: string,
     worktree?: string,
   ): Promise<{ detail: CommitDetail | null; forbidden?: boolean }> {
-    let url = `/internal/git-commit?cwd=${encodeURIComponent(cwd)}&sha=${encodeURIComponent(sha)}`;
-    if (worktree) url += `&worktree=${encodeURIComponent(worktree)}`;
-    return this.request(url);
+    return git.resolveGitCommit(this.gitRequest, cwd, sha, worktree);
   }
 
   /** One file's patch within a commit — mirrors /internal/git-commit-file. */
@@ -834,9 +786,7 @@ export class RemoteHostClient {
     filePath: string,
     worktree?: string,
   ): Promise<{ patch: string | null; forbidden?: boolean }> {
-    let url = `/internal/git-commit-file?cwd=${encodeURIComponent(cwd)}&sha=${encodeURIComponent(sha)}&path=${encodeURIComponent(filePath)}`;
-    if (worktree) url += `&worktree=${encodeURIComponent(worktree)}`;
-    return this.request(url);
+    return git.resolveGitCommitFile(this.gitRequest, cwd, sha, filePath, worktree);
   }
 
   /** Runs `git fetch origin` on this agent's filesystem (issue #369 —
@@ -851,12 +801,7 @@ export class RemoteHostClient {
     cwd: string,
     token?: string,
   ): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
-    const url = `/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`;
-    // The optional read token rides a header on the signed channel, never the
-    // URL. An agent too old to know it ignores the header and fetches plain.
-    return token
-      ? this.request(url, { headers: { "x-mullion-git-token": token } })
-      : this.request(url);
+    return git.resolveGitFetch(this.gitRequest, cwd, token);
   }
 
   /** Issue #1851 — the READ-ONLY clone health check on this agent's
@@ -865,11 +810,7 @@ export class RemoteHostClient {
    * Its own timeout: the agent-side check runs `git fsck`, which has a 30s
    * budget of its own — see GIT_HEALTH_REQUEST_TIMEOUT_MS above. */
   resolveGitHealth(cwd: string): Promise<CloneHealth> {
-    return this.request(
-      `/internal/git-health?cwd=${encodeURIComponent(cwd)}`,
-      undefined,
-      GIT_HEALTH_REQUEST_TIMEOUT_MS,
-    );
+    return git.resolveGitHealth(this.gitRequest, cwd);
   }
 
   /** Issue #1896 — the clone REPAIR on this agent's filesystem, and the
@@ -888,21 +829,14 @@ export class RemoteHostClient {
     cwd: string,
     opts: { confirm?: boolean } = {},
   ): Promise<RepairPlan | RepairOutcome> {
-    return this.request(
-      "/internal/git-repair",
-      { method: "POST", body: JSON.stringify({ cwd, confirm: opts.confirm === true }) },
-      GIT_REPAIR_REQUEST_TIMEOUT_MS,
-    );
+    return git.resolveGitRepair(this.gitRequest, cwd, opts);
   }
 
   /** Runs a fast-forward `git pull` on this agent's filesystem (issue #745).
    * Returns `{ pulled: boolean, reason?, detail? }` matching runGitPull's
    * GitPullResult shape. */
   resolveGitPull(cwd: string): Promise<GitPullResult> {
-    return this.request("/internal/git-pull", {
-      method: "POST",
-      body: JSON.stringify({ cwd }),
-    });
+    return git.resolveGitPull(this.gitRequest, cwd);
   }
 
   /** The guarded checkout / create / rebase on this agent's filesystem
@@ -910,11 +844,7 @@ export class RemoteHostClient {
    * and /internal/git-rebase, each returning git-branch-ops.ts's
    * GitBranchOpResult. */
   resolveGitCheckout(cwd: string, branch: string): Promise<GitBranchOpResult> {
-    return this.request(
-      "/internal/git-checkout",
-      { method: "POST", body: JSON.stringify({ cwd, branch }) },
-      GIT_BRANCH_OP_REQUEST_TIMEOUT_MS,
-    );
+    return git.resolveGitCheckout(this.gitRequest, cwd, branch);
   }
 
   resolveGitBranchCreate(
@@ -923,19 +853,11 @@ export class RemoteHostClient {
     startPoint: string,
     checkout?: boolean,
   ): Promise<GitBranchOpResult> {
-    return this.request(
-      "/internal/git-branch-create",
-      { method: "POST", body: JSON.stringify({ cwd, name, startPoint, checkout }) },
-      GIT_BRANCH_OP_REQUEST_TIMEOUT_MS,
-    );
+    return git.resolveGitBranchCreate(this.gitRequest, cwd, name, startPoint, checkout);
   }
 
   resolveGitRebase(cwd: string, onto?: string): Promise<GitBranchOpResult> {
-    return this.request(
-      "/internal/git-rebase",
-      { method: "POST", body: JSON.stringify({ cwd, onto }) },
-      GIT_REBASE_REQUEST_TIMEOUT_MS,
-    );
+    return git.resolveGitRebase(this.gitRequest, cwd, onto);
   }
 
   /** Resolves this agent's default base ref (and its pinned commit SHA) on
@@ -976,15 +898,7 @@ export class RemoteHostClient {
    * already-signed, IP-pinned channel; never logged by this method or the
    * route it calls. */
   resolveGitClone(url: string, name: string, token?: string): Promise<CloneResult> {
-    return this.request(
-      "/internal/git-clone",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url, name, ...(token ? { token } : {}) }),
-      },
-      GIT_CLONE_REQUEST_TIMEOUT_MS,
-    );
+    return git.resolveGitClone(this.gitRequest, url, name, token);
   }
 
   /** Reads `paths`' current content directly off this agent's own
