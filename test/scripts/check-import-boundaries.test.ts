@@ -116,6 +116,38 @@ describe("check-import-boundaries.mjs", () => {
     expect(result.stderr).toContain("NEW LAYERING INVERSION");
   });
 
+  it("fails on a new layering inversion (a route importing the db)", async () => {
+    write("src/db/schema.ts", "export const things = 1;\n");
+    write("src/routes/x.ts", 'import { things } from "../db/schema.js";\nexport { things };\n');
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("NEW LAYERING INVERSION");
+    expect(result.stderr).toContain("src/routes/x.ts -> src/db/schema.ts");
+  });
+
+  it("fails when a baselined route -> db edge is gone", async () => {
+    write("src/db/schema.ts", "export const things = 1;\n");
+    write("src/routes/x.ts", "export const x = 1;\n");
+    writeBaseline({
+      cycles: [],
+      inversions: [
+        {
+          from: "src/routes/x.ts",
+          to: "src/db/schema.ts",
+          note: "pending: moved behind a service by its route-family issue",
+        },
+      ],
+    });
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("STALE BASELINE ENTRY");
+    expect(result.stderr).toContain("src/routes/x.ts -> src/db/schema.ts");
+  });
+
   it("fails on a new import cycle", async () => {
     write("src/services/a.ts", 'import { b } from "./b.js";\nexport const a = b;\n');
     write("src/services/b.ts", 'import { a } from "./a.js";\nexport const b = a;\n');
