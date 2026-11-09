@@ -111,11 +111,17 @@ async function runGitWithLockRetry(
   return res;
 }
 
-const BUSY_RESULT: GitPullResult = {
-  pulled: false,
-  reason: "busy",
-  detail: "Another git process is using this repository",
-};
+// A fresh object per call (a caller may annotate it). The lock stderr goes to
+// the debug log, since the UI's `busy` copy does not render `detail`: an
+// orphaned lock from a killed process stays diagnosable.
+function busyResult(stderr: string): GitPullResult {
+  console.debug(`git pull: repository lock still held after retries: ${stderr.trim()}`);
+  return {
+    pulled: false,
+    reason: "busy",
+    detail: "Another git process is using this repository",
+  };
+}
 
 /**
  * Executes a fast-forward git pull (`git merge --ff-only @{u}`) after fetching
@@ -204,7 +210,7 @@ export async function runGitPull(cwd: string): Promise<GitPullResult> {
     FETCH_TIMEOUT_MS,
   );
   if (fetchRes.code !== 0) {
-    if (isLockError(fetchRes.stderr)) return BUSY_RESULT;
+    if (isLockError(fetchRes.stderr)) return busyResult(fetchRes.stderr);
     const trimmed = fetchRes.stderr.trim();
     return {
       pulled: false,
@@ -249,7 +255,7 @@ export async function runGitPull(cwd: string): Promise<GitPullResult> {
     return { pulled: true };
   }
 
-  if (isLockError(mergeRes.stderr)) return BUSY_RESULT;
+  if (isLockError(mergeRes.stderr)) return busyResult(mergeRes.stderr);
 
   const stderr = mergeRes.stderr.trim();
   if (/Not possible to fast-forward|not fast-forward/i.test(stderr)) {

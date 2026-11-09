@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { runGitPull } from "../../src/services/git-pull.js";
+import { isLockError, runGitPull } from "../../src/services/git-pull.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 function git(cwd: string, args: string[]) {
@@ -195,9 +195,14 @@ describe("runGitPull (issue #745)", () => {
     it("retries a merge blocked by a transient index.lock and succeeds", async () => {
       const lock = cloneBehindUpstream();
       fs.writeFileSync(lock, "");
-      setTimeout(() => fs.rmSync(lock, { force: true }), 500);
+      // Released after the first retry delay (300 ms) but before the second
+      // attempt lands, so the merge has to go through the retry path.
+      setTimeout(() => fs.rmSync(lock, { force: true }), 1000);
 
+      const started = Date.now();
       expect(await runGitPull(tmpDir)).toEqual({ pulled: true });
+      // A retry delay elapsed: the merge did not simply succeed first time.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(300);
       expect(fs.readFileSync(path.join(tmpDir, "file.txt"), "utf8")).toBe("v2");
     }, 20_000);
 
@@ -209,5 +214,14 @@ describe("runGitPull (issue #745)", () => {
       expect(result).toMatchObject({ pulled: false, reason: "busy" });
       expect(fs.existsSync(lock)).toBe(true);
     }, 20_000);
+  });
+
+  it("isLockError recognises index.lock and ref-lock failures, and nothing else", () => {
+    expect(isLockError("fatal: Unable to create '/r/.git/index.lock': File exists.")).toBe(true);
+    expect(
+      isLockError("error: cannot lock ref 'refs/remotes/origin/x': Unable to create 'x.lock'"),
+    ).toBe(true);
+    expect(isLockError("fatal: Another git process seems to be running")).toBe(true);
+    expect(isLockError("fatal: Not possible to fast-forward, aborting.")).toBe(false);
   });
 });
