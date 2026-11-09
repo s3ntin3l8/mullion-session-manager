@@ -746,6 +746,9 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
   await Promise.all(
     rows.map(async ({ task, project }) => {
       if (!task.worktreePath || task.prNumber === null) return;
+      // Same rapid-exit rebase backoff hold as processPendingReviewSpawns: a
+      // Hermes run started in that gap would be stopped by the retry.
+      if (task.rapidExitRetryAfter !== null && now < task.rapidExitRetryAfter.getTime()) return;
       const reviewer = resolveReviewer(app, {
         taskReviewAgent: task.reviewAgent,
         issueBody: task.body,
@@ -5186,7 +5189,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 await workerExitedRapidly(app, task, project, {
                   sessionId: session.id,
                   spawnedAt: task.claimedAt,
-                  endedAt: sessionEndedAt(info),
+                  // The rate-limit-grace admission (neither finished, shell
+                  // tail nor api_error) is excluded on purpose: it only falls
+                  // through here when the worker has commits past base, i.e.
+                  // it made progress, and it carries no end-of-session signal.
+                  // Judging it rapid would discard that work.
+                  endedAt:
+                    derived.status === "finished" || shellTail || derived.status === "api_error"
+                      ? sessionEndedAt(info)
+                      : null,
                   headAtSpawn: task.lastReviewedHeadSha,
                 })
               ) {
