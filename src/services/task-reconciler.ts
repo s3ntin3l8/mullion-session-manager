@@ -160,6 +160,7 @@ import {
   recordRateLimitEvent,
 } from "./task-rate-limit-grace.js";
 import { holdRedCiWithoutProgress } from "./task-ci-return-hold.js";
+import { ciAllowsAutoApproval } from "./task-ci-approval-gate.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
 export { REBASE_ATTEMPT_STALE_MS };
 
@@ -3256,7 +3257,7 @@ async function attemptAutoApprove(
   // not a stuck task.
   if (current.mergeable !== true) return;
 
-  if (current.status !== "success") return;
+  if (!(await ciAllowsAutoApproval(app, task, current))) return;
 
   const outcome = await approveTask(app, task, project, "auto-approve");
   if (outcome.ok) {

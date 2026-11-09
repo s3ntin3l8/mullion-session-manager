@@ -40,7 +40,7 @@ export type PrCheckRuns = { ok: true; runs: CheckRunResult[] } | { ok: false; de
  * Which caller asked — the two share the lookup and the warning, and a log
  * line that cannot say which one it was is a log line nobody can act on.
  */
-export type PrCheckRunsSource = "unstable-merge" | "red-ci-return";
+export type PrCheckRunsSource = "unstable-merge" | "red-ci-return" | "approval-gate";
 
 /** Once per task per hour — see the header. */
 const warnUnreadableCheckRuns = createThrottledWarn(60 * 60_000);

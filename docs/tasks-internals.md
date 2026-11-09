@@ -1985,7 +1985,18 @@ once **all** of the following hold:
    thrown lookup all simply mean "not yet," forever. A repo with no CI
    configured therefore never auto-approves — the right default for a gate
    whose whole job is to be a gate, not a formality that eventually
-   rubber-stamps itself.
+   rubber-stamps itself. The one exception (`ciAllowsAutoApproval`,
+   `task-ci-approval-gate.ts`): the aggregate comes from the head's
+   _workflow runs_, but GitHub's own merge gate reads _check runs_, and the two
+   can disagree when GitHub loses a run (a CodeQL or dependency-review run that
+   ends `failure` with its jobs never created, which it may refuse to retry).
+   A `failure` is therefore only believed if a check run backs it: when every
+   check run on the head is complete and none is red, the failed run is
+   treated as infrastructure noise and does not hold the approval. A red or
+   still-running check run, an unreadable check list, or no check runs at all
+   still hold it. Without this, such a task sat approved and green forever with
+   nothing in the log. The gate also logs why it is waiting (once per task
+   per hour) instead of returning silently.
 5. **The PR's `mergeable` field reads exactly `true` (`#1334`)** —
    `mergeable === null` ("unknown," GitHub still computing after a push) is
    neither confirmed-clean nor confirmed-dirty, and this gate mirrors the
