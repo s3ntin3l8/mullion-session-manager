@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
+import { insertDemoTasks, TASK_STATUSES } from "../services/demo-fixtures.js";
+import { getProjectRow } from "../services/session-host.js";
 
 // Demo-only fixture routes. The demo instance (scripts/demo/) needs tasks in
 // states the REST API refuses to create — POST /api/tasks only makes
@@ -104,12 +104,13 @@ export async function demoFixturesRoute(app: FastifyInstance): Promise<void> {
     { schema: createTasksSchema },
     async (request, reply) => {
       const { projectId, tasks: fixtures } = request.body;
-      const project = app.db.select().from(projects).where(eq(projects.id, projectId)).get();
+      const project = getProjectRow(app, projectId);
       if (!project) return reply.notFound(`project ${projectId} not found`);
 
       // All or nothing: a throw on fixture N (e.g. the unique
       // (project_id, issue_number) index) must not leave 1..N-1 behind.
-      const created = app.db.transaction((tx) =>
+      const created = insertDemoTasks(
+        app,
         fixtures.map((fixture) => {
           const values: Record<string, unknown> = {
             projectId,
@@ -124,11 +125,7 @@ export async function demoFixturesRoute(app: FastifyInstance): Promise<void> {
             const raw = fixture[column];
             if (raw !== undefined) values[column] = raw === null ? null : new Date(raw as string);
           }
-          return tx
-            .insert(tasks)
-            .values(values as typeof tasks.$inferInsert)
-            .returning()
-            .get();
+          return values;
         }),
       );
       return reply.code(201).send({ tasks: created });

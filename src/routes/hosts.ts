@@ -1,7 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { listLeakedBrowserCloses } from "../services/session-browsers.js";
-import { eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
 import { closeAgentChannel } from "./agent-channel.js";
 import { isChannelHostBound, unbindChannelHost } from "../services/agent-channel-tunnel.js";
 import { AgentChannelCloseCode, type HostChannelStatus } from "../shared/agent-channel.js";
@@ -18,6 +16,9 @@ import {
   mintHostToken,
   revokeMachineIdentity,
   updateHost,
+  listHostProjects,
+  listProjectSessions,
+  deleteProjectRows,
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
@@ -696,14 +697,10 @@ export async function hostsRoute(app: FastifyInstance) {
       const cascade = request.query.cascade === "true";
 
       if (cascade) {
-        const hostProjects = app.db.select().from(projects).where(eq(projects.hostId, id)).all();
+        const hostProjects = listHostProjects(app, id);
         const backend = resolveBackend(app, id);
         for (const project of hostProjects) {
-          const projectSessions = app.db
-            .select()
-            .from(sessions)
-            .where(eq(sessions.projectId, project.id))
-            .all();
+          const projectSessions = listProjectSessions(app, project.id);
           await Promise.all(
             projectSessions.map((session) =>
               backend.terminate(String(session.id)).catch((err) => {
@@ -718,9 +715,10 @@ export async function hostsRoute(app: FastifyInstance) {
         // Rows, not just the live processes above: a project's ON DELETE
         // CASCADE (schema.ts) takes its sessions with it, so the host row
         // below is never left referenced by a dangling project.
-        for (const project of hostProjects) {
-          app.db.delete(projects).where(eq(projects.id, project.id)).run();
-        }
+        deleteProjectRows(
+          app,
+          hostProjects.map((project) => project.id),
+        );
       }
 
       try {

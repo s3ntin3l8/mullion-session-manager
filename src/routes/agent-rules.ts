@@ -14,9 +14,8 @@
 // the frontend through a primary-host-only route instead — silently
 // writing a remote project's global file to the *primary's* filesystem).
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { getProjectRow } from "../services/session-host.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import {
@@ -54,8 +53,7 @@ const targetParamsSchema = {
 
 export async function agentRulesRoute(app: FastifyInstance) {
   function getProjectOr404(projectId: number) {
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-    return project ?? null;
+    return getProjectRow(app, projectId) ?? null;
   }
 
   // GET /api/projects/:id/agent-rules — the full target list (all agents,

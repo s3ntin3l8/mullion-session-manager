@@ -1,7 +1,5 @@
 import crypto from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { eq } from "drizzle-orm";
-import { integrations } from "../db/schema.js";
 import {
   disconnect,
   getIntegration,
@@ -14,6 +12,7 @@ import {
   setGitHubApp,
   clearGitHubApp,
   verifyAppCredentials,
+  isGithubWebhookEnabled,
 } from "../services/github-integration.js";
 import {
   DeviceFlowError,
@@ -342,15 +341,8 @@ export async function integrationsRoute(app: FastifyInstance) {
   // is configured. The frontend calls this on mount to decide whether to
   // show the enable/disable toggle.
   app.get("/api/integrations/github/webhooks/status", async () => {
-    const row = app.db
-      .select({
-        webhookEnabled: integrations.webhookEnabled,
-      })
-      .from(integrations)
-      .where(eq(integrations.provider, GITHUB_PROVIDER))
-      .get();
     return {
-      enabled: row?.webhookEnabled ?? false,
+      enabled: isGithubWebhookEnabled(app),
       webhookBaseUrl: app.config.MULLION_WEBHOOK_BASE_URL || null,
     };
   });

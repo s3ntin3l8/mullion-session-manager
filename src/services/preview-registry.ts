@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
-import { previews, projects, sessions } from "../db/schema.js";
+import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { previews, projectPreviewTargets, projects, sessions } from "../db/schema.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 
 // Never a decodable/encoded target (see schema.ts) — an opaque random slug,
@@ -274,4 +274,74 @@ export function getOrCreateTargetPreview(
     .run();
   const [row] = app.db.select().from(previews).where(eq(previews.targetId, targetId)).all();
   return toSummary(row);
+}
+
+export type PreviewTargetRow = typeof projectPreviewTargets.$inferSelect;
+
+/** One configured preview target by id, or undefined. */
+export function getPreviewTarget(
+  app: FastifyInstance,
+  targetId: string,
+): PreviewTargetRow | undefined {
+  return app.db
+    .select()
+    .from(projectPreviewTargets)
+    .where(eq(projectPreviewTargets.id, targetId))
+    .get();
+}
+
+/** The project's dev server URL plus its configured targets in order; undefined for an unknown project. */
+export function readProjectPreviewTargets(
+  app: FastifyInstance,
+  projectId: number,
+): { devServerUrl: string | null; targets: PreviewTargetRow[] } | undefined {
+  const project = app.db.select().from(projects).where(eq(projects.id, projectId)).get();
+  if (!project) return undefined;
+  return {
+    devServerUrl: project.devServerUrl,
+    targets: app.db
+      .select()
+      .from(projectPreviewTargets)
+      .where(eq(projectPreviewTargets.projectId, projectId))
+      .orderBy(asc(projectPreviewTargets.order))
+      .all(),
+  };
+}
+
+export interface PreviewTargetInput {
+  id: string;
+  name: string;
+  destination: string;
+  connectionOrigin: "project" | "primary";
+}
+
+/** Replace a project's targets and dev server URL in one transaction. */
+export function saveProjectPreviewTargets(
+  app: FastifyInstance,
+  projectId: number,
+  devServerUrl: string | null,
+  targets: PreviewTargetInput[],
+): void {
+  const ids = new Set(targets.map((target) => target.id));
+  app.db.transaction((tx) => {
+    tx.update(projects).set({ devServerUrl }).where(eq(projects.id, projectId)).run();
+    const old = tx
+      .select()
+      .from(projectPreviewTargets)
+      .where(eq(projectPreviewTargets.projectId, projectId))
+      .all();
+    // Update in place: retained target IDs keep their existing preview slugs.
+    old
+      .filter((target) => !ids.has(target.id))
+      .forEach((target) =>
+        tx.delete(projectPreviewTargets).where(eq(projectPreviewTargets.id, target.id)).run(),
+      );
+    targets.forEach((target, order) =>
+      tx
+        .insert(projectPreviewTargets)
+        .values({ ...target, projectId, order })
+        .onConflictDoUpdate({ target: projectPreviewTargets.id, set: { ...target, order } })
+        .run(),
+    );
+  });
 }

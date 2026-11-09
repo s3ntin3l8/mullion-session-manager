@@ -1021,3 +1021,20 @@ export function clearHostSession(app: FastifyInstance, hostId: string): void {
     .where(eq(hosts.id, hostId))
     .run();
 }
+
+/** Every project row on a host. */
+export function listHostProjects(app: FastifyInstance, hostId: string) {
+  return app.db.select().from(projects).where(eq(projects.hostId, hostId)).all();
+}
+
+/** Every session row of a project. */
+export function listProjectSessions(app: FastifyInstance, projectId: number) {
+  return app.db.select().from(sessions).where(eq(sessions.projectId, projectId)).all();
+}
+
+/** Delete project rows (their sessions go with them via ON DELETE CASCADE). */
+export function deleteProjectRows(app: FastifyInstance, projectIds: number[]): void {
+  for (const id of projectIds) {
+    app.db.delete(projects).where(eq(projects.id, id)).run();
+  }
+}

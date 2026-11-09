@@ -1,8 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import os from "node:os";
 import path from "node:path";
-import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { claudeSessionsDirsFor } from "../services/claude-scratch.js";
 import { getStoredSettings } from "../services/settings.js";
@@ -29,13 +27,18 @@ import {
   type DevWorktreeOptions,
 } from "../services/dev-worktrees.js";
 import { findMergedPullRequestByHead } from "../services/github-write.js";
+import {
+  getLocalProject,
+  listActiveLocalSessionEnvs,
+  listLocalProjects,
+} from "../services/session-host.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import {
-  RESUMABLE_TASK_STATUSES,
   canonicalWorktreePath,
   sessionsUsingWorktree,
   worktreeInUse,
+  listResumableTaskWorktrees,
 } from "../services/worktree-usage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 import { createMeasuredProbe } from "../services/measured-probe.js";
@@ -99,19 +102,7 @@ function monitoredPaths(app: FastifyInstance): MonitoredPath[] {
 // for anything (and only local ones: a remote host's config dir is a path on
 // another machine), and a dir that is gone just means nothing registers there.
 function claudeSessionsDirs(app: FastifyInstance): string[] {
-  const rows = app.db
-    .select({ env: sessions.env })
-    .from(sessions)
-    .innerJoin(projects, eq(sessions.projectId, projects.id))
-    .where(
-      and(
-        eq(sessions.status, "active"),
-        eq(projects.hostId, LOCAL_HOST_ID),
-        isNotNull(sessions.env),
-      ),
-    )
-    .all();
-  return claudeSessionsDirsFor(rows.map((row) => row.env));
+  return claudeSessionsDirsFor(listActiveLocalSessionEnvs(app));
 }
 
 const MERGED_PR_CACHE_MS = 10 * 60_000;
@@ -164,11 +155,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
 
   // Local projects only: a remote host's worktrees are on another machine.
   function devWorktreeOptions(): DevWorktreeOptions {
-    const rows = app.db
-      .select({ id: projects.id, name: projects.name, cwd: projects.cwd })
-      .from(projects)
-      .where(eq(projects.hostId, LOCAL_HOST_ID))
-      .all();
+    const rows = listLocalProjects(app);
     return {
       app,
       projects: rows,
@@ -316,11 +303,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const [project] = app.db
-        .select({ id: projects.id, name: projects.name, cwd: projects.cwd })
-        .from(projects)
-        .where(and(eq(projects.id, request.body.projectId), eq(projects.hostId, LOCAL_HOST_ID)))
-        .all();
+      const project = getLocalProject(app, request.body.projectId);
       if (!project) return reply.notFound("Local project not found");
       const job = orphanRemoval.start(project.id, request.body.path, async () => {
         try {
@@ -329,15 +312,11 @@ export async function systemResourcesRoute(app: FastifyInstance) {
             request.body.path,
             async (target) => {
               if (worktreeInUse(app, target)) return true;
-              const resumable = app.db
-                .select({ worktreePath: tasks.worktreePath })
-                .from(tasks)
-                .where(inArray(tasks.status, RESUMABLE_TASK_STATUSES))
-                .all();
-              for (const task of resumable) {
-                if (!task.worktreePath) continue;
+              const resumable = listResumableTaskWorktrees(app);
+              for (const worktreePath of resumable) {
+                if (!worktreePath) continue;
                 // Resolve aliases too; inability to check is not evidence of safety.
-                const taskPath = await canonicalWorktreePath(task.worktreePath);
+                const taskPath = await canonicalWorktreePath(worktreePath);
                 if (taskPath === target || taskPath.startsWith(target + path.sep)) return true;
               }
               const usage = await sessionsUsingWorktree(app, target, LOCAL_HOST_ID);
