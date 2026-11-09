@@ -2159,7 +2159,9 @@ the worker came back without pushing — typically because nothing in the code i
 wrong (a lost runner, an abandoned shard, a run GitHub never created jobs for;
 tasks 1031536, 1031838 and 1031834 looped on exactly that, one reseed per
 ~90 s, which an unlimited round cap does not stop). `holdRedCiWithoutProgress`
-then re-runs the failed Actions jobs itself (`rerunFailedJobs`, at most
+then re-runs the failed Actions jobs itself — in the run that OWNS each red check, read
+from the check's `details_url`, not the latest run of the same workflow name, which can be a
+newer green one (`rerunFailedJobs`, at most
 `MAX_CI_RERUNS_PER_HEAD` per head, spaced `CI_RERUN_SETTLE_MS` apart, counted in
 `ciRerunCount`). When GitHub refuses the rerun (it does for CodeQL and
 dependency-review runs and for runs without jobs), the budget is spent, or the

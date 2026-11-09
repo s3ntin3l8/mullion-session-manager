@@ -55,8 +55,6 @@ export interface GitHubIssueOrPr {
 }
 
 export interface GitHubActionsRun {
-  /** Workflow run id; what `rerunFailedJobs` needs. Absent on synthesized runs. */
-  id?: number;
   name: string;
   status: string;
   conclusion: string | null;
@@ -902,7 +900,6 @@ function prsCacheSet(key: string, entry: PRsCacheEntry): void {
 }
 
 interface GitHubWorkflowRunItem {
-  id?: number;
   name: string | null;
   status: string;
   conclusion: string | null;
@@ -1040,7 +1037,6 @@ export async function fetchRunsForHeadChecked(
       if (seen.has(name)) continue;
       seen.add(name);
       latest.push({
-        ...(typeof run.id === "number" ? { id: run.id } : {}),
         name,
         status: run.status,
         conclusion: run.conclusion,
@@ -1080,6 +1076,19 @@ export function isRedCheckConclusion(conclusion: string | null): boolean {
     conclusion !== "cancelled" &&
     conclusion !== "neutral"
   );
+}
+
+/**
+ * The Actions workflow run a check run belongs to, read from its `details_url`
+ * (`https://github.com/o/r/actions/runs/<run>/job/<job>`). `undefined` for a
+ * check from another app (codecov, ...) whose URL names no workflow run: there
+ * is nothing to re-run for it. Used to re-run the run that OWNS a red check
+ * rather than the latest run of the same workflow name, which can be a newer
+ * green one.
+ */
+export function actionsRunIdFromCheckUrl(url: string | undefined): number | undefined {
+  const m = url?.match(/\/actions\/runs\/(\d+)(?:\/|$|\?)/);
+  return m ? Number(m[1]) : undefined;
 }
 
 /**

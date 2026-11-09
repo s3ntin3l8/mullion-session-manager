@@ -115,6 +115,11 @@ function mockPr(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/** A check run's `details_url`: it names the workflow run that owns the check. */
+function runUrl(runId: number, job = 1) {
+  return `https://github.com/o/r/actions/runs/${runId}/job/${job}`;
+}
+
 /** The Workflow Run layer: the coarse "is anything red" pre-filter, and the run id a rerun targets. */
 function workflowRun(conclusion: "success" | "failure", id = 4242) {
   return [
@@ -160,7 +165,9 @@ describe("red CI on a head the worker was already returned for", () => {
       .mockResolvedValue({ ok: true, runs: workflowRun("failure") });
     mockFetchCheckRunsForHead
       .mockReset()
-      .mockResolvedValue([{ name: "test-frontend / test-merge", conclusion: "failure" }]);
+      .mockResolvedValue([
+        { name: "test-frontend / test-merge", conclusion: "failure", url: runUrl(4242) },
+      ]);
   });
 
   afterEach(() => {
@@ -330,13 +337,10 @@ describe("red CI on a head the worker was already returned for", () => {
   it("records the spend when a later run's rerun throws after an earlier one was accepted", async () => {
     const app = await buildApp();
     const taskId = await createCandidate(app, { ciReturnHeadSha: "sha-head" });
-    mockFetchRunsForHeadChecked.mockResolvedValue({
-      ok: true,
-      runs: [
-        { ...workflowRun("failure", 4242)[0], name: "CI/CD" },
-        { ...workflowRun("failure", 4243)[0], name: "CodeQL" },
-      ],
-    });
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "test-merge", conclusion: "failure", url: runUrl(4242) },
+      { name: "Analyze", conclusion: "failure", url: runUrl(4243) },
+    ]);
     mockRerunFailedJobs.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("boom"));
 
     await reconcileTasks(app);
@@ -348,6 +352,44 @@ describe("red CI on a head the worker was already returned for", () => {
     expect(row.ciRerunCount).toBe(1);
     expect(row.status).toBe("reviewing");
     expect(row.autoReturnCapAnnouncedAt).toBeNull();
+
+    await app.close();
+  });
+
+  it("re-runs the run that owns the red check, not a newer green run of the same workflow name", async () => {
+    const app = await buildApp();
+    const taskId = await createCandidate(app, { ciReturnHeadSha: "sha-head" });
+    // The workflow-run list keeps only the latest run per name, and here that is
+    // a green run (id 5000). The red check belongs to the older run 4242.
+    mockFetchRunsForHeadChecked.mockResolvedValue({
+      ok: true,
+      runs: [
+        { ...workflowRun("success", 5000)[0] },
+        { ...workflowRun("failure", 4242)[0], name: "CI/CD (push)" },
+      ],
+    });
+
+    await reconcileTasks(app);
+
+    expect(mockRerunFailedJobs).toHaveBeenCalledTimes(1);
+    expect(mockRerunFailedJobs).toHaveBeenCalledWith("tok", "o", "r", 4242);
+    expect(getTask(app, taskId).autoReturnCapAnnouncedAt).toBeNull();
+
+    await app.close();
+  });
+
+  it("re-runs a run once when several red checks belong to it", async () => {
+    const app = await buildApp();
+    await createCandidate(app, { ciReturnHeadSha: "sha-head" });
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "test-node / shard (1)", conclusion: "failure", url: runUrl(4242, 1) },
+      { name: "test-node / shard (2)", conclusion: "failure", url: runUrl(4242, 2) },
+    ]);
+
+    await reconcileTasks(app);
+
+    expect(mockRerunFailedJobs).toHaveBeenCalledTimes(1);
+    expect(mockRerunFailedJobs).toHaveBeenCalledWith("tok", "o", "r", 4242);
 
     await app.close();
   });
