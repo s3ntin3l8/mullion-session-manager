@@ -36,6 +36,7 @@
   {
     "ref": ".claude/skills/mullion-review-invariants/references/task-rebase-and-worktrees.md",
     "paths": [
+      "src/services/task-auto-rebase.ts",
       "src/services/task-reconciler.ts",
       "src/services/task-reseed.ts",
       "src/services/task-claim.ts",
@@ -47,6 +48,7 @@
   {
     "ref": ".claude/skills/mullion-review-invariants/references/task-merge-and-cleanup.md",
     "paths": [
+      "src/services/task-auto-rebase.ts",
       "src/services/task-reconciler.ts",
       "src/services/task-retry-backoff.ts",
       "src/services/task-approve.ts",
