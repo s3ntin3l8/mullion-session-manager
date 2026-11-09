@@ -1453,7 +1453,7 @@
       const vA =
         () => `<p class="cap">Facets off (default): one filter row, full board width</p><div class="app">${barA()}${board(TASKS, { stack: true })}${adhoc(false)}</div>
         <p class="cap" style="margin-top:14px">Facets on (the 1c rail, one click on the bar; remembered; “Auto” opens it above ~1440px or &gt;8 projects). Claimed is merged into In progress here to buy back width.</p><div class="app" style="width:1280px">${barA({ rail: 1 })}<div style="display:flex">${facets()}<div style="flex:1;min-width:0">${board(TASKS, { stack: true, mergeQueued: true })}</div></div>${adhoc(false)}</div>
-        <div class="row" style="margin-top:14px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popProject}</div></div><div><p class="cap">Filter menu open (epic is filtered here, shown as a token)</p><div class="app" style="height:380px;overflow:hidden;width:900px">${barA({ epicTok: 1 })}${popFilter}</div></div><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden;width:900px">${barA()}${popDisplay}</div></div></div>`;
+        <div class="row" style="margin-top:14px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popProject}</div></div><div><p class="cap">Filter menu open (epic is filtered here, shown as a token)</p><div class="app" style="height:380px;overflow:hidden;width:1100px">${barA({ epicTok: 1 })}${popFilter}</div></div><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popDisplay}</div></div></div>`;
 
       /* ───────── 2 · Cards & columns ───────── */
       const vBoard = (
