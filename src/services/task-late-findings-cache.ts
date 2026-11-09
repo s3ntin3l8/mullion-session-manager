@@ -34,7 +34,8 @@ export function resetLateFindingsCaches(): void {
 }
 
 /**
- * Drop both caches' entries for every task not in `latchedTaskIds` (the
+ * Drop all three caches' entries (`lastLateReadKey`, `ignoredUnstructured`,
+ * `lateIngestFailures`) for every task not in `latchedTaskIds` (the
  * `reviewing` tasks whose inconclusive verdict is still latched): a task that
  * left `reviewing`, or whose latch was cleared, has nothing left to re-read.
  */
