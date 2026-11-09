@@ -2,8 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import type { Page, Frame } from "playwright";
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
-import { sessions } from "../db/schema.js";
+import { getSessionRow, type SessionRow } from "../services/browser-store.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import { resolveSessionBrowserTarget } from "../services/browser-target.js";
 import { beginBrowserAttach, recordBindingOrRelease } from "../services/session-browsers.js";
@@ -674,7 +673,7 @@ export async function browserRoute(app: FastifyInstance): Promise<void> {
           return reply.badRequest("sessionId path param is required");
         }
 
-        const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+        const row = getSessionRow(app, sessionId);
         if (!row) return reply.notFound(`No session ${sessionId}`);
         if (row.status === "killed") return reply.badRequest(`Session ${sessionId} was killed`);
         if (row.status === "exited") return reply.badRequest(`Session ${sessionId} exited`);
@@ -683,7 +682,7 @@ export async function browserRoute(app: FastifyInstance): Promise<void> {
     (socket, req) => {
       // preValidation above already confirmed this session exists.
       const sessionId = Number(req.params.sessionId);
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const row = getSessionRow(app, sessionId) as SessionRow; // confirmed by preValidation
       // The session's own host and checkout, resolved once when the panel
       // opens: the socket keeps this target for its whole life, and a refused
       // target is reported, never replaced by the project's.

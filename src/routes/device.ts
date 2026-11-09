@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
-import { eq } from "drizzle-orm";
 import { AndroidKeyEventAction } from "@yume-chan/scrcpy";
 import { AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
 import type {
@@ -8,7 +7,7 @@ import type {
   AndroidKeyEventMeta,
   ScrcpyMediaStreamPacket,
 } from "@yume-chan/scrcpy";
-import { devices } from "../db/schema.js";
+import { getDeviceRow } from "../services/device-store.js";
 import type { Device, DeviceKind } from "../services/device-manager.js";
 import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
 
@@ -536,7 +535,7 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
         if (!Number.isInteger(deviceId)) {
           return reply.badRequest("deviceId path param is required");
         }
-        const [row] = app.db.select().from(devices).where(eq(devices.id, deviceId)).all();
+        const row = getDeviceRow(app, deviceId);
         if (!row) return reply.notFound(`No device ${deviceId}`);
         if (row.status === "killed") return reply.badRequest(`Device ${deviceId} was killed`);
         if (row.kind !== "physical" && !app.deviceEmulatorEnabled) {
@@ -553,7 +552,7 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
       // HTTP error anymore) the same way terminal.ts's own
       // resolveAndAttach does: close the socket rather than leaving it open
       // with nothing wired up, or throwing on `row` being undefined.
-      const [row] = app.db.select().from(devices).where(eq(devices.id, deviceId)).all();
+      const row = getDeviceRow(app, deviceId);
       if (!row || row.status === "killed") {
         app.log.warn({ deviceId }, "device ws attach failed after upgrade, closing");
         socket.close();

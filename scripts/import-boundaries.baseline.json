@@ -22,36 +22,6 @@
       "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
     },
     {
-      "from": "src/routes/browser-automation.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/browser-cookies.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/browser-urls.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/browser.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/device.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/devices.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
       "from": "src/routes/groups.ts",
       "to": "src/db/schema.ts",
       "note": "pending: moved behind a service by its route-family issue"

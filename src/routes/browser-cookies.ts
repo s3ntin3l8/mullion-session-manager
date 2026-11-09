@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
+import { getProjectRow } from "../services/browser-store.js";
 import {
   importCookieProfile,
   importCookieProfileFromBuffer,
@@ -71,8 +70,7 @@ const uploadCookiesSchema = {
 };
 
 function getProjectOr404(app: FastifyInstance, projectId: number) {
-  const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-  return project ?? null;
+  return getProjectRow(app, projectId) ?? null;
 }
 
 export async function browserCookiesRoute(app: FastifyInstance): Promise<void> {
