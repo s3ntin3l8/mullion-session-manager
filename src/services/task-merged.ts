@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull } from "drizzle-orm";
 import { tasks, type projects } from "../db/schema.js";
-import { clearMergeNeedsHumanReason } from "./task-merge-human.js";
+import { clearNeedsHumanOnMerge } from "./task-merge-human.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { cleanupMergedTaskBranch } from "./task-approve.js";
 
@@ -24,7 +24,7 @@ export function markTaskMerged(
 ): boolean {
   const { changes } = app.db
     .update(tasks)
-    .set({ mergedAt, archivedAt: new Date(), needsHumanReason: clearMergeNeedsHumanReason })
+    .set({ mergedAt, archivedAt: new Date(), needsHumanReason: clearNeedsHumanOnMerge })
     .where(and(eq(tasks.id, task.id), isNull(tasks.mergedAt)))
     .run();
   if (changes === 0) return false;

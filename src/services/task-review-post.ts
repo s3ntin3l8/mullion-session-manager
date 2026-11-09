@@ -3,7 +3,7 @@
 // task-reconciler.ts's processReviewingTasks. See docs/tasks-internals.md,
 // "A lost post is retried, and holds auto-approve".
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 import {
@@ -44,6 +44,23 @@ function writeReviewPostPending(
     app.db
       .update(tasks)
       .set({ reviewPostPending: nextRaw })
+      .where(and(eq(tasks.id, taskId), eq(tasks.reviewPostPending, expectedRaw)))
+      .run().changes > 0
+  );
+}
+
+// Sets `review-post-failed` without replacing a different reason already parked
+// on the task (`cap`, `no-progress`, `finding-persisted`, a merge-tied one).
+const SET_REVIEW_POST_FAILED = sql<
+  string | null
+>`CASE WHEN needs_human_reason IS NULL THEN 'review-post-failed' ELSE needs_human_reason END`;
+
+/** Compare-and-set the marker away and, in the same statement, hold the task. */
+function clearMarkerAndHold(app: FastifyInstance, taskId: number, expectedRaw: string): boolean {
+  return (
+    app.db
+      .update(tasks)
+      .set({ reviewPostPending: null, needsHumanReason: SET_REVIEW_POST_FAILED })
       .where(and(eq(tasks.id, taskId), eq(tasks.reviewPostPending, expectedRaw)))
       .run().changes > 0
   );
@@ -114,7 +131,14 @@ export async function attemptPendingReviewPost(
     );
     if (outcome === "retry") again = true;
     else if (outcome === "stale") {
-      if (writeReviewPostPending(app, task.id, currentRaw, null)) {
+      // An approving verdict that never posted leaves GitHub's older
+      // CHANGES_REQUESTED standing: hold for a human instead of releasing.
+      const approving = isApprovingVerdict(current.verdict);
+      if (
+        approving
+          ? clearMarkerAndHold(app, task.id, currentRaw)
+          : writeReviewPostPending(app, task.id, currentRaw, null)
+      ) {
         recordGithubSyncError(
           app,
           task.id,
@@ -154,13 +178,7 @@ export async function attemptPendingReviewPost(
     // CHANGES_REQUESTED: clearing the marker alone would release auto-approve
     // against it. Flag the task for a human instead (githubSyncError, already
     // recorded, is the text the card shows).
-    if (writeReviewPostPending(app, task.id, currentRaw, null)) {
-      app.db
-        .update(tasks)
-        .set({ needsHumanReason: "review-post-failed" })
-        .where(eq(tasks.id, task.id))
-        .run();
-    }
+    clearMarkerAndHold(app, task.id, currentRaw);
     reviewPostRetryBackoff.clear(task.id);
     return;
   }
