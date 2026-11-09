@@ -253,7 +253,11 @@ waiting for a free concurrency slot. It never holds a session; see the
   promotes: the sync that sees the directive disappear moves a task still
   parked in `backlog` (no session, not an epic with open sub-issues) to
   `ready`, and the transition is recorded as `github-sync-manual-removed`.
-  Any other `backlog` → `ready` move is a human action. An issue that
+  Conversely, _adding_ `Manual: true` to an issue already ingested `ready`
+  demotes it to `backlog` on the sync that sees the directive appear (only
+  while untouched: `ready`, no session), recorded as
+  `github-sync-manual-added`; a human who drags it back to `ready` keeps
+  that choice. Any other `backlog` → `ready` move is a human action. An issue that
   _gains_ open sub-issues after already being ingested `ready` is demoted
   back to `backlog` the same way, but only while it's still untouched
   (`ready`, no session ever attached) — a task already claimed or further

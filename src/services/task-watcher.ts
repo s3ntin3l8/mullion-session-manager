@@ -428,6 +428,37 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
     }
   }
 
+  // Manual-directive addition — the mirror of the removal rule below. An
+  // issue ingested `ready` whose body LATER gains `Manual: true` would stay
+  // auto-claimable forever (the upsert never touches `status`), so the edit
+  // that adds the directive demotes it. Edge-triggered on the previous body
+  // lacking the directive, so a human who drags it back to `ready` keeps
+  // that choice; the guarded UPDATE leaves anything claimed or with a
+  // session alone.
+  if (existingRow !== undefined && !isManualOnly(existingRow.body) && isManualOnly(issue.body)) {
+    const demotedManual = app.db
+      .update(tasks)
+      .set({ status: "backlog" satisfies TaskStatus })
+      .where(
+        and(
+          eq(tasks.id, existingRow.id),
+          eq(tasks.status, "ready" satisfies TaskStatus),
+          isNull(tasks.sessionId),
+        ),
+      )
+      .run();
+    if (demotedManual.changes > 0) {
+      recordTaskTransition(app, {
+        taskId: existingRow.id,
+        projectId,
+        from: "ready",
+        to: "backlog",
+        via: "github-sync-manual-added",
+        context: { issueNumber: issue.number },
+      });
+    }
+  }
+
   // Manual-directive removal — an issue ingested to `backlog` because its
   // body carried `Manual: true` stays parked after the line is deleted
   // (the upsert never touches `status`). The edit itself is the evidence a
