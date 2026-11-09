@@ -721,7 +721,10 @@ export function TaskDetail({
             This agent started with no initial instructions.
           </div>
         )}
-        <SessionTimeline params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }} />
+        <SessionTimeline
+          surface="task"
+          params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }}
+        />
       </div>
 
       {isMergeNeedsHumanReason(task.needsHumanReason) && !task.mergedAt && (
@@ -855,7 +858,7 @@ export function TaskDetail({
             )
           )}
           {task.reviewSessionId !== null && (
-            <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
+            <SessionTimeline surface="task" params={{ sessionIds: [task.reviewSessionId] }} />
           )}
         </div>
       )}

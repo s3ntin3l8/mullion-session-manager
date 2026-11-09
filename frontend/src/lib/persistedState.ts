@@ -134,6 +134,10 @@ export const STORAGE_KEYS = {
   // is what makes them survive closing and reopening the panel.
   timelineKinds: "crs.timelineKinds",
   timelineOnlyAttention: "crs.timelineOnlyAttention",
+  // The same two filters for the task-detail surface (SessionTimeline's
+  // `surface="task"`), kept apart from the session timeline panel's.
+  timelineKindsTask: "crs.timelineKindsTask",
+  timelineOnlyAttentionTask: "crs.timelineOnlyAttentionTask",
   // #719 — per-session mute / do-not-disturb. A `number[]` of muted session
   // ids (not a Set, so it round-trips through JSON cleanly): read/written in
   // one place each (store/slices/ui.ts's state init + toggleSessionMute),

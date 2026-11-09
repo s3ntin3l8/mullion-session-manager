@@ -16,7 +16,11 @@ import { fromLiveEvent, mergeTimelineEvents, toTimelineEvent } from "./eventHist
 import type { TimelineEvent } from "./eventHistory.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { STORAGE_KEYS, readJSON, readBool, writeJSON, writeBool } from "./lib/persistedState.js";
+import type { StorageKey } from "./lib/persistedState.js";
 import { SearchInput } from "./ui/primitives.js";
+import { TimelineKindFilter } from "./TimelineKindFilter.js";
+import { IMPORTANT_KINDS } from "./timelineKinds.js";
+import type { TimelineSurface } from "./timelineKinds.js";
 
 export interface SessionTimelineParams {
   // Phase 6 (6.5/#218) widened this from a single required `sessionId` to
@@ -54,27 +58,29 @@ export interface SessionTimelineParams {
 // panel's kind-chip vocabulary and NotificationBell.tsx's pill vocabulary
 // share one source instead of two that could drift.
 
-// Making notifications relevant/scannable — title_change (86% of every
-// row this app has ever persisted) and file_change (another 2%) are opt-out
-// of the DEFAULT filter, not removed as chip options: a session actively
-// spamming title updates used to be the first thing a freshly-opened
-// timeline showed, burying any actual signal under routine chatter. Both
-// stay one click away via their own chips.
-const DEFAULT_ACTIVE_KINDS = ALL_KINDS.filter(
-  (kind) => kind !== "title_change" && kind !== "file_change",
-);
+// The kind selection and the "Only attention" toggle persist per surface (a
+// session's own timeline vs. a task's detail), so narrowing one does not
+// silently narrow the other.
+const KIND_KEYS: Record<TimelineSurface, StorageKey> = {
+  session: STORAGE_KEYS.timelineKinds,
+  task: STORAGE_KEYS.timelineKindsTask,
+};
+const ONLY_ATTENTION_KEYS: Record<TimelineSurface, StorageKey> = {
+  session: STORAGE_KEYS.timelineOnlyAttention,
+  task: STORAGE_KEYS.timelineOnlyAttentionTask,
+};
 
 /** Restores a persisted kind selection, validated against ALL_KINDS so a
  * future release dropping/renaming a kind can't leave a stale, unrecognized
  * string permanently stuck in someone's localStorage. Absent/invalid
- * persisted state falls back to DEFAULT_ACTIVE_KINDS, not "everything" —
+ * persisted state falls back to IMPORTANT_KINDS, not "everything" —
  * this IS the default now. */
-function loadPersistedActiveKinds(): Set<NotificationEvent["kind"]> {
-  const stored = readJSON<string[] | null>(STORAGE_KEYS.timelineKinds, null);
-  if (stored === null) return new Set(DEFAULT_ACTIVE_KINDS);
+function loadPersistedActiveKinds(surface: TimelineSurface): Set<NotificationEvent["kind"]> {
+  const stored = readJSON<string[] | null>(KIND_KEYS[surface], null);
+  if (stored === null) return new Set(IMPORTANT_KINDS);
   const known = new Set<string>(ALL_KINDS);
   const restored = stored.filter((k) => known.has(k)) as NotificationEvent["kind"][];
-  return restored.length > 0 ? new Set(restored) : new Set(DEFAULT_ACTIVE_KINDS);
+  return restored.length > 0 ? new Set(restored) : new Set(IMPORTANT_KINDS);
 }
 
 // How close in time a specific-kind event (e.g. permission_request) and its
@@ -198,8 +204,12 @@ async function fetchInitialHistoryPage(sessionId: number): Promise<SessionHistor
 export function SessionTimeline({
   params,
   panelApi,
+  surface = "session",
 }: {
   params: SessionTimelineParams;
+  // Which surface this timeline sits on; scopes the persisted filter state
+  // (see KIND_KEYS). The session timeline panel is the default.
+  surface?: TimelineSurface;
   // Issue #1455 — dockview's own panel api, threaded down by registry.tsx's
   // makePanelWrapper `extraProps` (the "timeline" panel registration) so
   // this component can observe onDidActiveChange and mark its own sessions
@@ -236,13 +246,14 @@ export function SessionTimeline({
   );
   // Making notifications relevant/scannable — persisted across panel
   // remounts (see loadPersistedActiveKinds' own comment); defaults to
-  // DEFAULT_ACTIVE_KINDS (everything except title_change/file_change), not
+  // IMPORTANT_KINDS (everything except title_change/file_change), not
   // ALL_KINDS.
-  const [activeKinds, setActiveKinds] =
-    useState<Set<NotificationEvent["kind"]>>(loadPersistedActiveKinds);
+  const [activeKinds, setActiveKinds] = useState<Set<NotificationEvent["kind"]>>(() =>
+    loadPersistedActiveKinds(surface),
+  );
   useEffect(() => {
-    writeJSON(STORAGE_KEYS.timelineKinds, Array.from(activeKinds));
-  }, [activeKinds]);
+    writeJSON(KIND_KEYS[surface], Array.from(activeKinds));
+  }, [activeKinds, surface]);
   // Making notifications relevant/scannable — a quick, persisted toggle
   // that narrows to only notifySeverity()-classified rows (the SAME
   // notify-worthy set NotificationBell.tsx's feed already shows), layered
@@ -250,11 +261,11 @@ export function SessionTimeline({
   // restores whatever kind selection was already in place, instead of
   // resetting it.
   const [onlyAttention, setOnlyAttention] = useState<boolean>(() =>
-    readBool(STORAGE_KEYS.timelineOnlyAttention, false),
+    readBool(ONLY_ATTENTION_KEYS[surface], false),
   );
   useEffect(() => {
-    writeBool(STORAGE_KEYS.timelineOnlyAttention, onlyAttention);
-  }, [onlyAttention]);
+    writeBool(ONLY_ATTENTION_KEYS[surface], onlyAttention);
+  }, [onlyAttention, surface]);
   // Empty set = no agent filtering (show everything, including unattributed
   // events) — unlike activeKinds above, this can't default to "every known
   // key selected" since the key set grows as new subagents appear over the
@@ -547,15 +558,6 @@ export function SessionTimeline({
     });
   }, [described, activeKinds, onlyAttention, search, reachableActiveAgentKeys]);
 
-  const toggleKind = (kind: NotificationEvent["kind"]) => {
-    setActiveKinds((prev) => {
-      const next = new Set(prev);
-      if (next.has(kind)) next.delete(kind);
-      else next.add(kind);
-      return next;
-    });
-  };
-
   const toggleAgentKey = (key: string) => {
     setActiveAgentKeys((prev) => {
       const next = new Set(prev);
@@ -597,35 +599,13 @@ export function SessionTimeline({
         >
           Only attention
         </button>
-        <div className="session-timeline-kinds" role="group" aria-label="Filter by kind">
-          {ALL_KINDS.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className={`session-timeline-kind-chip${activeKinds.has(kind) ? " active" : ""}`}
-              aria-pressed={activeKinds.has(kind)}
-              onClick={() => toggleKind(kind)}
-            >
-              {KIND_LABELS[kind]}
-            </button>
-          ))}
-        </div>
-        {agentOptions.length > 0 && (
-          <div className="session-timeline-agents" role="group" aria-label="Filter by subagent">
-            {agentOptions.map(({ key, label }) => (
-              <button
-                key={key}
-                type="button"
-                className={`session-timeline-kind-chip${activeAgentKeys.has(key) ? " active" : ""}`}
-                aria-pressed={activeAgentKeys.has(key)}
-                title={key === UNATTRIBUTED_AGENT_KEY ? undefined : key}
-                onClick={() => toggleAgentKey(key)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
+        <TimelineKindFilter
+          activeKinds={activeKinds}
+          onChange={setActiveKinds}
+          agentOptions={agentOptions}
+          activeAgentKeys={activeAgentKeys}
+          onToggleAgent={toggleAgentKey}
+        />
       </div>
       {/* Hermes review, PR #560 — only worth showing once the user has
           actually typed something; with an empty search box there's nothing
