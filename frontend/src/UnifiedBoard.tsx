@@ -1,4 +1,3 @@
-import { isAwaitingMerge } from "./unified-board/awaitingMerge.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDashboardStore } from "./store/index.js";
@@ -22,29 +21,16 @@ import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
 import { TaskDetail } from "./TaskDetail.js";
 import type { Session, TaskStatus } from "./api/index.js";
 import { ApiError } from "./api/index.js";
-import {
-  BlockedIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  CloseIcon,
-  LayersIcon,
-} from "./ui/icons.js";
-import { Dropdown } from "./ui/primitives.js";
+import { ChevronDownIcon, ChevronRightIcon, CloseIcon, LayersIcon } from "./ui/icons.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
-import {
-  STORAGE_KEYS,
-  readNumber,
-  writeNumber,
-  readJSON,
-  writeJSON,
-  readBool,
-  writeBool,
-  readString,
-  writeString,
-} from "./lib/persistedState.js";
+import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
-import { TasksToolbar } from "./unified-board/TasksToolbar.js";
+import { TaskFilterBar } from "./unified-board/TaskFilterBar.js";
+import { TaskFacetsPanel } from "./unified-board/TaskFacetsPanel.js";
+import { useTaskFilters } from "./unified-board/useTaskFilters.js";
+import { facetsOpen } from "./unified-board/taskFilters.js";
+import type { TaskFilters } from "./unified-board/taskFilters.js";
 import { TaskColumn } from "./unified-board/TaskColumn.js";
 import { LaneCard } from "./unified-board/LaneCard.js";
 
@@ -58,14 +44,40 @@ const MIN_DRAWER_WIDTH = 300;
 // the board down to zero visible columns.
 const MIN_COLUMNS_WIDTH = 240;
 
-// #701 — sentinel for the parent/phase filter's "(no parent)" option. Never
-// a valid "repo#number" key (those always contain "#" preceded by a repo
-// slug, never this exact string), so it safely shares the same string
-// state as a real selection without a separate boolean.
-const PARENT_FILTER_NONE = "__none__";
+// The window's inner width, for the facets panel's "Auto" setting.
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return width;
+}
 
 function clampDrawerWidth(n: number, maxW: number): number {
   return Math.min(Math.max(n, MIN_DRAWER_WIDTH), Math.max(MIN_DRAWER_WIDTH, maxW));
+}
+
+// What the empty-board note says when filters hide every task.
+function emptyBoardMessage(f: TaskFilters): string {
+  const where = f.projectIds.length > 0 ? " in the selected projects" : "";
+  if (f.agents.length > 0 || f.text.trim() !== "") return "No tasks match the current filters.";
+  if (f.epicKeys.length > 0) {
+    return `No tasks match the selected epic${f.epicKeys.length > 1 ? "s" : ""}${where}.`;
+  }
+  switch (f.view) {
+    case "needs-me":
+      return `No tasks need you${where}.`;
+    case "running":
+      return `No running tasks${where}.`;
+    case "blocked":
+      return `No blocked tasks${where}.`;
+    case "awaiting-merge":
+      return `No tasks awaiting merge${where}.`;
+    default:
+      return `No tasks in the selected projects.`;
+  }
 }
 
 // Merges Mullion's two Kanban surfaces (issue #211's session-only
@@ -79,7 +91,7 @@ function clampDrawerWidth(n: number, maxW: number): number {
 // Split into unified-board/*.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — this file now owns the board's
 // own orchestration (task drag-and-drop, the detail drawer and its resize,
-// the ad-hoc lane's collapse/grouping) while TasksToolbar/TaskColumn/
+// the ad-hoc lane's collapse/grouping) while TaskFilterBar/TaskColumn/
 // TaskCard/TaskSessionSlot/LaneCard live in unified-board/ as focused,
 // mostly-presentational components.
 export function UnifiedBoard({
@@ -135,217 +147,23 @@ export function UnifiedBoard({
   const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
   const sessionsById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
 
-  // Board-wide project filter (empty = every project, the default) — a
-  // client-only render-time filter, not a fetch param: `tasks` in the store
-  // always holds every task install-wide (see store.ts's refreshTasks), and
-  // must keep doing so here too, because computeTaskReorder below reindexes
-  // a target column's FULL contents on every drop, including whatever a
-  // filter is currently hiding. #610 considered and cut a project filter
-  // for exactly this hazard ("the drag/reorder math indexes against the
-  // rendered list, not the full store list, and filtering would silently
-  // corrupt boardOrder on drop") — applyDrop's use of absoluteDropIndex
-  // below is what closes that gap: it translates a filtered TaskColumn's
-  // own rendered index back into the equivalent index against the full,
-  // unfiltered column before computeTaskReorder ever sees it.
-  const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>(() => {
-    const raw = readJSON<unknown>(STORAGE_KEYS.taskProjectFilter, []);
-    return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
-  });
-  // Drops ids for projects deleted since they were selected — same posture
-  // as Dock.tsx's own manualIds/columnIds filtering.
-  const activeProjectIds = useMemo(
-    () => selectedProjectIds.filter((id) => projectsById.has(id)),
-    [selectedProjectIds, projectsById],
-  );
-  const toggleProjectFilter = (id: number) => {
-    const next = activeProjectIds.includes(id)
-      ? activeProjectIds.filter((p) => p !== id)
-      : [...activeProjectIds, id];
-    setSelectedProjectIds(next);
-    writeJSON(STORAGE_KEYS.taskProjectFilter, next);
-  };
-  const clearProjectFilter = () => {
-    setSelectedProjectIds([]);
-    writeJSON(STORAGE_KEYS.taskProjectFilter, []);
-  };
-  // Issue: a blocked task's badge is easy to miss scrolling past a large
-  // board — same "client-only render filter" posture as the project filter
-  // above, and it composes with it via the same absoluteDropIndex path
-  // (UnifiedBoard's own drop handler below), which is what makes stacking a
-  // second filter on top of the first safe for boardOrder.
-  const [blockedOnly, setBlockedOnly] = useState(() =>
-    readBool(STORAGE_KEYS.taskBlockedOnlyFilter, false),
-  );
-  // Keeps localStorage in sync with `blockedOnly` on every change, including
-  // the render-time reset below — a plain "sync state to an external
-  // system" effect, not a setState-in-effect (nothing here calls
-  // setBlockedOnly), so toggleBlockedOnly and the reset below don't need
-  // their own separate writeBool calls.
-  useEffect(() => {
-    writeBool(STORAGE_KEYS.taskBlockedOnlyFilter, blockedOnly);
-  }, [blockedOnly]);
-  const toggleBlockedOnly = () => setBlockedOnly((prev) => !prev);
-  const hasBlockedTask = useMemo(() => tasks.some((t) => t.blockedState === "blocked"), [tasks]);
-  // Gated on hasBlockedTask, not just the persisted `blockedOnly` flag —
-  // otherwise a user who toggled this on, then had every blocked task
-  // resolve/close, would be stuck looking at an empty board with no visible
-  // way back: the toggle button itself is only rendered while hasBlockedTask
-  // is true (see below), so a filter that stayed active regardless would
-  // have no on-screen affordance left to turn it off. Same "no way back"
-  // trap category as the view-mode navigation issue this same change fixes
-  // elsewhere — worth avoiding here too.
-  //
-  // Hermes review, PR #699 — the gate above silently overrode the *live*
-  // filter but left the *persisted* flag (and the in-memory `blockedOnly`
-  // state) at true, so it would silently re-engage the next time any task
-  // became blocked (even weeks later, after a reload). Reset `blockedOnly`
-  // itself — not just an effect's local read of it — whenever the gate is
-  // the thing actually suppressing the filter, so re-engaging it is always
-  // an explicit click again. Adjusted during render rather than in a
-  // useEffect (React's documented pattern for resetting state when a
-  // derived value changes — see "Adjusting some state when a prop
-  // changes" in react.dev's "You Might Not Need an Effect"): a
-  // useEffect-driven reset would paint one extra frame with the stale
-  // "still active" toggle before correcting itself, and would need to
-  // duplicate the persistence effect above's job instead of composing
-  // with it.
-  const [prevHasBlockedTask, setPrevHasBlockedTask] = useState(hasBlockedTask);
-  if (hasBlockedTask !== prevHasBlockedTask) {
-    setPrevHasBlockedTask(hasBlockedTask);
-    if (blockedOnly && !hasBlockedTask) setBlockedOnly(false);
-  }
-  // #746 — hides the Done (and Failed) columns' contents by default, so a
-  // board that accumulates finished tasks forever doesn't crowd out the
-  // columns still being worked. Collapses rather than removes the columns
-  // (TaskColumn's own `collapsed` prop) — the count stays visible either
-  // way, and going through the same `visibleTasks` filter every other
-  // board filter here uses would ALSO hide the count itself, which isn't
-  // what "collapse" is meant to mean. Rendered unconditionally (unlike
-  // blockedOnly's toggle above, which only appears while at least one task
-  // qualifies) precisely so it never needs the same render-time-reset
-  // dance — there's no "no tasks qualify" state for a toggle whose own
-  // condition doesn't depend on what's currently on the board.
-  const [hideDone, setHideDone] = useState(() => readBool(STORAGE_KEYS.taskHideDone, false));
-  useEffect(() => {
-    writeBool(STORAGE_KEYS.taskHideDone, hideDone);
-  }, [hideDone]);
-  const toggleHideDone = () => setHideDone((prev) => !prev);
-  // Only done tasks whose PR is still open — a pile of approved-but-unmerged
-  // PRs is otherwise hard to find. Filters visibleTasks like showArchived.
-  const [awaitingMergeOnly, setAwaitingMergeOnly] = useState(() =>
-    readBool(STORAGE_KEYS.taskAwaitingMergeOnly, false),
-  );
-  useEffect(() => {
-    writeBool(STORAGE_KEYS.taskAwaitingMergeOnly, awaitingMergeOnly);
-  }, [awaitingMergeOnly]);
-  // #1015 (archive) — unlike hideDone above, this DOES route through the
-  // visibleTasks filter below rather than a column's `collapsed` prop: an
-  // archived task should vanish from the column COUNT too, not just be
-  // visually collapsed. Safe to do so because archiving is restricted to
-  // done/failed (routes/tasks.ts), so an archived task can never sit in a
-  // DRAG_EDITABLE_STATUSES column — no absoluteDropIndex translation is at
-  // risk the way it would be for backlog/ready.
-  const [showArchived, setShowArchived] = useState(() =>
-    readBool(STORAGE_KEYS.taskShowArchived, false),
-  );
-  useEffect(() => {
-    writeBool(STORAGE_KEYS.taskShowArchived, showArchived);
-  }, [showArchived]);
-  const toggleShowArchived = () => setShowArchived((prev) => !prev);
-  // #701 — parent/phase filter. Empty string = "All" (the default); a
-  // reserved sentinel (not a real "repo#number" key, which always contains
-  // "#") stands in for "(no parent)" so it can share the same string state
-  // as a real selection. A <select>, not chips like the project filter:
-  // the reference install alone has 10 distinct parents, each a full issue
-  // title — chips at that count would wrap the filter bar across several
-  // lines the way the project filter's own chips are documented not to.
-  // Composes with the project/blocked-only filters via the same
-  // absoluteDropIndex path — see selectedProjectIds' own comment above for
-  // why that's what makes stacking filters safe for boardOrder.
-  const parentOptions = useMemo(() => {
-    const byKey = new Map<string, { key: string; label: string; count: number }>();
-    for (const t of tasks) {
-      if (t.parentIssueNumber === null || t.parentIssueRepo === null) continue;
-      const key = `${t.parentIssueRepo}#${t.parentIssueNumber}`;
-      const existing = byKey.get(key);
-      if (existing) {
-        existing.count += 1;
-        // A late-arriving title (task-watcher.ts's fillParentIssueTitles
-        // lands after the row itself is ingested) upgrades an
-        // already-seen `#N` placeholder option rather than needing a
-        // fresh option to appear once it does.
-        if (existing.label === `#${t.parentIssueNumber}` && t.parentIssueTitle) {
-          existing.label = t.parentIssueTitle;
-        }
-      } else {
-        byKey.set(key, { key, label: t.parentIssueTitle ?? `#${t.parentIssueNumber}`, count: 1 });
-      }
-    }
-    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
-  }, [tasks]);
-  const noParentCount = useMemo(
-    () => tasks.filter((t) => t.parentIssueNumber === null).length,
-    [tasks],
-  );
-  const [selectedParentKey, setSelectedParentKey] = useState<string>(() =>
-    readString(STORAGE_KEYS.taskParentFilter, ""),
-  );
-  useEffect(() => {
-    writeString(STORAGE_KEYS.taskParentFilter, selectedParentKey);
-  }, [selectedParentKey]);
-  // Same render-time-adjustment pattern as blockedOnly's own reset above
-  // (see its comment for the full "why not a useEffect" reasoning) — a
-  // persisted selection for a parent that's since vanished from `tasks`
-  // (its last child was re-parented, deleted, or closed) must not leave the
-  // filter silently stuck showing zero results with no visible way back.
-  const selectedParentValid =
-    selectedParentKey === "" ||
-    selectedParentKey === PARENT_FILTER_NONE ||
-    parentOptions.some((o) => o.key === selectedParentKey);
-  const [prevSelectedParentValid, setPrevSelectedParentValid] = useState(selectedParentValid);
-  if (selectedParentValid !== prevSelectedParentValid) {
-    setPrevSelectedParentValid(selectedParentValid);
-    if (!selectedParentValid) setSelectedParentKey("");
-  }
-  const visibleTasks = useMemo(() => {
-    let result =
-      activeProjectIds.length === 0
-        ? tasks
-        : tasks.filter((t) => activeProjectIds.includes(t.projectId));
-    if (blockedOnly && hasBlockedTask) result = result.filter((t) => t.blockedState === "blocked");
-    if (selectedParentKey === PARENT_FILTER_NONE) {
-      result = result.filter((t) => t.parentIssueNumber === null);
-    } else if (selectedParentKey !== "") {
-      result = result.filter(
-        (t) =>
-          t.parentIssueNumber !== null &&
-          `${t.parentIssueRepo}#${t.parentIssueNumber}` === selectedParentKey,
-      );
-    }
-    if (!showArchived) result = result.filter((t) => t.archivedAt === null);
-    if (awaitingMergeOnly) result = result.filter(isAwaitingMerge);
-    return result;
-  }, [
-    tasks,
-    activeProjectIds,
-    blockedOnly,
-    hasBlockedTask,
-    selectedParentKey,
-    showArchived,
-    awaitingMergeOnly,
-  ]);
-
-  // Done tasks Clear done would drop that still have an open PR (in the
-  // current project filter) — surfaced in its confirmation.
-  const awaitingMergeCount = useMemo(
-    () =>
-      tasks.filter(
-        (t) =>
-          isAwaitingMerge(t) &&
-          (activeProjectIds.length === 0 || activeProjectIds.includes(t.projectId)),
-      ).length,
-    [tasks, activeProjectIds],
-  );
+  // Every board filter (project, quick view, epic, agent, text, hide done, archived)
+  // lives in useTaskFilters (#2840). They are all client-only render-time filters, not
+  // fetch params: `tasks` in the store always holds every task install-wide (see
+  // store.ts's refreshTasks), and must keep doing so, because computeTaskReorder below
+  // reindexes a target column's FULL contents on every drop, including whatever a
+  // filter is currently hiding. #610 considered and cut a project filter for exactly
+  // this hazard ("the drag/reorder math indexes against the rendered list, not the
+  // full store list, and filtering would silently corrupt boardOrder on drop") —
+  // applyDrop's use of absoluteDropIndex below is what closes that gap: it translates
+  // a filtered TaskColumn's own rendered index back into the equivalent index against
+  // the full, unfiltered column before computeTaskReorder ever sees it, whatever
+  // combination of filters produced `visibleTasks`.
+  const filterApi = useTaskFilters(tasks, projects);
+  const { visibleTasks, filters, effectiveHideDone: hideDone } = filterApi;
+  const activeProjectIds = filters.projectIds;
+  const viewportWidth = useViewportWidth();
+  const facetsShown = !phone && facetsOpen(filterApi.facets, viewportWidth, projects.length);
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -630,94 +448,6 @@ export function UnifiedBoard({
       ?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
   }, [phone, phoneColumn]);
 
-  // The board's three filter bars. Inline above the columns on desktop/
-  // tablet; inside the toolbar's filter sheet on phone.
-  const filterBars = (
-    <>
-      {/* Issue: a blocked task's card badge is easy to scroll past on a
-              large board. Only worth showing once something is actually
-              blocked — an always-visible toggle that's always a no-op would
-              just be noise. */}
-      {hasBlockedTask && (
-        <div className="tasks-panel-filter-bar">
-          <button
-            type="button"
-            className={`sidebar-filter-chip tasks-panel-blocked-toggle${blockedOnly ? " active" : ""}`}
-            aria-pressed={blockedOnly}
-            onClick={toggleBlockedOnly}
-          >
-            <BlockedIcon size={11} aria-hidden="true" />
-            Blocked only
-          </button>
-        </div>
-      )}
-      {/* Client-only render filter (see selectedProjectIds's own
-              comment above) — only worth showing once there's more than
-              one project to narrow down. */}
-      {projects.length > 1 && (
-        <div className="tasks-panel-filter-bar">
-          <div className="sidebar-filter-chips" role="group" aria-label="Filter by project">
-            {projects.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={`sidebar-filter-chip${activeProjectIds.includes(p.id) ? " active" : ""}`}
-                aria-pressed={activeProjectIds.includes(p.id)}
-                onClick={() => toggleProjectFilter(p.id)}
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
-          {activeProjectIds.length > 0 && (
-            <button
-              type="button"
-              className="tasks-panel-filter-clear"
-              title="Show every project"
-              aria-label="Show every project"
-              onClick={clearProjectFilter}
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      )}
-      {/* #701 — only worth showing once at least one task actually has
-              a parent, same "only worth showing once it'd narrow anything"
-              posture as the project filter above. */}
-      {parentOptions.length > 0 && (
-        <div className="tasks-panel-filter-bar">
-          <label className="tasks-panel-parent-filter-label" htmlFor="tasks-panel-parent-filter">
-            Phase
-          </label>
-          <Dropdown
-            small
-            id="tasks-panel-parent-filter"
-            className="tasks-panel-parent-filter"
-            value={selectedParentKey}
-            onChange={setSelectedParentKey}
-            options={[
-              { value: "", label: "All" },
-              ...parentOptions.map((o) => ({ value: o.key, label: `${o.label} (${o.count})` })),
-              { value: PARENT_FILTER_NONE, label: `(no parent) (${noParentCount})` },
-            ]}
-          />
-          {selectedParentKey !== "" && (
-            <button
-              type="button"
-              className="tasks-panel-filter-clear"
-              title="Show every phase"
-              aria-label="Show every phase"
-              onClick={() => setSelectedParentKey("")}
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      )}
-    </>
-  );
-
   return (
     <div className="kanban-unified">
       <div
@@ -739,33 +469,18 @@ export function UnifiedBoard({
           // itself would also read the toolbar out.
           aria-busy={tasksLoaded ? undefined : true}
         >
-          <TasksToolbar
+          <TaskFilterBar
+            api={filterApi}
+            projects={projects}
+            phone={phone}
+            facetsShown={facetsShown}
             creating={creating}
             onToggleCreate={() => setCreating((v) => !v)}
-            projects={projects}
             createTask={(projectId, title) =>
               useDashboardStore.getState().createTask(projectId, title)
             }
             onCreated={() => setCreating(false)}
-            hideDone={hideDone}
-            onToggleHideDone={toggleHideDone}
-            showArchived={showArchived}
-            onToggleShowArchived={toggleShowArchived}
-            awaitingMergeOnly={awaitingMergeOnly}
-            onToggleAwaitingMergeOnly={() => setAwaitingMergeOnly((v) => !v)}
-            awaitingMergeCount={awaitingMergeCount}
-            activeProjectIds={activeProjectIds}
             clearDoneTasks={(opts) => useDashboardStore.getState().clearDoneTasks(opts)}
-            phone={phone}
-            filterSheetContent={filterBars}
-            activeFilterCount={
-              (hideDone ? 1 : 0) +
-              (showArchived ? 1 : 0) +
-              (awaitingMergeOnly ? 1 : 0) +
-              (blockedOnly ? 1 : 0) +
-              (activeProjectIds.length > 0 ? 1 : 0) +
-              (selectedParentKey !== "" ? 1 : 0)
-            }
           />
           {phone && (
             <div ref={stripRef} className="tasks-phone-strip" role="group" aria-label="Task status">
@@ -790,7 +505,6 @@ export function UnifiedBoard({
               ))}
             </div>
           )}
-          {!phone && filterBars}
           {dragError && (
             <div className="task-detail-error tasks-panel-drag-error" role="status">
               {dragError}
@@ -856,34 +570,22 @@ export function UnifiedBoard({
               </div>
             </EmptyStateNote>
           )}
-          {/* Distinct from the "No tasks yet." case above — there ARE
-              tasks, an active filter just hides all of them. Same "above
-              the columns, not instead of them" posture: the seven empty
-              columns still show, so the board's shape stays legible and
-              clearing whichever filter is responsible is one click away
-              without leaving the board. Message and clear action are
-              filter-aware rather than always blaming the project filter —
-              a Blocked-only filter with zero blocked tasks isn't fixed by
-              "Clear the project filter". */}
+          {/* Distinct from the "No tasks yet." case above — there ARE tasks, an active
+              filter just hides all of them. Same "above the columns, not instead of
+              them" posture: the empty columns still show, so the board's shape stays
+              legible and clearing whichever filter is responsible is one click away
+              without leaving the board. Message and clear actions are filter-aware
+              rather than always blaming the project filter — a Blocked view with zero
+              blocked tasks isn't fixed by "Clear the project filter". */}
           {tasksLoaded && tasks.length > 0 && visibleTasks.length === 0 && (
             <EmptyStateNote>
               <LayersIcon size={20} />
-              <div>
-                {blockedOnly && activeProjectIds.length > 0
-                  ? "No blocked tasks in the selected projects."
-                  : blockedOnly
-                    ? "No blocked tasks."
-                    : selectedParentKey !== "" && activeProjectIds.length > 0
-                      ? "No tasks match the selected phase in the selected projects."
-                      : selectedParentKey !== ""
-                        ? "No tasks match the selected phase."
-                        : "No tasks in the selected projects."}
-              </div>
-              {blockedOnly && (
+              <div>{emptyBoardMessage(filters)}</div>
+              {filters.view !== "all" && (
                 <button
                   type="button"
                   className="tasks-panel-empty-hint-clear"
-                  onClick={toggleBlockedOnly}
+                  onClick={() => filterApi.setView("all")}
                 >
                   Show every task
                 </button>
@@ -892,54 +594,66 @@ export function UnifiedBoard({
                 <button
                   type="button"
                   className="tasks-panel-empty-hint-clear"
-                  onClick={clearProjectFilter}
+                  onClick={() => filterApi.setProjectIds([])}
                 >
                   Clear the project filter
                 </button>
               )}
-              {selectedParentKey !== "" && (
+              {filters.epicKeys.length > 0 && (
                 <button
                   type="button"
                   className="tasks-panel-empty-hint-clear"
-                  onClick={() => setSelectedParentKey("")}
+                  onClick={() => filterApi.setEpicKeys([])}
                 >
-                  Clear the phase filter
+                  Clear the epic filter
+                </button>
+              )}
+              {(filters.agents.length > 0 || filters.text.trim() !== "") && (
+                <button
+                  type="button"
+                  className="tasks-panel-empty-hint-clear"
+                  onClick={filterApi.clearFilters}
+                >
+                  Clear all filters
                 </button>
               )}
             </EmptyStateNote>
           )}
-          <div
-            className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
-          >
-            {(phone
-              ? TASK_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
-              : TASK_COLUMNS
-            ).map((column) => {
-              const columnTasks = orderTasksForColumn(visibleTasks, column.id);
-              const acceptsDrop =
-                draggingTask !== null &&
-                (draggingTask.status === column.id ||
-                  (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
-              return (
-                <TaskColumn
-                  key={column.id}
-                  title={column.title}
-                  projectsById={projectsById}
-                  sessionsById={sessionsById}
-                  theme={theme}
-                  tasks={columnTasks}
-                  taskMasterEnabled={taskMasterEnabled}
-                  acceptsDrop={acceptsDrop}
-                  onOpen={(task) => openDetail(task.id)}
-                  onOpenSession={onOpenSession}
-                  onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
-                  onDragBegin={setDraggingId}
-                  onDragFinish={() => setDraggingId(null)}
-                  collapsed={hideDone && (column.id === "done" || column.id === "failed")}
-                  loading={!tasksLoaded}
-                />
-              );
-            })}
+          <div className={`task-board-body${facetsShown ? " task-board-body--facets" : ""}`}>
+            {facetsShown && <TaskFacetsPanel api={filterApi} projects={projects} />}
+            <div
+              className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
+            >
+              {(phone
+                ? TASK_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
+                : TASK_COLUMNS
+              ).map((column) => {
+                const columnTasks = orderTasksForColumn(visibleTasks, column.id);
+                const acceptsDrop =
+                  draggingTask !== null &&
+                  (draggingTask.status === column.id ||
+                    (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+                return (
+                  <TaskColumn
+                    key={column.id}
+                    title={column.title}
+                    projectsById={projectsById}
+                    sessionsById={sessionsById}
+                    theme={theme}
+                    tasks={columnTasks}
+                    taskMasterEnabled={taskMasterEnabled}
+                    acceptsDrop={acceptsDrop}
+                    onOpen={(task) => openDetail(task.id)}
+                    onOpenSession={onOpenSession}
+                    onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
+                    onDragBegin={setDraggingId}
+                    onDragFinish={() => setDraggingId(null)}
+                    collapsed={hideDone && (column.id === "done" || column.id === "failed")}
+                    loading={!tasksLoaded}
+                  />
+                );
+              })}
+            </div>
           </div>
         </div>
         {detailTaskId !== null && (

@@ -43,3 +43,5 @@
 /* New section — appended last so it cannot reorder any earlier rule.
    Only defines the loading-bone classes (issue #1885). */
 @import "./skeleton.css";
+/* New section — appended last so it cannot reorder any earlier rule (#2840). */
+@import "./task-filter-bar.css";

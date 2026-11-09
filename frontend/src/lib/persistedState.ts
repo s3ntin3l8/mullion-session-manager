@@ -120,13 +120,23 @@ export const STORAGE_KEYS = {
   sourceControlCollapsed: "crs.sourceControlCollapsed",
   taskDrawerWidth: "crs.taskDrawerWidth",
   taskProjectFilter: "crs.taskProjectFilter",
+  // Legacy (pre-#2840) filter keys. Read once by unified-board/useTaskFilters.ts to
+  // migrate into taskQuickView / taskEpicFilter, then removed.
   taskBlockedOnlyFilter: "crs.taskBlockedOnlyFilter",
-  // #701
+  // #701 (the "Phase" select, now the epic filter)
   taskParentFilter: "crs.taskParentFilter",
+  // #2840 — the board's quick view tab, epic and agent filters (JSON string[]),
+  // the facets panel setting, and the last projects picked (most recent first).
+  taskQuickView: "crs.taskQuickView",
+  taskEpicFilter: "crs.taskEpicFilter",
+  taskAgentFilter: "crs.taskAgentFilter",
+  taskFacets: "crs.taskFacets",
+  taskRecentProjects: "crs.taskRecentProjects",
   // #746
   taskHideDone: "crs.taskHideDone",
   // #1015
   taskShowArchived: "crs.taskShowArchived",
+  // Legacy, see taskBlockedOnlyFilter above.
   taskAwaitingMergeOnly: "crs.taskAwaitingMergeOnly",
   // Making notifications relevant/scannable — SessionTimeline.tsx's kind
   // filter and "Only attention" quick toggle previously reset to their
