@@ -183,15 +183,15 @@ export async function settleRapidRebaseExit(
     return "settled";
   }
   const aborted = task.rebaseAbortedAttempts + 1;
+  const exhausted = aborted >= MAX_RAPID_REBASE_ABORTS;
   const patch = {
     rebaseSpawnHeadSha: null,
     rebaseStartedAt: null,
     rebaseAbortedAttempts: aborted,
-    rapidExitRetryAfter: new Date(Date.now() + RAPID_EXIT_BACKOFF_MS),
-    rebaseAttempts:
-      aborted >= MAX_RAPID_REBASE_ABORTS
-        ? MAX_REBASE_ATTEMPTS
-        : Math.max(0, task.rebaseAttempts - 1),
+    // Exhausted: the task needs a human, so no backoff hold (it would only
+    // delay a reviewer for a task that is not going to retry).
+    rapidExitRetryAfter: exhausted ? null : new Date(Date.now() + RAPID_EXIT_BACKOFF_MS),
+    rebaseAttempts: exhausted ? MAX_REBASE_ATTEMPTS : Math.max(0, task.rebaseAttempts - 1),
   };
   app.db.update(tasks).set(patch).where(eq(tasks.id, task.id)).run();
   Object.assign(task, patch);
@@ -593,14 +593,19 @@ export async function attemptAutoRebase(
 /**
  * True when the rebase worker's own work finished after the rebase began.
  * Same comparison as turnFinishedSinceClaim, anchored on `rebaseStartedAt`;
- * `workFinishedAt` (not `lastTurnEndedAt`) for the same #1735 reason.
+ * `workFinishedAt` (not `lastTurnEndedAt`) for the same #1735 reason. A worker
+ * that died without a turn end (an `api_error` stop_failure sets none) is
+ * accepted through the same fallback chain the suggestions path uses
+ * ({@link sessionEndedAt}), so the rapid-exit judgement can see it; the first
+ * signal at or after the rebase start counts, a stale earlier one does not.
  */
 export function rebaseWorkerFinished(
   info: SessionInfo | null,
   task: { rebaseStartedAt: Date | null },
 ): boolean {
-  if (info === null || info.workFinishedAt === null || task.rebaseStartedAt === null) {
-    return false;
-  }
-  return info.workFinishedAt >= task.rebaseStartedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
+  if (info === null || task.rebaseStartedAt === null) return false;
+  const floor = task.rebaseStartedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
+  return [info.workFinishedAt, info.lastTurnEndedAt, info.errorAt].some(
+    (t) => t !== null && t !== undefined && t >= floor,
+  );
 }

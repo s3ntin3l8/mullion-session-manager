@@ -7,13 +7,31 @@ import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 
-const { mockResolveRepoRef, mockResolveGitHubToken, mockGetPullRequestByNumber, mockResume } =
-  vi.hoisted(() => ({
-    mockResolveRepoRef: vi.fn(),
-    mockResolveGitHubToken: vi.fn(),
-    mockGetPullRequestByNumber: vi.fn(),
-    mockResume: vi.fn(),
-  }));
+const {
+  mockResolveRepoRef,
+  mockResolveGitHubToken,
+  mockGetPullRequestByNumber,
+  mockResume,
+  mockHermesUsable,
+  mockDispatchTaskReview,
+} = vi.hoisted(() => ({
+  mockResolveRepoRef: vi.fn(),
+  mockResolveGitHubToken: vi.fn(),
+  mockGetPullRequestByNumber: vi.fn(),
+  mockResume: vi.fn(),
+  mockHermesUsable: vi.fn().mockReturnValue(false),
+  mockDispatchTaskReview: vi.fn(),
+}));
+
+// Hermes is the network edge only; the dispatch sweep itself runs for real.
+vi.mock("../../src/services/hermes-integration.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  hermesTaskReviewerUsable: mockHermesUsable,
+}));
+vi.mock("../../src/services/hermes-task-review.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  dispatchTaskReview: mockDispatchTaskReview,
+}));
 
 vi.mock("../../src/services/host-git.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -62,6 +80,7 @@ const { reconcileTasks, resetMergeBackoff, autoReturnTask } =
   await import("../../src/services/task-reconciler.js");
 const lifecycle = await import("../../src/services/session-lifecycle.js");
 const reseedModule = await import("../../src/services/task-reseed.js");
+const commitsPastBase = await import("../../src/services/commits-past-base.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { eq, ne } = await import("drizzle-orm");
 
@@ -719,6 +738,102 @@ describe("a worker that exits within seconds", () => {
     const row = getTask(app, task.id);
     expect(row.status).toBe("reviewing");
     expect(row.suggestionsRapidExits).toBe(0);
+  });
+
+  it("judges a null-workFinishedAt api_error rebase worker as a rapid exit", async () => {
+    const { app, task } = await rebaseTask("p-rapid-rebase-api-error", { ranMs: 3_000 });
+    const errorAt = task.rebaseStartedAt!.getTime() + 3_000;
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          errorState: "api_error",
+          errorDetail: "overloaded",
+          errorAt,
+          lastTurnEndedAt: null,
+          workFinishedAt: null,
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, task.id);
+    expect(row.rebaseAttempts).toBe(0);
+    expect(row.rebaseAbortedAttempts).toBe(1);
+    expect(row.rebaseStartedAt).toBeNull();
+    expect(row.rapidExitRetryAfter).not.toBeNull();
+  });
+
+  it("sets no backoff hold when the rapid-exit abort exhausts the attempts", async () => {
+    const { app, task } = await rebaseTask("p-exhausted-no-hold", {
+      ranMs: 3_000,
+      attempts: 1,
+      aborted: 2,
+    });
+    await reconcileTasks(app);
+    const row = getTask(app, task.id);
+    expect(row.rebaseAbortedAttempts).toBe(3);
+    expect(row.rapidExitRetryAfter).toBeNull();
+  });
+
+  it("starts no Hermes run during the rapid-exit backoff, and one once it ends", async () => {
+    mockHermesUsable.mockReturnValue(true);
+    mockDispatchTaskReview.mockRejectedValue(new Error("stop after dispatch"));
+    const { app, task } = await rebaseTask("p-rapid-no-hermes", { ranMs: 3_000 });
+    app.db
+      .update(projects)
+      .set({ defaultReviewAgent: "hermes" })
+      .where(eq(projects.id, task.projectId))
+      .run();
+    app.db
+      .update(tasks)
+      .set({
+        status: "reviewing",
+        reviewingAt: new Date(Date.now() - 3_600_000),
+        completedAt: null,
+        worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
+        rebaseStartedAt: null,
+        rebaseSpawnHeadSha: null,
+        reviewSessionId: null,
+        reviewRunId: null,
+        rapidExitRetryAfter: new Date(Date.now() + 5 * 60_000),
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    await reconcileTasks(app);
+    expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+
+    app.db
+      .update(tasks)
+      .set({ rapidExitRetryAfter: new Date(Date.now() - 1000) })
+      .where(eq(tasks.id, task.id))
+      .run();
+    await reconcileTasks(app);
+    expect(mockDispatchTaskReview).toHaveBeenCalled();
+    mockHermesUsable.mockReturnValue(false);
+  });
+
+  it("does not judge a rate-limit-grace worker with commits as a rapid exit", async () => {
+    const { app, task } = await suggestionsTask("p-grace-not-rapid", { ranMs: 20_000 });
+    app.db
+      .update(tasks)
+      .set({ lastRateLimitAt: new Date(task.claimedAt!.getTime() + 20_000) })
+      .where(eq(tasks.id, task.id))
+      .run();
+    vi.spyOn(commitsPastBase, "resolveCommitsPastBase").mockResolvedValue({
+      state: "ahead",
+    } as never);
+    // Error state TTL-cleared: no turn end and no errorAt, only the durable grace.
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => fakeInfo({ lastTurnEndedAt: null, workFinishedAt: null, errorAt: null }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, task.id);
+    expect(row.suggestionsRapidExits).toBe(0);
+    expect(row.rapidExitRetryAfter).toBeNull();
+    expect(row.status).toBe("reviewing");
   });
 
   it("leaves no backoff stamp behind a round that completes, so a following rebase is not delayed", async () => {
