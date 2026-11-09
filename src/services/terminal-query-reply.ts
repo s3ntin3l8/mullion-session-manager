@@ -62,7 +62,8 @@ interface SessionPaletteEntry {
 const sessionPalettes = new Map<string, SessionPaletteEntry>();
 const SESSION_PALETTE_SPAWN_CAP_MS = 10 * 60_000;
 const SESSION_PALETTE_TTL_MS = 35_000;
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+/** `#rrggbb`. The one definition: routes/terminal-palette.ts builds its schema pattern from it. */
+export const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 function expireSessionPalette(sessionId: string, afterMs: number): ReturnType<typeof setTimeout> {
   return setTimeout(() => sessionPalettes.delete(sessionId), afterMs).unref();
@@ -81,7 +82,12 @@ export function setSessionPalette(sessionId: string, next: TerminalPalette): voi
   sessionPalettes.set(sessionId, { palette: { ...next }, timer, armed: false });
 }
 
-/** The palette its spawning pane gave `sessionId`, or undefined to use the process-wide one. */
+/**
+ * The palette its spawning pane gave `sessionId`, or undefined to use the
+ * process-wide one. Not a pure lookup: the first call re-arms the entry's expiry
+ * to 35 s, on the assumption that it is the startup-query path (the session's
+ * first output); any other caller would start that clock early.
+ */
 export function getSessionPalette(sessionId: string): TerminalPalette | undefined {
   const entry = sessionPalettes.get(sessionId);
   if (!entry) return undefined;

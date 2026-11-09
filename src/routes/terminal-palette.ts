@@ -1,12 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { setTerminalPalette } from "../services/terminal-query-reply.js";
+import { HEX_COLOR, setTerminalPalette } from "../services/terminal-query-reply.js";
 import { pushTerminalPaletteToHosts } from "../services/terminal-palette-sync.js";
 
 // The frontend reports the palette it has resolved for the current theme and
 // color scheme, so the backend can answer a program's startup color query
 // itself (see services/terminal-query-reply.ts). Held in
 // memory only: the dashboard re-reports on every load and theme change.
-const HEX = "^#[0-9a-fA-F]{6}$";
+const HEX = HEX_COLOR.source;
 
 // Also the `palette` property of POST /api/sessions (#2528).
 export const paletteSchema = {

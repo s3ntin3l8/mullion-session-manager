@@ -13,7 +13,10 @@ vi.mock("../api/settings.js", () => ({
 
 describe("useReportTerminalPalette", () => {
   beforeEach(() => vi.mocked(settingsApi.putTerminalPalette).mockReset().mockResolvedValue());
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("does nothing before settings have loaded", () => {
     renderHook(() =>
@@ -120,6 +123,5 @@ describe("useReportTerminalPalette", () => {
       useReportTerminalPalette({ settingsLoaded: true, colorScheme: "mullion", theme: "light" }),
     );
     expect(getReportedPalette()).toBeUndefined();
-    vi.restoreAllMocks();
   });
 });
