@@ -7,7 +7,7 @@ import { ClearDoneControl } from "./ClearDoneControl.js";
 import { FilterPopover } from "./FilterPopover.js";
 import { NewTaskForm } from "./NewTaskForm.js";
 import { DisplayMenuPanel, FilterMenuPanel, ProjectPickerPanel } from "./TaskFilterPanels.js";
-import { NO_EPIC, QUICK_VIEWS, activeFilterCount } from "./taskFilters.js";
+import { NO_EPIC, QUICK_VIEWS, activeFilterCount, followOption } from "./taskFilters.js";
 import type { TaskFilterApi } from "./useTaskFilters.js";
 
 // The Task Master board's single filter row (epic #2847, #2840; mockup view
@@ -65,6 +65,7 @@ export function TaskFilterBar({
       recent={api.recentProjectIds}
       onToggle={api.toggleProject}
       onClear={() => api.setProjectIds([])}
+      follow={followOption(api, projects)}
     />
   );
   const filterPanel = (
@@ -153,14 +154,16 @@ export function TaskFilterBar({
     );
   }
 
-  const projectSummary =
-    filters.projectIds.length === 0
+  const projectNames = projects
+    .filter((p) => filters.projectIds.includes(p.id))
+    .map((p) => p.name)
+    .join(", ");
+  const projectSummary = api.followSidebar
+    ? `◎ ${projectNames || "All projects"}`
+    : filters.projectIds.length === 0
       ? "All projects"
       : filters.projectIds.length <= 2
-        ? projects
-            .filter((p) => filters.projectIds.includes(p.id))
-            .map((p) => p.name)
-            .join(", ")
+        ? projectNames
         : `${filters.projectIds.length} projects`;
   const filterDims =
     (filters.epicKeys.length > 0 ? 1 : 0) +
@@ -185,7 +188,7 @@ export function TaskFilterBar({
         {showProjects && (
           <FilterPopover
             ariaLabel="Projects"
-            buttonLabel={`Projects: ${projectSummary}`}
+            buttonLabel={`Projects: ${projectSummary}${api.followSidebar ? " (following the sidebar)" : ""}`}
             label={projectSummary}
             active={filters.projectIds.length > 0}
           >

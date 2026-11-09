@@ -135,6 +135,9 @@ export const STORAGE_KEYS = {
   // #2841 — how the board groups its columns (none / epic / project) and card density.
   taskGroupBy: "crs.taskGroupBy",
   taskDensity: "crs.taskDensity",
+  // #2858 — the board's project filter follows the project the right sidebar follows
+  // (default off).
+  taskFollowSidebar: "crs.taskFollowSidebar",
   // #746
   taskHideDone: "crs.taskHideDone",
   // #1015

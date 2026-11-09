@@ -64,6 +64,13 @@ afterEach(() => {
 });
 
 describe("RightSidebar", () => {
+  it("publishes the followed project for the Task Master board, and clears it on unmount (#2858)", () => {
+    const view = renderSidebar();
+    expect(useDashboardStore.getState().followedProjectId).toBe(1);
+    view.unmount();
+    expect(useDashboardStore.getState().followedProjectId).toBeNull();
+  });
+
   it("renders nothing on phone", () => {
     const { container } = renderSidebar("phone");
     expect(container.firstChild).toBeNull();

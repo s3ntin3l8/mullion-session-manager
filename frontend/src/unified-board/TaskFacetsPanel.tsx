@@ -1,4 +1,4 @@
-import { QUICK_VIEWS } from "./taskFilters.js";
+import { QUICK_VIEWS, followOption } from "./taskFilters.js";
 import type { TaskFilterApi } from "./useTaskFilters.js";
 import { EpicChecklist, ProjectPickerPanel } from "./TaskFilterPanels.js";
 
@@ -37,6 +37,7 @@ export function TaskFacetsPanel({
           recent={api.recentProjectIds}
           onToggle={api.toggleProject}
           onClear={() => api.setProjectIds([])}
+          follow={followOption(api, projects)}
         />
       )}
       <EpicChecklist

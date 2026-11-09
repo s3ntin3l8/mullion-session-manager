@@ -177,7 +177,9 @@ export function UnifiedBoard({
   // a filtered TaskColumn's own rendered index back into the equivalent index against
   // the full, unfiltered column before computeTaskReorder ever sees it, whatever
   // combination of filters produced `visibleTasks`.
-  const filterApi = useTaskFilters(tasks, projects);
+  // The project the right sidebar follows, for the project picker's "follow" option (#2858).
+  const followedProjectId = useDashboardStore((s) => s.followedProjectId);
+  const filterApi = useTaskFilters(tasks, projects, followedProjectId);
   const { visibleTasks, filters, effectiveHideDone: hideDone, density } = filterApi;
   // #2841 — grouping into lanes needs width and a second axis; phone shows one status
   // column at a time and stays flat.
