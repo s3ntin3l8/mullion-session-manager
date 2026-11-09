@@ -102,6 +102,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { ingestLateFindings } = await import("../../src/services/task-late-findings.js");
+const { pruneLateFindingsCaches } = await import("../../src/services/task-late-findings-cache.js");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
@@ -359,7 +360,8 @@ describe("late review findings after an inconclusive ingest", () => {
   it("does not re-parse the same freeform text rewritten in a new turn, but parses a changed one", async () => {
     const info = { lastTurnEndedAt: Date.now() };
     const { app, task } = await setup({ info });
-    const FREEFORM = "Looks fine to me, no blocking issues.";
+    // Unique text: earlier tests leave their tasks in the shared DB and the pty spy answers for every session, so their files would otherwise add to the parse count.
+    const FREEFORM = "Reads fine overall; nothing blocking in this one.";
     const parsesOf = (text: string) => mockParse.mock.calls.filter((c) => c[0] === text).length;
 
     writeFindings(app, task.id, FREEFORM);
@@ -403,6 +405,63 @@ describe("late review findings after an inconclusive ingest", () => {
     });
     expect(readTaskReviewFindings).not.toHaveBeenCalled();
     expect(ingest).not.toHaveBeenCalled();
+    await app.close();
+  });
+  it("retries the same file on the next tick when ingest threw", async () => {
+    const { app, task } = await setup();
+    const session = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.reviewSessionId!))
+      .get()!;
+    const readTaskReviewFindings = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ verdict: "approved", summary: "ok" }));
+    const ingest = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("post failed"))
+      .mockResolvedValue(undefined);
+    const run = () =>
+      ingestLateFindings(app, {
+        task,
+        session,
+        info: finishedInfo() as never,
+        backend: { readTaskReviewFindings } as never,
+        ingest,
+      });
+    await expect(run()).rejects.toThrow("post failed");
+    await run();
+    expect(ingest).toHaveBeenCalledTimes(2);
+    await run(); // recorded after the success: no third read
+    expect(ingest).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it("prunes the read caches once the task is no longer latched inconclusive", async () => {
+    const { app, task } = await setup();
+    const session = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, task.reviewSessionId!))
+      .get()!;
+    const readTaskReviewFindings = vi.fn().mockResolvedValue(null);
+    const run = () =>
+      ingestLateFindings(app, {
+        task,
+        session,
+        info: finishedInfo() as never,
+        backend: { readTaskReviewFindings } as never,
+        ingest: vi.fn(),
+      });
+    await run();
+    await run();
+    expect(readTaskReviewFindings).toHaveBeenCalledTimes(1);
+    pruneLateFindingsCaches(new Set([task.id]));
+    await run();
+    expect(readTaskReviewFindings).toHaveBeenCalledTimes(1);
+    pruneLateFindingsCaches(new Set());
+    await run();
+    expect(readTaskReviewFindings).toHaveBeenCalledTimes(2);
     await app.close();
   });
 });

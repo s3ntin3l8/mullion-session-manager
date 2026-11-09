@@ -76,6 +76,7 @@ import { recordTaskTransition } from "./task-state.js";
 import { endIfRebaseEmptied, endReviewingOnPrState } from "./task-review-end.js";
 import { isHostTransientError } from "./remote-host-errors.js";
 import { spawnReviewAgentNow, unlinkFindingsFileIfPresent } from "./task-review-spawn.js";
+import { pruneLateFindingsCaches } from "./task-late-findings-cache.js";
 import {
   ingestLateFindings,
   reannounceInconclusiveReviewsAfterGrace,
@@ -3843,6 +3844,11 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
     .innerJoin(projects, eq(tasks.projectId, projects.id))
     .where(eq(tasks.status, "reviewing"))
     .all();
+  pruneLateFindingsCaches(
+    new Set(
+      allRows.filter((r) => r.task.lastReviewVerdict === "inconclusive").map((r) => r.task.id),
+    ),
+  );
   if (allRows.length === 0) return;
 
   const now = Date.now();
