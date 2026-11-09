@@ -179,4 +179,35 @@ describe("runGitPull (issue #745)", () => {
       detail: "Branch has diverged from upstream",
     });
   });
+
+  describe("index.lock contention", () => {
+    function cloneBehindUpstream() {
+      initRepo(remoteDir);
+      fs.writeFileSync(path.join(remoteDir, "file.txt"), "v1");
+      commitAll(remoteDir, "base commit");
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      git(os.tmpdir(), ["clone", remoteDir, path.basename(tmpDir)]);
+      fs.writeFileSync(path.join(remoteDir, "file.txt"), "v2");
+      commitAll(remoteDir, "second commit");
+      return path.join(tmpDir, ".git", "index.lock");
+    }
+
+    it("retries a merge blocked by a transient index.lock and succeeds", async () => {
+      const lock = cloneBehindUpstream();
+      fs.writeFileSync(lock, "");
+      setTimeout(() => fs.rmSync(lock, { force: true }), 500);
+
+      expect(await runGitPull(tmpDir)).toEqual({ pulled: true });
+      expect(fs.readFileSync(path.join(tmpDir, "file.txt"), "utf8")).toBe("v2");
+    }, 20_000);
+
+    it("reports busy, and leaves the lock alone, when the lock never clears", async () => {
+      const lock = cloneBehindUpstream();
+      fs.writeFileSync(lock, "");
+
+      const result = await runGitPull(tmpDir);
+      expect(result).toMatchObject({ pulled: false, reason: "busy" });
+      expect(fs.existsSync(lock)).toBe(true);
+    }, 20_000);
+  });
 });

@@ -1,7 +1,7 @@
 import { spawn as spawnChild } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitReadOnlyEnv } from "./git-env.js";
 // GitFileStatusCode/GitFileStatus/GitStatus now physically live in
 // src/shared/types.ts (hand-mirrored 1:1 on the frontend — see
 // frontend/src/api.ts's own re-export). Re-exported below so every existing
@@ -134,7 +134,7 @@ function runGitStatus(cwd: string): Promise<string | null> {
       ],
       {
         stdio: ["ignore", "pipe", "pipe"],
-        env: gitEnv(),
+        env: gitReadOnlyEnv(),
       },
     );
 

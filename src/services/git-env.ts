@@ -130,3 +130,15 @@ export function gitEnv(): NodeJS.ProcessEnv {
   env.LC_ALL = "C";
   return env;
 }
+
+/**
+ * `gitEnv()` plus `GIT_OPTIONAL_LOCKS=0`, for a read-only `git status` that
+ * runs on a timer (the sidebar poll) or as a pre-flight check. Without it,
+ * `status` opportunistically rewrites the index and takes `.git/index.lock`,
+ * so a poll that overlaps a Pull's merge makes the merge fail with "Unable to
+ * create '.git/index.lock'". git documents this variable for background
+ * status pollers. Never use it for a command that is meant to write.
+ */
+export function gitReadOnlyEnv(): NodeJS.ProcessEnv {
+  return { ...gitEnv(), GIT_OPTIONAL_LOCKS: "0" };
+}
