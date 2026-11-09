@@ -102,12 +102,17 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { ingestLateFindings } = await import("../../src/services/task-late-findings.js");
-const { pruneLateFindingsCaches } = await import("../../src/services/task-late-findings-cache.js");
+const { pruneLateFindingsCaches, lastLateReadKey } =
+  await import("../../src/services/task-late-findings-cache.js");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-late-findings-${process.pid}.db`);
+
+// Fixed: the read-dedupe key includes the turn end, so a clock-derived value
+// would make whether two reads share a key depend on the millisecond.
+const TURN_ENDED_AT = Date.now();
 
 function finishedInfo() {
   return {
@@ -130,8 +135,8 @@ function finishedInfo() {
     exitCode: null,
     compactState: "idle",
     subagentCount: 0,
-    lastTurnEndedAt: Date.now(),
-    workFinishedAt: Date.now(),
+    lastTurnEndedAt: TURN_ENDED_AT,
+    workFinishedAt: TURN_ENDED_AT,
     outstandingBackgroundTasks: [],
   };
 }
@@ -421,9 +426,6 @@ describe("late review findings after an inconclusive ingest", () => {
       .fn()
       .mockRejectedValueOnce(new Error("post failed"))
       .mockResolvedValue(undefined);
-    // One snapshot per test: finishedInfo() stamps Date.now(), and the read-dedupe
-    // key includes the turn end, so a fresh one per run() makes two runs straddling
-    // a millisecond boundary read twice.
     const info = finishedInfo() as never;
     const run = () =>
       ingestLateFindings(app, {
@@ -433,11 +435,72 @@ describe("late review findings after an inconclusive ingest", () => {
         backend: { readTaskReviewFindings } as never,
         ingest,
       });
-    await expect(run()).rejects.toThrow("post failed");
+    await run(); // the throw is contained
     await run();
     expect(ingest).toHaveBeenCalledTimes(2);
     await run(); // recorded after the success: no third read
     expect(ingest).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it("contains a persistently throwing ingest: bounded attempts, other tasks unaffected", async () => {
+    const { app, task: a } = await setup({ task: { prNumber: 9 } });
+    const projectB = (
+      await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { allowDuplicate: true, createDir: true, name: "p-late-b", cwd: "/tmp" },
+      })
+    ).json().id as number;
+    const reviewB = (
+      await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: projectB, command: "bash" },
+      })
+    ).json().id as number;
+    const b = app.db
+      .insert(tasks)
+      .values({
+        ...a,
+        id: undefined,
+        title: "task B",
+        projectId: projectB,
+        sessionId: a.sessionId,
+        reviewSessionId: reviewB,
+        reviewFindingsIngestedSessionId: reviewB,
+        prNumber: 10,
+      })
+      .returning()
+      .get();
+    writeFindings(app, a.id, APPROVED);
+    writeFindings(app, b.id, JSON.stringify({ verdict: "approved", summary: "B OK." }));
+    // Resolving task A's repo ref throws on every attempt; B's works.
+    mockResolveRepoRef.mockImplementation(async (_app: unknown, project: { name: string }) => {
+      if (project.name === "p-late") throw new Error("persistent failure");
+      return { owner: "o", repo: "r" };
+    });
+    const errors = vi.spyOn(app.log, "error");
+
+    for (let i = 0; i < 6; i++) await expect(reconcileTasks(app)).resolves.not.toThrow();
+
+    expect(getTask(app, b.id).lastReviewVerdict).toBe("approved");
+    expect(getTask(app, b.id).reviewFindings).toContain("B OK.");
+    expect(getTask(app, a.id).lastReviewVerdict).toBe("inconclusive");
+    // Bounded: the file is read MAX attempts times, not once per tick.
+    expect(readsFor(a.id)).toBe(3);
+    const aErrors = errors.mock.calls.filter((c) => (c[0] as { taskId?: number })?.taskId === a.id);
+    expect(aErrors.length).toBeLessThanOrEqual(2);
+    await app.close();
+  });
+
+  it("the sweep prunes a task's read caches when it leaves reviewing", async () => {
+    const { app, task } = await setup({ sessionStatus: "exited" });
+    await reconcileTasks(app);
+    expect(lastLateReadKey.has(task.id)).toBe(true);
+    app.db.update(tasks).set({ status: "done" }).where(eq(tasks.id, task.id)).run();
+    await reconcileTasks(app);
+    expect(lastLateReadKey.has(task.id)).toBe(false);
     await app.close();
   });
 
@@ -449,9 +512,6 @@ describe("late review findings after an inconclusive ingest", () => {
       .where(eq(sessions.id, task.reviewSessionId!))
       .get()!;
     const readTaskReviewFindings = vi.fn().mockResolvedValue(null);
-    // One snapshot per test: finishedInfo() stamps Date.now(), and the read-dedupe
-    // key includes the turn end, so a fresh one per run() makes two runs straddling
-    // a millisecond boundary read twice.
     const info = finishedInfo() as never;
     const run = () =>
       ingestLateFindings(app, {
