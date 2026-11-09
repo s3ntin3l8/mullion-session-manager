@@ -282,6 +282,10 @@ export async function reseedTaskIfSessionExited(
     cwd: task.worktreePath,
     initialPrompt: seedCapable ? prompt : undefined,
     skipPermissions: taskMasterConfig.skipPermissions,
+    // Named like every other worker spawn site (task-claim.ts), so the re-seeded
+    // worker reads as task #N's worker in the UI.
+    name: `Task #${task.id} · worker`,
+    nameLocked: true,
     // Mark this session as an unattended Task Master worker so the
     // opencode and codex adapters deny brainstorming / writing-plans /
     // finishing-a-development-branch — same marker every other Task
