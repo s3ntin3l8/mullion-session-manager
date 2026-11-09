@@ -641,11 +641,6 @@
   flex-direction: column;
   gap: 12px;
 }
-.tasks-phone-filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 /* 44px targets and 16px inputs inside the sheet (iOS zooms on smaller). */
 .tasks-phone-filter-sheet .sidebar-filter-chip,
 .tasks-phone-filter-sheet .tasks-panel-filter-clear,
@@ -653,13 +648,15 @@
 .tasks-phone-filter-sheet .notif-gate-btn {
   min-height: 44px;
 }
-.tasks-phone-filter-sheet .tasks-panel-parent-filter {
+.tasks-phone-filter-sheet .task-view,
+.tasks-phone-filter-sheet .task-pop-item,
+.tasks-phone-filter-sheet .task-facets-view,
+.tasks-phone-filter-sheet .settings-segmented-btn {
+  min-height: 44px;
+}
+.tasks-phone-filter-sheet .task-pop-search {
   min-height: 44px;
   font-size: 1rem;
-}
-.tasks-phone-filter-danger {
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
 }
 
 /* Settings on phone: fix the fields that overflow a 390px screen. Inline

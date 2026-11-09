@@ -131,25 +131,25 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   effort, since Retry must still be able to resume an ordinary
   claimed-then-failed task.
 
-  **A "Hide done" board toggle (`#746`)** complements deletion for anyone
+  **A "Hide Done & Failed" board setting (`#746`)** complements deletion for anyone
   who wants finished tasks kept as reference rather than deleted: it
   collapses the Done and Failed columns to header-only (title + count),
   rather than filtering them out of `tasks` — collapsing keeps the count
   visible; filtering would hide it too. Persisted client-side
   (`crs.taskHideDone`, `frontend/src/lib/persistedState.ts`), alongside the
-  board's other filters (project, blocked-only, `#701`'s parent filter) —
-  not through `AppSettings`/the Settings panel, a deliberate deviation from
-  how the sidebar's own `hideEndedSessions`/`showTaskSessions` toggles work,
-  since this is a board filter sitting next to three others that already
-  use this mechanism. Rendered unconditionally, unlike the blocked-only
-  toggle (which only appears once something is actually blocked) — there's
-  no "nothing qualifies" state to gate on, so no render-time-reset dance is
-  needed either.
+  board's other filters (project, quick view, epic; see "Board filters"
+  under "The task board") — not through `AppSettings`/the Settings panel, a
+  deliberate deviation from how the sidebar's own `hideEndedSessions`/
+  `showTaskSessions` toggles work, since this is a board filter sitting
+  next to others that already use this mechanism. It lives in the board's
+  Display menu and is always available — there's no "nothing qualifies"
+  state to gate on. In the Awaiting merge quick view it does not collapse
+  Done, which would hide exactly what that view asks for.
 
   **Bulk "Clear done" (`#746`)** — `POST /api/tasks/clear-done`, an optional
   `{ projectIds?, deleteBranches? }` body — deletes every `done` task the
-  same deletability check above allows, in one request, via the board
-  toolbar's "Clear done" button. Shares `checkTaskDeletable` with the
+  same deletability check above allows, in one request, via the "Clear done"
+  entry in the board's Display menu. Shares `checkTaskDeletable` with the
   single-row `DELETE` route so a row's fate is decided in exactly one
   place; no existing route in this codebase returned a per-row ok/failed
   shape before this one, so the response (`{ deleted, failed, branches,
@@ -378,6 +378,33 @@ own card, and any session not owned by a task collects in an "ad-hoc
 sessions" lane beneath the columns, grouped by the same severity tiers
 the original session board used.
 
+- **Board filters** (`#2840`, `frontend/src/unified-board/TaskFilterBar.tsx`):
+  one row above the columns. A **project picker** (searchable, with per-project
+  counts and, once the list is long, a Recent group; hidden with a single
+  project); **quick views** — All, Needs me, Running, Blocked, Awaiting
+  merge — each with a count taken over every other filter; a **Filter** menu
+  (epic, agent, and a text search over title, issue number and PR number) whose
+  active choices show as removable tokens under the row; and a **Display** menu
+  (Hide Done & Failed, Show archived, the facets panel setting, Clear done).
+  "Needs me", "Running" and "Awaiting merge" use the same definitions as the
+  Tasks sidebar (`needsYouReason` / `taskBucket` in `github/taskMasterSummary.ts`,
+  `isAwaitingMerge`), so the board and the sidebar agree. The **epic** filter
+  was the "Phase" select (`#701`): the parent issue, shown as `#N title` with
+  sub-issue progress, plus "No epic"; it is multi-select. An optional **facets
+  panel** (the left-rail toggle, or Display → Facets panel: Off / On / Auto —
+  Auto opens it from a 1440px window or with more than 8 projects) shows the
+  same state, project and epic choices with counts; it edits the same filter
+  state as the row. On phone the row collapses to [New task] [Filter] and the
+  same controls live in the filter sheet.
+  All of these are client-side render filters over the full task list, so a
+  drag-and-drop reorder stays correct under any combination of them
+  (`absoluteDropIndex`, `#610`). Filter state is saved per browser:
+  `crs.taskProjectFilter`, `crs.taskQuickView`, `crs.taskEpicFilter`,
+  `crs.taskAgentFilter`, `crs.taskHideDone`, `crs.taskShowArchived`,
+  `crs.taskFacets`. The earlier "Blocked only", "Awaiting merge" and "Phase"
+  keys (`crs.taskBlockedOnlyFilter`, `crs.taskAwaitingMergeOnly`,
+  `crs.taskParentFilter`) are migrated into the quick view and the epic filter
+  the first time the board loads, then removed.
 - Cards show title, owning project, linked-issue number, resolved agent
   name, and — nested directly on the card — its worker/review session's
   live status dot and label, not just a static indicator. A session whose
@@ -567,7 +594,7 @@ non-Abandon-path task) are not gated either way.
 /api/tasks/:id/archive`, orthogonal to `status`, not a transition: hides a
   finished (`done`/`failed`) task from the board's default view without
   touching its status, its PR linkage, or anything that branches on
-  `status === "done"`. A "Show archived" toggle in the board toolbar
+  `status === "done"`. A "Show archived" setting in the board's Display menu
   (persisted client-side, `crs.taskShowArchived`) reveals them again; an
   archived task is excluded from the column counts too, not just hidden —
   unlike "Hide done" above, which only collapses the column visually.

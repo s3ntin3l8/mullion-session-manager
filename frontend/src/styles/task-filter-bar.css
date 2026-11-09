@@ -1,0 +1,208 @@
+/* The Task Master board's filter bar (epic #2847, #2840): one row of project picker,
+   quick views, Filter and Display menus, plus the optional facets panel. Appended
+   last in styles/index.css so it cannot reorder any earlier rule. Colours are the
+   existing sidebar-kit tokens (tokens.css); nothing here introduces a token. */
+.task-filter-bar {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+.task-filter-row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+.task-filter-spacer {
+  flex: 1;
+}
+.task-pop {
+  position: relative;
+  flex: none;
+}
+.task-pop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-pop-btn:hover {
+  background: var(--surface-hover);
+}
+.task-pop-btn.active {
+  border-color: var(--ring);
+}
+.task-facets-toggle {
+  padding: 4px 7px;
+}
+.task-pop-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 300px;
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 35%);
+  font-size: 0.75rem;
+}
+.task-pop-h {
+  padding: 8px 8px 2px;
+  font-size: 0.65625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.task-pop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.task-pop-item:hover {
+  background: var(--surface-hover);
+}
+.task-pop-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-pop-n,
+.task-view-n {
+  color: var(--dim);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+.task-pop-search {
+  width: 100%;
+  margin-bottom: 4px;
+}
+.task-pop-empty {
+  padding: 6px 8px;
+  color: var(--dim);
+}
+.task-pop-clear {
+  padding: 4px 8px 8px;
+}
+.task-views {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--sidebar-2);
+  flex-wrap: wrap;
+}
+.task-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.task-view.active {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.task-view.attention .task-view-n {
+  color: var(--status-warn-fg);
+}
+.task-filter-tokens {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.task-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 360px;
+  padding: 1px 4px 1px 9px;
+  border: 1px solid var(--status-info-border);
+  border-radius: 999px;
+  background: var(--status-info-bg);
+  color: var(--status-info-fg);
+  font-size: 0.71875rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-token button {
+  display: inline-grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+/* The optional left rail (mockup variant 1c). */
+.task-board-body {
+  display: contents;
+}
+.task-board-body--facets {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.task-board-body--facets > .tasks-board {
+  flex: 1;
+  min-width: 0;
+}
+.task-facets {
+  flex: none;
+  width: 214px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-right: 1px solid var(--border-soft);
+  font-size: 0.75rem;
+}
+.task-facets-views {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-facets-view {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.task-facets-view.active {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}

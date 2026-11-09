@@ -210,18 +210,8 @@
   padding: 6px 12px;
   border-bottom: 1px solid var(--border-soft);
 }
-/* Reuses Sidebar.tsx's own .sidebar-filter-chip look (same on/off pill
-   shape) for the board's project filter, so the two "narrow this list
-   down" affordances read as one visual language rather than two competing
-   ones. */
-.tasks-panel-filter-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border-soft);
-  flex-wrap: wrap;
-}
+/* The text-button look for "Clear" / "Clear all" next to the board's filters (and
+   inside its menus). */
 .tasks-panel-filter-clear {
   flex-shrink: 0;
   border: none;
@@ -235,27 +225,6 @@
 }
 .tasks-panel-filter-clear:hover {
   text-decoration: underline;
-}
-.tasks-panel-blocked-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.tasks-panel-blocked-toggle.active {
-  color: var(--y);
-}
-/* #701 — parent/phase filter. A <select>, not a chip group (see the
-   filter's own doc comment in UnifiedBoard.tsx) — same field look as the
-   "New task" form's .tasks-panel-new-project/.tasks-panel-new-title
-   below, so it reads as one form-control language rather than introducing
-   a third. */
-.tasks-panel-parent-filter-label {
-  font-size: 0.6875rem;
-  color: var(--muted);
-  flex-shrink: 0;
-}
-.settings-dropdown.tasks-panel-parent-filter select {
-  max-width: 260px;
 }
 .tasks-panel-new-btn {
   display: flex;
