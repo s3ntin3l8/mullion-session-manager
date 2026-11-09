@@ -1,5 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
-import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv, gitReadOnlyEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 import type { GitPullReason, GitPullResult } from "../shared/types.js";
 
@@ -24,14 +24,19 @@ interface GitResult {
   stderr: string;
 }
 
-function runGit(cwd: string, args: string[], timeoutMs = 10_000): Promise<GitResult> {
+function runGit(
+  cwd: string,
+  args: string[],
+  timeoutMs = 10_000,
+  spawnEnv: NodeJS.ProcessEnv = gitEnv(),
+): Promise<GitResult> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
     const child = spawnChild("git", [...GIT_NO_AUTO_GC, "-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: gitEnv(),
+      env: spawnEnv,
     });
 
     const onStdoutData = (chunk: Buffer) => {
@@ -81,6 +86,43 @@ function runGit(cwd: string, args: string[], timeoutMs = 10_000): Promise<GitRes
   });
 }
 
+// A transient lock held by another git process (an agent's commit or fetch in
+// a sibling worktree). Retrying after a short pause is the right answer; the
+// lock file is never deleted, since it may belong to a live process.
+const LOCK_ERROR =
+  /index\.lock|cannot lock ref|Unable to create '[^']*\.lock'|Another git process/i;
+const LOCK_RETRY_DELAYS_MS = [300, 800, 1500];
+
+export function isLockError(stderr: string): boolean {
+  return LOCK_ERROR.test(stderr);
+}
+
+async function runGitWithLockRetry(
+  cwd: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<GitResult> {
+  let res = await runGit(cwd, args, timeoutMs);
+  for (const delay of LOCK_RETRY_DELAYS_MS) {
+    if (res.code === 0 || !isLockError(res.stderr)) break;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    res = await runGit(cwd, args, timeoutMs);
+  }
+  return res;
+}
+
+// A fresh object per call (a caller may annotate it). The lock stderr goes to
+// the debug log, since the UI's `busy` copy does not render `detail`: an
+// orphaned lock from a killed process stays diagnosable.
+function busyResult(stderr: string): GitPullResult {
+  console.debug(`git pull: repository lock still held after retries: ${stderr.trim()}`);
+  return {
+    pulled: false,
+    reason: "busy",
+    detail: "Another git process is using this repository",
+  };
+}
+
 /**
  * Executes a fast-forward git pull (`git merge --ff-only @{u}`) after fetching
  * from upstream. Never throws.
@@ -93,6 +135,7 @@ function runGit(cwd: string, args: string[], timeoutMs = 10_000): Promise<GitRes
  * - `no-upstream`: current branch has no configured tracking branch
  * - `not-fast-forward`: local branch has diverged from upstream
  * - `already-up-to-date`: behind count is 0 (no-op success)
+ * - `busy`: a git lock stayed held after a few retries (try again shortly)
  * - `pull-failed`: unexpected fetch or merge error
  */
 export async function runGitPull(cwd: string): Promise<GitPullResult> {
@@ -101,7 +144,12 @@ export async function runGitPull(cwd: string): Promise<GitPullResult> {
   }
 
   // Pre-flight status check before making network calls
-  const statusRes = await runGit(cwd, ["status", "--porcelain=v2", "--branch"], STATUS_TIMEOUT_MS);
+  const statusRes = await runGit(
+    cwd,
+    ["status", "--porcelain=v2", "--branch"],
+    STATUS_TIMEOUT_MS,
+    gitReadOnlyEnv(),
+  );
   if (statusRes.code !== 0) {
     return {
       pulled: false,
@@ -156,8 +204,13 @@ export async function runGitPull(cwd: string): Promise<GitPullResult> {
   }
 
   // Fetch remote-tracking refs
-  const fetchRes = await runGit(cwd, ["fetch", "--quiet", "--prune"], FETCH_TIMEOUT_MS);
+  const fetchRes = await runGitWithLockRetry(
+    cwd,
+    ["fetch", "--quiet", "--prune"],
+    FETCH_TIMEOUT_MS,
+  );
   if (fetchRes.code !== 0) {
+    if (isLockError(fetchRes.stderr)) return busyResult(fetchRes.stderr);
     const trimmed = fetchRes.stderr.trim();
     return {
       pulled: false,
@@ -171,6 +224,7 @@ export async function runGitPull(cwd: string): Promise<GitPullResult> {
     cwd,
     ["status", "--porcelain=v2", "--branch"],
     STATUS_TIMEOUT_MS,
+    gitReadOnlyEnv(),
   );
   if (postFetchStatus.code !== 0) {
     return {
@@ -196,10 +250,12 @@ export async function runGitPull(cwd: string): Promise<GitPullResult> {
   }
 
   // Fast-forward merge upstream
-  const mergeRes = await runGit(cwd, ["merge", "--ff-only", "@{u}"], MERGE_TIMEOUT_MS);
+  const mergeRes = await runGitWithLockRetry(cwd, ["merge", "--ff-only", "@{u}"], MERGE_TIMEOUT_MS);
   if (mergeRes.code === 0) {
     return { pulled: true };
   }
+
+  if (isLockError(mergeRes.stderr)) return busyResult(mergeRes.stderr);
 
   const stderr = mergeRes.stderr.trim();
   if (/Not possible to fast-forward|not fast-forward/i.test(stderr)) {

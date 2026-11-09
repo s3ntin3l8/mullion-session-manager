@@ -50,3 +50,11 @@ describe("gitEnv (issue #442)", () => {
     }
   });
 });
+
+describe("gitReadOnlyEnv", () => {
+  it("is gitEnv() plus GIT_OPTIONAL_LOCKS=0, and leaves gitEnv() alone", async () => {
+    const { gitEnv, gitReadOnlyEnv } = await import("../../src/services/git-env.js");
+    expect(gitReadOnlyEnv()).toEqual({ ...gitEnv(), GIT_OPTIONAL_LOCKS: "0" });
+    expect(gitEnv().GIT_OPTIONAL_LOCKS).toBeUndefined();
+  });
+});
