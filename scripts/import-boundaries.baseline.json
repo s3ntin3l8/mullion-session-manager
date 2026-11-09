@@ -12,12 +12,12 @@
   ],
   "inversions": [
     {
-      "from": "src/plugins/control-socket.ts",
+      "from": "src/plugins/control-socket-ops.ts",
       "to": "src/routes/events.ts",
       "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
     },
     {
-      "from": "src/plugins/control-socket.ts",
+      "from": "src/plugins/control-socket-ops.ts",
       "to": "src/routes/terminal.ts",
       "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
     },
