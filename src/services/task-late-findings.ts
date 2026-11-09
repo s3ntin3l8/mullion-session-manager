@@ -11,7 +11,12 @@ import type { SessionInfo } from "./pty-manager.js";
 import type { SessionBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { CLOCK_SKEW_TOLERANCE_MS } from "./task-auto-rebase.js";
-import { ignoredUnstructured, lastLateReadKey } from "./task-late-findings-cache.js";
+import {
+  MAX_LATE_INGEST_ATTEMPTS,
+  ignoredUnstructured,
+  lastLateReadKey,
+  lateIngestFailures,
+} from "./task-late-findings-cache.js";
 import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
 
 /**
@@ -115,9 +120,33 @@ export async function ingestLateFindings(
     return;
   }
   ignoredUnstructured.delete(task.id);
-  // Recorded only once ingest succeeded: a throw (a transient post failure)
-  // leaves the key unset so the next tick retries the same file.
-  await input.ingest(parsed, derived.status === "finished");
+  // Recorded once ingest succeeded: a throw (a transient post failure) leaves
+  // the key unset so the next tick retries the same file. The throw is
+  // contained here, so one task's failing ingest cannot abort the other rows
+  // or the sweeps after this one; after MAX_LATE_INGEST_ATTEMPTS failures for
+  // the same key it is recorded and the file is not re-read every tick.
+  try {
+    await input.ingest(parsed, derived.status === "finished");
+  } catch (err) {
+    const prev = lateIngestFailures.get(task.id);
+    const count = prev?.key === readKey ? prev.count + 1 : 1;
+    lateIngestFailures.set(task.id, { key: readKey, count });
+    if (count >= MAX_LATE_INGEST_ATTEMPTS) {
+      lastLateReadKey.set(task.id, readKey);
+      lateIngestFailures.delete(task.id);
+      app.log.error(
+        { err, taskId: task.id, attempts: count },
+        "task reconcile: late review findings ingest kept failing — giving up on this file until the reviewer writes again",
+      );
+    } else if (count === 1) {
+      app.log.error(
+        { err, taskId: task.id },
+        "task reconcile: late review findings ingest failed — retrying next tick",
+      );
+    }
+    return;
+  }
+  lateIngestFailures.delete(task.id);
   lastLateReadKey.set(task.id, readKey);
 }
 
