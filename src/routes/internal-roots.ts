@@ -64,6 +64,17 @@ export function resolveWithinRoots(app: FastifyInstance, cwd: string): string | 
   return withinRoots ? resolved : null;
 }
 
+// CodeQL (js/path-injection) reports the sinks in services/host-files.ts and
+// services/project-files.ts as "new" on the PR that split internal.ts into
+// per-domain registrars. They are not new: the same request.body -> service
+// flows existed in internal.ts and were guarded by these same helpers. The
+// split only moved the taint *sources* into internal-*.ts, so CodeQL
+// re-anchored the alerts. No sink or guard changed; every handler still runs
+// requireWithinRoots/requireAllWithinRoots before any filesystem or git side
+// effect. Resolution: dismiss as false positives in GHAS (same as the
+// js/path-injection alerts on services/git-refs.ts); a source-level
+// suppression would not dismiss them, as this repo's codeql.yml has no SARIF
+// post-processing step.
 /**
  * The call-site half of resolveWithinRoots: resolves `value` and, on
  * failure, sends the standard 400 ("<field> must be within this agent's
