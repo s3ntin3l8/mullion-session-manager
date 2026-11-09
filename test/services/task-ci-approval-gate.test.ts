@@ -37,8 +37,14 @@ function appWithLog() {
 function current(
   status: "success" | "failure" | "in_progress" | null,
   runs: { name: string; conclusion: string | null }[] = [],
+  checkRuns?: { ok: true; runs: { name: string; conclusion: string | null }[] },
 ) {
-  return { status, headSha: "sha-head", repoRef, runs };
+  return { status, headSha: "sha-head", repoRef, runs, ...(checkRuns ? { checkRuns } : {}) };
+}
+
+/** Why the gate held, as it logs it. */
+function holdReason(log: { info: ReturnType<typeof vi.fn> }) {
+  return (log.info.mock.calls[0]?.[0] as { reason?: string } | undefined)?.reason;
 }
 
 const deadRun = [{ name: "CodeQL", conclusion: "failure" }];
@@ -73,37 +79,88 @@ describe("ciAllowsAutoApproval", () => {
   });
 
   it("holds when a check run is actually red", async () => {
-    const { app } = appWithLog();
+    const { app, log } = appWithLog();
     mockFetchCheckRunsForHead.mockResolvedValue([
       { name: "test-node / lint-and-test", conclusion: "failure" },
     ]);
     await expect(ciAllowsAutoApproval(app, task, current("failure", deadRun))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("check-run-red");
+  });
+
+  it("also ignores a lost Dependency Review run, but only the known lost-run workflows", async () => {
+    const { app } = appWithLog();
+    mockFetchCheckRunsForHead.mockResolvedValue([{ name: "a", conclusion: "success" }]);
+    await expect(
+      ciAllowsAutoApproval(
+        app,
+        task,
+        current("failure", [
+          { name: "CodeQL", conclusion: "failure" },
+          { name: "Dependency Review", conclusion: "failure" },
+          { name: "CI/CD", conclusion: "success" },
+        ]),
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it("holds when any OTHER workflow failed, even with green check runs (a workflow that fails validation creates no check run either)", async () => {
+    const { app, log } = appWithLog();
+    mockFetchCheckRunsForHead.mockResolvedValue([{ name: "a", conclusion: "success" }]);
+    await expect(
+      ciAllowsAutoApproval(
+        app,
+        task,
+        current("failure", [
+          { name: "CodeQL", conclusion: "failure" },
+          { name: "CI/CD", conclusion: "failure" },
+        ]),
+      ),
+    ).resolves.toBe(false);
+    expect(holdReason(log)).toBe("failed-workflow-not-known-lost");
+    expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+  });
+
+  it("uses the check runs the red-CI return already read, without a second lookup", async () => {
+    const { app } = appWithLog();
+    await expect(
+      ciAllowsAutoApproval(
+        app,
+        task,
+        current("failure", deadRun, { ok: true, runs: [{ name: "a", conclusion: "success" }] }),
+      ),
+    ).resolves.toBe(true);
+    expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+    expect(mockResolveGitHubToken).not.toHaveBeenCalled();
   });
 
   it("holds while a check run is still running", async () => {
-    const { app } = appWithLog();
+    const { app, log } = appWithLog();
     mockFetchCheckRunsForHead.mockResolvedValue([
       { name: "a", conclusion: "success" },
       { name: "b", conclusion: null },
     ]);
     await expect(ciAllowsAutoApproval(app, task, current("failure", deadRun))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("check-run-still-running");
   });
 
   it("holds when the head has no check runs at all (nothing contradicts the failure)", async () => {
-    const { app } = appWithLog();
+    const { app, log } = appWithLog();
     await expect(ciAllowsAutoApproval(app, task, current("failure", deadRun))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("no-check-runs");
   });
 
-  it("holds when the check-run lookup cannot be answered", async () => {
-    const { app } = appWithLog();
+  it("holds when the check-run lookup cannot be answered, and says that rather than 'not all green'", async () => {
+    const { app, log } = appWithLog();
     mockFetchCheckRunsForHead.mockRejectedValue(new Error("HTTP 502"));
     await expect(ciAllowsAutoApproval(app, task, current("failure", deadRun))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("check-runs-unreadable");
   });
 
   it("holds when there is no token to read check runs with", async () => {
-    const { app } = appWithLog();
+    const { app, log } = appWithLog();
     mockResolveGitHubToken.mockResolvedValue(null);
     await expect(ciAllowsAutoApproval(app, task, current("failure", deadRun))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("no-token-to-read-check-runs");
     expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
   });
 
@@ -122,8 +179,12 @@ describe("ciAllowsAutoApproval", () => {
 
     expect(log.info).toHaveBeenCalledTimes(1);
     expect(log.info).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: 7, ciStatus: "in_progress" }),
-      expect.stringContaining("waiting on CI"),
+      expect.objectContaining({
+        taskId: 7,
+        ciStatus: "in_progress",
+        reason: "workflow-runs-in-progress",
+      }),
+      expect.stringContaining("waiting on CI (workflow-runs-in-progress)"),
     );
   });
 });

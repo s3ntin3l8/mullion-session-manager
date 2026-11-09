@@ -1990,13 +1990,15 @@ once **all** of the following hold:
    _workflow runs_, but GitHub's own merge gate reads _check runs_, and the two
    can disagree when GitHub loses a run (a CodeQL or dependency-review run that
    ends `failure` with its jobs never created, which it may refuse to retry).
-   A `failure` is therefore only believed if a check run backs it: when every
-   check run on the head is complete and none is red, the failed run is
-   treated as infrastructure noise and does not hold the approval. A red or
-   still-running check run, an unreadable check list, or no check runs at all
-   still hold it. Without this, such a task sat approved and green forever with
-   nothing in the log. The gate also logs why it is waiting (once per task
-   per hour) instead of returning silently.
+   A `failure` is therefore only overridden when every failed workflow is one of
+   the known lost-run workflows (`LOST_RUN_WORKFLOWS`: CodeQL, Dependency
+   Review; a workflow that fails validation also creates no check run, and must
+   keep holding) AND a check run on the head backs the green: GitHub answered,
+   there are check runs, none is running and none is red. Anything else — any
+   other failed workflow, a red or running check run, an unreadable list, no
+   token, no check runs — still holds it. Without this, such a task sat approved and green forever with
+   nothing in the log. The gate also logs why it is waiting, with the actual reason
+   (once per task per hour), instead of returning silently.
 5. **The PR's `mergeable` field reads exactly `true` (`#1334`)** —
    `mergeable === null` ("unknown," GitHub still computing after a push) is
    neither confirmed-clean nor confirmed-dirty, and this gate mirrors the
@@ -2007,8 +2009,8 @@ once **all** of the following hold:
    (feeding the CI-return and PR-comment-return auto-return checks below),
    then steps 2 and 3 (round ingestion, approving verdict), then the
    dirty/mergeable check right below, then step 5 (`mergeable === true`),
-   and only then step 4 (`status === "success"`) as the final gate before
-   `approveTask` runs. If the PR is `dirty` or `mergeable === false` once
+   and only then step 4 (`ciAllowsAutoApproval`: `status === "success"`, or the
+   lost-run exception above) as the final gate before `approveTask` runs. If the PR is `dirty` or `mergeable === false` once
    steps 2/3 pass, `project.autoApprove` + an unspent `rebaseAttempts`
    budget triggers [Auto-rebase](#auto-rebase-758) right there — on the
    still-`reviewing` task, before it has ever been approved — instead of
