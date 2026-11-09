@@ -44,6 +44,11 @@ vi.mock("../../src/services/github-integration.js", async (importOriginal) => ({
 vi.mock("../../src/services/github-write.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getPullRequestByNumber: mockGetPullRequestByNumber,
+  fetchPullRequestReviewThreads: vi.fn().mockResolvedValue({ threads: [], truncated: false }),
+}));
+vi.mock("../../src/services/github.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  fetchRunsForHeadChecked: vi.fn().mockResolvedValue({ ok: true, runs: [] }),
 }));
 vi.mock("../../src/services/git-worktree.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -78,6 +83,11 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks, resetMergeBackoff, autoReturnTask } =
   await import("../../src/services/task-reconciler.js");
+const { Session } = await import("../../src/services/pty-manager.js");
+const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+const { resolveBackend } = await import("../../src/services/session-backend.js");
+const reviewSync = await import("../../src/services/task-github-sync.js");
+const { RAPID_EXIT_BACKOFF_MS } = await import("../../src/services/worker-rapid-exit.js");
 const lifecycle = await import("../../src/services/session-lifecycle.js");
 const reseedModule = await import("../../src/services/task-reseed.js");
 const commitsPastBase = await import("../../src/services/commits-past-base.js");
@@ -376,6 +386,136 @@ describe("a worker that exits within seconds", () => {
     expect(row.sessionId).toBe(respawned.id);
     expect(row.rapidExitRetryAfter).toBeNull();
   });
+
+  it.each(["finished", "api_error"] as const)(
+    "retries a %s abort after backoff, terminating the carried reviewer without posting again",
+    async (ending) => {
+      const { app, task } = await rebaseTask(`p-rapid-reviewer-${ending}`, { ranMs: 3_000 });
+      // Use the real manager map and termination path: a permanent get() mock
+      // would falsely keep returning api_error info after the session is killed.
+      vi.spyOn(app.pty, "get").mockRestore();
+      vi.spyOn(Session.prototype, "spawn").mockResolvedValue();
+      const worker = app.pty.getOrCreate({
+        id: String(task.sessionId),
+        command: "claude",
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+      });
+      const endedAt = task.rebaseStartedAt!.getTime() + 3_000;
+      vi.spyOn(worker, "toInfo").mockReturnValue(
+        fakeInfo(
+          ending === "api_error"
+            ? { errorState: "api_error", errorDetail: "overloaded", errorAt: endedAt }
+            : { lastTurnEndedAt: endedAt, workFinishedAt: endedAt },
+        ) as never,
+      );
+      const [reviewer] = app.db
+        .insert(sessions)
+        .values({
+          projectId: task.projectId,
+          command: "claude",
+          cwd: "/tmp",
+          status: "active",
+        })
+        .returning()
+        .all();
+      app.pty.getOrCreate({
+        id: String(reviewer.id),
+        command: "claude",
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+      });
+      app.db
+        .update(projects)
+        .set({ defaultReviewAgent: "claude" })
+        .where(eq(projects.id, task.projectId))
+        .run();
+      app.db
+        .update(tasks)
+        .set({
+          status: "reviewing",
+          completedAt: null,
+          mergeRequestedAt: null,
+          reviewingAt: new Date(Date.now() - 3_600_000),
+          worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
+          approvalCarriedAt: new Date(),
+          reviewSessionId: reviewer.id,
+          reviewFindingsIngestedSessionId: reviewer.id,
+          lastReviewVerdict: "approved",
+          lastReviewVerdictAt: new Date(),
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      const terminate = vi.spyOn(app.pty, "terminate");
+      const post = vi.spyOn(reviewSync, "postReviewFindingsComment");
+      const create = vi.spyOn(lifecycle, "createSessionRecord");
+      const t0 = Math.floor(Date.now() / 1000) * 1000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+
+      await reconcileTasks(app);
+      let row = getTask(app, task.id);
+      expect(row.rebaseStartedAt).toBeNull();
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseAbortedAttempts).toBe(1);
+      expect(row.rapidExitRetryAfter!.getTime()).toBe(t0 + RAPID_EXIT_BACKOFF_MS);
+      expect(terminate).toHaveBeenCalledExactlyOnceWith(String(task.sessionId));
+      expect(app.pty.get(String(task.sessionId))).toBeUndefined();
+      expect(
+        await resolveBackend(app, LOCAL_HOST_ID).liveStatus([String(task.sessionId)], 1000),
+      ).toEqual({
+        [String(task.sessionId)]: null,
+      });
+      expect(
+        app.db.select().from(sessions).where(eq(sessions.id, task.sessionId!)).get()!.status,
+      ).toBe("killed");
+      expect(row.reviewSessionId).toBe(reviewer.id);
+      expect(app.pty.get(String(reviewer.id))).toBeDefined();
+      expect(create).not.toHaveBeenCalled();
+
+      now.mockReturnValue(t0 + 2 * 60_000);
+      await reconcileTasks(app);
+      expect(create).not.toHaveBeenCalled();
+      expect(terminate).not.toHaveBeenCalledWith(String(reviewer.id));
+      expect(getTask(app, task.id).reviewSessionId).toBe(reviewer.id);
+
+      const [respawned] = app.db
+        .insert(sessions)
+        .values({
+          projectId: task.projectId,
+          command: "claude",
+          cwd: "/tmp",
+          status: "active",
+        })
+        .returning()
+        .all();
+      create.mockResolvedValue({
+        ok: true,
+        row: { id: respawned.id },
+        initialPromptApplied: true,
+      } as never);
+      // Ten minutes plus one second: no additional 30-minute suggestions hold.
+      now.mockReturnValue(t0 + RAPID_EXIT_BACKOFF_MS + 1000);
+      await reconcileTasks(app);
+      row = getTask(app, task.id);
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(terminate).toHaveBeenCalledWith(String(reviewer.id));
+      expect(app.pty.get(String(reviewer.id))).toBeUndefined();
+      expect(app.db.select().from(sessions).where(eq(sessions.id, reviewer.id)).get()!.status).toBe(
+        "killed",
+      );
+      expect(row.reviewSessionId).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      expect(row.sessionId).toBe(respawned.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.rapidExitRetryAfter).toBeNull();
+      await reconcileTasks(app);
+      expect(post).not.toHaveBeenCalled();
+      expect(create).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("still counts a normal rebase session", async () => {
     const { app, task } = await rebaseTask("p-normal-rebase", { ranMs: 5 * 60_000 });
