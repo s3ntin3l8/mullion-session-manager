@@ -156,6 +156,9 @@ describe("mullion-review-invariants reference index", () => {
       "remote-host-transport.ts",
       "remote-host-file-streams.ts",
       "remote-host-client-types.ts",
+      "remote-host-channel-transfers.ts",
+      "remote-host-client-cache.ts",
+      "remote-host-errors.ts",
     ]) {
       const hit = matchReferences(index, [`src/services/${f}`]).map((m: { ref: string }) =>
         path.basename(m.ref),
