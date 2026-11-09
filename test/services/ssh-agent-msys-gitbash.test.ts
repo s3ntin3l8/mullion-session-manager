@@ -68,9 +68,9 @@ describe.runIf(bash)("ssh-agent bridge over an MSYS socket, with Git Bash's ssh-
       expect(acl.stdout).not.toMatch(/Users|Everyone|Administrators|\(I\)/);
 
       // The real script never overwrites a file that is already there.
-      await expect(writeMsysSocketFile(socketPath, "!<socket >1 s x")).rejects.toBeInstanceOf(
-        SocketAlreadyListeningError,
-      );
+      await expect(
+        writeMsysSocketFile(socketPath, "!<socket >1 s x", { timeoutMs: 60_000 }),
+      ).rejects.toBeInstanceOf(SocketAlreadyListeningError);
 
       const result = await run(bash!, ["-lc", "ssh-add -l; echo rc=$?"], {
         env: { ...process.env, SSH_AUTH_SOCK: socketPath },
