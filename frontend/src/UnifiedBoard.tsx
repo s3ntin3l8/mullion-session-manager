@@ -603,7 +603,7 @@ export function UnifiedBoard({
                 <button
                   type="button"
                   className="tasks-panel-empty-hint-clear"
-                  onClick={() => filters.epicKeys.forEach((k) => filterApi.toggleEpic(k))}
+                  onClick={() => filterApi.setEpicKeys([])}
                 >
                   Clear the epic filter
                 </button>

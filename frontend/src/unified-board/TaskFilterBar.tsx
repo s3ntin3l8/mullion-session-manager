@@ -83,6 +83,7 @@ export function TaskFilterBar({
   const displayPanel = (
     <DisplayMenuPanel
       hideDone={api.hideDone}
+      hideDoneSuppressed={api.hideDone && !api.effectiveHideDone}
       onToggleHideDone={api.toggleHideDone}
       showArchived={filters.showArchived}
       onToggleShowArchived={api.toggleShowArchived}

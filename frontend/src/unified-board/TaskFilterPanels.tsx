@@ -196,6 +196,7 @@ export function FilterMenuPanel({
 
 export function DisplayMenuPanel({
   hideDone,
+  hideDoneSuppressed = false,
   onToggleHideDone,
   showArchived,
   onToggleShowArchived,
@@ -206,6 +207,8 @@ export function DisplayMenuPanel({
   clearDone,
 }: {
   hideDone: boolean;
+  /** The setting is on but not applied: the Awaiting merge view needs Done visible. */
+  hideDoneSuppressed?: boolean;
   onToggleHideDone: () => void;
   showArchived: boolean;
   onToggleShowArchived: () => void;
@@ -222,6 +225,9 @@ export function DisplayMenuPanel({
       <div className="task-pop-h">Columns</div>
       <CheckItem checked={hideDone} onChange={onToggleHideDone}>
         Hide Done &amp; Failed
+        {hideDone && hideDoneSuppressed && (
+          <span className="task-pop-note"> (not applied in the Awaiting merge view)</span>
+        )}
       </CheckItem>
       <CheckItem checked={showArchived} onChange={onToggleShowArchived}>
         Show archived

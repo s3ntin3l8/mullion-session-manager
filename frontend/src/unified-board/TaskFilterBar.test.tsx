@@ -856,6 +856,28 @@ describe("Filter menu", () => {
     expect(screen.getByText("mine")).toBeInTheDocument();
   });
 
+  it("'Clear the epic filter' clears every selected epic, not just one", async () => {
+    tasks = [
+      makeTask({ id: 1, projectId: 2, status: "ready", title: "in A", ...epicA }),
+      makeTask({ id: 2, projectId: 2, status: "ready", title: "in B", ...epicB }),
+      makeTask({ id: 3, projectId: 1, status: "ready", title: "mine" }),
+    ];
+    const user = userEvent.setup();
+    renderBoard();
+    await pickProject(user, "demo");
+    await openMenu(user, "Filter");
+    await user.click(screen.getByRole("checkbox", { name: "#10 Parent A 1/4" }));
+    await user.click(screen.getByRole("checkbox", { name: "#20 Parent B 1" }));
+    expect(
+      screen.getByText("No tasks match the selected epics in the selected projects."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear the epic filter" }));
+    expect(screen.getByText("mine")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Active filters" })).toBeNull();
+    expect(JSON.parse(localStorage.getItem("crs.taskEpicFilter")!)).toEqual([]);
+  });
+
   it("reorders identically inside an epic-filtered column — boardOrder must stay correct (#610)", async () => {
     tasks = [
       makeTask({ id: 1, status: "ready", boardOrder: 0, title: "first", ...epicA }),
@@ -912,6 +934,22 @@ describe("Display menu", () => {
     await user.click(screen.getByRole("checkbox", { name: "Show archived" }));
     expect(screen.getByText("old")).toBeInTheDocument();
     expect(localStorage.getItem("crs.taskShowArchived")).toBe("1");
+  });
+
+  it("says Hide Done & Failed is not applied while the Awaiting merge view is active", async () => {
+    tasks = [makeTask({ id: 1, status: "done", prNumber: 1, mergedAt: null })];
+    localStorage.setItem("crs.taskHideDone", "1");
+    const user = userEvent.setup();
+    renderBoard();
+    await openMenu(user, "Display");
+    expect(screen.queryByText(/not applied in the Awaiting merge view/)).toBeNull();
+
+    // A click outside closes the menu, so reopen it once the view is switched.
+    await user.click(screen.getByRole("button", { name: /^Awaiting merge/ }));
+    await openMenu(user, "Display");
+    expect(screen.getByText(/not applied in the Awaiting merge view/)).toBeInTheDocument();
+    // The preference itself is untouched: it applies again once the view is left.
+    expect(localStorage.getItem("crs.taskHideDone")).toBe("1");
   });
 
   it("closes on Escape and on a click outside", async () => {

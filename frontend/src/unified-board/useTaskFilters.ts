@@ -199,15 +199,18 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
     },
     [activeProjectIds, recentProjectIds, setProjectIds],
   );
+  const setEpicKeys = useCallback((keys: string[]) => {
+    setSelectedEpicKeys(keys);
+    writeJSON(STORAGE_KEYS.taskEpicFilter, keys);
+  }, []);
   const toggleEpic = useCallback(
     (key: string) => {
       const next = activeEpicKeys.includes(key)
         ? activeEpicKeys.filter((k) => k !== key)
         : [...activeEpicKeys, key];
-      setSelectedEpicKeys(next);
-      writeJSON(STORAGE_KEYS.taskEpicFilter, next);
+      setEpicKeys(next);
     },
-    [activeEpicKeys],
+    [activeEpicKeys, setEpicKeys],
   );
   const toggleAgent = useCallback(
     (value: string) => {
@@ -229,12 +232,11 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
     setProjectIds([]);
     setViewState("all");
     writeString(STORAGE_KEYS.taskQuickView, "all");
-    setSelectedEpicKeys([]);
-    writeJSON(STORAGE_KEYS.taskEpicFilter, []);
+    setEpicKeys([]);
     setSelectedAgents([]);
     writeJSON(STORAGE_KEYS.taskAgentFilter, []);
     setText("");
-  }, [setProjectIds]);
+  }, [setProjectIds, setEpicKeys]);
 
   return {
     filters,
@@ -255,6 +257,7 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
     setProjectIds,
     toggleProject,
     toggleEpic,
+    setEpicKeys,
     toggleAgent,
     setText,
     toggleHideDone: () => setHideDone((v) => !v),
