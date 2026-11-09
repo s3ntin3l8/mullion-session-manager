@@ -150,7 +150,14 @@ describe("reseedTaskIfSessionExited", () => {
     expect(mockTerminate).not.toHaveBeenCalled();
     expect(mockCreateSessionRecord).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ cwd: "/tmp/wt", command: "claude", initialPrompt: "prompt text" }),
+      expect.objectContaining({
+        cwd: "/tmp/wt",
+        command: "claude",
+        initialPrompt: "prompt text",
+        // Named like every other worker spawn, so the UI reads it as task #N's worker.
+        name: `Task #${task.id} · worker`,
+        nameLocked: true,
+      }),
     );
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(newSessionId);

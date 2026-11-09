@@ -333,10 +333,16 @@ export async function attemptAutoRebase(
   }
   rebaseHeldSince.delete(task.id);
 
-  // An expired hold (blocker !== null) may sit on a still-live worker round
-  // in this very worktree: terminate it like a superseded attempt, so the
-  // force-remove below never pulls the cwd out from under a running agent.
-  if ((task.rebaseStartedAt !== null || blocker !== null) && task.sessionId !== null) {
+  // The task's current worker is about to be replaced: the spawn below
+  // overwrites tasks.sessionId, so a still-live one would be orphaned (no task
+  // links it, so the sidebar's "Show task sessions" toggle can't hide it) with
+  // its worktree force-removed from under it. That covers a stale prior attempt
+  // (rebaseStartedAt set), an expired hold on a live worker round (blocker),
+  // and a first attempt where the original worker sits idle (neither set).
+  // Ending it precedes the non-retryable resumeTaskWorktree bail below: losing
+  // the only worker there is intended, since its worktree is removed either way
+  // and the task is surfaced for a human instead.
+  if (task.sessionId !== null) {
     // Reaching here means rebaseStartedAt is past its window (the withinWindow
     // check above already returned otherwise) and a retry is going to happen
     // (the cap check above already returned otherwise) — so the previous
@@ -363,20 +369,24 @@ export async function attemptAutoRebase(
           .run();
         closeSessionBrowserBindings(app, task.sessionId);
       } catch (err) {
-        // Word the message by how this block was entered: an expired hold has
-        // no previous rebase attempt, only the blocking worker round.
+        // Word the message by how this block was entered.
+        const priorAttempt = task.rebaseStartedAt !== null;
         app.log.warn(
           { err, taskId: task.id, sessionId: task.sessionId },
           blocker !== null
             ? "task auto-rebase: the worker round behind an expired rebase hold is still active and could not be terminated, leaving it for a later tick"
-            : "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick",
+            : priorAttempt
+              ? "task auto-rebase: a stale attempt's session is still active and could not be terminated, leaving it for a later tick"
+              : "task auto-rebase: the task's previous worker is still active and could not be terminated, leaving it for a later tick",
         );
         recordMergeError(
           app,
           task.id,
           blocker !== null
             ? `Conflicts with main — the worker round behind the expired hold (${blocker}) could not be stopped, needs manual resolution`
-            : "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution",
+            : priorAttempt
+              ? "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution"
+              : "Conflicts with main — the task's previous worker could not be stopped, needs manual resolution",
         );
         return;
       }
