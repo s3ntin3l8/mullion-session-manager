@@ -2565,6 +2565,10 @@ button.github-panel-row.gh-issue-row {
 }
 .session-timeline-controls {
   flex-shrink: 0;
+  /* The kind popover opens inline inside this row; in a short panel it must
+     scroll rather than be cut off, leaving the list the rest of the height. */
+  max-height: 70%;
+  overflow-y: auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2575,6 +2579,70 @@ button.github-panel-row.gh-issue-row {
 .session-timeline-search {
   flex: 1;
   min-width: 140px;
+}
+/* Timeline kind filter (TimelineKindFilter.tsx): the Important / All / Custom
+   switch sits in the controls row; Custom opens a popover grouping every kind
+   plus the subagent isolate chips. Chips reuse .session-timeline-kind-chip. */
+.session-timeline-presets {
+  /* The switch joins the controls row as siblings and the opened popover
+     takes a full row of its own: inline, not floating, because the timeline
+     often sits in a short dockview panel whose bounds would clip an
+     absolutely positioned popover. */
+  display: contents;
+}
+.session-timeline-preset-switch {
+  display: flex;
+  gap: 5px;
+}
+.session-timeline-kind-popover {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.session-timeline-kind-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.session-timeline-kind-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.65625rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.session-timeline-kind-group-head > span:first-child {
+  flex: 1;
+}
+.session-timeline-kind-group-hint {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.session-timeline-kind-group-action {
+  /* A 24px target (WCAG 2.5.8) around a small underlined label. */
+  min-height: 24px;
+  padding: 0 4px;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.session-timeline-kind-group-action:hover {
+  color: var(--fg);
 }
 .session-timeline-kinds {
   display: flex;
@@ -2589,8 +2657,6 @@ button.github-panel-row.gh-issue-row {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
 }
 .session-timeline-kind-chip {
   font-size: 0.6875rem;

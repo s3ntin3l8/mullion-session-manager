@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionTimeline } from "./SessionTimeline.js";
 import type { DockviewPanelApi } from "dockview-react";
@@ -30,6 +30,14 @@ vi.mock("./store/index.js", () => {
   const eventKey = (sessionId: number, seq: number) => `${sessionId}:${seq}`;
   return { useDashboardStore, eventKey };
 });
+
+// The kind filter is a preset switch plus a Custom popover (TimelineKindFilter);
+// the per-kind and per-subagent chips only exist while it is open. Idempotent:
+// the popover stays open across clicks inside it.
+async function openKindFilter() {
+  const custom = screen.getByRole("button", { name: /^Custom/ });
+  if (custom.getAttribute("aria-expanded") !== "true") await userEvent.click(custom);
+}
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -174,7 +182,7 @@ describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
           seq: 1,
           ts: 2000,
           // Making notifications relevant/scannable — was file_change,
-          // which is now hidden by DEFAULT (see DEFAULT_ACTIVE_KINDS); this
+          // which is now hidden by DEFAULT (see IMPORTANT_KINDS); this
           // test isn't about file_change at all, just multi-session merge
           // order, so tool_failure (on by default) is an equally-fine
           // second distinct row.
@@ -213,7 +221,7 @@ describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
     ).toBeInTheDocument();
   });
 
-  it("merges subagent labels across every requested session", () => {
+  it("merges subagent labels across every requested session", async () => {
     sessions = [
       makeSession({
         id: 1,
@@ -255,6 +263,7 @@ describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
     // session 1's subagent resolves to its real label; session 2's unknown
     // agentId falls back to its truncated id — both from the merged pool,
     // not just the first session's own subagents.
+    await openKindFilter();
     expect(screen.getByRole("button", { name: "worker" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "review-subagent".slice(0, 8) })).toBeInTheDocument();
   });
@@ -331,7 +340,7 @@ describe("SessionTimeline (issue #212)", () => {
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
     // Making notifications relevant/scannable — file_change is one of the
     // two kinds (with title_change) now hidden by DEFAULT (see
-    // DEFAULT_ACTIVE_KINDS): title_change/file_change together were 88% of
+    // IMPORTANT_KINDS): title_change/file_change together were 88% of
     // every event this app has ever persisted, so a fresh timeline no
     // longer opens buried in routine chatter. This is new coverage for
     // that default, layered onto the pre-existing "toggling a chip works"
@@ -340,6 +349,7 @@ describe("SessionTimeline (issue #212)", () => {
       screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
+    await openKindFilter();
     expect(screen.getByRole("button", { name: "Files" })).toHaveAttribute("aria-pressed", "false");
 
     // Toggling "Files" ON reveals the file_change row without touching the
@@ -362,6 +372,7 @@ describe("SessionTimeline (issue #212)", () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
+    await openKindFilter();
     await userEvent.click(screen.getByRole("button", { name: "Attention" }));
 
     expect(screen.getByText("No events match the current filter.")).toBeInTheDocument();
@@ -409,6 +420,7 @@ describe("SessionTimeline (issue #212)", () => {
     await userEvent.type(screen.getByLabelText("Search timeline"), "bell");
     // Both rows match the text search ("Bell" and "...bell-widget..."), but
     // untoggling "Attention" should still remove only that one.
+    await openKindFilter();
     await userEvent.click(screen.getByRole("button", { name: "Attention" }));
 
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
@@ -417,7 +429,7 @@ describe("SessionTimeline (issue #212)", () => {
 });
 
 describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () => {
-  it("renders no subagent filter row when no event carries an agentId, and the event still renders", () => {
+  it("renders no subagent filter row when no event carries an agentId, and the event still renders", async () => {
     // The no-group assertion is the load-bearing one — see the
     // filter-predicate comment in SessionTimeline.tsx for why a session
     // with zero subagents can never have anything to isolate against. The
@@ -430,6 +442,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
       1: [makeEvent({ seq: 1 })],
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await openKindFilter();
     expect(screen.queryByRole("group", { name: "Filter by subagent" })).not.toBeInTheDocument();
     // Making notifications relevant/scannable — scoped to the row text: a
     // bell event's kind pill also reads "Bell".
@@ -438,7 +451,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     ).toBeInTheDocument();
   });
 
-  it("renders one chip per distinct agentId, labeled from session.subagents when known", () => {
+  it("renders one chip per distinct agentId, labeled from session.subagents when known", async () => {
     sessions = [
       makeSession({
         subagents: [
@@ -467,13 +480,14 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
+    await openKindFilter();
     const group = screen.getByRole("group", { name: "Filter by subagent" });
     expect(screen.getByRole("button", { name: "code-reviewer" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unattributed" })).toBeInTheDocument();
     expect(group.querySelectorAll("button")).toHaveLength(2);
   });
 
-  it("falls back to a truncated agentId label when the subagent isn't in session.subagents", () => {
+  it("falls back to a truncated agentId label when the subagent isn't in session.subagents", async () => {
     events = {
       1: [
         makeEvent({
@@ -484,6 +498,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
       ],
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await openKindFilter();
     expect(
       screen.getByRole("button", { name: "subagent-test-id-2".slice(0, 8) }),
     ).toBeInTheDocument();
@@ -516,6 +531,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     expect(screen.getByText("Tool failed: toolA — err-a")).toBeInTheDocument();
     expect(screen.getByText("Tool failed: toolB — err-b")).toBeInTheDocument();
 
+    await openKindFilter();
     await userEvent.click(
       screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
     );
@@ -548,6 +564,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     };
     const { rerender } = render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
+    await openKindFilter();
     await userEvent.click(
       screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
     );
@@ -590,12 +607,14 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     // Isolate-model filter — see the filter-predicate comment in
     // SessionTimeline.tsx. Combining both chips is how a caller sees
     // everything again.
+    await openKindFilter();
     await userEvent.click(screen.getByRole("button", { name: "Unattributed" }));
     expect(
       screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Tool failed: toolA — err-a")).not.toBeInTheDocument();
 
+    await openKindFilter();
     await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
     expect(
       screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
@@ -625,12 +644,13 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
+    await openKindFilter();
     await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
     expect(screen.getByText("Tool failed: toolA — err-a")).toBeInTheDocument();
   });
 
-  it("two parallel subagents of the same type get distinct groups (grouped by agentId, not agentType), with disambiguated labels", () => {
+  it("two parallel subagents of the same type get distinct groups (grouped by agentId, not agentType), with disambiguated labels", async () => {
     // Distinct first-8-char prefixes, same rationale as the filter test
     // above — a bare agentType label would otherwise give two functionally
     // distinct chips an identical accessible name.
@@ -676,6 +696,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
+    await openKindFilter();
     const group = screen.getByRole("group", { name: "Filter by subagent" });
     const buttons = group.querySelectorAll("button");
     expect(buttons).toHaveLength(2);
@@ -834,8 +855,11 @@ describe("SessionTimeline severity/pairing/persistence", () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     const first = render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
+    await openKindFilter();
     await userEvent.click(screen.getByRole("button", { name: "Review" }));
     await userEvent.click(screen.getByRole("button", { name: "Only attention" }));
+    // The click above landed outside the popover, which closes it.
+    await openKindFilter();
     expect(screen.getByRole("button", { name: "Review" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "Only attention" })).toHaveAttribute(
       "aria-pressed",
@@ -845,6 +869,7 @@ describe("SessionTimeline severity/pairing/persistence", () => {
     first.unmount();
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
+    await openKindFilter();
     expect(screen.getByRole("button", { name: "Review" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "Only attention" })).toHaveAttribute(
       "aria-pressed",
@@ -957,5 +982,157 @@ describe("SessionTimeline mark-read while active (issue #1455)", () => {
 
     expect(markSessionRead).not.toHaveBeenCalled();
     expect(ackAttention).not.toHaveBeenCalled();
+  });
+});
+
+// The kind filter's presets (Important · All · Custom) and per-surface
+// persistence. The per-chip behaviour is covered by the tests above; these
+// pin the switch and the popover around it.
+describe("SessionTimeline kind presets", () => {
+  const mixed = () => ({
+    1: [
+      makeEvent({ seq: 1 }),
+      makeEvent({ seq: 2, kind: "file_change", payload: { path: "src/a.ts", action: "modify" } }),
+    ],
+  });
+
+  it("opens on Important and shows no kind chips until Custom is opened", () => {
+    events = mixed();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    expect(screen.getByRole("button", { name: "Important" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
+  });
+
+  it("All reveals the title and file rows, and Important hides them again", async () => {
+    events = mixed();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await userEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Important" }));
+    expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
+  });
+
+  it("Custom opens a popover without changing the selection, and Escape closes it", async () => {
+    events = mixed();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    const custom = screen.getByRole("button", { name: /^Custom/ });
+    await userEvent.click(custom);
+    expect(custom).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("group", { name: "Filter by kind" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Important" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "Filter by kind" })).not.toBeInTheDocument();
+    expect(custom).toHaveAttribute("aria-expanded", "false");
+    expect(custom).toHaveFocus();
+  });
+
+  it("closes on a click outside the popover", async () => {
+    events = mixed();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Custom/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Only attention" }));
+    expect(screen.queryByRole("group", { name: "Filter by kind" })).not.toBeInTheDocument();
+  });
+
+  it("a hand-picked selection switches the highlight to Custom, and a group's none / all toggles every kind in it", async () => {
+    events = mixed();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await openKindFilter();
+    await userEvent.click(screen.getByRole("button", { name: "Hide every Agent kind" }));
+    expect(screen.getByRole("button", { name: "Attention" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Important" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: /^Custom/ })).toHaveClass("active");
+    // The Bell row is an attention event, now hidden.
+    expect(
+      screen.queryByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show every Agent kind" }));
+    expect(
+      screen.getByText("Bell", { selector: ".session-timeline-row-text" }),
+    ).toBeInTheDocument();
+    // Back to exactly the default set, so the switch reads Important again.
+    expect(screen.getByRole("button", { name: "Important" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // ...and only Important: the open Custom chip does not also read selected.
+    expect(screen.getByRole("button", { name: /^Custom/ })).not.toHaveClass("active");
+  });
+
+  it("lists the two PR CI kinds under distinct names", async () => {
+    events = mixed();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await openKindFilter();
+    expect(screen.getByRole("button", { name: "PR CI failed" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "PR CI passed" })).toBeInTheDocument();
+  });
+
+  it("reads a selection persisted before the presets existed as Custom", () => {
+    events = mixed();
+    localStorage.setItem("crs.timelineKinds", JSON.stringify(["attention", "file_change"]));
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    expect(screen.getByRole("button", { name: /^Custom/ })).toHaveClass("active");
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+  });
+
+  it("keeps the session panel's and the task detail's selections apart", async () => {
+    events = mixed();
+    const first = render(<SessionTimeline surface="task" params={{ sessionIds: [1] }} />);
+    await userEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+    first.unmount();
+
+    // The task surface remembers All; the session surface was never touched.
+    render(<SessionTimeline surface="task" params={{ sessionIds: [1] }} />);
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+    cleanup();
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    expect(screen.getByRole("button", { name: "Important" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
+  });
+
+  it("says on the closed switch that a subagent is isolated", async () => {
+    events = {
+      1: [
+        makeEvent({
+          seq: 1,
+          kind: "tool_failure",
+          payload: { tool: "toolA", error: "err-a", agentId: "alpha-fake-subagent-id" },
+        }),
+        makeEvent({ seq: 2, kind: "tool_failure", payload: { tool: "toolB", error: "err-b" } }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await openKindFilter();
+    await userEvent.click(
+      screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
+    );
+    // The Unattributed bucket's internal key never shows as a tooltip; a real
+    // agent's id does.
+    expect(screen.getByRole("button", { name: "Unattributed" })).not.toHaveAttribute("title");
+    expect(
+      screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
+    ).toHaveAttribute("title", "alpha-fake-subagent-id");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: /^Custom · 1 agent/ })).toBeInTheDocument();
   });
 });
