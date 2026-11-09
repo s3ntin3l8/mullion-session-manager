@@ -1,8 +1,8 @@
 {
-  "$comment": "The import-boundary baseline — issue #2413 / #2414. Every import cycle and every layering inversion the tree has today is listed here with a note saying why it is still allowed. The guard (scripts/check-import-boundaries.mjs) fails on a violation that is NOT listed, and on a listed entry that no longer describes a real violation: the baseline only turns down. Regenerate with `node scripts/check-import-boundaries.mjs --update` and read the diff — and note that `--update` writes a NEW entry with an empty note, which the check then rejects: `--update` can record that a violation exists, but only a human can say why it is allowed, so fill the note in before the check will pass.",
+  "$comment": "The import-boundary baseline \u2014 issue #2413 / #2414. Every import cycle and every layering inversion the tree has today is listed here with a note saying why it is still allowed. The guard (scripts/check-import-boundaries.mjs) fails on a violation that is NOT listed, and on a listed entry that no longer describes a real violation: the baseline only turns down. Regenerate with `node scripts/check-import-boundaries.mjs --update` and read the diff \u2014 and note that `--update` writes a NEW entry with an empty note, which the check then rejects: `--update` can record that a violation exists, but only a human can say why it is allowed, so fill the note in before the check will pass.",
   "cycles": [
     {
-      "note": "out of scope for #2414 — this one belongs to the Session split (#2403), which owns pty-manager.ts.",
+      "note": "out of scope for #2414 \u2014 this one belongs to the Session split (#2403), which owns pty-manager.ts.",
       "edges": [
         "src/services/dev-server-detect.ts -> src/services/pty-manager.ts",
         "src/services/pty-manager.ts -> src/services/dev-server-detect.ts"
@@ -14,12 +14,12 @@
     {
       "from": "src/plugins/control-socket-ops.ts",
       "to": "src/routes/events.ts",
-      "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
+      "note": "deliberate \u2014 the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
     },
     {
       "from": "src/plugins/control-socket-ops.ts",
       "to": "src/routes/terminal.ts",
-      "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
+      "note": "deliberate \u2014 the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
     },
     {
       "from": "src/routes/review-relay.ts",
@@ -44,7 +44,7 @@
     {
       "from": "src/services/session-env.ts",
       "to": "src/plugins/env.ts",
-      "note": "deliberate — it reads the validated config (app.config), which the plugin owns."
+      "note": "deliberate \u2014 it reads the validated config (app.config), which the plugin owns."
     }
   ]
 }
