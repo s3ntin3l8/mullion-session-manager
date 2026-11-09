@@ -30,7 +30,9 @@ export function TimelineKindFilter({
 }: {
   activeKinds: ReadonlySet<TimelineKind>;
   onChange: (next: Set<TimelineKind>) => void;
-  agentOptions: ReadonlyArray<{ key: string; label: string }>;
+  // `title` is the chip's hover text; omitted for an option whose key is an
+  // internal sentinel (the Unattributed bucket) that should not show.
+  agentOptions: ReadonlyArray<{ key: string; label: string; title?: string }>;
   activeAgentKeys: ReadonlySet<string>;
   onToggleAgent: (key: string) => void;
 }) {
@@ -100,7 +102,7 @@ export function TimelineKindFilter({
         <button
           ref={customRef}
           type="button"
-          className={`session-timeline-kind-chip${preset === "custom" || open ? " active" : ""}`}
+          className={`session-timeline-kind-chip${preset === "custom" ? " active" : ""}`}
           aria-expanded={open}
           aria-controls={open ? panelId : undefined}
           onClick={() => setOpen((v) => !v)}
@@ -158,13 +160,13 @@ export function TimelineKindFilter({
                 <span className="session-timeline-kind-group-hint">isolate one agent's events</span>
               </div>
               <div className="session-timeline-agents" role="group" aria-label="Filter by subagent">
-                {agentOptions.map(({ key, label }) => (
+                {agentOptions.map(({ key, label, title }) => (
                   <button
                     key={key}
                     type="button"
                     className={`session-timeline-kind-chip${activeAgentKeys.has(key) ? " active" : ""}`}
                     aria-pressed={activeAgentKeys.has(key)}
-                    title={key}
+                    title={title}
                     onClick={() => onToggleAgent(key)}
                   >
                     {label}

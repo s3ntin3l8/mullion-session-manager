@@ -602,7 +602,10 @@ export function SessionTimeline({
         <TimelineKindFilter
           activeKinds={activeKinds}
           onChange={setActiveKinds}
-          agentOptions={agentOptions}
+          agentOptions={agentOptions.map((o) => ({
+            ...o,
+            title: o.key === UNATTRIBUTED_AGENT_KEY ? undefined : o.key,
+          }))}
           activeAgentKeys={activeAgentKeys}
           onToggleAgent={toggleAgentKey}
         />

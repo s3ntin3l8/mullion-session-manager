@@ -482,7 +482,6 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
 
     await openKindFilter();
     const group = screen.getByRole("group", { name: "Filter by subagent" });
-    await openKindFilter();
     expect(screen.getByRole("button", { name: "code-reviewer" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unattributed" })).toBeInTheDocument();
     expect(group.querySelectorAll("button")).toHaveLength(2);
@@ -703,7 +702,6 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     expect(buttons).toHaveLength(2);
     // Same base label ("code-reviewer"), but disambiguated with each
     // subagent's own truncated id — no two chips share an accessible name.
-    await openKindFilter();
     expect(screen.getByRole("button", { name: "code-reviewer (alpha-fa)" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "code-reviewer (beta-fak)" })).toBeInTheDocument();
   });
@@ -1072,6 +1070,8 @@ describe("SessionTimeline kind presets", () => {
       "aria-pressed",
       "true",
     );
+    // ...and only Important: the open Custom chip does not also read selected.
+    expect(screen.getByRole("button", { name: /^Custom/ })).not.toHaveClass("active");
   });
 
   it("lists the two PR CI kinds under distinct names", async () => {
@@ -1126,6 +1126,12 @@ describe("SessionTimeline kind presets", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
     );
+    // The Unattributed bucket's internal key never shows as a tooltip; a real
+    // agent's id does.
+    expect(screen.getByRole("button", { name: "Unattributed" })).not.toHaveAttribute("title");
+    expect(
+      screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
+    ).toHaveAttribute("title", "alpha-fake-subagent-id");
     await userEvent.keyboard("{Escape}");
     expect(screen.getByRole("button", { name: /^Custom · 1 agent/ })).toBeInTheDocument();
   });
