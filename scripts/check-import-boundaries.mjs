@@ -93,6 +93,7 @@ const SOURCE_ROOTS = ["src", "frontend/src"];
  * "services > routes" — a service reaches up into the module that publishes
  * the route. "services > plugins" — a service reaches up into a plugin.
  * "plugins > routes" — a plugin reaches down into a route.
+ * "routes > db" — a route skips the service layer and talks to the database.
  *
  * The frontend is not layered this way (it is one workspace of components
  * and an API client), so it contributes no inversions — but it does
@@ -102,6 +103,7 @@ const SOURCE_ROOTS = ["src", "frontend/src"];
  * show them all, and the rule set is the part that matters):
  *
  *   routes  -> services -> db          the intended direction
+ *   routes  -> db                      FORBIDDEN — a route reaches past its service (#2418)
  *   routes  -> plugins                 allowed (plugins are above routes)
  *   plugins -> services, db            allowed
  *   services -> routes                 FORBIDDEN — reaching up to a route
@@ -127,6 +129,7 @@ const FORBIDDEN_EDGES = new Set([
   "services>routes",
   "services>plugins",
   "plugins>routes",
+  "routes>db",
   "db>services",
   "db>routes",
   "db>plugins",
