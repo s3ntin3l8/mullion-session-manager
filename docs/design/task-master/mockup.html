@@ -247,7 +247,7 @@
         background: var(--sidebar);
         border: 1px solid var(--border);
         border-radius: 8px;
-        width: 1100px;
+        width: 1160px;
         flex: none;
         position: relative;
       }
@@ -484,7 +484,7 @@
         overflow-x: auto;
       }
       .col {
-        width: 232px;
+        width: 248px;
         flex: none;
       }
       .app.narrow .col {
@@ -1079,6 +1079,37 @@
       .card .cm .lnk {
         flex: none;
       }
+      .lnk:hover {
+        text-decoration: underline;
+        cursor: pointer;
+      }
+      .hier {
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .hier .hl {
+        font-size: 10.5px;
+        color: var(--dim);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-top: 4px;
+      }
+      .hier .hr {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+      }
+      .hier .ht {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--muted);
+      }
     </style>
   </head>
   <body>
@@ -1347,8 +1378,9 @@
         const ep = t.ep ? EPICS[t.ep] : null;
         return `<div class="card${o.sel === t.id ? " sel" : ""}" style="--ep:${ep ? ep.c : "var(--border)"}">
           <div class="ct">${t.title}</div>
-          <div class="cm">${lnk("#" + t.id + " ↗")}${t.pr ? lnk("PR #" + t.pr) : ""}<span class="sp"></span>${t.needs ? chip("warn", t.needs) : ""}<span>${t.age}</span></div>
-          <div class="cm"><span class="proj">${t.p}</span><span>· ${t.agent}</span><span class="sp"></span>${ep ? `<span class="ept" title="Epic: ${ep.n}"><span class="dot" style="color:${ep.c}"></span>epic #${ep.num}</span>` : ""}</div>
+          <div class="cm">${lnk("#" + t.id + " ↗")}${t.pr ? lnk("PR #" + t.pr) : ""}<span class="sp"></span><span>${t.agent} · ${t.age}</span></div>
+          <div class="cm"><span class="proj">${t.p}</span><span class="sp"></span>${ep ? `<span class="ept" title="Epic: ${ep.n}"><span class="dot" style="color:${ep.c}"></span>epic #${ep.num}</span>` : ""}</div>
+          ${t.needs ? `<div>${chip("warn", t.needs)}</div>` : ""}
           ${t.ws || t.rs ? `<div class="sessrow">${t.ws ? sess("worker", t.ws) : ""}${t.rs ? sess("reviewer", t.rs) : ""}</div>` : ""}
           ${t.q ? `<div>${chip("warn", "Queued · waiting for a free slot")}</div>` : ""}
           ${t.by && o.blockedChip !== false ? `<div>${chip("warn", I("block", 11) + " Blocked by #" + t.by)}</div>` : ""}</div>`;
@@ -1513,16 +1545,25 @@
           <div class="next"><b>Next:</b> starts automatically when ${lnk("#2418 ↗")} is done. ${chip("info", "#2418 reviewing · awaiting approval")}</div></div>
         <div class="sec"><div class="sec-h">Review</div><div class="cap" style="margin:0">Not started — no worker yet.</div></div>
         <div class="acts">${btn("Start now", "primary")}${btn("Edit")}${btn("Move to backlog")}</div>`;
+      const titleOf = (id) =>
+        (TASKS.find((t) => t.id === id) || {}).title.replace(/^[a-z]+\([a-z]+\): /, "");
+      const hrow = (id, st, tone) =>
+        `<div class="hr">${lnk("#" + id + " ↗")}<span class="ht">${titleOf(id)}</span>${chip(tone, st)}</div>`;
+      const hierarchy = (
+        kind,
+      ) => `<div class="hier"><div class="hr">${chip("", "epic")}${lnk("#2400 ↗")}<span class="ht">projects, worktrees &amp; storage</span><span class="cap" style="margin:0">3/9</span></div>
+        ${kind === "blocked" ? `<div class="hl">Blocked by</div>${hrow(2418, "reviewing", "info")}<div class="hl">Siblings blocked by the same task</div>${hrow(2818, "ready", "warn")}${hrow(2817, "ready", "warn")}<div class="hr">${lnk("+ 4 more")}</div>` : `<div class="hl">Blocks 7</div>${hrow(2819, "ready", "warn")}${hrow(2818, "ready", "warn")}${hrow(2817, "ready", "warn")}<div class="hr">${lnk("+ 4 more")}</div>`}</div>`;
       const detailDetails = (
         title,
+        kind,
       ) => `<div class="sec"><div class="sec-h">Details</div><dl class="kv0"><dt>Project</dt><dd>${DEF}</dd><dt>Issue</dt><dd>${lnk("#" + title + " ↗")}</dd><dt>Agent</dt><dd>claude</dd></dl><div class="body" style="padding:6px 0 0"><b style="color:var(--fg)">Context</b> The intended layering is routes → services → db… <span class="more">Show more</span></div></div>
-        <div class="sec"><div class="sec-h">Hierarchy</div><div style="font-size:12px">${chip("", "epic")} <b class="mono">#2400</b> feat(projects): projects, worktrees &amp; storage <span class="cap" style="margin:0">3/9</span><div style="margin-top:6px">${chip("warn", "blocks 7")} <span style="color:var(--muted)">#2819 #2818 #2817 #2816 #2815 #2814 #2812</span></div></div></div>
+        <div class="sec"><div class="sec-h">Hierarchy</div>${hierarchy(kind)}</div>
         <div class="sec"><div class="sec-h">Timeline <span class="sp"></span><span class="tabs" style="text-transform:none;letter-spacing:0"><span class="tab on">Important</span><span class="tab">All</span><span class="tab">Custom</span></span></div></div>
         <div class="tl"><span class="t">4m</span><span class="k">Status</span><span>Agent: done</span><span class="t">4m</span><span class="k">Status</span><span>Entered full-screen mode</span><span class="t">4m</span><span class="k">Status</span><span>Agent: generating</span></div>`;
       const detailBody = (kind) =>
         kind === "blocked"
-          ? detailBlocked() + detailDetails("2819")
-          : detailReview() + detailDetails("2418");
+          ? detailBlocked() + detailDetails("2819", "blocked")
+          : detailReview() + detailDetails("2418", "review");
       const detailHead = (kind) =>
         `<div class="vh"><span class="ibtn">${I("back")}</span><span class="title">${kind === "blocked" ? "#2819 move the host, preview and device routes' DB access" : "#2418 forbid new route → db imports"}</span><span class="ibtn" title="Pop out to a docked panel">${I("popout")}</span></div>`;
       const sbDetail = (w, kind) =>
