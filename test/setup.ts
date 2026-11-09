@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { afterAll, beforeEach } from "vitest";
+import { resetLateFindingsCaches } from "../src/services/task-late-findings-cache.js";
 import { resetHostWarnThrottle } from "../src/services/host-warn-throttle.js";
 import { schema } from "../src/plugins/env.js";
 import { reapDtachMasters } from "./helpers/reap-dtach.js";
@@ -180,4 +181,5 @@ afterAll(() => {
 // test with it empty so no assertion depends on test order (#2753).
 beforeEach(() => {
   resetHostWarnThrottle();
+  resetLateFindingsCaches();
 });

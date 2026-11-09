@@ -11,16 +11,8 @@ import type { SessionInfo } from "./pty-manager.js";
 import type { SessionBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { CLOCK_SKEW_TOLERANCE_MS } from "./task-auto-rebase.js";
+import { ignoredUnstructured, lastLateReadKey } from "./task-late-findings-cache.js";
 import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
-
-/**
- * What the last successful late read looked at, per task. A re-read with the
- * same key cannot find anything new (an exited reviewer writes nothing more; a
- * finished one only writes in a new turn, which moves `turnEndedAt`), so it is
- * skipped instead of paying a (possibly remote) read on every tick. In-memory:
- * a restart costs at most one extra read per task.
- */
-const lastLateReadKey = new Map<number, string>();
 
 /**
  * A review session whose findings were ingested as `inconclusive` (it died or
@@ -47,7 +39,6 @@ const lastLateReadKey = new Map<number, string>();
  * the review handle so this stops matching, and `ingest` is a CAS on the
  * verdict still being `inconclusive` for that session.
  */
-const ignoredUnstructured = new Map<(typeof tasks.$inferSelect)["id"], string>();
 
 export async function ingestLateFindings(
   app: FastifyInstance,
@@ -108,17 +99,26 @@ export async function ingestLateFindings(
     );
     return;
   }
-  lastLateReadKey.set(task.id, readKey);
-  if (findings === null) return;
+  if (findings === null) {
+    lastLateReadKey.set(task.id, readKey);
+    return;
+  }
   const key = `${session.id}:${createHash("sha256").update(findings).digest("hex")}`;
-  if (ignoredUnstructured.get(task.id) === key) return;
+  if (ignoredUnstructured.get(task.id) === key) {
+    lastLateReadKey.set(task.id, readKey);
+    return;
+  }
   const parsed = parseReviewFindings(findings);
   if (!parsed.structured) {
     ignoredUnstructured.set(task.id, key);
+    lastLateReadKey.set(task.id, readKey);
     return;
   }
   ignoredUnstructured.delete(task.id);
+  // Recorded only once ingest succeeded: a throw (a transient post failure)
+  // leaves the key unset so the next tick retries the same file.
   await input.ingest(parsed, derived.status === "finished");
+  lastLateReadKey.set(task.id, readKey);
 }
 
 // Task 409707 — a review agent can stall silently: no reported
