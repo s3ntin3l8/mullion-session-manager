@@ -16,6 +16,7 @@ import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "./session-backend.js";
 import { getStoredSettings } from "./settings.js";
+import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { CLEARED_REVIEW_RUN, hasReviewHandle } from "./task-review-handle.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
@@ -146,7 +147,19 @@ export async function settleRapidRebaseExit(
     return "settled";
   }
   // Still running (or no signal yet): judge it on a later tick.
-  if (!info || !rebaseWorkerFinished(info, task)) return "settled";
+  const derived = deriveSessionStatus({
+    dbStatus: session.status,
+    info: defaultDeriveStatusInfo(info ?? null),
+  });
+  if (
+    !info ||
+    !rebaseWorkerFinished(info, task, {
+      gone: derived.status === "exited",
+      apiError: derived.status === "api_error",
+    })
+  ) {
+    return "settled";
+  }
   const rapid = await workerExitedRapidly(app, task, project, {
     sessionId: session.id,
     spawnedAt: task.rebaseStartedAt,
@@ -597,19 +610,29 @@ export async function attemptAutoRebase(
 /**
  * True when the rebase worker's own work finished after the rebase began.
  * Same comparison as turnFinishedSinceClaim, anchored on `rebaseStartedAt`;
- * `workFinishedAt` (not `lastTurnEndedAt`) for the same #1735 reason. A worker
- * that died without a turn end (an `api_error` stop_failure sets none) is
- * accepted through the same fallback chain the suggestions path uses
- * ({@link sessionEndedAt}), so the rapid-exit judgement can see it; the first
- * signal at or after the rebase start counts, a stale earlier one does not.
+ * `workFinishedAt` (not `lastTurnEndedAt`) for the same #1735 reason.
+ *
+ * A worker that died without a turn-end hook is still visible to the
+ * rapid-exit judgement through two fallbacks, each gated on the derived
+ * status, because a bare `lastTurnEndedAt` also fires on a machine-woken,
+ * mid-loop turn end and an `errorAt` goes stale once the agent recovers:
+ * `lastTurnEndedAt` only when the session is gone (`gone`: derived
+ * `exited`; derived `finished` cannot tell a mid-loop turn end from a real
+ * one), `errorAt` when it is gone or currently `api_error`. Callers that
+ * pass no derived status get `workFinishedAt` only.
  */
 export function rebaseWorkerFinished(
   info: SessionInfo | null,
   task: { rebaseStartedAt: Date | null },
+  derived: { gone?: boolean; apiError?: boolean } = {},
 ): boolean {
   if (info === null || task.rebaseStartedAt === null) return false;
   const floor = task.rebaseStartedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
-  return [info.workFinishedAt, info.lastTurnEndedAt, info.errorAt].some(
-    (t) => t !== null && t !== undefined && t >= floor,
-  );
+  const fresh = (t: number | null | undefined): boolean => t != null && t >= floor;
+  if (fresh(info.workFinishedAt)) return true;
+  // #1735: a bare turn end is not "finished" (a machine-woken, mid-loop turn
+  // also ends); a recovered API error's errorAt goes stale the same way. Take
+  // each fallback only when the derived status says the worker is gone.
+  if (derived.gone === true && fresh(info.lastTurnEndedAt)) return true;
+  return (derived.gone === true || derived.apiError === true) && fresh(info.errorAt);
 }
