@@ -917,6 +917,9 @@
         font-size: 11px;
       }
       .ept {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
         font-family: ui-monospace, Menlo, monospace;
         font-size: 10.5px;
         color: var(--dim);
@@ -1345,7 +1348,7 @@
         return `<div class="card${o.sel === t.id ? " sel" : ""}" style="--ep:${ep ? ep.c : "var(--border)"}">
           <div class="ct">${t.title}</div>
           <div class="cm">${lnk("#" + t.id + " ↗")}${t.pr ? lnk("PR #" + t.pr) : ""}<span class="sp"></span>${t.needs ? chip("warn", t.needs) : ""}<span>${t.age}</span></div>
-          <div class="cm"><span class="proj">${t.p}</span><span>· ${t.agent}</span><span class="sp"></span>${ep ? `<span class="ept" title="${ep.n}">↳ #${ep.num}</span>` : ""}</div>
+          <div class="cm"><span class="proj">${t.p}</span><span>· ${t.agent}</span><span class="sp"></span>${ep ? `<span class="ept" title="Epic: ${ep.n}"><span class="dot" style="color:${ep.c}"></span>epic #${ep.num}</span>` : ""}</div>
           ${t.ws || t.rs ? `<div class="sessrow">${t.ws ? sess("worker", t.ws) : ""}${t.rs ? sess("reviewer", t.rs) : ""}</div>` : ""}
           ${t.q ? `<div>${chip("warn", "Queued · waiting for a free slot")}</div>` : ""}
           ${t.by && o.blockedChip !== false ? `<div>${chip("warn", I("block", 11) + " Blocked by #" + t.by)}</div>` : ""}</div>`;
@@ -1415,7 +1418,7 @@
           <div class="tabs"><span class="tab on">All <span class="n">24</span></span><span class="tab warn">Needs me <span class="n">3</span></span><span class="tab">Running <span class="n">3</span></span><span class="tab">Blocked <span class="n">7</span></span><span class="tab">Awaiting merge <span class="n">1</span></span></div>
           ${btn(I("filter", 12) + " Filter " + I("chevd", 11))}${btn(I("sliders", 12) + " Display " + I("chevd", 11))}
           <span class="sp"></span>${btn(I("plus") + " New task", "primary")}</div>
-          <div class="bar" style="border-bottom:0;padding-top:6px"><span class="cap" style="margin:0">Filters</span><span class="tok">Agent: claude <span class="x">×</span></span><span class="btn ghost">Clear all</span><span class="sp"></span><span class="cap" style="margin:0">23 of 24 tasks</span></div>`;
+          <div class="bar" style="border-bottom:0;padding-top:6px"><span class="cap" style="margin:0">Filters</span>${o.epicTok ? '<span class="tok">Epic: #2400 projects, worktrees &amp; storage <span class="x">×</span></span>' : ""}<span class="tok">Agent: claude <span class="x">×</span></span><span class="btn ghost">Clear all</span><span class="sp"></span><span class="cap" style="margin:0">${o.epicTok ? "9 of 24 tasks" : "23 of 24 tasks"}</span></div>`;
       const facets = () => `<div class="facets">
           <div class="h">State</div><div class="it on"><span class="cb on"></span>All<span class="n">24</span></div><div class="it"><span class="cb"></span>Needs me<span class="n">3</span></div><div class="it"><span class="cb"></span>Blocked<span class="n">7</span></div><div class="it"><span class="cb"></span>Awaiting merge<span class="n">1</span></div>
           <div class="h">Projects · 21</div><div class="it"><input placeholder="Filter projects…" style="width:100%;background:var(--sidebar-2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--fg);font:inherit"></div><div class="it on"><span class="cb on"></span>${DEF}<span class="n">22</span></div><div class="it on"><span class="cb on"></span>mullion-helper<span class="n">1</span></div><div class="it on"><span class="cb on"></span>ai-agent-skills<span class="n">1</span></div><div class="it" style="color:var(--dim)">+ 18 more</div>
@@ -1432,13 +1435,25 @@
           <div class="h">All projects</div>${checkRow(".github", 0, '<span class="n">0</span>')}${checkRow("aerie-media-dashboard", 0, '<span class="n">2</span>')}${checkRow("ansible-playbooks", 0, '<span class="n">1</span>')}
           <div class="it" style="color:var(--dim)">… 15 more · type to search</div>
           <div class="it" style="border-top:1px solid var(--border-soft);margin-top:4px"><span class="chip">Default</span> follow the sidebar's project</div></div>`;
+      const popFilter = `<div class="pop" style="left:470px;top:44px;width:340px"><input class="s" placeholder="Filter by epic, agent, text…" />
+          <div class="h">Epic · parent issue</div>${Object.values(EPICS)
+            .map((e, i) =>
+              checkRow(
+                `<span class="dot" style="color:${e.c}"></span><span class="mono" style="color:var(--dim)">#${e.num}</span> ${e.n.replace(/^[a-z]+\([a-z]+\): /, "")}`,
+                i === 0,
+                `<span class="n">${e.done}/${e.total}</span>`,
+              ),
+            )
+            .join("")}${checkRow("No epic", 0, '<span class="n">2</span>')}
+          <div class="h">Agent</div>${checkRow("claude", 1, '<span class="n">19</span>')}${checkRow("auto", 0, '<span class="n">5</span>')}
+          <div class="h">Text</div><div class="it" style="color:var(--dim)">search title, issue #, PR #</div></div>`;
       const popDisplay = `<div class="pop" style="left:560px;top:44px;width:290px"><div class="h">Columns</div>${switchRow("Hide Done &amp; Failed", 0)}${switchRow("Show archived", 0)}${switchRow("Claimed as its own column", 1)}
           <div class="h">Layout</div><div class="it">Group by <span class="n">None · <b style="color:var(--fg)">Epic</b> · Project</span></div><div class="it">Card density <span class="n"><b style="color:var(--fg)">Compact</b> · Comfortable</span></div><div class="it">Facets panel <span class="n">Off · <b style="color:var(--fg)">On</b> · Auto</span></div>
           <div class="h">Maintenance</div><div class="it">Clear done tasks <span class="n">12</span></div></div>`;
       const vA =
         () => `<p class="cap">Facets off (default): one filter row, full board width</p><div class="app">${barA()}${board(TASKS, { stack: true })}${adhoc(false)}</div>
         <p class="cap" style="margin-top:14px">Facets on (the 1c rail, one click on the bar; remembered; “Auto” opens it above ~1440px or &gt;8 projects). Claimed is merged into In progress here to buy back width.</p><div class="app" style="width:1280px">${barA({ rail: 1 })}<div style="display:flex">${facets()}<div style="flex:1;min-width:0">${board(TASKS, { stack: true, mergeQueued: true })}</div></div>${adhoc(false)}</div>
-        <div class="row" style="margin-top:14px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden;width:900px">${barA()}${popProject}</div></div><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden;width:900px">${barA()}${popDisplay}</div></div></div>`;
+        <div class="row" style="margin-top:14px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popProject}</div></div><div><p class="cap">Filter menu open (epic is filtered here, shown as a token)</p><div class="app" style="height:380px;overflow:hidden;width:900px">${barA({ epicTok: 1 })}${popFilter}</div></div><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden;width:900px">${barA()}${popDisplay}</div></div></div>`;
 
       /* ───────── 2 · Cards & columns ───────── */
       const vBoard = (
