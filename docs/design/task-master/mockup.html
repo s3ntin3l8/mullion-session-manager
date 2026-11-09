@@ -7,9 +7,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* ───────── Tokens ─────────
-         Copied verbatim from the git-github-sidebar mockup, whose values are now
-         the real frontend/src/styles/tokens.css. Nothing NEW is added for tokens;
-         NEW in this mockup is layout only (marked in each view's note). */
+         Values copied from frontend/src/styles/tokens.css as of this commit. The
+         sidebar-kit tokens (--surface, --surface-hover, --border-soft, --accent,
+         the status tokens; B1, #1971) already exist there. Nothing in this
+         mockup is a new token; what is new is layout only (see each view's note). */
       .t-dark {
         --sidebar: #161617;
         --sidebar-2: #1b1b1d;
@@ -27,11 +28,12 @@
         --o: #e0965a;
         --accent-solid: #0e9f6e; /* base; white text on it is 3.39:1 — known debt, B1 darkens button fill */
         --ring: #12b981;
-        --border: #3b3b41; /* NEW value (tokens.css: #2c2c30) */
-        --border-soft: #2b2b30; /* NEW: stronger (was #2c2c30 / #232326, ~1.1:1) */
-        --surface: #1e1e21; /* NEW token (does not exist in tokens.css) */
-        --surface-hover: #26262a; /* NEW */
-        --accent: #34d399; /* NEW: defined (was referenced but undefined) */
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --surface: #1e1e21;
+        --surface-hover: #242427; /* #26262a put --dim at 4.41:1 (tokens.css) */
+        --accent-fill: #0a7a53;
+        --accent: #34d399;
         --lane-1: #5c9bf5;
         --lane-2: #5ec27a;
         --lane-3: #d7b06a;
@@ -58,10 +60,11 @@
         --o: #bc5215;
         --accent-solid: #0b6e4b;
         --ring: #0b6e4b;
-        --border: #c9c9c4; /* NEW value (tokens.css: #e2e2df) */
+        --border: #c9c9c4;
         --border-soft: #dcdcd8;
-        --surface: #ffffff; /* NEW token (does not exist in tokens.css) */
+        --surface: #ffffff;
         --surface-hover: #f0f0ed;
+        --accent-fill: #0b6e4b;
         --accent: #0b6e4b;
         --lane-1: #0969da;
         --lane-2: #1a7f37;
@@ -72,7 +75,7 @@
         --lane-more: #9a9a9a;
         color-scheme: light;
       }
-      /* NEW semantic status tokens: one vocabulary (success/danger/warn/info/merged/neutral). */
+      /* Semantic status tokens: one vocabulary (success/danger/warn/info/merged/neutral). */
       .t-dark,
       .t-light {
         --status-success-fg: var(--g);
@@ -278,7 +281,7 @@
         white-space: nowrap;
       }
       .btn.primary {
-        background: var(--accent-fill, #0a7a53);
+        background: var(--accent-fill);
         border-color: transparent;
         color: #fff;
       }
@@ -1354,6 +1357,14 @@
           "2m",
           { ws: "Finished", rs: "Waiting to start", pr: 2833, needs: "Awaiting approval" },
         ),
+        T(
+          2827,
+          "review",
+          "fix(tasks): a worker that finished is not rebased onto the new base",
+          "tasks",
+          "12m",
+          { ws: "Finished", rs: "Reviewing", pr: 2836, am: true },
+        ),
         T(88, "review", "fix(skills): version-keyed updates for mcode copy-not-link", null, "9m", {
           p: "ai-agent-skills",
           ws: "Finished",
@@ -1361,6 +1372,24 @@
           pr: 61,
         }),
       ];
+      const N = {
+        all: TASKS.length,
+        needs: TASKS.filter((t) => t.needs).length,
+        running: TASKS.filter((t) => t.st === "doing").length,
+        blocked: TASKS.filter((t) => t.by).length,
+        am: TASKS.filter((t) => t.am).length,
+        ready: TASKS.filter((t) => t.st === "ready").length,
+        review: TASKS.filter((t) => t.st === "review").length,
+        backlog: TASKS.filter((t) => t.st === "backlog").length,
+        active: TASKS.filter((t) => ["claimed", "doing", "review"].includes(t.st)).length,
+        list: TASKS.filter((t) => ["claimed", "doing", "review", "ready"].includes(t.st)).length,
+        helper: TASKS.filter((t) => t.p === "mullion-helper").length,
+        skills: TASKS.filter((t) => t.p === "ai-agent-skills").length,
+        noEpic: TASKS.filter((t) => !t.ep).length,
+        epicClaude: TASKS.filter((t) => t.ep === "proj" && t.agent === "claude").length,
+        claude: TASKS.filter((t) => t.agent === "claude").length,
+      };
+      N.def = N.all - N.helper - N.skills;
       const COLS = [
         ["backlog", "Backlog"],
         ["ready", "Ready"],
@@ -1381,7 +1410,7 @@
           <div class="ct">${t.title}</div>
           <div class="cm">${lnk("#" + t.id + " ↗")}${t.pr ? lnk("PR #" + t.pr) : ""}<span class="sp"></span><span>${t.agent} · ${t.age}</span></div>
           <div class="cm"><span class="proj">${t.p}</span><span class="sp"></span>${ep ? `<span class="ept" title="Epic: ${ep.n}"><span class="dot" style="color:${ep.c}"></span>epic #${ep.num}</span>` : ""}</div>
-          ${t.needs ? `<div>${chip("warn", t.needs)}</div>` : ""}
+          ${t.needs || t.am ? `<div>${t.needs ? chip("warn", t.needs) : ""}${t.am ? chip("ok", "Approved · awaiting merge") : ""}</div>` : ""}
           ${t.ws || t.rs ? `<div class="sessrow">${t.ws ? sess("worker", t.ws) : ""}${t.rs ? sess("reviewer", t.rs) : ""}</div>` : ""}
           ${t.q ? `<div>${chip("warn", "Queued · waiting for a free slot")}</div>` : ""}
           ${t.by && o.blockedChip !== false ? `<div>${chip("warn", I("block", 11) + " Blocked by #" + t.by)}</div>` : ""}</div>`;
@@ -1431,15 +1460,12 @@
 
       /* ───────── 0 · Today ───────── */
       const vToday =
-        () => `<div class="app"><div class="bar">${btn(I("plus") + " New task")}${btn("Hide done")}${btn("Show archived")}${btn("Awaiting merge (1)")}${btn("Clear done")}</div>
+        () => `<div class="app"><div class="bar">${btn(I("plus") + " New task")}${btn("Hide done")}${btn("Show archived")}${btn(`Awaiting merge (${N.am})`)}${btn("Clear done")}</div>
         <div class="old">${btn(I("block", 12) + " Blocked only")}
         <div class="chips">${PROJECTS.map((p, i) => chip(i === 13 ? "info" : "", p)).join("")}</div>
         <div class="annot">◀ four stacked rows ≈ 200px before the first card. Scope (project, “Phase”), state (blocked, awaiting merge) and display (hide done, archived) are mixed and in no order.</div>
         <div style="display:flex;gap:8px;align-items:center"><span class="cap">Phase</span>${btn("All " + I("chevd", 12))}<span class="annot">“Phase” is really the parent epic (#701)</span></div></div>
-        ${board(
-          TASKS.filter((t) => t.st !== "claimed" || true),
-          {},
-        )}${adhoc(false)}${dockbar}</div>`;
+        ${board(TASKS, {})}${adhoc(false)}${dockbar}</div>`;
 
       ic.panel = '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>';
       ic.check = '<path d="M5 12.5l4.5 4.5L19 7"/>';
@@ -1448,13 +1474,13 @@
       const barA = (o = {}) => `<div class="bar" style="position:relative">
           ${btn(I("panel", 13) + (o.rail ? ' <span class="n">on</span>' : ""), o.rail ? "on" : "")}
           ${btn(`${DEF} <span class="n">+2</span> ${I("chevd", 12)}`)}
-          <div class="tabs"><span class="tab on">All <span class="n">24</span></span><span class="tab warn">Needs me <span class="n">3</span></span><span class="tab">Running <span class="n">3</span></span><span class="tab">Blocked <span class="n">7</span></span><span class="tab">Awaiting merge <span class="n">1</span></span></div>
+          <div class="tabs"><span class="tab on">All <span class="n">${N.all}</span></span><span class="tab warn">Needs me <span class="n">${N.needs}</span></span><span class="tab">Running <span class="n">${N.running}</span></span><span class="tab">Blocked <span class="n">${N.blocked}</span></span><span class="tab">Awaiting merge <span class="n">${N.am}</span></span></div>
           ${btn(I("filter", 12) + " Filter " + I("chevd", 11))}${btn(I("sliders", 12) + " Display " + I("chevd", 11))}
           <span class="sp"></span>${btn(I("plus") + " New task", "primary")}</div>
-          <div class="bar" style="border-bottom:0;padding-top:6px"><span class="cap" style="margin:0">Filters</span>${o.epicTok ? '<span class="tok">Epic: #2400 projects, worktrees &amp; storage <span class="x">×</span></span>' : ""}<span class="tok">Agent: claude <span class="x">×</span></span><span class="btn ghost">Clear all</span><span class="sp"></span><span class="cap" style="margin:0">${o.epicTok ? "9 of 24 tasks" : "23 of 24 tasks"}</span></div>`;
+          <div class="bar" style="border-bottom:0;padding-top:6px"><span class="cap" style="margin:0">Filters</span>${o.epicTok ? `<span class="tok">Epic: #2400 projects, worktrees &amp; storage <span class="x">×</span></span><span class="tok">Agent: claude <span class="x">×</span></span><span class="btn ghost">Clear all</span>` : '<span class="cap" style="margin:0">none</span>'}<span class="sp"></span><span class="cap" style="margin:0">${o.epicTok ? `${N.epicClaude} of ${N.all} tasks` : `${N.all} tasks`}</span></div>`;
       const facets = () => `<div class="facets">
-          <div class="h">State</div><div class="it on"><span class="cb on"></span>All<span class="n">24</span></div><div class="it"><span class="cb"></span>Needs me<span class="n">3</span></div><div class="it"><span class="cb"></span>Blocked<span class="n">7</span></div><div class="it"><span class="cb"></span>Awaiting merge<span class="n">1</span></div>
-          <div class="h">Projects · 21</div><div class="it"><input placeholder="Filter projects…" style="width:100%;background:var(--sidebar-2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--fg);font:inherit"></div><div class="it on"><span class="cb on"></span>${DEF}<span class="n">22</span></div><div class="it on"><span class="cb on"></span>mullion-helper<span class="n">1</span></div><div class="it on"><span class="cb on"></span>ai-agent-skills<span class="n">1</span></div><div class="it" style="color:var(--dim)">+ 18 more</div>
+          <div class="h">State</div><div class="it on"><span class="cb on"></span>All<span class="n">${N.all}</span></div><div class="it"><span class="cb"></span>Needs me<span class="n">${N.needs}</span></div><div class="it"><span class="cb"></span>Blocked<span class="n">${N.blocked}</span></div><div class="it"><span class="cb"></span>Awaiting merge<span class="n">${N.am}</span></div>
+          <div class="h">Projects · 21</div><div class="it"><input placeholder="Filter projects…" style="width:100%;background:var(--sidebar-2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;color:var(--fg);font:inherit"></div><div class="it on"><span class="cb on"></span>${DEF}<span class="n">${N.def}</span></div><div class="it on"><span class="cb on"></span>mullion-helper<span class="n">${N.helper}</span></div><div class="it on"><span class="cb on"></span>ai-agent-skills<span class="n">${N.skills}</span></div><div class="it" style="color:var(--dim)">+ 18 more</div>
           <div class="h">Epics · by number</div>${Object.values(EPICS)
             .map(
               (e) =>
@@ -1462,9 +1488,9 @@
             )
             .join(
               "",
-            )}<div class="it" style="color:var(--dim)">No epic<span class="n">2</span></div></div>`;
+            )}<div class="it" style="color:var(--dim)">No epic<span class="n">${N.noEpic}</span></div></div>`;
       const popProject = `<div class="pop" style="left:100px;top:44px;width:300px"><input class="s" placeholder="Search 21 projects…" />
-          <div class="h">Recent</div>${checkRow(DEF, 1, '<span class="n">22</span>')}${checkRow("mullion-helper", 1, '<span class="n">1</span>')}${checkRow("ai-agent-skills", 1, '<span class="n">1</span>')}
+          <div class="h">Recent</div>${checkRow(DEF, 1, `<span class="n">${N.def}</span>`)}${checkRow("mullion-helper", 1, `<span class="n">${N.helper}</span>`)}${checkRow("ai-agent-skills", 1, `<span class="n">${N.skills}</span>`)}
           <div class="h">All projects</div>${checkRow(".github", 0, '<span class="n">0</span>')}${checkRow("aerie-media-dashboard", 0, '<span class="n">2</span>')}${checkRow("ansible-playbooks", 0, '<span class="n">1</span>')}
           <div class="it" style="color:var(--dim)">… 15 more · type to search</div>
           <div class="it" style="border-top:1px solid var(--border-soft);margin-top:4px"><span class="chip">Default</span> follow the sidebar's project</div></div>`;
@@ -1524,8 +1550,8 @@
       const sbList = (
         w,
         sel,
-      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="title">Tasks<span class="sub">18 active · ${DEF}</span></span><span class="ibtn">${I("popout")}</span></div>
-        <div class="chips">${chip("on", "All 18")}${chip("warn", "1 needs you")}${chip("info", "1 reviewing")}${chip("ok", "3 running")}${chip("", "12 ready")}</div>
+      ) => `<div class="sbf" style="width:${w}px"><div class="vh"><span class="title">Tasks<span class="sub">${N.list} active · ${DEF}</span></span><span class="ibtn">${I("popout")}</span></div>
+        <div class="chips">${chip("on", `All ${N.list}`)}${chip("warn", `${N.needs} needs you`)}${chip("info", `${N.review} reviewing`)}${chip("ok", `${N.running} running`)}${chip("", `${N.ready} ready`)}</div>
         ${["review", "doing", "claimed", "ready"]
           .flatMap((k) => TASKS.filter((t) => t.st === k))
           .slice(0, 9)
@@ -1597,7 +1623,6 @@
         "Diff",
         "Dev Server",
         "PR CI",
-        "PR CI",
         "PR Review",
         "PR Comments",
         "PR Merged",
@@ -1608,7 +1633,7 @@
         "Unattributed",
       ];
       const vTL =
-        () => `<div class="row"><div><p class="cap">Today · 26 chips, 5 rows</p><div class="tlf"><div class="bar"><span class="chip">Search timeline…</span>${btn("Only attention")}</div><div class="chips">${KINDS.map((k, i) => chip(i < 16 ? "on" : "", k)).join("")}</div></div></div>
+        () => `<div class="row"><div><p class="cap">Today · ${KINDS.length} chips, 5 rows</p><div class="tlf"><div class="bar"><span class="chip">Search timeline…</span>${btn("Only attention")}</div><div class="chips">${KINDS.map((k, i) => chip(i < 16 ? "on" : "", k)).join("")}</div></div></div>
         <div><p class="cap">Proposed · one row, grouped popover</p><div class="tlf" style="height:330px"><div class="bar"><span class="chip" style="flex:1">${I("search", 11)} Search timeline…</span><div class="tabs"><span class="tab on">Important</span><span class="tab">All</span><span class="tab">Custom ${I("chevd", 10)}</span></div>${btn("Only attention")}</div>
         <div class="pop" style="left:150px;top:44px;min-width:330px"><div class="h">Agent</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["Attention", "Status", "Tool", "Plan", "Question", "Todo", "Permission"].map((k) => chip("ok", k)).join("")}</div><div class="h">Session</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["Title", "Files", "Stop", "Exit", "Message Sent", "Message"].map((k) => chip("", k)).join("")}</div><div class="h">Git &amp; PR</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px">${["PR CI", "PR Review", "PR Comments", "PR Merged", "PR Conflicts", "Diff"].map((k) => chip("ok", k)).join("")}</div><div class="h">Review &amp; promote</div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:2px 8px;padding-bottom:6px">${["Review", "Promote", "Elicitation", "Dev Server"].map((k) => chip("", k)).join("")}</div></div></div></div></div>
         <p class="cap" style="margin-top:8px">The same component serves the session timeline, so it benefits more than tasks. “Important” = today's default-on set; the agent-isolate row (<code>abd4a351</code>, Unattributed) moves into the popover as an “Agent” group.</p>`;
@@ -1616,15 +1641,15 @@
       /* ───────── 6 · Phone ───────── */
       const vPhone =
         () => `<div class="row"><div class="phone"><div class="bar"><b>Tasks</b><span class="sp"></span>${btn(I("filter", 12) + " Filter · 1")}${btn(I("plus"), "primary")}</div>
-        <div class="bar">${btn(`${DEF} <span class="n">+2</span> ${I("chevd", 12)}`)}${btn("Needs me <span class='n'>3</span>")}</div>
-        <div class="bar"><div class="tabs" style="width:100%;justify-content:space-between"><span class="tab">Backlog 5</span><span class="tab on">Ready 13</span><span class="tab">Active 6</span><span class="tab">Done</span></div></div>
-        <div class="cards"><details class="stack" open><summary>${I("block", 13)} <b>7 blocked by #2418</b></summary></details>${TASKS.filter(
+        <div class="bar">${btn(`${DEF} <span class="n">+2</span> ${I("chevd", 12)}`)}${btn(`Needs me <span class='n'>${N.needs}</span>`)}</div>
+        <div class="bar"><div class="tabs" style="width:100%;justify-content:space-between"><span class="tab">Backlog ${N.backlog}</span><span class="tab on">Ready ${N.ready}</span><span class="tab">Active ${N.active}</span><span class="tab">Done</span></div></div>
+        <div class="cards"><details class="stack" open><summary>${I("block", 13)} <b>${N.blocked} blocked by #2418</b></summary></details>${TASKS.filter(
           (t) => t.st === "ready" && !t.by,
         )
           .slice(0, 3)
           .map((t) => card(t))
           .join("")}</div>${adhoc(false)}</div>
-        <div class="phone"><div class="bar"><b>Tasks · Active</b><span class="sp"></span>${btn("Needs me <span class='n'>3</span>")}</div><div class="cards">${TASKS.filter(
+        <div class="phone"><div class="bar"><b>Tasks · Active</b><span class="sp"></span>${btn(`Needs me <span class='n'>${N.needs}</span>`)}</div><div class="cards">${TASKS.filter(
           (t) => t.st === "doing" || t.st === "review",
         )
           .slice(0, 4)
@@ -1691,7 +1716,7 @@
           "tl",
           "5 · Timeline filters",
           vTL,
-          "<b>Timeline filter chips.</b> 26 chips → a preset switch and a grouped popover (approved).",
+          "<b>Timeline filter chips.</b> 25 chips → a preset switch and a grouped popover (approved).",
         ],
         [
           "phone",
