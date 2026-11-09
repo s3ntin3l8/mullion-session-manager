@@ -763,6 +763,44 @@ describe("a worker that exits within seconds", () => {
     expect(row.rapidExitRetryAfter).not.toBeNull();
   });
 
+  it("does not terminate or count a live rebase worker whose mid-loop turn ended within the window", async () => {
+    const { app, task } = await rebaseTask("p-rebase-mid-loop-turn", { ranMs: 3_000 });
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          // A machine-woken turn end: lastTurnEndedAt moves, workFinishedAt does not.
+          lastTurnEndedAt: task.rebaseStartedAt!.getTime() + 3_000,
+          workFinishedAt: null,
+          errorAt: null,
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, task.id);
+    expect(row.rebaseAbortedAttempts).toBe(0);
+    expect(row.rebaseAttempts).toBe(1);
+    expect(row.rebaseStartedAt).not.toBeNull();
+    expect(row.rapidExitRetryAfter).toBeNull();
+  });
+
+  it("does not count a rebase worker that recovered from an API error as a rapid exit", async () => {
+    const { app, task } = await rebaseTask("p-rebase-recovered-error", { ranMs: 3_000 });
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          errorState: "idle",
+          errorAt: task.rebaseStartedAt!.getTime() + 2_000,
+          lastTurnEndedAt: null,
+          workFinishedAt: null,
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    expect(getTask(app, task.id).rebaseAbortedAttempts).toBe(0);
+  });
+
   it("sets no backoff hold when the rapid-exit abort exhausts the attempts", async () => {
     const { app, task } = await rebaseTask("p-exhausted-no-hold", {
       ranMs: 3_000,
@@ -823,9 +861,16 @@ describe("a worker that exits within seconds", () => {
     vi.spyOn(commitsPastBase, "resolveCommitsPastBase").mockResolvedValue({
       state: "ahead",
     } as never);
-    // Error state TTL-cleared: no turn end and no errorAt, only the durable grace.
+    // Error state TTL-cleared, only the durable grace admits the task. A stale
+    // errorAt inside the rapid window makes sessionEndedAt(info) non-null, so
+    // only the guarded endedAt keeps this from being judged a rapid exit.
     vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo({ lastTurnEndedAt: null, workFinishedAt: null, errorAt: null }),
+      toInfo: () =>
+        fakeInfo({
+          lastTurnEndedAt: null,
+          workFinishedAt: null,
+          errorAt: task.claimedAt!.getTime() + 20_000,
+        }),
     } as never);
 
     await reconcileTasks(app);
