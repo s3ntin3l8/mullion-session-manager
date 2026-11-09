@@ -40,8 +40,9 @@ const lastLateReadKey = new Map<number, string>();
  * reply would otherwise replace `inconclusive` with `changes-requested`, which
  * blocks auto-approve with nothing to auto-return it. The verdict stays
  * `inconclusive`, nothing is posted, and the file's content hash is remembered
- * per task (in memory) so later ticks skip parsing it again; a changed file is
- * looked at afresh. The readiness gate below (a finished turn or an exit) is
+ * per task (in memory) so later ticks skip parsing it again. A rewrite is only seen once the
+ * read-dedupe key moves (a new turn end), since the key gates the read itself.
+ * The readiness gate below (a finished turn or an exit) is
  * what keeps a half-written file out. A re-arm clears
  * the review handle so this stops matching, and `ingest` is a CAS on the
  * verdict still being `inconclusive` for that session.

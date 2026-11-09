@@ -929,6 +929,11 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   (`task-merge-human.ts`) clears them wherever `mergeError` is cleared and
   when a merge is recorded. Reject also resets `rebaseAttempts` to 0, so a
   worker that failed to rebase can be followed by a fresh auto-rebase.
+- **Round headings.** Each stored round is `## Round N`, with a parenthetical
+  of notes (`retry N`, `re-review after suggestions`, `late verdict — …`) from
+  `reviewRoundLabel` (`task-round-label.ts`). A human re-review of a concluded
+  round spends no round, so when the stored findings already hold that heading
+  it gets a `re-review N` note (N from 2) to keep headings unique (#2776).
 - An inconclusive verdict (or a review agent whose adapter can't receive a
   seed at all — see [Seed delivery](#seed-delivery) below) simply stays in
   `reviewing`; the review still posts, so a finished review is never silently
@@ -937,16 +942,23 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   still `inconclusive`, and `reviewFindingsIngestedSessionId` equals the current
   `reviewSessionId` (never for a Hermes run), each tick re-reads that session's
   findings file through the same `readTaskReviewFindings` (so a remote host
-  works). The read is skipped while the reviewer is mid-turn, or after a turn
-  that ended no later than the verdict. Once the reviewer has finished its
+  works). The read is skipped while the reviewer is mid-turn, and after a turn
+  that ended more than `CLOCK_SKEW_TOLERANCE_MS` (5 s, for a remote host's
+  clock) before the verdict. Reads are also deduped per task: the key is the
+  review session, its derived status, the turn end (finished reviewers only;
+  an exited one writes nothing more, so one read per session) and the verdict
+  time, and it is recorded after a successful read, so an unchanged key is not
+  read again. Once the reviewer has finished its
   turn (or exited), the file is ingested through the normal path and replaces
   the inconclusive verdict (a human re-prompting the reviewer after its quota
   recovered is the motivating case); the round is labelled "late verdict".
   Every ingest unlinks the round's file, so a file present now was written
   after it; the backend exposes no mtime. A freeform (unstructured) late
   file is not ingested: the verdict stays `inconclusive`, nothing is posted, and
-  its content hash is remembered per task in memory so later ticks do not parse
-  it again (a changed file is looked at afresh). The write is a CAS on the verdict still
+  its content hash is remembered per task in memory so a read of the same
+  content does not parse it again. A rewrite without a new turn end never
+  reaches that point: the read-dedupe key is unchanged, so the file is not read
+  again. The write is a CAS on the verdict still
   being `inconclusive` for that
   session, so the re-arm sweep's fresh review cannot be ingested twice. An approving verdict with nothing
   to apply likewise stays put until the CI / auto-approve gates move it.
@@ -1685,24 +1697,35 @@ the task's branch to fix the conflict instead of just backing off:
   suggestions or review-fix turn) and only then recreates the worktree; if the
   terminate fails nothing is touched and the failure is recorded in
   `tasks.mergeError`. An unreadable worker
-  status fails open. It does not wait for CI: a conflicting PR runs none.
+  status fails open. "A suggestions round is in flight" means the worker's
+  `workFinishedAt` is null, so a round that finished through the `api_error`
+  admission (which sets `errorAt` but never `workFinishedAt`) is held too, up
+  to the same `REBASE_HOLD_MAX_MS`; it is bounded, not released early. It does not wait for CI: a conflicting PR runs none.
 - **A worker that exits within seconds is not an attempt.** An agent CLI that
   dies at once (agy on an exhausted quota, #1363) still reads as a finished
   worker. `src/services/worker-rapid-exit.ts` holds the one predicate for it:
-  the session's `workFinishedAt` is under `RAPID_EXIT_MS` (60 s) after the
-  spawn and the PR head is still the one read at spawn (the same
-  `getPullRequestByNumber` read the review-stall detector uses; an unreadable
-  head fails open, so the attempt is counted as before). For the rebase worker,
+  the session ended under `RAPID_EXIT_MS` (60 s) after the spawn and the PR
+  head is still the one read at spawn (the same `getPullRequestByNumber` read
+  the review-stall detector uses; an unreadable head fails open, so the attempt
+  is counted as before). "Ended" is `sessionEndedAt`: `workFinishedAt`, else
+  `lastTurnEndedAt`, else `errorAt`, so a shell-tail death with no turn-end
+  hook (#2772) and an `api_error` death are covered; a gap within the 5 s clock
+  skew tolerance before the spawn still counts. For the rebase worker,
   such an attempt is refunded from `rebaseAttempts`, counted in
   `rebaseAbortedAttempts`, and the next one waits 10 minutes
-  (`rapidExitRetryAfter`). The third aborted attempt is not refunded, so the
+  (`rapidExitRetryAfter`). During that backoff the reviewing sweep spawns no
+  reviewer either (#2773): the retry's pre-removal cleanup would terminate it.
+  The third aborted attempt is not refunded, so the
   normal give-up applies. The same check protects a suggestions round (an
   approved review's nits): a worker that ends that fast with the head
   unchanged does not complete the round. It is re-seeded once after the same
   backoff with the stored prompt (`suggestionsSeedPrompt`); a second rapid
   exit lets the task return to `reviewing` with the approval still carried and
-  `needsHumanReason: "no-progress"` set. Each rapid exit logs one `warn` with
-  the task id, session id, agent and elapsed seconds.
+  `needsHumanReason: "no-progress"` set. The backoff stamp is shared by both
+  consumers, so it is cleared when a suggestions round is seeded and on every
+  `in_progress` → `reviewing` write, and cannot delay a later rebase. Each
+  rapid exit logs one `warn` with the task id, session id, agent and elapsed
+  seconds.
 - **A rebase that landed a mergeable head is refunded when main outruns it.**
   On a busy repo each rebase can make the PR mergeable only for the next merge
   to `main` to re-conflict it, and two such attempts would otherwise exhaust
