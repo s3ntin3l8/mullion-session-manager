@@ -386,8 +386,16 @@ export async function reseedTaskIfSessionExited(
   if (updated.changes === 0) {
     app.log.warn(
       { taskId: task.id, newSessionId: result.row.id },
-      `${logContext}: lost a race with a concurrent transition — the freshly re-seeded session is orphaned, left for a human to notice`,
+      `${logContext}: lost a race with a concurrent transition — killing the freshly re-seeded session, nothing points at it`,
     );
+    // Nothing links it, so no later tick would find it: it would stay live and
+    // promptable (#2804). Same as the auto-rebase and review-spawn lost-CAS paths.
+    await killSession(app, result.row.id).catch((err) => {
+      app.log.warn(
+        { err, taskId: task.id, newSessionId: result.row.id },
+        `${logContext}: failed to kill the orphaned re-seeded session`,
+      );
+    });
     return false;
   }
   app.log.info(

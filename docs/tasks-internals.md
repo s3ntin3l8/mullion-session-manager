@@ -1488,6 +1488,29 @@ in-progress sweep in `task-reconciler.ts` repairs a row that still ended up
 (compare-and-set on `status = 'exited'`, at most once per session, never for
 "dead"/"unknown") and lets the normal sweep handle the task next pass.
 
+### Orphaned task sessions (#2804)
+
+A task's worker or review session is hidden from the sidebar, and ended, only
+through the task's _current_ `sessionId`/`reviewSessionId`. A spawn path that
+replaces or unlinks a session without killing it, and every archive/merge
+path, leaves a live, promptable session behind. `sessions.task_id` records the
+spawning task (written by `createSessionRecord` when its caller passes `taskId`;
+`NULL` for every manual session, so a human's session in a task worktree is
+never touched), and `sweepTaskSessions` (`task-orphan-sessions.ts`, one
+fire-and-forget call per `reconcileTasks` tick) ends two kinds:
+
+- **unlinked** — `task_id` set, `active`, older than 10 minutes
+  (`TASK_ORPHAN_GRACE_MS`, so a spawn still in flight is never swept) and
+  referenced by no task;
+- **archived-task** — still linked, but the task is archived.
+
+A host that can't be reached is skipped and retried next tick (`killSession`
+marks the row `killed` even when the terminate failed, which would leave an
+untracked process). Sessions created before the column existed have no
+`task_id`, so only the archived-task pass sees them. Each kill is logged at
+`warn` with its reason: a recurring `unlinked` line means a spawn path is
+still leaking, and the fix belongs there, not in the sweep.
+
 ### Merge on approve
 
 By default, approving a task does everything above and stops — the PR is

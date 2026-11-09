@@ -760,8 +760,16 @@ export const sessions = sqliteTable(
     // moment the server restarts. Nullable — most sessions set none.
     // Same JSON-as-text convention as `workspaces.layout`/`settings.data`.
     env: text("env"),
+    // #2804 — the Task Master task that spawned this session (worker, review or
+    // rebase worker), set once at creation by createSessionRecord when its caller
+    // passes `taskId`. Lets the reconciler's sweep tell a task's session from one
+    // a human opened in the same worktree. Deliberately no FK: a task can be
+    // deleted, and the sweep reads a missing task as "no task links this
+    // session". NULL for every manual session and for rows predating the column.
+    taskId: integer("task_id"),
   },
   (table) => [
+    index("sessions_task_id_idx").on(table.taskId),
     foreignKey({
       columns: [table.parentSessionId],
       foreignColumns: [table.id],

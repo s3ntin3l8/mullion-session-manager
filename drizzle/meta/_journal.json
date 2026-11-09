@@ -799,6 +799,13 @@
       "when": 1794172026207,
       "tag": "0113_pale_human_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "6",
+      "when": 1794226870943,
+      "tag": "0114_wide_captain_flint",
+      "breakpoints": true
     }
   ]
 }
