@@ -262,10 +262,13 @@ individual issue, only a repository):
   Developer settings → GitHub Apps → Permissions & events → Repository
   permissions → Issues: Read-only), then accept the update on the
   installation.
-- **dispatch** (#744) — Actions: write, Metadata — used only for the
-  release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`),
-  which needs `actions: write`, a permission none of the other sets
-  grants. Deliberately its own set rather than folded into `write`: Task
+- **dispatch** (#744) — Actions: write, Metadata — used for the
+  release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`)
+  and for Task Master re-running a red check's failed Actions jobs
+  (`POST .../actions/runs/:id/rerun-failed-jobs`, `rerunFailedJobs`). Both need
+  `actions: write`, a permission none of the other sets grants. An install that
+  has not accepted it 403s the re-run, which Task Master reads as a refusal and
+  parks the task for a human. Deliberately its own set rather than folded into `write`: Task
   Master's ordinary issue/PR/push writes have no business holding an
   Actions-write scope.
 - **checks** — Checks: write, Metadata — used only for the Hermes review
