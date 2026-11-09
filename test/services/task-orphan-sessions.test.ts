@@ -160,8 +160,8 @@ describe("sweepTaskSessions (#2804)", () => {
   it("ends the still-linked sessions of an archived task, not those of a live one", async () => {
     const { app, addSession, addTask, status } = await setup();
     const archived = addTask({ archivedAt: new Date(), mergedAt: new Date() });
-    const aWorker = addSession({ taskId: archived.id, createdAt: new Date() });
-    const aReview = addSession({ taskId: archived.id, createdAt: new Date() });
+    const aWorker = addSession({ taskId: archived.id });
+    const aReview = addSession({ taskId: archived.id });
     app.db
       .update(tasks)
       .set({ sessionId: aWorker.id, reviewSessionId: aReview.id })
@@ -176,6 +176,51 @@ describe("sweepTaskSessions (#2804)", () => {
     expect(status(aWorker.id)).toBe("killed");
     expect(status(aReview.id)).toBe("killed");
     expect(status(lWorker.id)).toBe("active");
+  });
+
+  it("leaves an archived task's session inside the grace window (a spawn racing the archive)", async () => {
+    const { app, terminate, addSession, addTask, status } = await setup();
+    const archived = addTask({ archivedAt: new Date() });
+    const fresh = addSession({ taskId: archived.id, createdAt: new Date() });
+    app.db.update(tasks).set({ sessionId: fresh.id }).where(eq(tasks.id, archived.id)).run();
+
+    expect(await sweepTaskSessions(app)).toBe(0);
+
+    expect(terminate).not.toHaveBeenCalled();
+    expect(status(fresh.id)).toBe("active");
+  });
+
+  it("keeps a session whose task was unarchived while the host was being probed", async () => {
+    const { app, terminate, addSession, addTask, status } = await setup();
+    const archived = addTask({ archivedAt: new Date() });
+    const worker = addSession({ taskId: archived.id });
+    app.db.update(tasks).set({ sessionId: worker.id }).where(eq(tasks.id, archived.id)).run();
+    // The unarchive lands during the per-host liveness round trip.
+    vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(async (ids: string[]) => {
+      app.db.update(tasks).set({ archivedAt: null }).where(eq(tasks.id, archived.id)).run();
+      const result: Record<string, SessionLiveness> = Object.create(null);
+      for (const id of ids) result[id] = "alive";
+      return result;
+    });
+
+    expect(await sweepTaskSessions(app)).toBe(0);
+
+    expect(terminate).not.toHaveBeenCalled();
+    expect(status(worker.id)).toBe("active");
+  });
+
+  it("counts only sessions it actually ended", async () => {
+    const { app, addSession, addTask } = await setup();
+    const task = addTask();
+    const orphan = addSession({ taskId: task.id });
+    const lifecycle = await import("../../src/services/session-lifecycle.js");
+    vi.spyOn(lifecycle, "killSession").mockResolvedValue(null);
+
+    expect(await sweepTaskSessions(app)).toBe(0);
+
+    // The mock left the row active; the file shares one DB, so settle it here or the
+    // next test's sweep would end (and count) it.
+    app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, orphan.id)).run();
   });
 
   it("skips a session on an unreachable host instead of marking it killed", async () => {

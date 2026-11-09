@@ -42,12 +42,16 @@ let sweeping = false;
  *    `sessionId`/`reviewSessionId`, past TASK_ORPHAN_GRACE_MS. A human's session in a
  *    task worktree carries no `task_id` and is never touched.
  *  - `archived-task`: still linked, but the task is archived (merged or done and
- *    cleared), so nothing can use the session any more.
+ *    cleared, or a superseded copy archived while still in progress), so nothing can
+ *    use the session any more. Same grace as above, so a spawn racing an archive is
+ *    safe.
  *
  * A host that can't be reached is skipped (retried next tick), never treated as
  * "dead": `killSession` flips the row to `killed` even when the terminate failed,
- * which would leave an untracked process behind. Returns the number of sessions it
- * asked to end. Never throws; one overlapping call is dropped.
+ * which would leave an untracked process behind. Each candidate is re-read right
+ * before its kill, so an unarchive or a relink that lands during the host round
+ * trip keeps its session. Returns the number of sessions ended. Never throws; one
+ * overlapping call is dropped.
  */
 export async function sweepTaskSessions(app: FastifyInstance, now = Date.now()): Promise<number> {
   if (sweeping) return 0;
@@ -67,6 +71,10 @@ export async function sweepTaskSessions(app: FastifyInstance, now = Date.now()):
     await Promise.all(
       [...byHost.entries()].map(async ([hostId, group]) => {
         try {
+          // A reachability probe, not a liveness gate: the result is discarded on
+          // purpose. A session the host reports `dead` is still ended here, which
+          // leaves it `killed` (hidden from the sidebar) instead of `exited`
+          // (still listed, and no task links it to hide it).
           await resolveBackend(app, hostId).liveness(group.map((c) => String(c.sessionId)));
         } catch (err) {
           warnHostError(app.log, { hostId }, err, MSG_REJECTED, MSG_UNREACHABLE, MSG_BUSY, hostId);
@@ -74,13 +82,16 @@ export async function sweepTaskSessions(app: FastifyInstance, now = Date.now()):
         }
         noteHostReachable(app.log, hostId, MSG_UNREACHABLE, MSG_BUSY, MSG_REJECTED);
         for (const c of group) {
+          // The candidate list predates the host round trip: an unarchive or a relink
+          // may have landed since, so confirm this one is still due before killing.
+          if (findCandidates(app, Date.now(), c.sessionId).length === 0) continue;
           app.log.warn(
             { sessionId: c.sessionId, taskId: c.taskId, hostId, reason: c.reason },
             "task orphan sweep: ending a task session that should no longer be running",
           );
           try {
-            await killSession(app, c.sessionId, "detach");
-            ended += 1;
+            // null: the row is gone, nothing was ended.
+            if ((await killSession(app, c.sessionId, "detach")) !== null) ended += 1;
           } catch (err) {
             app.log.warn(
               { err, sessionId: c.sessionId, taskId: c.taskId },
@@ -99,9 +110,11 @@ export async function sweepTaskSessions(app: FastifyInstance, now = Date.now()):
   }
 }
 
-function findCandidates(app: FastifyInstance, now: number): Candidate[] {
+function findCandidates(app: FastifyInstance, now: number, onlySessionId?: number): Candidate[] {
   const host = sql<string | null>`coalesce(${sessions.hostId}, ${projects.hostId})`;
   const byId = new Map<number, Candidate>();
+  const cutoff = new Date(now - TASK_ORPHAN_GRACE_MS);
+  const only = onlySessionId === undefined ? undefined : eq(sessions.id, onlySessionId);
 
   const unlinked = app.db
     .select({ id: sessions.id, taskId: sessions.taskId, hostId: host })
@@ -112,9 +125,10 @@ function findCandidates(app: FastifyInstance, now: number): Candidate[] {
         eq(sessions.status, "active"),
         eq(sessions.kind, "terminal"),
         isNotNull(sessions.taskId),
-        lt(sessions.createdAt, new Date(now - TASK_ORPHAN_GRACE_MS)),
+        lt(sessions.createdAt, cutoff),
         sql`${sessions.id} NOT IN (SELECT ${tasks.sessionId} FROM ${tasks} WHERE ${tasks.sessionId} IS NOT NULL)`,
         sql`${sessions.id} NOT IN (SELECT ${tasks.reviewSessionId} FROM ${tasks} WHERE ${tasks.reviewSessionId} IS NOT NULL)`,
+        only,
       ),
     )
     .all();
@@ -133,7 +147,14 @@ function findCandidates(app: FastifyInstance, now: number): Candidate[] {
     .from(sessions)
     .innerJoin(tasks, or(eq(tasks.sessionId, sessions.id), eq(tasks.reviewSessionId, sessions.id)))
     .leftJoin(projects, eq(sessions.projectId, projects.id))
-    .where(and(isNotNull(tasks.archivedAt), eq(sessions.status, "active")))
+    .where(
+      and(
+        isNotNull(tasks.archivedAt),
+        eq(sessions.status, "active"),
+        lt(sessions.createdAt, cutoff),
+        only,
+      ),
+    )
     .all();
   for (const row of archived) {
     if (byId.has(row.id)) continue;

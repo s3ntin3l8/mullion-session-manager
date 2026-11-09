@@ -421,11 +421,15 @@ describe("late review findings after an inconclusive ingest", () => {
       .fn()
       .mockRejectedValueOnce(new Error("post failed"))
       .mockResolvedValue(undefined);
+    // One snapshot per test: finishedInfo() stamps Date.now(), and the read-dedupe
+    // key includes the turn end, so a fresh one per run() makes two runs straddling
+    // a millisecond boundary read twice.
+    const info = finishedInfo() as never;
     const run = () =>
       ingestLateFindings(app, {
         task,
         session,
-        info: finishedInfo() as never,
+        info,
         backend: { readTaskReviewFindings } as never,
         ingest,
       });
@@ -445,11 +449,15 @@ describe("late review findings after an inconclusive ingest", () => {
       .where(eq(sessions.id, task.reviewSessionId!))
       .get()!;
     const readTaskReviewFindings = vi.fn().mockResolvedValue(null);
+    // One snapshot per test: finishedInfo() stamps Date.now(), and the read-dedupe
+    // key includes the turn end, so a fresh one per run() makes two runs straddling
+    // a millisecond boundary read twice.
+    const info = finishedInfo() as never;
     const run = () =>
       ingestLateFindings(app, {
         task,
         session,
-        info: finishedInfo() as never,
+        info,
         backend: { readTaskReviewFindings } as never,
         ingest: vi.fn(),
       });

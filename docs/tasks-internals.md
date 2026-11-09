@@ -1502,9 +1502,14 @@ fire-and-forget call per `reconcileTasks` tick) ends two kinds:
 - **unlinked** — `task_id` set, `active`, older than 10 minutes
   (`TASK_ORPHAN_GRACE_MS`, so a spawn still in flight is never swept) and
   referenced by no task;
-- **archived-task** — still linked, but the task is archived.
+- **archived-task** — still linked, but the task is archived: merged, done and
+  cleared, or a superseded copy archived while still `in_progress`
+  (`project-merge.ts`), whose worker is ended mid-turn on purpose (two workers on
+  one issue is worse). The same 10-minute grace applies, so a spawn racing an
+  archive is safe.
 
-A host that can't be reached is skipped and retried next tick (`killSession`
+Each candidate is re-read right before its kill, so an unarchive or relink that
+lands during the host round trip keeps its session. A host that can't be reached is skipped and retried next tick (`killSession`
 marks the row `killed` even when the terminate failed, which would leave an
 untracked process). Sessions created before the column existed have no
 `task_id`, so only the archived-task pass sees them. Each kill is logged at
