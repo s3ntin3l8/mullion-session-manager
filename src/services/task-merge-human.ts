@@ -12,7 +12,8 @@ export type MergeNeedsHumanReason = "rebase-exhausted" | "blocked-threads";
 /**
  * A `.set()` value for `tasks.needsHumanReason` that clears a merge-tied
  * reason and leaves every other value (a review-loop reason) alone. Use it at
- * each site that clears `mergeError` or records a merge.
+ * each site that clears `mergeError` without recording a merge. For a recorded
+ * merge, use `clearNeedsHumanOnMerge` instead.
  */
 export const clearMergeNeedsHumanReason = sql<
   string | null

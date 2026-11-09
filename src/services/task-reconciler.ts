@@ -105,7 +105,12 @@ import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
-import { CLEARED_MERGE_ERROR, hasForeignOpenThread, recordMergeError } from "./task-merge-human.js";
+import {
+  CLEARED_MERGE_ERROR,
+  clearNeedsHumanOnMerge,
+  hasForeignOpenThread,
+  recordMergeError,
+} from "./task-merge-human.js";
 import { reseedTaskIfSessionExited, recheckAdoptedSeeds } from "./task-reseed.js";
 import {
   MAX_REBASE_ATTEMPTS,
@@ -1640,7 +1645,10 @@ export async function finishTaskForMergedPr(
     // "Prune merged branches" / Clear done.
     const { changes } = app.db
       .update(tasks)
-      .set({ mergedAt: mergedAt ? new Date(mergedAt) : new Date() })
+      .set({
+        mergedAt: mergedAt ? new Date(mergedAt) : new Date(),
+        needsHumanReason: clearNeedsHumanOnMerge,
+      })
       .where(and(eq(tasks.id, task.id), isNull(tasks.mergedAt)))
       .run();
     if (changes > 0) notifyTaskMerged(app, task.id);

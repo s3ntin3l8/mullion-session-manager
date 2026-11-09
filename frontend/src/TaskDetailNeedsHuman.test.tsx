@@ -87,4 +87,19 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText(/Needs a human/)).toBeNull();
   });
+
+  it("hides the review-post-failed block after the task is merged", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        needsHumanReason: "review-post-failed",
+        githubSyncError: "Not Found",
+        reviewFindings: "## Round 1\nAll good.",
+        mergedAt: "2026-09-04T09:34:44.000Z",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/approving review could not be posted to GitHub/)).toBeNull();
+  });
 });

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
-import { CLEARED_MERGE_ERROR, clearedFor, reviewPostFlags } from "../services/task-merge-human.js";
+import * as mergeHuman from "../services/task-merge-human.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
@@ -389,11 +389,11 @@ function withAutoReturnCapped<
   installCap: number,
 ): Omit<T, "projectMaxAutoReturnRounds" | "reviewPostPending"> & {
   autoReturnCapped: boolean;
-} & ReturnType<typeof reviewPostFlags> {
+} & ReturnType<typeof mergeHuman.reviewPostFlags> {
   const { projectMaxAutoReturnRounds, reviewPostPending, ...rest } = row;
   return {
     ...rest,
-    ...reviewPostFlags(reviewPostPending),
+    ...mergeHuman.reviewPostFlags(reviewPostPending),
     autoReturnCapped:
       row.autoReturnRounds >=
       resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }, installCap),
@@ -1200,7 +1200,7 @@ export async function tasksRoute(app: FastifyInstance) {
           .set({
             mergedAt: task.mergedAt ?? (mergedAt ? new Date(mergedAt) : now),
             archivedAt: now,
-            needsHumanReason: CLEARED_MERGE_ERROR.needsHumanReason,
+            needsHumanReason: mergeHuman.clearNeedsHumanOnMerge,
           })
           .where(eq(tasks.id, task.id))
           .run();
@@ -1482,7 +1482,7 @@ export async function tasksRoute(app: FastifyInstance) {
 
     const [updated] = app.db
       .update(tasks)
-      .set({ mergeRequestedAt: new Date(), ...clearedFor(existing.needsHumanReason) })
+      .set({ mergeRequestedAt: new Date(), ...mergeHuman.clearedFor(existing.needsHumanReason) })
       .where(eq(tasks.id, taskId))
       .returning()
       .all();
