@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { workspaces } from "../db/schema.js";
+import {
+  DEFAULT_WORKSPACE_NAME,
+  createWorkspace,
+  deleteWorkspace,
+  listWorkspacesSeeded,
+  updateWorkspace,
+  type WorkspaceRow,
+} from "../services/workspaces-store.js";
 
 interface CreateWorkspaceBody {
   name: string;
@@ -42,16 +48,15 @@ const updateWorkspaceSchema = {
   },
 };
 
-function serialize(row: typeof workspaces.$inferSelect) {
+function serialize(row: WorkspaceRow) {
   return {
     ...row,
     layout: row.layout ? (JSON.parse(row.layout) as Record<string, unknown>) : null,
   };
 }
 
-// Issue #1618 — the name GET /api/workspaces seeds when the table is empty.
-// Mirrors the frontend's own DEFAULT_WORKSPACE_NAME (App.tsx).
-export const DEFAULT_WORKSPACE_NAME = "Default";
+// Re-exported so existing importers keep their path.
+export { DEFAULT_WORKSPACE_NAME };
 
 export async function workspacesRoute(app: FastifyInstance) {
   // Issue #1618 — a fresh (or fully emptied) database must never list zero
@@ -72,20 +77,7 @@ export async function workspacesRoute(app: FastifyInstance) {
   // makes a GET write (at most this one fixed row) — a documented exception
   // to auth.ts's "a bare GET can't mutate state" premise; see the note there.
   app.get("/api/workspaces", async () => {
-    const existing = app.db.select().from(workspaces).all();
-    if (existing.length > 0) return existing.map(serialize);
-    const rows = app.db.transaction(
-      (tx) => {
-        const current = tx.select().from(workspaces).all();
-        if (current.length > 0) return current;
-        return tx
-          .insert(workspaces)
-          .values({ name: DEFAULT_WORKSPACE_NAME, layout: null })
-          .returning()
-          .all();
-      },
-      { behavior: "immediate" },
-    );
+    const rows = listWorkspacesSeeded(app.db);
     return rows.map(serialize);
   });
 
@@ -93,11 +85,7 @@ export async function workspacesRoute(app: FastifyInstance) {
     "/api/workspaces",
     { schema: createWorkspaceSchema },
     async (request, reply) => {
-      const [created] = app.db
-        .insert(workspaces)
-        .values({ name: request.body.name, layout: null })
-        .returning()
-        .all();
+      const created = createWorkspace(app.db, request.body.name);
       reply.code(201);
       return serialize(created);
     },
@@ -111,19 +99,14 @@ export async function workspacesRoute(app: FastifyInstance) {
       if (!Number.isInteger(workspaceId)) return reply.badRequest("Invalid workspace id");
 
       const { name, layout, groupId, position } = request.body;
-      const updated = app.db
-        .update(workspaces)
-        .set({
-          ...(name !== undefined ? { name } : {}),
-          ...(layout !== undefined ? { layout: JSON.stringify(layout) } : {}),
-          ...(groupId !== undefined ? { groupId } : {}),
-          ...(position !== undefined ? { position } : {}),
-        })
-        .where(eq(workspaces.id, workspaceId))
-        .returning()
-        .all();
-      if (updated.length === 0) return reply.notFound();
-      return serialize(updated[0]);
+      const updated = updateWorkspace(app.db, workspaceId, {
+        name,
+        layout: layout !== undefined ? JSON.stringify(layout) : undefined,
+        groupId,
+        position,
+      });
+      if (!updated) return reply.notFound();
+      return serialize(updated);
     },
   );
 
@@ -134,12 +117,7 @@ export async function workspacesRoute(app: FastifyInstance) {
     const workspaceId = Number(request.params.id);
     if (!Number.isInteger(workspaceId)) return reply.badRequest("Invalid workspace id");
 
-    const deleted = app.db
-      .delete(workspaces)
-      .where(eq(workspaces.id, workspaceId))
-      .returning()
-      .all();
-    if (deleted.length === 0) return reply.notFound();
+    if (!deleteWorkspace(app.db, workspaceId)) return reply.notFound();
     reply.code(204);
   });
 }

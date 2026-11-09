@@ -22,17 +22,7 @@
       "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
     },
     {
-      "from": "src/routes/groups.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
       "from": "src/routes/review-relay.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/sessions.ts",
       "to": "src/db/schema.ts",
       "note": "pending: moved behind a service by its route-family issue"
     },
@@ -47,17 +37,7 @@
       "note": "pending: moved behind a service by its route-family issue"
     },
     {
-      "from": "src/routes/terminal.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
       "from": "src/routes/webhooks.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/workspaces.ts",
       "to": "src/db/schema.ts",
       "note": "pending: moved behind a service by its route-family issue"
     },
