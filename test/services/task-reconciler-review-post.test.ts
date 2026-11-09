@@ -618,6 +618,36 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     await app.close();
   });
 
+  it("holds a done, unmerged task whose approving review was dropped as stale: not merged", async () => {
+    const { app, task, read } = await setup("p-post-stale-hold");
+    seedMarker(
+      app,
+      task.id,
+      { status: "done", mergeRequestedAt: new Date(), lastReviewVerdict: "approved" },
+      "sha-old",
+    );
+
+    await reconcileTasks(app);
+
+    expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+    expect(read().reviewPostPending).toBeNull();
+    expect(read().needsHumanReason).toBe("review-post-failed");
+    expect(mockMergePullRequest).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("a permanent post failure keeps a different needs-human reason", async () => {
+    const { app, read } = await setup("p-post-keeps-cap");
+    app.db.update(tasks).set({ needsHumanReason: "cap" }).run();
+    mockCreatePullRequestReview.mockRejectedValue(new GitHubApiError("Not Found", 404));
+
+    await reconcileTasks(app);
+
+    expect(read().reviewPostPending).toBeNull();
+    expect(read().needsHumanReason).toBe("cap");
+    await app.close();
+  });
+
   it("still posts for a task that left review when the PR head is the reviewed one", async () => {
     const { app, task, read } = await setup("p-post-same-head");
     seedMarker(app, task.id, { status: "in_progress" }, "sha-head");

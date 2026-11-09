@@ -18,6 +18,12 @@ export const clearMergeNeedsHumanReason = sql<
   string | null
 >`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads') THEN NULL ELSE needs_human_reason END`;
 
+/** Like clearMergeNeedsHumanReason, for a recorded merge: the PR is merged, so
+ * a `review-post-failed` hold (nothing left to hold) is released too. */
+export const clearNeedsHumanOnMerge = sql<
+  string | null
+>`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'review-post-failed') THEN NULL ELSE needs_human_reason END`;
+
 /** The `.set()` fields that clear a merge error and its merge-tied reason. */
 export const CLEARED_MERGE_ERROR = {
   mergeError: null,

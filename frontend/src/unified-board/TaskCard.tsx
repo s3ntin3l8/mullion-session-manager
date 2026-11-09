@@ -525,7 +525,7 @@ export function TaskCard({
               : `Round ${task.autoReturnRounds} · returned to worker`}
         </div>
       )}
-      {task.needsHumanReason === "review-post-failed" && (
+      {task.needsHumanReason === "review-post-failed" && task.mergedAt === null && (
         <div className="task-card-review-round task-card-review-round-capped" role="status">
           {needsHumanText(task.needsHumanReason)}, needs a human
           {task.githubSyncError ? ` — ${task.githubSyncError}` : ""}

@@ -789,7 +789,7 @@ export function TaskDetail({
               {approvalStateText(task.approvalState, task.autoReturnRounds)}
             </div>
           )}
-          {task.needsHumanReason === "review-post-failed" && (
+          {task.needsHumanReason === "review-post-failed" && task.mergedAt === null && (
             <div className="task-detail-review-round task-detail-review-round-capped">
               {needsHumanText(task.needsHumanReason)}, needs a human
               {task.githubSyncError ? ` — ${task.githubSyncError}` : ""}

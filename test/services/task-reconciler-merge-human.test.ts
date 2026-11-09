@@ -308,4 +308,16 @@ describe("#2750 — merges that need a human", () => {
     expect(getTask(app, id).needsHumanReason).toBeNull();
     await app.close();
   });
+
+  it("clears a review-post-failed hold when the task merges", async () => {
+    const app = await buildApp();
+    const id = await createTask(app, { needsHumanReason: "review-post-failed" });
+    const task = getTask(app, id);
+    const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
+
+    expect(markTaskMerged(app, task, project)).toBe(true);
+
+    expect(getTask(app, id).needsHumanReason).toBeNull();
+    await app.close();
+  });
 });
