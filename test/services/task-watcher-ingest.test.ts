@@ -747,6 +747,89 @@ describe("upsertIssueTask (#490a)", () => {
     });
   });
 
+  describe("Manual: true addition demotes an untouched ready task", () => {
+    const issue = (number: number, body: string | null) => ({
+      htmlUrl: "https://x/980",
+      authorAssociation: "OWNER",
+      number,
+      title: `Issue ${number}`,
+      body,
+    });
+    const rowFor = (n: number) =>
+      app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, n)))
+        .all()[0];
+    const transitions = () =>
+      mockBroadcastTaskEvent.mock.calls.filter(([e]) => e.kind === "transition").map(([e]) => e);
+
+    it("the edit that adds the directive moves ready to backlog and records the transition", () => {
+      upsertIssueTask(app, projectId, issue(980, "Spec.\n"));
+      expect(rowFor(980).status).toBe("ready");
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(980, "Spec.\nManual: true\n"));
+
+      const row = rowFor(980);
+      expect(row.status).toBe("backlog");
+      expect(transitions()).toEqual([
+        expect.objectContaining({ taskId: row.id, from: "ready", to: "backlog" }),
+      ]);
+    });
+
+    it("a later re-sighting does not demote a task a human moved back to ready", () => {
+      upsertIssueTask(app, projectId, issue(981, "Spec.\n"));
+      upsertIssueTask(app, projectId, issue(981, "Spec.\nManual: true\n"));
+      app.db
+        .update(tasks)
+        .set({ status: "ready" })
+        .where(eq(tasks.id, rowFor(981).id))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(981, "Spec.\nManual: true\nedited"));
+
+      expect(rowFor(981).status).toBe("ready");
+      expect(transitions()).toEqual([]);
+    });
+
+    it("leaves a task that is not ready untouched", () => {
+      upsertIssueTask(app, projectId, issue(982, "Spec.\n"));
+      app.db
+        .update(tasks)
+        .set({ status: "claimed" })
+        .where(eq(tasks.id, rowFor(982).id))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(982, "Spec.\nManual: true\n"));
+
+      expect(rowFor(982).status).toBe("claimed");
+      expect(transitions()).toEqual([]);
+    });
+
+    it("leaves a ready task that already has a session untouched", () => {
+      upsertIssueTask(app, projectId, issue(983, "Spec.\n"));
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      app.db
+        .update(tasks)
+        .set({ sessionId: session.id })
+        .where(eq(tasks.id, rowFor(983).id))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(983, "Spec.\nManual: true\n"));
+
+      expect(rowFor(983).status).toBe("ready");
+      expect(transitions()).toEqual([]);
+    });
+  });
+
   describe("Manual: true removal promotes a parked task", () => {
     const base = { htmlUrl: "https://x/970", authorAssociation: "OWNER" };
     const MANUAL = "Spec.\nManual: true\n";
