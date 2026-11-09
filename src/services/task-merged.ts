@@ -4,6 +4,7 @@ import { tasks, type projects } from "../db/schema.js";
 import { clearNeedsHumanOnMerge } from "./task-merge-human.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { cleanupMergedTaskBranch } from "./task-approve.js";
+import { closeIssueOnMerge } from "./task-github-sync.js";
 
 // #1015 (archive) — called only where the caller has already confirmed
 // `pr.merged` is true (never on a PR closed WITHOUT merging — see this
@@ -34,6 +35,11 @@ export function markTaskMerged(
   // Only the pass that won the write cleans up, so a webhook and a sweep
   // observing the same merge don't both run it.
   cleanupMergedTaskBranch(app, task, project);
+  // The issue stays open from approval until here (task-github-sync.ts's
+  // `done` case), so a `blocked_by` dependent only unblocks once the code is
+  // on the default branch. `Closes #N` in the PR body normally closed it
+  // already; this is the idempotent backstop. Fire-and-forget: it never throws.
+  void closeIssueOnMerge(app, task, project);
   return true;
 }
 
