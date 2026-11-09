@@ -1,3 +1,4 @@
+import { paletteSchema } from "./terminal-palette.js";
 import path from "node:path";
 import {
   DEFAULT_LIMIT as DEFAULT_TRANSCRIPT_LIMIT,
@@ -179,6 +180,9 @@ const createSessionSchema = {
       // default 1 MB request body limit already bounds a genuinely
       // pathological payload.
       seedPrompt: { type: "string" },
+      // #2528 — the creating dashboard's resolved terminal palette; answers
+      // this session's startup color query instead of the process-wide cache.
+      palette: paletteSchema,
     },
   },
 };

@@ -20,12 +20,15 @@
 // session. The answered queries are stripped from what is forwarded, so a
 // pane never answers them a second time (live or on replay).
 //
-// One palette is held for the whole process (last reporter wins), so two
-// dashboards on different schemes (`theme: "system"` resolves per browser)
-// can have a session answered with the other one's colors, and the stripped
-// query leaves the program no way to correct it. Accepted: a single-user
-// install is the norm, and the late-browser alternative loses Codex's palette
-// outright. Per-pane palettes would need to ride the WS attach handshake.
+// Two layers decide the answer. The dashboard that creates a session sends its
+// own resolved palette on POST /api/sessions, and the session answers from that
+// for its life (#2528): `theme: "system"` resolves per browser, so two
+// dashboards can disagree, and the creating one is the one the user is looking
+// at. A session created without a palette (a Task Master worker, the control
+// socket, a remote host's own sessions) falls back to the one process-wide
+// palette (last reporter wins), which can still be the other dashboard's. A
+// running session is never re-answered when another pane attaches later: the
+// program asked once, at startup.
 //
 // A chunk split across two PTY reads is not reassembled; a split query is
 // simply left for the browser, as before.
@@ -46,9 +49,26 @@ export function getTerminalPalette(): TerminalPalette | null {
   return palette;
 }
 
+// Per-session palettes (#2528), each dropped once the session's startup-query
+// window has closed, so the map cannot outgrow the sessions still starting.
+const sessionPalettes = new Map<string, TerminalPalette>();
+const SESSION_PALETTE_TTL_MS = 35_000;
+
+/** Answer `sessionId`'s startup queries from `next` instead of the process-wide palette. */
+export function setSessionPalette(sessionId: string, next: TerminalPalette): void {
+  sessionPalettes.set(sessionId, { ...next });
+  setTimeout(() => sessionPalettes.delete(sessionId), SESSION_PALETTE_TTL_MS).unref();
+}
+
+/** The palette its spawning pane gave `sessionId`, or undefined to use the process-wide one. */
+export function getSessionPalette(sessionId: string): TerminalPalette | undefined {
+  return sessionPalettes.get(sessionId);
+}
+
 /** Test seam: forget the cached palette. */
 export function resetTerminalPalette(): void {
   palette = null;
+  sessionPalettes.clear();
 }
 
 /* eslint-disable no-control-regex */

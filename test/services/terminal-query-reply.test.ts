@@ -1,8 +1,10 @@
 import { afterEach, describe, it, expect } from "vitest";
 import {
   buildStartupQueryReplies,
+  getSessionPalette,
   getTerminalPalette,
   resetTerminalPalette,
+  setSessionPalette,
   setTerminalPalette,
   splitStartupQueries,
 } from "../../src/services/terminal-query-reply.js";
@@ -56,5 +58,16 @@ describe("splitStartupQueries", () => {
 
   it("leaves the data untouched when no palette is known", () => {
     expect(splitStartupQueries("\x1b]11;?\x07")).toEqual({ reply: "", rest: "\x1b]11;?\x07" });
+  });
+});
+
+describe("session palette", () => {
+  afterEach(() => resetTerminalPalette());
+
+  it("is undefined until set, then returned for that session only", () => {
+    expect(getSessionPalette("7")).toBeUndefined();
+    setSessionPalette("7", LIGHT);
+    expect(getSessionPalette("7")).toEqual(LIGHT);
+    expect(getSessionPalette("8")).toBeUndefined();
   });
 });

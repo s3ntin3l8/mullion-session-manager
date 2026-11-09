@@ -8,18 +8,19 @@ import { pushTerminalPaletteToHosts } from "../services/terminal-palette-sync.js
 // memory only: the dashboard re-reports on every load and theme change.
 const HEX = "^#[0-9a-fA-F]{6}$";
 
-export const paletteBodySchema = {
-  body: {
-    type: "object",
-    required: ["foreground", "background", "cursor"],
-    additionalProperties: false,
-    properties: {
-      foreground: { type: "string", pattern: HEX },
-      background: { type: "string", pattern: HEX },
-      cursor: { type: "string", pattern: HEX },
-    },
+// Also the `palette` property of POST /api/sessions (#2528).
+export const paletteSchema = {
+  type: "object",
+  required: ["foreground", "background", "cursor"],
+  additionalProperties: false,
+  properties: {
+    foreground: { type: "string", pattern: HEX },
+    background: { type: "string", pattern: HEX },
+    cursor: { type: "string", pattern: HEX },
   },
 } as const;
+
+export const paletteBodySchema = { body: paletteSchema } as const;
 
 export async function terminalPaletteRoute(app: FastifyInstance) {
   app.put("/api/terminal/palette", { schema: paletteBodySchema }, async (req, reply) => {

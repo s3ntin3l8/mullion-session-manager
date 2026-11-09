@@ -4,6 +4,7 @@ import { renderHook } from "@testing-library/react";
 import { useReportTerminalPalette } from "./useReportTerminalPalette.js";
 import { settingsApi } from "../api/settings.js";
 import { buildXtermTheme } from "../terminalTheme.js";
+import { getReportedPalette } from "../lib/reportedPalette.js";
 
 vi.mock("../api/settings.js", () => ({
   settingsApi: { putTerminalPalette: vi.fn(() => Promise.resolve()) },
@@ -77,5 +78,33 @@ describe("useReportTerminalPalette", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(settingsApi.putTerminalPalette).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the palette for POST /api/sessions to send (#2528)", () => {
+    renderHook(() =>
+      useReportTerminalPalette({ settingsLoaded: true, colorScheme: "mullion", theme: "light" }),
+    );
+    const t = buildXtermTheme("mullion", "light");
+    expect(getReportedPalette()).toEqual({
+      foreground: t.foreground,
+      background: t.background,
+      cursor: t.cursor,
+    });
+  });
+
+  it("re-reports when the tab becomes visible again, throttled to once per 5 s", () => {
+    vi.useFakeTimers();
+    renderHook(() =>
+      useReportTerminalPalette({ settingsLoaded: true, colorScheme: "mullion", theme: "light" }),
+    );
+    const put = vi.mocked(settingsApi.putTerminalPalette);
+    expect(put).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event("focus"));
+    expect(put).toHaveBeenCalledTimes(1); // inside the throttle window
+
+    vi.advanceTimersByTime(5_000);
+    window.dispatchEvent(new Event("focus"));
+    expect(put).toHaveBeenCalledTimes(2);
   });
 });

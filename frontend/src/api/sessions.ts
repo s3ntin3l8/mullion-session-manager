@@ -1,5 +1,6 @@
 // Session lifecycle + persisted event history. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
+import { getReportedPalette } from "../lib/reportedPalette.js";
 import { UPLOAD_IMAGE_EXTENSIONS } from "../../../src/shared/constants.js";
 import { request } from "./client.js";
 import type {
@@ -109,7 +110,7 @@ export const sessionsApi = {
   ) =>
     request<Session | PreparingCheckoutResponse>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ projectId, command, ...opts }),
+      body: JSON.stringify({ projectId, command, palette: getReportedPalette(), ...opts }),
     }),
 
   // Lazy checkout materialization — the clone job for a project on a host.
