@@ -16,8 +16,24 @@ import {
 } from "../services/git-identity.js";
 import path from "node:path";
 import net from "node:net";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { projects, sessions, webhookRegistrations } from "../db/schema.js";
+import {
+  deleteProject,
+  dockSessionIdsByProject,
+  findOtherProject,
+  getProjectById,
+  getProjectOrThrow,
+  getProjectsByIds,
+  getWebhookRegistration,
+  insertProject,
+  listOtherProjectLocations,
+  listProjectCwdsOnHost,
+  listProjectIds,
+  listProjects,
+  listProjectsByName,
+  listSessionsForProject,
+  updateProject,
+  type ProjectRow,
+} from "../services/project-store.js";
 import {
   ACCEPTS_CHILDREN_FROM,
   MAX_PROJECT_LIST,
@@ -386,7 +402,7 @@ async function findDuplicateProject(
   excludeProjectId?: number,
 ) {
   const originIndexRef = {};
-  const rows = app.db.select().from(projects).all();
+  const rows = listProjects(app);
   for (const c of checkouts) {
     const match = await findProjectByRepoIdentity(app, {
       ...c,
@@ -638,24 +654,12 @@ async function maybeRegisterProjectWebhook(
     // if the repo really did change, its hook is now orphaned (still live
     // on GitHub, still delivering events, but for a repo nothing here
     // tracks anymore) and needs tearing down once the new repo is handled.
-    const previous = app.db
-      .select({
-        owner: webhookRegistrations.owner,
-        repo: webhookRegistrations.repo,
-        hookId: webhookRegistrations.hookId,
-      })
-      .from(webhookRegistrations)
-      .where(eq(webhookRegistrations.projectId, row.id))
-      .get();
+    const previous = getWebhookRegistration(app, row.id);
 
     await registerProjectWebhook(app, row, token, webhookUrl, secret);
 
     if (previous?.hookId) {
-      const current = app.db
-        .select({ owner: webhookRegistrations.owner, repo: webhookRegistrations.repo })
-        .from(webhookRegistrations)
-        .where(eq(webhookRegistrations.projectId, row.id))
-        .get();
+      const current = getWebhookRegistration(app, row.id);
       if (current && (current.owner !== previous.owner || current.repo !== previous.repo)) {
         await unregisterHook(token, previous.owner, previous.repo, webhookUrl).catch((err) => {
           app.log.warn(
@@ -697,7 +701,7 @@ export async function projectsRoute(app: FastifyInstance) {
   // routes below, just without a status code to express it through here.
   // Shared by GET /api/projects and GET /api/projects/:id so the two can never
   // drift: a single-project read is byte-for-byte a list row.
-  async function serializeProjectRows(rows: (typeof projects.$inferSelect)[]) {
+  async function serializeProjectRows(rows: ProjectRow[]) {
     // Phase 3 (drift detection, issue #1205, follow-up to #1201) — this install's own
     // conventions text, read ONCE for the whole list rather than per row:
     // it's install-wide, not per-project, so re-reading settings inside
@@ -708,17 +712,7 @@ export async function projectsRoute(app: FastifyInstance) {
     // resolution uses) applies that per row.
     const globalConventionsText = getStoredSettings(app.db).sessions.workflowConventionsText;
 
-    const activeDockSessions = app.db
-      .select()
-      .from(sessions)
-      .where(and(eq(sessions.kind, "dock"), eq(sessions.status, "active")))
-      .all();
-    const dockSessionIdsByProject = new Map<number, string[]>();
-    for (const session of activeDockSessions) {
-      const ids = dockSessionIdsByProject.get(session.projectId) ?? [];
-      ids.push(String(session.id));
-      dockSessionIdsByProject.set(session.projectId, ids);
-    }
+    const dockSessionIdsForProject = dockSessionIdsByProject(app);
 
     return Promise.all(
       rows.map(async (row) => {
@@ -844,7 +838,7 @@ export async function projectsRoute(app: FastifyInstance) {
           // own comment.
           detectedDevServerPort:
             row.hostId === LOCAL_HOST_ID
-              ? detectDevServerPortForSessionIds(app, dockSessionIdsByProject.get(row.id) ?? [])
+              ? detectDevServerPortForSessionIds(app, dockSessionIdsForProject.get(row.id) ?? [])
               : null,
         };
       }),
@@ -852,11 +846,7 @@ export async function projectsRoute(app: FastifyInstance) {
   }
 
   app.get("/api/projects", async () => {
-    const rows = app.db
-      .select()
-      .from(projects)
-      .orderBy(sql`LOWER(${projects.name})`)
-      .all();
+    const rows = listProjectsByName(app);
     return serializeProjectRows(rows);
   });
 
@@ -866,7 +856,7 @@ export async function projectsRoute(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/api/projects/:id", async (request, reply) => {
     const projectId = Number(request.params.id);
     if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-    const row = app.db.select().from(projects).where(eq(projects.id, projectId)).get();
+    const row = getProjectById(app, projectId);
     if (!row) return reply.notFound("Project not found");
     const [serialized] = await serializeProjectRows([row]);
     return serialized;
@@ -905,18 +895,11 @@ export async function projectsRoute(app: FastifyInstance) {
       // Discovery is per-host (issue #26): a cwd on one host registering
       // as "already added" must never match a same-path project on a
       // different host, so the match key is (hostId, cwd), not cwd alone.
-      const registeredCwds = new Set(
-        app.db
-          .select({ cwd: projects.cwd })
-          .from(projects)
-          .where(eq(projects.hostId, hostId))
-          .all()
-          .map((p) => p.cwd),
-      );
+      const registeredCwds = new Set(listProjectCwdsOnHost(app, hostId));
       // Issue #2231 — a path mapped in ANOTHER project's hostCwds is
       // registered too, and a candidate whose path or origin matches a project
       // is reported with that project so the UI can attach instead of add.
-      const allProjects = app.db.select().from(projects).all();
+      const allProjects = listProjects(app);
       const originIndexRef = {};
 
       const discovered: DiscoveredProject[] = [];
@@ -958,7 +941,7 @@ export async function projectsRoute(app: FastifyInstance) {
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app, projectId);
       if (!project) return reply.notFound();
       return { hosts: await detectCheckouts(app, project) };
     },
@@ -1015,7 +998,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app, projectId);
       if (!project) return reply.notFound();
 
       // The mode ASKED about — the picked one when the caller says so, the
@@ -1084,7 +1067,7 @@ export async function projectsRoute(app: FastifyInstance) {
     const projectId = Number(request.params.id);
     if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    const project = getProjectById(app, projectId);
     if (!project) return reply.notFound();
 
     if (project.hostId === LOCAL_HOST_ID) {
@@ -1132,7 +1115,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app, projectId);
       if (!project) return reply.notFound();
 
       if (project.hostId === LOCAL_HOST_ID) {
@@ -1295,25 +1278,21 @@ export async function projectsRoute(app: FastifyInstance) {
         }
       }
 
-      const [created] = app.db
-        .insert(projects)
-        .values({
-          name,
-          cwd: resolvedCwd,
-          hostId,
-          // Issue #1724 — the per-host cwd map, serialized. Null/empty means
-          // "this project lives on its own host and nowhere else".
-          hostCwds: serializeHostCwds(hostCwds),
-          // Issue #2241 — the steering flags; null/default flags store as null.
-          placementConstraints: serializePlacementConstraints(placementConstraints),
-          preProvision: serializePreProvision(preProvision),
-          gitIdentity: serializeProjectGitIdentity(gitIdentity),
-          // Issue #1723 / roadmap 8.9 — absent means "pinned" (the
-          // column's default), so an existing project is untouched.
-          ...(placement === undefined ? {} : { placement }),
-        })
-        .returning()
-        .all();
+      const created = insertProject(app, {
+        name,
+        cwd: resolvedCwd,
+        hostId,
+        // Issue #1724 — the per-host cwd map, serialized. Null/empty means
+        // "this project lives on its own host and nowhere else".
+        hostCwds: serializeHostCwds(hostCwds),
+        // Issue #2241 — the steering flags; null/default flags store as null.
+        placementConstraints: serializePlacementConstraints(placementConstraints),
+        preProvision: serializePreProvision(preProvision),
+        gitIdentity: serializeProjectGitIdentity(gitIdentity),
+        // Issue #1723 / roadmap 8.9 — absent means "pinned" (the
+        // column's default), so an existing project is untouched.
+        ...(placement === undefined ? {} : { placement }),
+      });
       await maybeRegisterProjectWebhook(app, created);
       // Runs after the webhook registration above (order doesn't matter
       // between the two — independent GitHub round trips, both best-effort)
@@ -1362,11 +1341,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const duplicateId = Number(request.params.id);
       if (!Number.isInteger(duplicateId)) return reply.badRequest("Invalid project id");
       const survivorId = request.body.into;
-      const pair = app.db
-        .select()
-        .from(projects)
-        .where(inArray(projects.id, [duplicateId, survivorId]))
-        .all();
+      const pair = getProjectsByIds(app, [duplicateId, survivorId]);
       const duplicate = pair.find((p) => p.id === duplicateId);
       const survivor = pair.find((p) => p.id === survivorId);
       if (!duplicate || !survivor) return reply.notFound("Project not found");
@@ -1391,7 +1366,7 @@ export async function projectsRoute(app: FastifyInstance) {
           code: `MERGE_${result.refusal.code}`,
         });
       }
-      const [row] = app.db.select().from(projects).where(eq(projects.id, survivorId)).all();
+      const row = getProjectOrThrow(app, survivorId);
       return {
         survivor: {
           ...row,
@@ -1425,11 +1400,7 @@ export async function projectsRoute(app: FastifyInstance) {
       }
       // The path must not already belong to ANOTHER project: attaching it
       // would create exactly the duplicate this feature prevents.
-      const owner = app.db
-        .select()
-        .from(projects)
-        .all()
-        .find((p) => p.id !== projectId && projectHasPath(p, hostId, cwd));
+      const owner = findOtherProject(app, projectId, (p) => projectHasPath(p, hostId, cwd));
       if (owner) return duplicateProjectReply(reply, owner, "attach");
       const result = attachHostCheckout(app, projectId, hostId, cwd);
       if (result === "not-found") return reply.notFound();
@@ -1450,7 +1421,7 @@ export async function projectsRoute(app: FastifyInstance) {
       if (result === "limit") {
         return reply.badRequest(`A project can map at most ${MAX_HOST_CWDS} hosts.`);
       }
-      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const row = getProjectOrThrow(app, projectId);
       return {
         ...row,
         hostCwds: { ...parseHostCwds(row.hostCwds) },
@@ -1474,7 +1445,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const { hostId } = request.params;
-      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const row = getProjectById(app, projectId);
       if (!row) return reply.notFound();
       const job = getMaterializeJob(projectId, hostId);
       if (job) {
@@ -1499,7 +1470,7 @@ export async function projectsRoute(app: FastifyInstance) {
       if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
       }
-      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const row = getProjectById(app, projectId);
       if (!row) return reply.notFound();
       // A new request is a retry: a failure already shown is not replayed.
       takeFailedMaterialize(projectId, hostId);
@@ -1521,7 +1492,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const existing = getProjectById(app, projectId);
       if (!existing) return reply.notFound();
 
       const {
@@ -1570,13 +1541,7 @@ export async function projectsRoute(app: FastifyInstance) {
         ...(acceptsMessagesFromList ?? []),
       ];
       if (referenced.length > 0) {
-        const known = new Set(
-          app.db
-            .select({ id: projects.id })
-            .from(projects)
-            .all()
-            .map((p) => p.id),
-        );
+        const known = new Set(listProjectIds(app));
         const unknown = referenced.find((id) => !known.has(id));
         if (unknown !== undefined) return reply.badRequest(`unknown project ${unknown}`);
         // A project's own id means nothing in either list (same-project children
@@ -1648,7 +1613,7 @@ export async function projectsRoute(app: FastifyInstance) {
       // alone, which is falsy and so skips both — before it can fall
       // through to `.update(projects).set({})` with an empty object (every
       // spread below is conditional on an undefined field), which
-      // drizzle-orm throws on ("No values to set") — a 500, not a 400.
+      // the query builder throws on ("No values to set") — a 500, not a 400.
       if (
         name === undefined &&
         cwd === undefined &&
@@ -1741,107 +1706,102 @@ export async function projectsRoute(app: FastifyInstance) {
         }
       }
 
-      const updated = app.db
-        .update(projects)
-        .set({
-          ...(name !== undefined ? { name } : {}),
-          ...(cwd !== undefined ? { cwd: resolvedCwd } : {}),
-          ...(devServerUrl !== undefined ? { devServerUrl } : {}),
-          ...(autoFetch !== undefined ? { autoFetch } : {}),
-          ...(defaultAgent !== undefined ? { defaultAgent } : {}),
-          ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
-          // A blank recipe is "none": stored as null so nothing runs.
-          ...(setupRecipe !== undefined ? { setupRecipe: setupRecipe?.trim() || null } : {}),
-          // Issue #1723 / roadmap 8.9 — the placement opt-in.
-          ...(placement !== undefined ? { placement } : {}),
-          // Issue #2241 — the steering flags. `null` (or default flags) clears them.
-          ...(placementConstraints !== undefined
-            ? { placementConstraints: serializePlacementConstraints(placementConstraints) }
-            : {}),
-          // Pre-provisioned checkouts. `null` (or "none") clears them.
-          ...(preProvision !== undefined
-            ? { preProvision: serializePreProvision(preProvision) }
-            : {}),
-          // The git identity override. `null` clears it.
-          ...(gitIdentity !== undefined
-            ? { gitIdentity: serializeProjectGitIdentity(gitIdentity) }
-            : {}),
-          // Issue #1724 — the per-host cwd map. `null` clears it.
-          ...(hostCwds !== undefined
-            ? {
-                hostCwds: serializeHostCwds(hostCwds),
-                // Issue #2090 — saving the map is the operator's decision: a
-                // removed host is declined (auto-detect never re-adds it),
-                // every kept one stops being "auto-detected".
-                hostCwdsMeta: serializeHostCwdsMeta(
-                  metaAfterOperatorSave(
-                    { hostCwds: existing.hostCwds, meta: existing.hostCwdsMeta },
-                    hostCwds ?? {},
-                    new Set(listHosts(app).map((h) => h.id)),
-                  ),
+      const updated = updateProject(app, projectId, {
+        ...(name !== undefined ? { name } : {}),
+        ...(cwd !== undefined ? { cwd: resolvedCwd } : {}),
+        ...(devServerUrl !== undefined ? { devServerUrl } : {}),
+        ...(autoFetch !== undefined ? { autoFetch } : {}),
+        ...(defaultAgent !== undefined ? { defaultAgent } : {}),
+        ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
+        // A blank recipe is "none": stored as null so nothing runs.
+        ...(setupRecipe !== undefined ? { setupRecipe: setupRecipe?.trim() || null } : {}),
+        // Issue #1723 / roadmap 8.9 — the placement opt-in.
+        ...(placement !== undefined ? { placement } : {}),
+        // Issue #2241 — the steering flags. `null` (or default flags) clears them.
+        ...(placementConstraints !== undefined
+          ? { placementConstraints: serializePlacementConstraints(placementConstraints) }
+          : {}),
+        // Pre-provisioned checkouts. `null` (or "none") clears them.
+        ...(preProvision !== undefined
+          ? { preProvision: serializePreProvision(preProvision) }
+          : {}),
+        // The git identity override. `null` clears it.
+        ...(gitIdentity !== undefined
+          ? { gitIdentity: serializeProjectGitIdentity(gitIdentity) }
+          : {}),
+        // Issue #1724 — the per-host cwd map. `null` clears it.
+        ...(hostCwds !== undefined
+          ? {
+              hostCwds: serializeHostCwds(hostCwds),
+              // Issue #2090 — saving the map is the operator's decision: a
+              // removed host is declined (auto-detect never re-adds it),
+              // every kept one stops being "auto-detected".
+              hostCwdsMeta: serializeHostCwdsMeta(
+                metaAfterOperatorSave(
+                  { hostCwds: existing.hostCwds, meta: existing.hostCwdsMeta },
+                  hostCwds ?? {},
+                  new Set(listHosts(app).map((h) => h.id)),
                 ),
-              }
-            : {}),
-          ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
-          ...(autoApprove !== undefined ? { autoApprove } : {}),
-          ...(allowCrossProjectSpawn !== undefined ? { allowCrossProjectSpawn } : {}),
-          ...(crossProjectTargets !== undefined
-            ? { crossProjectTargets: serializeProjectIdList(crossProjectTargets) }
-            : {}),
-          ...(acceptsChildrenFrom !== undefined
-            ? { acceptsChildrenFrom: acceptsChildrenFrom === "any" ? null : acceptsChildrenFrom }
-            : {}),
-          ...(acceptsChildrenFromList !== undefined
-            ? { acceptsChildrenFromList: serializeProjectIdList(acceptsChildrenFromList) }
-            : {}),
-          // Issue #2270 — "none" is the default for messages, so it is stored as null.
-          ...(acceptsMessagesFrom !== undefined
-            ? { acceptsMessagesFrom: acceptsMessagesFrom === "none" ? null : acceptsMessagesFrom }
-            : {}),
-          ...(acceptsMessagesFromList !== undefined
-            ? { acceptsMessagesFromList: serializeProjectIdList(acceptsMessagesFromList) }
-            : {}),
-          ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
-          // A human PATCHing this field — on, or explicitly back off — is a
-          // deliberate decision that must permanently outrank the
-          // release-please auto-enable sweep (project-release-please.ts),
-          // including when it hasn't run for this project yet: without
-          // stamping conventionalCommitTitlesResolvedAt here too, an
-          // explicit `false` set before the sweep's first pass would look
-          // identical to "never decided," and the next reconciler tick
-          // would silently flip it back on. See that column's own doc
-          // comment in schema.ts.
-          ...(conventionalCommitTitles !== undefined
-            ? { conventionalCommitTitles, conventionalCommitTitlesResolvedAt: new Date() }
-            : {}),
-          ...(autoTagRelease !== undefined ? { autoTagRelease } : {}),
-          ...(injectAgentGuide !== undefined ? { injectAgentGuide } : {}),
-          ...(injectProjectBriefing !== undefined ? { injectProjectBriefing } : {}),
-          ...(injectWorkflowConventions !== undefined ? { injectWorkflowConventions } : {}),
-          ...(suppressConventionsInjectionAfterScaffold !== undefined
-            ? { suppressConventionsInjectionAfterScaffold }
-            : {}),
-        })
-        .where(eq(projects.id, projectId))
-        .returning()
-        .all();
-      if (updated.length === 0) return reply.notFound();
+              ),
+            }
+          : {}),
+        ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
+        ...(autoApprove !== undefined ? { autoApprove } : {}),
+        ...(allowCrossProjectSpawn !== undefined ? { allowCrossProjectSpawn } : {}),
+        ...(crossProjectTargets !== undefined
+          ? { crossProjectTargets: serializeProjectIdList(crossProjectTargets) }
+          : {}),
+        ...(acceptsChildrenFrom !== undefined
+          ? { acceptsChildrenFrom: acceptsChildrenFrom === "any" ? null : acceptsChildrenFrom }
+          : {}),
+        ...(acceptsChildrenFromList !== undefined
+          ? { acceptsChildrenFromList: serializeProjectIdList(acceptsChildrenFromList) }
+          : {}),
+        // Issue #2270 — "none" is the default for messages, so it is stored as null.
+        ...(acceptsMessagesFrom !== undefined
+          ? { acceptsMessagesFrom: acceptsMessagesFrom === "none" ? null : acceptsMessagesFrom }
+          : {}),
+        ...(acceptsMessagesFromList !== undefined
+          ? { acceptsMessagesFromList: serializeProjectIdList(acceptsMessagesFromList) }
+          : {}),
+        ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
+        // A human PATCHing this field — on, or explicitly back off — is a
+        // deliberate decision that must permanently outrank the
+        // release-please auto-enable sweep (project-release-please.ts),
+        // including when it hasn't run for this project yet: without
+        // stamping conventionalCommitTitlesResolvedAt here too, an
+        // explicit `false` set before the sweep's first pass would look
+        // identical to "never decided," and the next reconciler tick
+        // would silently flip it back on. See that column's own doc
+        // comment in schema.ts.
+        ...(conventionalCommitTitles !== undefined
+          ? { conventionalCommitTitles, conventionalCommitTitlesResolvedAt: new Date() }
+          : {}),
+        ...(autoTagRelease !== undefined ? { autoTagRelease } : {}),
+        ...(injectAgentGuide !== undefined ? { injectAgentGuide } : {}),
+        ...(injectProjectBriefing !== undefined ? { injectProjectBriefing } : {}),
+        ...(injectWorkflowConventions !== undefined ? { injectWorkflowConventions } : {}),
+        ...(suppressConventionsInjectionAfterScaffold !== undefined
+          ? { suppressConventionsInjectionAfterScaffold }
+          : {}),
+      });
+      if (!updated) return reply.notFound();
       // #490b — a cwd change can point this project at a different repo
       // (or a repo for the first time), so re-run registration the same
       // way create does. `registerProjectWebhook`'s own PATCH-on-conflict
       // behavior (github-webhook.ts) means re-registering an unchanged
       // repo is a harmless no-op, not a duplicate hook.
-      if (cwd !== undefined) await maybeRegisterProjectWebhook(app, updated[0]);
+      if (cwd !== undefined) await maybeRegisterProjectWebhook(app, updated);
       // Issue #1724 — the per-host cwd map, as an OBJECT (see the create
       // handler's own comment).
       const response = {
-        ...updated[0],
-        hostCwds: { ...parseHostCwds(updated[0].hostCwds) },
-        hostCwdsMeta: parseHostCwdsMeta(updated[0].hostCwdsMeta),
-        placementConstraints: parsePlacementConstraints(updated[0].placementConstraints),
-        preProvision: parsePreProvision(updated[0].preProvision),
-        gitIdentity: parseProjectGitIdentity(updated[0].gitIdentity) ?? null,
-        ...crossProjectFieldsOut(updated[0]),
+        ...updated,
+        hostCwds: { ...parseHostCwds(updated.hostCwds) },
+        hostCwdsMeta: parseHostCwdsMeta(updated.hostCwdsMeta),
+        placementConstraints: parsePlacementConstraints(updated.placementConstraints),
+        preProvision: parsePreProvision(updated.preProvision),
+        gitIdentity: parseProjectGitIdentity(updated.gitIdentity) ?? null,
+        ...crossProjectFieldsOut(updated),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
     },
@@ -1854,14 +1814,10 @@ export async function projectsRoute(app: FastifyInstance) {
     const projectId = Number(request.params.id);
     if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    const project = getProjectById(app, projectId);
     if (!project) return reply.notFound();
 
-    const projectSessions = app.db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.projectId, projectId))
-      .all();
+    const projectSessions = listSessionsForProject(app, projectId);
     const backend = resolveBackend(app, project.hostId);
     await Promise.all(
       projectSessions.map((session) =>
@@ -1883,11 +1839,7 @@ export async function projectsRoute(app: FastifyInstance) {
     // fresh resolveRepoRef(project.cwd) — the project may already be
     // mid-delete on disk, and the registered repo is the one that
     // actually has the hook regardless of what the cwd resolves to now.
-    const registration = app.db
-      .select()
-      .from(webhookRegistrations)
-      .where(eq(webhookRegistrations.projectId, projectId))
-      .get();
+    const registration = getWebhookRegistration(app, projectId);
     // #2251 — unregisterHook deletes every Mullion hook on the repo, so it must
     // not run while another project on the same repo (compared lower-cased)
     // still relies on it. The deleted project's registration row cascades away
@@ -1895,11 +1847,7 @@ export async function projectsRoute(app: FastifyInstance) {
     let hookShared = false;
     if (registration?.hookId) {
       const sharedKey = repoKey(registration);
-      const others = app.db
-        .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
-        .from(projects)
-        .all()
-        .filter((p) => p.id !== projectId);
+      const others = listOtherProjectLocations(app, projectId);
       const keys = await resolveRepoKeys(app, others);
       // Fails closed: a project whose repo can't be resolved right now (host
       // unreachable, even past the import deferral window) may share the hook,
@@ -1932,8 +1880,7 @@ export async function projectsRoute(app: FastifyInstance) {
       }
     }
 
-    const deleted = app.db.delete(projects).where(eq(projects.id, projectId)).returning().all();
-    if (deleted.length === 0) return reply.notFound();
+    if (!deleteProject(app, projectId)) return reply.notFound();
     reply.code(204);
   });
 
@@ -1942,7 +1889,7 @@ export async function projectsRoute(app: FastifyInstance) {
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      const project = getProjectById(app, projectId);
       if (!project) return reply.notFound("Project not found");
 
       if (!project.devServerUrl) {
