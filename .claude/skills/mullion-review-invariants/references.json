@@ -105,11 +105,7 @@
       "src/services/pty-host-token.ts",
       "src/services/scope/**",
       "src/services/session-process.ts",
-      "src/services/remote-host-client.ts",
-      "src/services/remote-host-client-core.ts",
-      "src/services/remote-host-transport.ts",
-      "src/services/remote-host-file-streams.ts",
-      "src/services/remote-host-client-types.ts",
+      "src/services/remote-host-*.ts",
       "src/services/host-git.ts",
       "src/services/git-env.ts",
       "src/routes/internal.ts"
