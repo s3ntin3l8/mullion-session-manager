@@ -164,6 +164,41 @@ describe("auto-rebase hold-back", () => {
     expect(getTask(app, task.id).mergeError).toContain("suggestions round is in flight");
   });
 
+  it("(a) holds a suggestions round that ended on an api_error (null workFinishedAt) until the hold limit", async () => {
+    // The round was admitted as finished through the api_error branch, which
+    // stamps errorAt but never workFinishedAt, so the in-flight test
+    // (`workFinishedAt === null`) keeps holding: bounded only by
+    // REBASE_HOLD_MAX_MS.
+    const { app, task, project } = await setup("hold-api-error", {
+      status: "reviewing",
+      approvalCarriedAt: new Date(),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => ({
+        workFinishedAt: null,
+        lastTurnEndedAt: null,
+        errorState: "api_error",
+        errorDetail: "overloaded",
+        errorAt: Date.now(),
+      }),
+    } as never);
+    vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined as never);
+    const create = vi.spyOn(lifecycle, "createSessionRecord").mockResolvedValue({
+      ok: true,
+      row: { id: task.sessionId },
+      initialPromptApplied: true,
+    } as never);
+    const t0 = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+    await attemptAutoRebase(app, task, project, "main");
+    expect(create).not.toHaveBeenCalled();
+    expect(getTask(app, task.id).rebaseAttempts).toBe(0);
+    expect(getTask(app, task.id).mergeError).toContain("suggestions round is in flight");
+    now.mockReturnValue(t0 + REBASE_HOLD_MAX_MS + 1000);
+    await attemptAutoRebase(app, getTask(app, task.id), project, "main");
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it("(a) holds a task still in progress", async () => {
     const { app, task, project } = await setup("hold-in-progress", { status: "in_progress" });
     const create = vi.spyOn(lifecycle, "createSessionRecord");
