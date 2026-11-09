@@ -132,11 +132,6 @@
       "note": "pending: moved behind a service by its route-family issue"
     },
     {
-      "from": "src/routes/projects.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
       "from": "src/routes/review-relay.ts",
       "to": "src/db/schema.ts",
       "note": "pending: moved behind a service by its route-family issue"
