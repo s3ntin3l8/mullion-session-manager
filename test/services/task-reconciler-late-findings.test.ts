@@ -15,8 +15,10 @@ const {
   mockGetPullRequestByNumber,
   mockCreatePullRequestReview,
   mockReadFindings,
+  mockParse,
 } = vi.hoisted(() => ({
   mockReadFindings: vi.fn(),
+  mockParse: vi.fn(),
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
   mockGetPullRequestByNumber: vi.fn(),
@@ -59,6 +61,18 @@ vi.mock("../../src/services/session-backend.js", async (importOriginal) => {
     },
   };
 });
+// Counts findings parses while delegating to the real parser.
+vi.mock("../../src/services/task-prompt.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const parse = actual.parseReviewFindings as (text: string) => unknown;
+  return {
+    ...actual,
+    parseReviewFindings: (text: string) => {
+      mockParse(text);
+      return parse(text);
+    },
+  };
+});
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
     onData: () => ({ dispose: () => {} }),
@@ -87,6 +101,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
+const { ingestLateFindings } = await import("../../src/services/task-late-findings.js");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
@@ -142,6 +157,7 @@ describe("late review findings after an inconclusive ingest", () => {
 
   beforeEach(() => {
     mockReadFindings.mockReset();
+    mockParse.mockReset();
     mockCreatePullRequestReview.mockReset();
     mockCreatePullRequestReview.mockResolvedValue({ id: 1, htmlUrl: "https://x/pr/9#r1" });
     mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
@@ -334,6 +350,59 @@ describe("late review findings after an inconclusive ingest", () => {
     await reconcileTasks(app);
     expect(readsFor(task.id)).toBe(1);
     expect(getTask(app, task.id).lastReviewVerdict).toBe("inconclusive");
+    await app.close();
+  });
+
+  // The `ignoredUnstructured` early return: `lastLateReadKey` already stops a
+  // re-read within one turn, so the content hash only matters when the same
+  // freeform text is written again in a NEW turn (a moved `lastTurnEndedAt`).
+  it("does not re-parse the same freeform text rewritten in a new turn, but parses a changed one", async () => {
+    const info = { lastTurnEndedAt: Date.now() };
+    const { app, task } = await setup({ info });
+    const FREEFORM = "Looks fine to me, no blocking issues.";
+    const parsesOf = (text: string) => mockParse.mock.calls.filter((c) => c[0] === text).length;
+
+    writeFindings(app, task.id, FREEFORM);
+    await reconcileTasks(app);
+    expect(readsFor(task.id)).toBe(1);
+    expect(parsesOf(FREEFORM)).toBe(1);
+
+    // A new turn: the reviewer rewrites the very same text.
+    info.lastTurnEndedAt += 1_000;
+    writeFindings(app, task.id, FREEFORM);
+    await reconcileTasks(app);
+    expect(readsFor(task.id)).toBe(2); // read again (new turn)...
+    expect(parsesOf(FREEFORM)).toBe(1); // ...but not re-parsed
+    expect(getTask(app, task.id).lastReviewVerdict).toBe("inconclusive");
+    expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+
+    // Different freeform text is looked at afresh.
+    const OTHER = "Actually, still no blocking issues.";
+    info.lastTurnEndedAt += 1_000;
+    writeFindings(app, task.id, OTHER);
+    await reconcileTasks(app);
+    expect(parsesOf(OTHER)).toBe(1);
+    expect(getTask(app, task.id).lastReviewVerdict).toBe("inconclusive");
+    await app.close();
+  });
+
+  // Unreachable through `reconcileTasks` (it passes the task's own review
+  // session), so the guard is pinned on `ingestLateFindings` directly.
+  it("ignores a session that is not the task's current review session", async () => {
+    const { app, task } = await setup();
+    const other = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId!)).get()!;
+    expect(other.id).not.toBe(task.reviewSessionId);
+    const readTaskReviewFindings = vi.fn().mockResolvedValue(APPROVED);
+    const ingest = vi.fn();
+    await ingestLateFindings(app, {
+      task,
+      session: other,
+      info: finishedInfo() as never,
+      backend: { readTaskReviewFindings } as never,
+      ingest,
+    });
+    expect(readTaskReviewFindings).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
     await app.close();
   });
 });
