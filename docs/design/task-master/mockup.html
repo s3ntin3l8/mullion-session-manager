@@ -1447,12 +1447,12 @@
             .join("")}${checkRow("No epic", 0, '<span class="n">2</span>')}
           <div class="h">Agent</div>${checkRow("claude", 1, '<span class="n">19</span>')}${checkRow("auto", 0, '<span class="n">5</span>')}
           <div class="h">Text</div><div class="it" style="color:var(--dim)">search title, issue #, PR #</div></div>`;
-      const popDisplay = `<div class="pop" style="left:560px;top:44px;width:290px"><div class="h">Columns</div>${switchRow("Hide Done &amp; Failed", 0)}${switchRow("Show archived", 0)}${switchRow("Claimed as its own column", 1)}
+      const popDisplay = `<div class="pop" style="left:560px;top:44px;width:290px"><div class="h">Columns</div>${switchRow("Hide Done &amp; Failed", 0)}${switchRow("Show archived", 0)}${switchRow("Claimed as its own column", 0)}
           <div class="h">Layout</div><div class="it">Group by <span class="n">None · <b style="color:var(--fg)">Epic</b> · Project</span></div><div class="it">Card density <span class="n"><b style="color:var(--fg)">Compact</b> · Comfortable</span></div><div class="it">Facets panel <span class="n">Off · <b style="color:var(--fg)">On</b> · Auto</span></div>
           <div class="h">Maintenance</div><div class="it">Clear done tasks <span class="n">12</span></div></div>`;
       const vA =
-        () => `<p class="cap">Facets off (default): one filter row, full board width</p><div class="app">${barA()}${board(TASKS, { stack: true })}${adhoc(false)}</div>
-        <p class="cap" style="margin-top:14px">Facets on (the 1c rail, one click on the bar; remembered; “Auto” opens it above ~1440px or &gt;8 projects). Claimed is merged into In progress here to buy back width.</p><div class="app" style="width:1280px">${barA({ rail: 1 })}<div style="display:flex">${facets()}<div style="flex:1;min-width:0">${board(TASKS, { stack: true, mergeQueued: true })}</div></div>${adhoc(false)}</div>
+        () => `<p class="cap">Facets off (default): one filter row, full board width</p><div class="app">${barA()}${board(TASKS, { stack: true, mergeQueued: true })}${adhoc(false)}</div>
+        <p class="cap" style="margin-top:14px">Facets on (the 1c rail, one click on the bar; remembered; “Auto” opens it above ~1440px or &gt;8 projects). Claimed is merged into In progress everywhere (decided).</p><div class="app" style="width:1280px">${barA({ rail: 1 })}<div style="display:flex">${facets()}<div style="flex:1;min-width:0">${board(TASKS, { stack: true, mergeQueued: true })}</div></div>${adhoc(false)}</div>
         <div class="row" style="margin-top:14px"><div><p class="cap">Project picker open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popProject}</div></div><div><p class="cap">Filter menu open (epic is filtered here, shown as a token)</p><div class="app" style="height:380px;overflow:hidden;width:1100px">${barA({ epicTok: 1 })}${popFilter}</div></div><div><p class="cap">Display menu open</p><div class="app" style="height:330px;overflow:hidden;width:1100px">${barA()}${popDisplay}</div></div></div>`;
 
       /* ───────── 2 · Cards & columns ───────── */
@@ -1609,7 +1609,7 @@
           "board",
           "2 · Cards & columns",
           () => vBoard(false),
-          "<b>Cards, blocked stack, empty-column rails, ad-hoc lane.</b> Toggle to see Claimed merged into In progress.",
+          "<b>Cards, blocked stack, empty-column rails, ad-hoc lane.</b> <b>Decided:</b> Claimed is merged into In progress; queued cards carry a “Queued” badge. The toggle shows the old separate column for comparison.",
           true,
         ],
         ["epic", "3 · Group by epic", vEpic, "<b>Epic swimlanes titled with the epic number.</b>"],
@@ -1634,7 +1634,7 @@
       ];
 
       let cur = location.hash.slice(1) || "a";
-      let merged = false;
+      let merged = true;
       function render() {
         const v = VIEWS.find((x) => x[0] === cur) || VIEWS[1];
         document.getElementById("nav").innerHTML = VIEWS.map(
