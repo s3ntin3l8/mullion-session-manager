@@ -306,10 +306,20 @@ export function parseCodexRateLimitSignal(tailText) {
 
   const message = typeof error.message === "string" ? error.message : null;
   const info = error.codex_error_info ?? null;
-  const variant = info && typeof info === "object" ? (Object.keys(info)[0] ?? null) : null;
+  // Codex writes `codex_error_info` two ways. The object form is a one-key
+  // map (`{ usage_limit_exceeded: { ... } }`, sometimes carrying
+  // `http_status_code`). Some rollouts write the variant as a bare string
+  // (`"usage_limit_exceeded"`) with no nested status — issue #2928. An empty
+  // string, an array, or a missing field is not a variant.
+  let variant = null;
+  if (typeof info === "string") {
+    variant = info.length > 0 ? info : null;
+  } else if (info && typeof info === "object" && !Array.isArray(info)) {
+    variant = Object.keys(info)[0] ?? null;
+  }
 
   let status = null;
-  if (variant !== null && info !== null) {
+  if (variant !== null && info !== null && typeof info === "object" && !Array.isArray(info)) {
     const body = info[variant];
     const raw = body && typeof body === "object" ? body.http_status_code : undefined;
     if (typeof raw === "number") status = raw;
