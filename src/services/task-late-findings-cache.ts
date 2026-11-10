@@ -16,15 +16,26 @@ export const lastLateReadKey = new Map<number, string>();
 /** Per task: `<sessionId>:<sha256>` of the last unstructured late file seen. */
 export const ignoredUnstructured = new Map<number, string>();
 
-/** How many times a throwing late ingest is attempted for one read key. */
+/** How many times in a row a throwing late ingest is retried on every tick. */
 export const MAX_LATE_INGEST_ATTEMPTS = 3;
 
+/** First wait after the per-tick attempts are spent; it doubles per failure. */
+export const LATE_INGEST_RETRY_BASE_MS = 60_000;
+
+/** The wait never grows past this: a long outage is still retried. */
+export const LATE_INGEST_RETRY_MAX_MS = 15 * 60_000;
+
 /**
- * Per task: consecutive ingest failures for one read key. Once `count` reaches
- * `MAX_LATE_INGEST_ATTEMPTS` the key is recorded in `lastLateReadKey`, so a
- * persistently throwing ingest stops being retried (and re-read) every tick.
+ * Per task: consecutive ingest failures for one read key, and (once `count`
+ * reaches `MAX_LATE_INGEST_ATTEMPTS`) the time before which the file is not
+ * read or ingested again. The key is never recorded in `lastLateReadKey` for a
+ * failure, so the file is never dropped: it is retried on a growing interval
+ * until an ingest succeeds or the key moves (a new turn end or verdict).
  */
-export const lateIngestFailures = new Map<number, { key: string; count: number }>();
+export const lateIngestFailures = new Map<
+  number,
+  { key: string; count: number; nextAttemptAt: number }
+>();
 
 /** Test hook: forget every remembered late-read key and ignored file hash. */
 export function resetLateFindingsCaches(): void {

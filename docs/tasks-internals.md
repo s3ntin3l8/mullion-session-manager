@@ -974,9 +974,12 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   successful ingest, or after a read that found no file or an unstructured one —
   so an unchanged key is not read again. A failed read, or an ingest that throws
   (a transient post failure), leaves the key unset and the next tick retries; a
-  throw is contained to its task, and after `MAX_LATE_INGEST_ATTEMPTS` (3)
-  failures for the same key it is recorded anyway and logged, so a persistently
-  failing file is not re-read every tick until the reviewer writes again. Once the reviewer has finished its
+  throw is contained to its task. The first `MAX_LATE_INGEST_ATTEMPTS` (3)
+  failures for the same key retry on the next tick; after that the retry waits
+  a doubling interval (1 min, capped at 15 min) and each attempt logs an error.
+  The key is never recorded for a failure, so the file is never dropped, even
+  for an exited reviewer; a new turn end or verdict time also moves the key and
+  clears the wait. Once the reviewer has finished its
   turn (or exited), the file is ingested through the normal path and replaces
   the inconclusive verdict (a human re-prompting the reviewer after its quota
   recovered is the motivating case); the round is labelled "late verdict".
