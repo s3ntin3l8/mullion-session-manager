@@ -181,6 +181,48 @@ describe("TaskDetailView keyboard access in the real right sidebar", () => {
   });
 });
 
+describe("TaskDetailView review reviewer", () => {
+  const sessionsRow = (view: HTMLElement) => within(view).getByText("Sessions").nextElementSibling!;
+  it("shows the Hermes run instead of 'reviewer: none'", () => {
+    const t = task({ status: "reviewing", reviewRunId: "r1", reviewRunIngestedId: null } as never);
+    setTasks([t]);
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("Hermes · running");
+    expect(row.textContent).not.toContain("reviewer: none");
+  });
+  it("says finished and not sent for the other run states", () => {
+    const fin = task({ status: "reviewing", reviewRunId: "r", reviewRunIngestedId: "r" } as never);
+    setTasks([fin]);
+    const { unmount } = renderDetail(fin.id);
+    expect(sessionsRow(screen.getByTestId("task-detail-view")).textContent).toContain("finished");
+    unmount();
+    const unsent = task({ status: "reviewing", reviewRunId: "r", reviewRunUnsent: true } as never);
+    setTasks([unsent]);
+    renderDetail(unsent.id);
+    expect(sessionsRow(screen.getByTestId("task-detail-view")).textContent).toContain("not sent");
+  });
+  it("opens the PR in the GitHub tab when the task has one", async () => {
+    const open = vi.fn();
+    const t = task({
+      status: "reviewing",
+      reviewRunId: "r",
+      reviewRunIngestedId: "r",
+      prNumber: 7,
+    } as never);
+    setTasks([t], { openRightSidebarPr: open });
+    renderDetail(t.id);
+    await userEvent.click(screen.getByRole("button", { name: /Hermes · finished/ }));
+    expect(open).toHaveBeenCalledWith(4, 7, { kind: "task", taskId: t.id });
+  });
+  it("keeps 'reviewer: none' with neither a session nor a run", () => {
+    const t = task({ status: "reviewing" });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.getByText("reviewer: none")).toBeTruthy();
+  });
+});
+
 describe("TaskDetailView", () => {
   it("leads with the status block, then actions, details and the timeline", () => {
     const t = task({ status: "backlog", title: "Parked thing" });
