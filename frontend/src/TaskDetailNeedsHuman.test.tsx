@@ -75,6 +75,37 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
     expect(screen.queryByText(/could not be posted to GitHub/)).toBeNull();
   });
 
+  it("shows the review-post block from the terminal marker alone, and not once it is cleared", () => {
+    // reviewPostFailed rides beside whatever needsHumanReason the task carries.
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        needsHumanReason: "cap",
+        reviewPostFailed: true,
+        githubSyncError: "Not Found",
+        reviewFindings: "## Round 1\nAll good.",
+      }),
+    ];
+    const { unmount } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(
+      screen.getByText(/approving review could not be posted to GitHub, needs a human — Not Found/),
+    ).toBeInTheDocument();
+    unmount();
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        needsHumanReason: "cap",
+        reviewPostFailed: false,
+        githubSyncError: "Not Found",
+        reviewFindings: "## Round 1\nAll good.",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/could not be posted to GitHub/)).toBeNull();
+  });
+
   it("shows nothing for a merged task", () => {
     tasks = [
       makeTask({

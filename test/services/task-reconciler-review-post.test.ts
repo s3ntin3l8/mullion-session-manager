@@ -734,6 +734,74 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     });
   }
 
+  it("the next round's ingest rewrites a standing failed marker", async () => {
+    const { app, task, read } = await setup("p-post-ingest-rewrites");
+    app.db
+      .update(tasks)
+      .set({ reviewPostPending: "review-post-failed" })
+      .where(eq(tasks.id, task.id))
+      .run();
+    // The new round's post is lost transiently, so its pending record is what remains.
+    mockCreatePullRequestReview.mockRejectedValueOnce(rateLimit());
+
+    await reconcileTasks(app);
+
+    const raw = read().reviewPostPending;
+    expect(read().lastReviewVerdict).toBe("approved");
+    expect(raw).not.toBeNull();
+    expect(raw).not.toBe("review-post-failed");
+    expect(JSON.parse(raw!).verdict).toBe("approved");
+    // The DB is shared across this file: leave no retryable post for later tests.
+    app.db
+      .update(tasks)
+      .set({ status: "failed", reviewPostPending: null })
+      .where(eq(tasks.id, task.id))
+      .run();
+    await app.close();
+  });
+
+  // Reject, retry and claim clear needsHumanReason but not the marker; the sweep
+  // drops it once the status is no longer one a human can still act on.
+  it.each(["in_progress", "claimed", "failed"] as const)(
+    "a task a human sent to %s has the failed marker dropped by the next sweep",
+    async (status) => {
+      const { app, task, read } = await setup(`p-post-exit-${status}`);
+      app.db
+        .update(tasks)
+        .set({
+          status,
+          needsHumanReason: null,
+          reviewPostPending: "review-post-failed",
+          reviewSessionId: null,
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      await reconcileTasks(app);
+      expect(read().reviewPostPending).toBeNull();
+      await app.close();
+    },
+  );
+
+  it("keeps the failed marker while the task is still in review or approved and unmerged", async () => {
+    for (const status of ["reviewing", "done"] as const) {
+      const { app, task, read } = await setup(`p-post-keep-${status}`);
+      app.db
+        .update(tasks)
+        .set({
+          status,
+          needsHumanReason: "review-post-failed",
+          reviewPostPending: "review-post-failed",
+          lastReviewVerdict: "approved",
+          reviewSessionId: null,
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      await reconcileTasks(app);
+      expect(read().reviewPostPending).toBe("review-post-failed");
+      await app.close();
+    }
+  });
+
   it("POST /merge on a task holding cap plus a failed post releases the post hold", async () => {
     const { app, task, read } = await setup("p-post-route-cap");
     app.db

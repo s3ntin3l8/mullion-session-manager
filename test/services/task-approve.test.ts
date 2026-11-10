@@ -164,6 +164,36 @@ describe("approveTask", () => {
     await app.close();
   });
 
+  it("clears the terminal review-post-failed marker, and leaves a genuinely pending post alone", async () => {
+    const app = await buildApp();
+    const { task, project } = await createProjectAndReviewingTask(app, false);
+    app.db
+      .update(tasks)
+      .set({ reviewPostPending: "review-post-failed" })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
+    expect((await approveTask(app, held, project, "approve")).ok).toBe(true);
+    expect(
+      app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!.reviewPostPending,
+    ).toBeNull();
+
+    // A still-pending post (a JSON blob, not the marker) must survive an approve.
+    const second = await createProjectAndReviewingTask(app, false);
+    const pending = JSON.stringify({ key: "k", body: "b", verdict: "approved", posted: false });
+    app.db
+      .update(tasks)
+      .set({ reviewPostPending: pending })
+      .where(eq(tasks.id, second.task.id))
+      .run();
+    const heldPending = app.db.select().from(tasks).where(eq(tasks.id, second.task.id)).get()!;
+    expect((await approveTask(app, heldPending, second.project, "approve")).ok).toBe(true);
+    expect(
+      app.db.select().from(tasks).where(eq(tasks.id, second.task.id)).get()!.reviewPostPending,
+    ).toBe(pending);
+    await app.close();
+  });
+
   it("does not set mergeRequestedAt when the project's mergeOnApprove is off", async () => {
     const app = await buildApp();
     const { task, project } = await createProjectAndReviewingTask(app, false);
