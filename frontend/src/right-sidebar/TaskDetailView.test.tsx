@@ -81,6 +81,45 @@ const renderDetail = (id: number, onBack = vi.fn()) =>
 
 beforeEach(() => vi.restoreAllMocks());
 
+describe("TaskDetailView keyboard access", () => {
+  it("focuses Back when a task's detail appears, so Enter on a board card does not land nowhere", () => {
+    const t = task({ title: "Reach me" });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back" }));
+  });
+
+  it("moves focus again when another task replaces the one shown, and names it as a region", () => {
+    const a = task({ title: "First one" });
+    const b = task({ title: "Second one" });
+    setTasks([a, b]);
+    const { rerender } = renderDetail(a.id);
+    expect(screen.getByRole("region", { name: /First one/ })).toBeTruthy();
+    (document.activeElement as HTMLElement).blur();
+    rerender(<TaskDetailView taskId={b.id} onBack={vi.fn()} />);
+    expect(screen.getByRole("region", { name: /Second one/ })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back" }));
+  });
+
+  it("does not steal focus on an unrelated re-render of the same task", () => {
+    const t = task({ title: "Stay put" });
+    setTasks([t]);
+    const { rerender } = renderDetail(t.id);
+    const other = document.createElement("button");
+    document.body.appendChild(other);
+    other.focus();
+    rerender(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+    expect(document.activeElement).toBe(other);
+    other.remove();
+  });
+
+  it("focuses Back on the not-found state too", () => {
+    setTasks([]);
+    renderDetail(999);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back" }));
+  });
+});
+
 describe("TaskDetailView", () => {
   it("leads with the status block, then actions, details and the timeline", () => {
     const t = task({ status: "backlog", title: "Parked thing" });

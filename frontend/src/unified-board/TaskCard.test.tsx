@@ -8,6 +8,7 @@
 // are TaskColumn.test.tsx's — see that file's own header comment. Still
 // mounts the full `<UnifiedBoard>` (same reasoning as
 // session-row/Header.test.tsx's own header comment).
+import type * as layoutTierModule from "../lib/layoutTier.js";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -77,6 +78,14 @@ function storeState() {
     prsByProject,
   };
 }
+
+// useOpenTask (which the board uses to open a task) reads the layout tier; the
+// real one resolves it from matchMedia, which jsdom does not provide. These
+// tests assert the desktop path (selection in the sidebar's Tasks view).
+vi.mock("../lib/layoutTier.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof layoutTierModule>()),
+  useLayoutContext: () => ({ tier: "desktop" as const, tabletPaneCap: 2 }),
+}));
 
 vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {

@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "./UnifiedBoard.js";
+import type * as layoutTierModule from "./lib/layoutTier.js";
 import type {
   GitBranchesResult,
   GitDiffStats,
@@ -51,6 +52,9 @@ let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 let hideEndedSessions: boolean;
 let selectedTaskId: number | null = null;
+// The tier useOpenTask reads (lib/layoutTier.ts's useLayoutContext); the real
+// one resolves it from matchMedia, which jsdom does not provide.
+let layoutTier: "desktop" | "tablet" | "phone" = "desktop";
 const requestOpenTask = vi.fn();
 const openRightSidebarTask = vi.fn();
 
@@ -92,6 +96,11 @@ function storeState() {
     mutedSessionIds: [] as number[],
   };
 }
+
+vi.mock("./lib/layoutTier.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof layoutTierModule>()),
+  useLayoutContext: () => ({ tier: layoutTier, tabletPaneCap: 2 }),
+}));
 
 vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
@@ -160,6 +169,7 @@ beforeEach(() => {
   requestOpenTask.mockClear();
   openRightSidebarTask.mockClear();
   selectedTaskId = null;
+  layoutTier = "desktop";
   deleteSession.mockClear();
   refreshTasks.mockClear();
   updateTask.mockClear();
@@ -351,6 +361,7 @@ describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
 
   it("phone and tablet: a card click asks for the full-screen docked panel instead", async () => {
     tasks = [makeTask({ id: 7, status: "in_progress", title: "Open on phone" })];
+    layoutTier = "phone";
     const user = userEvent.setup();
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
 

@@ -7,6 +7,7 @@
 // the strip's status label/logo are derived by TaskSessionSlot itself off
 // the linked session's live store data, which is simplest to drive through
 // a real board render.
+import type * as layoutTierModule from "../lib/layoutTier.js";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -74,6 +75,14 @@ function storeState() {
     prsByProject,
   };
 }
+
+// useOpenTask (which the board uses to open a task) reads the layout tier; the
+// real one resolves it from matchMedia, which jsdom does not provide. These
+// tests assert the desktop path (selection in the sidebar's Tasks view).
+vi.mock("../lib/layoutTier.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof layoutTierModule>()),
+  useLayoutContext: () => ({ tier: "desktop" as const, tabletPaneCap: 2 }),
+}));
 
 vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {

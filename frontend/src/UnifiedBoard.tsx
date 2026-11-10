@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useOpenTask } from "./hooks/useOpenTask.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -261,20 +262,11 @@ export function UnifiedBoard({
   };
 
   // A card click selects the task and shows its detail (#2843: the board no
-  // longer has a drawer of its own). Desktop: the right sidebar's Tasks view
-  // opens in detail mode beside the board. `phone` is the compact board
-  // layout (phone and tablet): App.tsx renders no right sidebar on phone and
-  // floats it over the navigator drawer on tablet, where the board lives, so
-  // those tiers open the full-screen docked TaskDetail panel instead
-  // (usePhoneTasksNavigator keeps the Tasks view/navigator in step).
-  const openTask = useCallback(
-    (taskId: number) => {
-      const state = useDashboardStore.getState();
-      if (phone) state.requestOpenTask(taskId);
-      else state.openRightSidebarTask(taskId);
-    },
-    [phone],
-  );
+  // longer has a drawer of its own): in the sidebar's Tasks view on desktop,
+  // in the full-screen docked panel on phone and tablet. useOpenTask owns that
+  // tier decision for every caller (this board, the GitHub and Git views'
+  // task chips, the issue view), so they cannot drift apart.
+  const openTask = useOpenTask();
 
   // Per-status counts (after the board's filters) for the phone strip, and
   // which column the phone shows: the user's pick if it's still offered,
