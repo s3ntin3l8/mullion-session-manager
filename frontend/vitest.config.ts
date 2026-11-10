@@ -59,7 +59,12 @@ export default defineConfig({
     // overlay contract in ui/sidebar/sidebar-kit.test.tsx; github-pr.css: the task
     // strip's menu staying unclipped, ui/sidebar/TaskStatusBlock.test.tsx).
     css: {
-      include: [/styles\/tokens\.css/, /styles\/sidebar-kit\.css/, /styles\/github-pr\.css/],
+      include: [
+        /styles\/tokens\.css/,
+        /styles\/sidebar-kit\.css/,
+        /styles\/github-pr\.css/,
+        /styles\/task-board\.css/,
+      ],
     },
     maxWorkers,
   },

@@ -100,8 +100,16 @@
   border-left-color: var(--task-epic-colour, var(--ring));
   box-shadow: 0 0 0 1px var(--ring);
 }
+/* The links row wraps (agent and age drop to a second line) instead of spilling past the
+   card when the board is narrow, e.g. with the right sidebar open (#2917). Each item stays
+   on one line and truncates only if it alone is wider than the card. */
+.task-card {
+  min-width: 0;
+}
 .task-card-meta-links {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  min-width: 0;
 }
 .task-card-meta-spacer {
   flex: 1;
@@ -111,6 +119,10 @@
 .task-card-meta-links .task-card-agent,
 .task-card-meta-links .task-card-age {
   white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The project is what tells #310 from #2310 across projects, so it keeps its room and
    truncates last; the context row wraps rather than clip it to nothing. */
