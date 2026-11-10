@@ -20,8 +20,8 @@ function walk(dir: string): string[] {
 
 // Every object-literal key or shorthand named `mergedAt`, as `file#function`
 // (the nearest named function, method or variable around it). A write to
-// `tasks` through any of them would bypass `mergeRecordedSet`, so the set is
-// pinned: a new entry must be added below on purpose.
+// `tasks` through any of them would bypass `mergeRecordedSet`, so the list is
+// pinned (one entry per literal): a new entry must be added below on purpose.
 function mergedAtLiterals(file: string): string[] {
   const sf = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
   const found: string[] = [];
@@ -58,6 +58,7 @@ const NOT_A_TASKS_WRITE = [
   "routes/webhooks.ts#webhookRoutes",
   "services/github-merged-prs.ts#toRecord",
   "services/github-merged-prs.ts#isPullRequestMerged",
+  "services/github-merged-prs.ts#isPullRequestMerged",
   "services/github-request.ts#getPullRequestByNumber",
   "services/github-write.ts#getMergedClosingPullRequest",
   "services/github-write.ts#listClosedPullRequests",
@@ -72,11 +73,11 @@ describe("merge-recording sites", () => {
   const files = walk(SRC).filter((f) => !f.endsWith(HELPER));
 
   it("write mergedAt only through mergeRecordedSet: no other object literal carries the key", () => {
-    const literals = new Set(files.flatMap(mergedAtLiterals));
-    const offenders = [...literals].filter((l) => !NOT_A_TASKS_WRITE.includes(l));
-    expect(offenders).toEqual([]);
-    // An entry that no longer matches means the scan went blind or the list is stale.
-    expect(NOT_A_TASKS_WRITE.filter((l) => !literals.has(l))).toEqual([]);
+    // Compared as a sorted list, not a set: two literals in one function are two
+    // entries, so a third added there (a bypass) is a mismatch. A renamed or
+    // removed site is one too, so the scan cannot go silently blind.
+    const literals = files.flatMap(mergedAtLiterals).sort();
+    expect(literals).toEqual([...NOT_A_TASKS_WRITE].sort());
   });
 
   it("flags a bypass inside a file that already uses the helper, and a one-line shorthand", () => {

@@ -1063,7 +1063,7 @@ describe("a worker that exits within seconds", () => {
       await expectRetryAtBackoff(ctx);
     });
 
-    it("keeps the old worker and retries on a later tick while the terminate keeps throwing", async () => {
+    it("keeps the old worker, records the stop failure and retries on a later tick while the terminate keeps throwing", async () => {
       const ctx = await abortedThenRetried("p-abort-terminate-always", { sessionStatus: "active" });
       const { app, task, create, now, t0 } = ctx;
       const terminate = vi.spyOn(app.pty, "terminate").mockRejectedValue(new Error("scope busy"));
@@ -1083,12 +1083,11 @@ describe("a worker that exits within seconds", () => {
       } as never);
       now.mockReturnValue(t0 + RAPID_EXIT_BACKOFF_MS + 1000);
       // Past the backoff the retry still cannot stop the old worker: it spawns
-      // nothing and holds nothing, leaving the stop for a later tick.
+      // nothing and records the stop failure, leaving the stop for a later tick.
       await attemptAutoRebase(app, getTask(app, task.id), project, "main");
       expect(create).not.toHaveBeenCalled();
-      expect(getTask(app, task.id).mergeError ?? "").not.toContain(
-        "suggestions round is in flight",
-      );
+      // The catch path itself produced the message, not another blocker.
+      expect(getTask(app, task.id).mergeError ?? "").toContain("could not be stopped");
       expect(getTask(app, task.id).rebaseAttempts).toBe(0);
 
       // The scope recovers: the next tick stops the old worker and respawns.
