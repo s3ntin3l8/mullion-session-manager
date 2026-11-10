@@ -1165,9 +1165,17 @@ button.sb-chip--label[aria-pressed="true"] {
 }
 .sb-taskstatus-attn {
   margin-left: auto;
+  /* needsYouReason can carry unbounded server text (a merge error); ellipsise it
+     the way .sb-row-meta does, the full text is in the title. */
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sb-taskstatus-next {
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: 0.75rem;
   color: var(--muted);
 }
@@ -1262,6 +1270,14 @@ button.sb-chip--label[aria-pressed="true"] {
   margin-top: 8px;
   font-size: 0.75rem;
   color: var(--muted);
+  overflow-wrap: anywhere;
+}
+/* A long body is clamped (not sliced mid-Markdown, which could cut a code fence). */
+.sb-body-text--clamped {
+  max-height: 7.5em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
 }
 .sb-hier-group {
   display: flex;

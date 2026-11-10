@@ -131,6 +131,14 @@ export function taskNextStep(task: Task): NextStep {
       return { lead: "The review is running. Approval is automatic when it passes." };
     }
     case "done":
+      if (task.mergeError) {
+        return {
+          lead: `Approved, but the merge failed: ${task.mergeError}. Fix it on GitHub or merge by hand.`,
+        };
+      }
+      if (task.releaseError) {
+        return { lead: `Merged, but the release failed: ${task.releaseError}.` };
+      }
       if (task.mergedAt !== null) return { lead: "Merged. Nothing left to do." };
       return task.prNumber !== null
         ? { lead: "Approved. The pull request is waiting for a merge." }

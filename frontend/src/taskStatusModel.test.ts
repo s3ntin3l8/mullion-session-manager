@@ -26,6 +26,8 @@ function task(over: Partial<Task> = {}): Task {
     blockedState: "clear",
     blockers: [],
     failureReason: null,
+    mergeError: null,
+    releaseError: null,
     sessionId: null,
     mergedAt: null,
     prNumber: null,
@@ -113,6 +115,15 @@ describe("taskNextStep", () => {
     );
     expect(taskNextStep(task({ status: "reviewing" })).lead).toMatch(/automatic/);
     expect(taskNextStep(task({ status: "done", mergedAt: "x" })).lead).toMatch(/Merged/);
+    expect(
+      taskNextStep(task({ status: "done", prNumber: 4, mergeError: "required check failing" }))
+        .lead,
+    ).toBe(
+      "Approved, but the merge failed: required check failing. Fix it on GitHub or merge by hand.",
+    );
+    expect(
+      taskNextStep(task({ status: "done", mergedAt: "x", releaseError: "tag exists" })).lead,
+    ).toBe("Merged, but the release failed: tag exists.");
     expect(taskNextStep(task({ status: "done", prNumber: 4 })).lead).toMatch(/waiting for a merge/);
     expect(taskNextStep(task({ status: "done" })).lead).toMatch(/Nothing left/);
     expect(taskNextStep(task({ status: "failed", failureReason: "boom" })).lead).toBe("boom");

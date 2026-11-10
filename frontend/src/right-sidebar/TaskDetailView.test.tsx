@@ -58,6 +58,8 @@ const task = (o: Partial<Task>): Task => {
     reviewingAt: null,
     completedAt: null,
     mergedAt: null,
+    mergeError: null,
+    releaseError: null,
     ...o,
   } as unknown as Task;
 };
@@ -239,11 +241,25 @@ describe("TaskDetailView", () => {
     const t = task({ body: `start ${"word ".repeat(120)}END` });
     setTasks([t]);
     renderDetail(t.id);
-    expect(screen.queryByText(/END/)).toBeNull();
+    const text = screen.getByText(/END/).closest("[id^='task-body-']") as HTMLElement;
+    expect(text.className).toContain("sb-body-text--clamped");
+    expect(screen.getByRole("button", { name: "Show more" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
     await user.click(screen.getByRole("button", { name: "Show more" }));
-    expect(screen.getByText(/END/)).toBeTruthy();
+    expect(text.className).not.toContain("sb-body-text--clamped");
     await user.click(screen.getByRole("button", { name: "Show less" }));
-    expect(screen.queryByText(/END/)).toBeNull();
+    expect(text.className).toContain("sb-body-text--clamped");
+  });
+
+  it("says a done task's merge failed instead of 'nothing left to do'", () => {
+    const t = task({ status: "done", prNumber: 5, mergeError: "required check failing on main" });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(
+      screen.getByText(/Approved, but the merge failed: required check failing on main/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Nothing left to do/)).toBeNull();
   });
 
   it("hides the step tracker for a failed task and shows why it failed", () => {

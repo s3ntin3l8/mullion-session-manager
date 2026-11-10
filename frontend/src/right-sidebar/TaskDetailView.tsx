@@ -304,11 +304,20 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         </dl>
         {body && (
           <div className="sb-body">
-            <Markdown
-              text={bodyOpen || !longBody ? body : `${body.slice(0, BODY_COLLAPSED_CHARS)}…`}
-            />
+            <div
+              id={`task-body-${task.id}`}
+              className={longBody && !bodyOpen ? "sb-body-text--clamped" : undefined}
+            >
+              <Markdown text={body} />
+            </div>
             {longBody && (
-              <button type="button" className="sb-link" onClick={() => setBodyOpen((v) => !v)}>
+              <button
+                type="button"
+                className="sb-link"
+                aria-expanded={bodyOpen}
+                aria-controls={`task-body-${task.id}`}
+                onClick={() => setBodyOpen((v) => !v)}
+              >
                 {bodyOpen ? "Show less" : "Show more"}
               </button>
             )}
