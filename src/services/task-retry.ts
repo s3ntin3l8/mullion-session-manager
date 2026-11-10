@@ -42,6 +42,28 @@ export async function enqueueRetry(
   // queued retry then runs with the surviving task-level choice.
   const agentChangeModelPatch = agentChangeModelClears(app, task, project, opts);
 
+  // The old worker must be gone before the retry is dispatchable, or a sweep
+  // could resume the branch under it. So: validate what we can, kill, then make
+  // ONE atomic write that re-checks everything (the row never shows `claimed`
+  // with a live session). A failed task's session is meant to be dead anyway,
+  // so killing it ahead of a (racing) refusal costs nothing. Best-effort — a
+  // kill failure must not block the retry.
+  if (
+    task.status === "failed" &&
+    task.sessionId !== null &&
+    task.supersededAt === null &&
+    task.branchName
+  ) {
+    try {
+      await killSession(app, task.sessionId, "detach");
+    } catch (err) {
+      app.log.warn(
+        { err, taskId, sessionId: task.sessionId },
+        "task retry: failed to kill the previous session, leaving it as-is",
+      );
+    }
+  }
+
   const reservation = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
     if (!current || current.status !== "failed") {
@@ -58,11 +80,7 @@ export async function enqueueRetry(
     const patch: Partial<typeof tasks.$inferInsert> = {
       status: "claimed",
       queuedAt: new Date(),
-      // Not queued for dispatch yet: the old session is killed first (below),
-      // so a sweep cannot resume the branch while that worker still holds it.
-      // dispatchClaimedTask and dispatchQueuedRetry both skip this row until
-      // the flag is set.
-      resumeQueued: false,
+      resumeQueued: true,
       // A human retry resumes the same branch with a worker that may well
       // rebase this time: a spent auto-rebase budget must not outlive it
       // (same reasoning as the Reject route in routes/tasks.ts).
@@ -78,7 +96,7 @@ export async function enqueueRetry(
       completedAt: null,
       claimedAt: null,
       startedAt: null,
-      // sessionId is cleared after the old session is killed (below).
+      sessionId: null,
       // Stale "needs a human" markers from the failed run (give-up from review).
       autoReturnCapAnnouncedAt: null,
       needsHumanReason: null,
@@ -120,26 +138,6 @@ export async function enqueueRetry(
       detail: `Task is not failed (status: ${reservation.currentStatus ?? "unknown"})`,
     };
   }
-
-  // Kill the task's OLD session before the retry becomes dispatchable, rather
-  // than leave an orphan. Best-effort — a kill failure must not block the retry.
-  if (task.sessionId !== null) {
-    try {
-      await killSession(app, task.sessionId, "detach");
-    } catch (err) {
-      app.log.warn(
-        { err, taskId, sessionId: task.sessionId },
-        "task retry: failed to kill the previous session, leaving it as-is",
-      );
-    }
-  }
-
-  // Now dispatchable: the old worker is gone, so release the row to the sweep.
-  app.db
-    .update(tasks)
-    .set({ sessionId: null, resumeQueued: true })
-    .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
-    .run();
 
   // Recorded AFTER the write: the transition listener (task-dispatch.ts)
   // schedules a dispatch sweep on any move into "claimed", so a free slot
