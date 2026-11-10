@@ -23,11 +23,11 @@ type ProjectRow = typeof projects.$inferSelect;
 // once per REPOLL_INTERVAL_MS (FLAGGED_REPOLL_INTERVAL_MS once flagged), never
 // once archived, and at most MAX_REPOLLS_PER_SWEEP per tick.
 export const REPOLL_GRACE_MS = 30 * 60_000;
-export const REPOLL_INTERVAL_MS = 60 * 60_000;
+const REPOLL_INTERVAL_MS = 60 * 60_000;
 // A task already flagged `pr-closed` is polled far less often: the only thing
 // left to find is a human reopening and merging the PR by hand.
-export const FLAGGED_REPOLL_INTERVAL_MS = 6 * 60 * 60_000;
-export const MAX_REPOLLS_PER_SWEEP = 10;
+const FLAGGED_REPOLL_INTERVAL_MS = 6 * 60 * 60_000;
+const MAX_REPOLLS_PER_SWEEP = 10;
 const MAX_LEDGER_ENTRIES = 500;
 
 const lastPolledAt = new Map<number, number>();

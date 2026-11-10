@@ -22,7 +22,7 @@ export interface GqlLatestReviewNode {
 
 /** The GraphQL selection both queries use, so they cannot drift. */
 /** Page size for `latestReviews`, shared by the list and the detail so their summaries cannot differ. */
-export const LATEST_REVIEWS_PAGE = 10;
+const LATEST_REVIEWS_PAGE = 10;
 
 export function latestReviewsSelection(first: number = LATEST_REVIEWS_PAGE): string {
   return `latestReviews(first: ${first}) { nodes { author { login __typename } state body submittedAt commit { oid } } }`;
@@ -46,7 +46,7 @@ export const OPINIONATED_REVIEWS_SELECTION =
  * "Ready". For an author in both lists the opinionated entry wins, so a later
  * COMMENTED still cannot erase a block.
  */
-export function recoveredReviews(
+function recoveredReviews(
   opinionated: readonly (GqlLatestReviewNode | null)[],
   latest: readonly (GqlLatestReviewNode | null)[],
 ): GqlLatestReviewNode[] {

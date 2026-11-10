@@ -152,7 +152,7 @@ function describeDevice(device: Device): string {
 }
 
 // Reconnect-prompt scan cadence (issue #1380).
-export const DISCOVERY_RECONNECT_POLL_MS = 5000;
+const DISCOVERY_RECONNECT_POLL_MS = 5000;
 
 function ReconnectPrompt({
   device,

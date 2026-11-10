@@ -19,7 +19,7 @@ export const TITLE_CHANGE_EVENT_DEBOUNCE_MS = 3_000;
 // otherwise keep resetting the trailing debounce forever and starve the
 // event feed of any title_change at all for a session that never stops
 // retitling.
-export const TITLE_CHANGE_EVENT_CEILING_MS = 15_000;
+const TITLE_CHANGE_EVENT_CEILING_MS = 15_000;
 
 /**
  * Trailing-edge debounce of a session's title_change EVENT, with a ceiling

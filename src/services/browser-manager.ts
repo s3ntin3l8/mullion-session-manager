@@ -74,7 +74,7 @@ export interface BrowserManagerOptions {
 }
 
 /** Endpoint of a caller that names none (the project's single/default preview). */
-export const LEGACY_BROWSER_ENDPOINT = "";
+const LEGACY_BROWSER_ENDPOINT = "";
 
 /** The execution target a browser belongs to (issue #2448): the project plus
  * the host, checkout and preview endpoint its work lives in. Two sessions on

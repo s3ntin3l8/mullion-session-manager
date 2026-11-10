@@ -129,7 +129,7 @@ const PATH_MIDDLE_CHAR_RE = /[^\s"'`()<>[\]{},;|*?$=\\│┃║▏▕]/;
 const PATH_NEW_TOKEN_RE = /^(?:~\/|\/|\.{1,2}\/)/;
 const PATH_PRODUCER_TAIL_RE = /\S*\/\S*$/;
 
-export const PATH_PROFILE: WrapTokenProfile = {
+const PATH_PROFILE: WrapTokenProfile = {
   middleCharRe: PATH_MIDDLE_CHAR_RE,
   startsNewToken: (body) => PATH_NEW_TOKEN_RE.test(body),
   admits(producerStripped, prefix) {

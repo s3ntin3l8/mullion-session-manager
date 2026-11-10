@@ -28,7 +28,7 @@ import type { FastifyInstance } from "fastify";
 // where Mullion is SIGKILLed and never gets to run its own cleanup.
 
 /** How often the live-session predicate is re-evaluated. */
-export const DEFAULT_KEEP_AWAKE_INTERVAL_MS = 10_000;
+const DEFAULT_KEEP_AWAKE_INTERVAL_MS = 10_000;
 
 /** The `caffeinate` flags Mullion uses: no display sleep, no idle sleep, no
  * sleep on AC power, and declare the user active. */

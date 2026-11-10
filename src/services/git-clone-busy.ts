@@ -28,7 +28,7 @@ const busy = new Set<string>();
  * The cwd is resolved, so `/x` and `/x/` are the same key — they are the same
  * clone, and two keys for one clone would defeat the whole registry.
  */
-export function cloneKey(hostId: string, cwd: string): string {
+function cloneKey(hostId: string, cwd: string): string {
   return `${hostId}:${path.resolve(cwd)}`;
 }
 

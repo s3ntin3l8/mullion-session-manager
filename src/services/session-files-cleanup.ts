@@ -52,7 +52,7 @@ export async function cleanupSessionFiles(sessionsDir: string, id: string): Prom
 }
 
 /** Minimum age before an untracked session temp dir is considered orphaned (1 minute). */
-export const MIN_ORPHAN_TMP_AGE_MS = 60_000;
+const MIN_ORPHAN_TMP_AGE_MS = 60_000;
 
 export interface SweepLogger {
   warn(obj: unknown, msg: string): void;

@@ -38,10 +38,10 @@ export type { ResizeMessage, ExitedMessage, GeometryMessage, ResyncMessage, Resy
 // Close code the remote proxy uses to make the browser reconnect (and so
 // replay) after it dropped upstream output, when the agent can't resync in
 // place (an older agent that never acks) — see proxyToRemoteAttach.
-export const WS_CLOSE_RESYNC = 4001;
+const WS_CLOSE_RESYNC = 4001;
 // How long the proxy waits for the agent's {type:"resync"} ack after sending
 // a resync-request before assuming an older agent and falling back.
-export const REMOTE_RESYNC_ACK_TIMEOUT_MS = 3000;
+const REMOTE_RESYNC_ACK_TIMEOUT_MS = 3000;
 // Browser->upstream bytes buffered while the upstream is still CONNECTING.
 const REMOTE_INPUT_QUEUE_MAX_BYTES = 64 * 1024;
 

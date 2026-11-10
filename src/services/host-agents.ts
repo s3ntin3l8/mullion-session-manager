@@ -288,8 +288,7 @@ export function hostLaunchOptions(app: FastifyInstance, hostId: string): string[
 }
 
 /** Where the remedy for a gated operation lives: the per-host Update action. */
-export const UPDATE_HINT =
-  "update this host's Mullion from Settings → Hosts (the host's Update action)";
+const UPDATE_HINT = "update this host's Mullion from Settings → Hosts (the host's Update action)";
 
 /** A gated operation or launch option: the host's agent cannot do it (issue #2569). */
 export interface UnsupportedGate {
@@ -365,7 +364,7 @@ export function requireLaunchOptions(
 }
 
 /** The negotiated protocol for a remote host; null until first read. */
-export function hostProtocol(app: FastifyInstance, hostId: string): HostProtocol | null {
+function hostProtocol(app: FastifyInstance, hostId: string): HostProtocol | null {
   return app.hostAgentTracker?.get(hostId)?.protocol ?? null;
 }
 

@@ -34,7 +34,7 @@
 // does recognize.
 export const DANGEROUS_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 // eslint-disable-next-line no-control-regex -- deliberately matching C0 controls + DEL
-export const CONTROL_CHARACTER_RE = /[\x00-\x1f\x7f]/;
+const CONTROL_CHARACTER_RE = /[\x00-\x1f\x7f]/;
 // Hermes review, PR #894 — this guard's ORIGINAL two checks above assumed
 // `name` was only ever used as an OBJECT KEY (opencode-skills.ts's
 // `skill[name] = ...`) or a fixed-depth DIRECTORY NAME under an

@@ -226,10 +226,7 @@ export function closeSessionBrowserBindings(app: FastifyInstance, sessionId: num
 /** Closes `target` unless a session is bound to it or attaching to it. For an
  * attach that failed after it had launched the target, which no binding row
  * would ever close. Never throws. */
-export async function closeTargetIfUnused(
-  app: FastifyInstance,
-  target: BrowserTarget,
-): Promise<void> {
+async function closeTargetIfUnused(app: FastifyInstance, target: BrowserTarget): Promise<void> {
   try {
     if (!app.hasDecorator("db")) {
       // An agent host has no bindings: the primary owns them.
@@ -409,7 +406,7 @@ function recordPendingClose(
 /** Drops the pending closes of hosts that are no longer in the registry: no
  * retry can ever reach them, and a leaked count for them would show on no
  * host. Returns how many were dropped. */
-export function pruneOrphanedPendingCloses(app: FastifyInstance): number {
+function pruneOrphanedPendingCloses(app: FastifyInstance): number {
   let pruned = 0;
   for (const row of app.db.select().from(pendingBrowserCloses).all()) {
     if (row.hostId === LOCAL_HOST_ID || getHostRow(app, row.hostId)) continue;

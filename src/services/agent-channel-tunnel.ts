@@ -106,7 +106,7 @@ export class ChannelBusyError extends Error {
   }
 }
 
-export function isUploadPath(path: string): boolean {
+function isUploadPath(path: string): boolean {
   const p = path.split("?")[0]!;
   return (
     p === "/internal/uploads" ||
@@ -115,14 +115,14 @@ export function isUploadPath(path: string): boolean {
   );
 }
 
-export function isDownloadPath(path: string): boolean {
+function isDownloadPath(path: string): boolean {
   const p = path.split("?")[0]!;
   return p === "/internal/project-files/download";
 }
 
 /** The HTTP preview forwards (#2620): they carry a browser's request, so they
  * get the browser-facing header treatment and the large body limits. */
-export function isPreviewPath(path: string): boolean {
+function isPreviewPath(path: string): boolean {
   const p = path.split("?")[0]!;
   return p.startsWith("/internal/preview/") || p === "/internal/configured-preview";
 }
@@ -141,7 +141,7 @@ function formatLimit(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MiB` : `${bytes} bytes`;
 }
 /** A response that carries no body whatever its Content-Length says. */
-export function responseHasNoBody(method: string, status: number): boolean {
+function responseHasNoBody(method: string, status: number): boolean {
   return (
     method.toUpperCase() === "HEAD" ||
     (status >= 100 && status < 200) ||
@@ -149,14 +149,14 @@ export function responseHasNoBody(method: string, status: number): boolean {
     status === 304
   );
 }
-export function requestTooLargeMessage(cap: number): string {
+function requestTooLargeMessage(cap: number): string {
   return `request body exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
 }
 /** Set on the 413 the agent answers when a response head declares more than
  * the channel's limit, so it is not mistaken for the origin's own 413. */
 export const RESPONSE_TOO_LARGE_HEADER = "x-mullion-response-too-large";
 
-export function responseTooLargeMessage(cap: number): string {
+function responseTooLargeMessage(cap: number): string {
   return `response exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
 }
 
@@ -205,7 +205,7 @@ function hasUnsafeChar(target: string): boolean {
  * Decodes path segments and checks for undecodable, double-encoded, ws, and dot-segment paths.
  * Returns null if the path is invalid, malformed or prohibited.
  */
-export function validateAndDecodePath(target: string): string | null {
+function validateAndDecodePath(target: string): string | null {
   const pathname = target.split("?")[0]!;
   const segments = pathname.split("/");
   const decodedSegments: string[] = [];

@@ -11,7 +11,7 @@ export const MAX_MATCH_LENGTH = 256;
  * cost of one test is bounded however much the child prints. Best-effort
  * under a flood: >64 KiB of output inside one debounce can scroll a match out
  * of the raw window, and ANSI-heavy output strips to far fewer chars. */
-export const OUTPUT_WINDOW_CHARS = 16 * 1024;
+const OUTPUT_WINDOW_CHARS = 16 * 1024;
 /** Raw bytes kept to rebuild the window (escape sequences inflate raw output). */
 const RAW_WINDOW_BYTES = 64 * 1024;
 /** Matches are evaluated at most this often while output streams in. */

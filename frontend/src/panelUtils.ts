@@ -589,7 +589,7 @@ export function childWantsAutoOpen(
 // cleared server-side, so without a bound an active hinted child whose parent
 // panel isn't open would be retried (and could pop open) for the tab's whole
 // lifetime, and a page reload would replay every old hint.
-export const FRESH_HINT_WINDOW_MS = 60_000;
+const FRESH_HINT_WINDOW_MS = 60_000;
 
 function isFreshHint(createdAt: string, now: number): boolean {
   // max(0, …): a server clock ahead of the client reads as "just spawned".
@@ -1210,21 +1210,21 @@ function collectFloatingPanelIds(
 // closes any of these found in a *live*, already-restored dockview instance,
 // so an activated workspace's blob gets rewritten (via the caller's own
 // post-restore scheduleSave) instead of carrying the id forever.
-export const LEGACY_PANEL_IDS = ["tasks"] as const;
+const LEGACY_PANEL_IDS = ["tasks"] as const;
 
 // Component kinds whose panels are swept by *kind* rather than by fixed id,
 // because their ids are per project (`git-<projectId>`, the retired dock Git
 // panel — Source Control now lives in the right sidebar; see
 // GitPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
 // registered in panels/registry.tsx.
-export const LEGACY_PANEL_KINDS = ["git"] as const;
+const LEGACY_PANEL_KINDS = ["git"] as const;
 
 // The five per-project setup panels that now live as tabs of one
 // `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component
 // kinds stay registered (panels/registry.tsx renders the hub on the matching
 // tab) so a saved layout can never throw on restore; migrateLegacyProjectPanels
 // below is the self-heal half that converts any found in a live dockview.
-export const LEGACY_PROJECT_PANEL_KINDS: Record<string, ProjectHubTab> = {
+const LEGACY_PROJECT_PANEL_KINDS: Record<string, ProjectHubTab> = {
   "agent-rules": "agent-rules",
   "project-briefing": "briefing",
   "project-setup": "scaffold",

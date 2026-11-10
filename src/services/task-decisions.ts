@@ -11,7 +11,7 @@ import { redactSecrets } from "./scaffold-failure.js";
 // PR description, where a human can see them.
 
 /** The line-start prefixes the worker is asked to use. */
-export const DECISION_PREFIXES = ["Decision:", "Skipped:", "Deferred:", "Not run locally:"];
+const DECISION_PREFIXES = ["Decision:", "Skipped:", "Deferred:", "Not run locally:"];
 
 export const MAX_DECISION_LINES = 20;
 export const MAX_DECISION_LINE_LENGTH = 300;

@@ -20,7 +20,7 @@ import type { FastifyInstance } from "fastify";
 import { getRemoteHostClient } from "./remote-host-client.js";
 
 /** How long a fetched worktree listing stays reusable. */
-export const REMOTE_WORKTREE_CACHE_TTL_MS = 10_000;
+const REMOTE_WORKTREE_CACHE_TTL_MS = 10_000;
 
 /**
  * The host fields that identify WHICH agent answers for a host id: its
@@ -41,7 +41,7 @@ export interface RemoteHostIdentity {
 }
 
 /** The identity of a host's agent, as one comparable string. */
-export function remoteHostIdentity(host: RemoteHostIdentity): string {
+function remoteHostIdentity(host: RemoteHostIdentity): string {
   return [
     host.baseUrl,
     host.authTokenEnc,

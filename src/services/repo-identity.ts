@@ -18,7 +18,7 @@ type ProjectRow = typeof projects.$inferSelect;
  * Discover refresh. It bounds the AWAIT only: the host's `discover()` is not
  * aborted and stays pending for the rest of the request (the host cache is
  * per request, so nothing outlives it). */
-export const ORIGIN_HOST_TIMEOUT_MS = 3000;
+const ORIGIN_HOST_TIMEOUT_MS = 3000;
 
 export interface RepoMatch {
   project: typeof projects.$inferSelect;

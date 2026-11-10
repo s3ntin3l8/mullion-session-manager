@@ -96,13 +96,6 @@ export function registerTaskTransitionListener(listener: TaskTransitionListener)
   transitionListeners.push(listener);
 }
 
-/** Test-only reset — the listener list is module-level and would otherwise
- * accumulate duplicate registrations across test files that re-import
- * task-dispatch.ts (each with its own now-stale `app` expectations). */
-export function resetTaskTransitionListenersForTests(): void {
-  transitionListeners.length = 0;
-}
-
 /**
  * #488 — the single chokepoint every task status write should call through:
  * logs the transition (structured, matching the shape each call site used

@@ -256,7 +256,7 @@ export class GenerationOutputError extends Error {
  * moved out of it into CONTRIBUTING.md) for the human to review in the diff. */
 export type { ExistingInstructionsMode };
 
-export const CONFLICT_KINDS = ["contradicts", "duplicates", "misplaced"] as const;
+const CONFLICT_KINDS = ["contradicts", "duplicates", "misplaced"] as const;
 export type ConflictKind = (typeof CONFLICT_KINDS)[number];
 
 export interface ScaffoldConflict {

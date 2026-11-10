@@ -53,7 +53,7 @@ function sha256Hex(value: string): string {
 
 /** Drops the lookup hash of every code that can no longer be redeemed or retried,
  * and the audit rows older than a day. Cheap; called when issuing and listing. */
-export function cleanupHostPairings(app: FastifyInstance): void {
+function cleanupHostPairings(app: FastifyInstance): void {
   const now = new Date();
   const retryCutoff = new Date(now.getTime() - HOST_PAIRING_RETRY_WINDOW_MS);
   app.db

@@ -145,7 +145,7 @@ export interface LinkBufferSource {
 // Copied verbatim from the installed @xterm/addon-web-links@0.12.0 bundle
 // (`node_modules/@xterm/addon-web-links/lib/addon-web-links.js`) rather than
 // reinvented — it's the addon's own proven, scheme-required URL pattern.
-export const URL_REGEX =
+const URL_REGEX =
   // eslint-disable-next-line no-useless-escape
   /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\\^<>`]*[^\s"':,.!?{}|\\\^~\[\]`()<>]/;
 
@@ -160,12 +160,12 @@ export const RIGHT_EDGE_SLACK = 3;
  * panel" signal — see the module header). Deliberately small: a
  * coincidental match becomes likelier, not less likely, as the window
  * grows. */
-export const CORROBORATION_WINDOW = 6;
+const CORROBORATION_WINDOW = 6;
 
 /** A row's content edge must reach at least this column before a nearby
  * matching edge is treated as corroboration at all — guards against short,
  * unrelated lines coincidentally ending at the same (small) column. */
-export const MIN_CORROBORATION_EDGE = 16;
+const MIN_CORROBORATION_EDGE = 16;
 
 /** Cap on how many extra rows a single hard-wrap chain may pull in, mirrors
  * the spirit of the addon's own soft-wrap length cap below. */
@@ -180,7 +180,7 @@ export const MAX_JOINED_LENGTH = 2048;
  * body text. Bounds a pathological "URL fragment appears after a huge,
  * unexplained blank run" case; sized to comfortably fit a line-numbered
  * diff view's gutter (~10 columns in the real capture above). */
-export const MAX_GUTTER_COLUMNS = 16;
+const MAX_GUTTER_COLUMNS = 16;
 
 // A leading "gutter" a TUI commonly prefixes a continuation row with: plain
 // indentation (Claude Code's own Ink renderer routinely re-indents wrapped

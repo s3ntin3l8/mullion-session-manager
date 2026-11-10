@@ -8,7 +8,7 @@ import { getStoredSettings } from "./settings.js";
 // identity is just a new row — no migration; see github-integration.ts's
 // GITHUB_REVIEWER_PROVIDER for the same precedent). Only `authTokenEnc` and
 // `connectedAt` are populated; the PAT/OAuth/webhook columns stay null.
-export const HERMES_PROVIDER = "hermes";
+const HERMES_PROVIDER = "hermes";
 
 // Never includes the key — same "hasKey-only summary" shape as HostSummary
 // (host-registry.ts) and GitHubIntegrationSummary.

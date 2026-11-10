@@ -12,7 +12,7 @@
 export const PROTOCOL_VERSION = 1;
 
 /** The inclusive range of agent `protocolVersion`s this build can drive. */
-export const SUPPORTED_PROTOCOL_RANGE = { min: 1, max: 1 } as const;
+const SUPPORTED_PROTOCOL_RANGE = { min: 1, max: 1 } as const;
 
 /**
  * Operations an agent can perform, by route family. Add a name when a family

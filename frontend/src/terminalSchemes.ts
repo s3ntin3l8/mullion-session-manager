@@ -106,8 +106,6 @@ export const TERMINAL_SCHEMES: TerminalScheme[] = [
   },
 ];
 
-export const DEFAULT_TERMINAL_SCHEME_ID = "default";
-
 export function getTerminalScheme(id: string): TerminalScheme {
   return TERMINAL_SCHEMES.find((s) => s.id === id) ?? TERMINAL_SCHEMES[0];
 }

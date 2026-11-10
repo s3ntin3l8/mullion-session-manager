@@ -43,7 +43,7 @@ import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 
 /** `target` as an agent of `target.hostId` can use it: without its endpoint
  * when that agent does not negotiate `browser-endpoints`. */
-export function agentBrowserTarget(app: FastifyInstance, target: BrowserTarget): BrowserTarget {
+function agentBrowserTarget(app: FastifyInstance, target: BrowserTarget): BrowserTarget {
   if (!target.endpoint || target.hostId === LOCAL_HOST_ID) return target;
   if (hostSupports(app, target.hostId, BROWSER_ENDPOINTS_OPERATION)) return target;
   const { endpoint: _endpoint, ...rest } = target;
@@ -66,7 +66,7 @@ export type BrowserTargetResult =
 /** Target for an already-resolved execution context. `legacy` marks the
  * project's default checkout on its default host, which keeps the storage
  * state the project's browser had before targets existed. */
-export function browserTargetFromContext(
+function browserTargetFromContext(
   project: typeof projects.$inferSelect,
   context: ExecutionContext,
   endpoint?: string,
@@ -88,7 +88,7 @@ export function browserTargetFromContext(
  * own target; a project-wide checkout preview names its most recent accepter.
  * Undefined when the session has no preview, which is the legacy (empty)
  * endpoint. */
-export function sessionPreviewEndpoint(
+function sessionPreviewEndpoint(
   app: FastifyInstance,
   sessionId: number,
   projectId?: number,

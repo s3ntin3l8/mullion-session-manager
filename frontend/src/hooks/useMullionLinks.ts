@@ -57,7 +57,7 @@ import { useDashboardStore } from "../store/index.js";
  */
 
 /** Branches Task Master creates; the guard in the backend refuses to delete them. */
-export const TASK_BRANCH_PREFIX = "mullion/task-";
+const TASK_BRANCH_PREFIX = "mullion/task-";
 
 export interface SessionLink {
   session: Session;
@@ -115,7 +115,7 @@ export interface BuildMullionLinksArgs extends MullionLinksInputs {
 const isLive = (s: Session) => s.status !== "killed";
 
 export const sessionBranch = (s: Session): string | null => s.liveBranch ?? s.previewBranch ?? null;
-export const sessionWorktree = (s: Session): string | null => s.liveCwd ?? s.cwd ?? null;
+const sessionWorktree = (s: Session): string | null => s.liveCwd ?? s.cwd ?? null;
 
 export function isTaskBranch(branch: string | null | undefined): boolean {
   return !!branch && branch.startsWith(TASK_BRANCH_PREFIX);

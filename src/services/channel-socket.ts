@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import type { WebSocket as NodeWebSocket } from "ws";
 import type { MuxChannel } from "./ssh-agent-mux.js";
 import {
   AGENT_CHANNEL_MAX_BUFFERED_BYTES,
@@ -232,9 +231,4 @@ export class ChannelSocket extends EventEmitter {
     this.queuedBytes = 0;
     this.emit("close", code, Buffer.from(reason));
   }
-}
-
-/** The structural `ws` type the stream consumers are written against. */
-export function asNodeWebSocket(socket: ChannelSocket): NodeWebSocket {
-  return socket as unknown as NodeWebSocket;
 }

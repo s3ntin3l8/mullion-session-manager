@@ -49,7 +49,7 @@ export interface MessageQueueDeps {
 export const MAX_QUEUED_PER_TARGET = 8;
 export const DEFAULT_MESSAGE_TTL_MS = 10 * 60_000;
 export const MAX_MESSAGE_TTL_MS = 60 * 60_000;
-export const MESSAGE_TICK_MS = 2_000;
+const MESSAGE_TICK_MS = 2_000;
 /** Finished messages stay readable (status lookups) this long, and at most this many. */
 const FINISHED_RETAIN_MS = 60 * 60_000;
 const FINISHED_RETAIN_MAX = 500;

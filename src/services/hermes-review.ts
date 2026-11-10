@@ -67,7 +67,7 @@ const MIN_MODELS_PER_PROVIDER = 25;
  * profile (`/p/review-bot/v1/models` advertises `review-bot`), so it is never
  * put on the wire — a run with no model is the gateway default.
  */
-export const HERMES_PROFILE_DEFAULT_MODEL = "hermes-agent";
+const HERMES_PROFILE_DEFAULT_MODEL = "hermes-agent";
 const MAX_RUN_OUTPUT_CHARS = 4_000;
 const MAX_TRACKED_RUNS = 200;
 const MAX_LISTED_RUNS = 20;

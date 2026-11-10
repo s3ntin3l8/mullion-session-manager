@@ -21,10 +21,10 @@ const HEALTH_TIMEOUT_MS = 5_000;
 // POST /v1/runs answers 202 with a run id as soon as the run is admitted, so
 // (unlike the old chat/completions call, which was held open until the agent
 // finished) a timeout here is a real failure, not "accepted and running".
-export const DISPATCH_TIMEOUT_MS = 15_000;
+const DISPATCH_TIMEOUT_MS = 15_000;
 export const STATUS_TIMEOUT_MS = 10_000;
 /** The most of any Hermes JSON response body that is read. */
-export const MAX_JSON_BYTES = 256_000;
+const MAX_JSON_BYTES = 256_000;
 
 export class HermesNotConfiguredError extends Error {
   constructor(message: string) {
@@ -116,7 +116,7 @@ const RETIRED_SESSION_CODES = new Set(["not_found", "session_deleted"]);
  * run is retried under a deeper key rather than treated as "already
  * reviewed".
  */
-export const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 
 /**
  * The statuses that mean the run is GONE — Hermes does not know it any more
@@ -124,7 +124,7 @@ export const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"
  * running to wait for. "unknown" is here for the same reason: it is what the
  * API answers when the run's body was unreadable.
  */
-export const GONE_RUN_STATUSES = new Set(["not_found", "expired", "unknown"]);
+const GONE_RUN_STATUSES = new Set(["not_found", "expired", "unknown"]);
 
 export function isTerminal(status: string): boolean {
   return TERMINAL_RUN_STATUSES.has(status);
@@ -195,7 +195,7 @@ export async function readBounded(res: Response, maxBytes: number): Promise<stri
   return Buffer.concat(chunks).toString("utf8");
 }
 
-export async function readJson<T>(res: Response): Promise<T | null> {
+async function readJson<T>(res: Response): Promise<T | null> {
   const text = await readBounded(res, MAX_JSON_BYTES).catch(() => null);
   if (text === null) return null;
   try {

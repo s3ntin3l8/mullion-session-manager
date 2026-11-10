@@ -180,7 +180,7 @@ export function relayedSessionDenied(app: FastifyInstance, relay: RelayBinding):
 }
 
 /** How often a relayed connection's open streams re-check their session (#2125). */
-export const RELAY_STREAM_RECHECK_MS = 30_000;
+const RELAY_STREAM_RECHECK_MS = 30_000;
 
 /**
  * Issue #2125 — a request is re-checked against the session's row each time, but a

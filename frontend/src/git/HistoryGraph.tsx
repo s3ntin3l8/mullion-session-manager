@@ -2,7 +2,7 @@ import { foldRow, laneColour, MAX_LANES, type GraphRow } from "./graphLayout.js"
 
 const LANE_W = 9;
 const PAD = 7;
-export const ROW_H = 28;
+const ROW_H = 28;
 const DOT_R = 4;
 
 /** Widest a graph column can get: the capped lanes, the overflow lane, padding. */

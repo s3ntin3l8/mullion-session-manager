@@ -41,7 +41,7 @@ import type { LookupFunction } from "node:net";
 import { Agent as UndiciAgent } from "undici";
 import { isAllowedHttpUrl, isAllowedIpAddress, type UrlGuardPolicy } from "./url-guard.js";
 
-export const SSRF_BLOCKED_CODE = "MULLION_SSRF_BLOCKED";
+const SSRF_BLOCKED_CODE = "MULLION_SSRF_BLOCKED";
 
 /**
  * Thrown when a resolved address (or a URL's own IP literal) falls in a range

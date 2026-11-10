@@ -681,7 +681,7 @@ export const MAX_REVIEW_BODY_CHARS = 4_000;
  * text and renders as a replacement character. The cut is made visible with
  * an ellipsis, so a truncated body reads as truncated.
  */
-export function truncateText(text: string, max: number): string {
+function truncateText(text: string, max: number): string {
   if ([...text].length <= max) return text;
   const cut = [...text].slice(0, max).join("");
   return `${cut}…`;
