@@ -62,8 +62,12 @@ async function handleToolsCall(id, params) {
     return;
   }
   try {
-    const text = await tool.handler(params?.arguments ?? {}, client);
-    respond(id, { content: [{ type: "text", text }], isError: false });
+    const result = await tool.handler(params?.arguments ?? {}, client);
+    if (result && typeof result === "object" && Array.isArray(result.content)) {
+      respond(id, { content: result.content, isError: false });
+    } else {
+      respond(id, { content: [{ type: "text", text: result }], isError: false });
+    }
   } catch (err) {
     respond(id, {
       content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],

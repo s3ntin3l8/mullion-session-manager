@@ -11,6 +11,7 @@ import fs from "node:fs";
 import { eq } from "drizzle-orm";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { makePng } from "../helpers/png.js";
 import { devices } from "../../src/db/schema.js";
 
 // A device's spawn() bootstraps a real systemd-run scope the same way a
@@ -567,11 +568,7 @@ describe("devices routes", () => {
         const device = app.device.get(String(id))!;
 
         // A real multi-display device prefixes the PNG with a screencap warning.
-        const FAKE_PNG = Buffer.concat([
-          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-          Buffer.from("fake-png-body"),
-          Buffer.from("IEND\0\0\0\0", "latin1"),
-        ]);
+        const FAKE_PNG = makePng(40, 20);
         const spawnWait = vi
           .fn()
           .mockResolvedValue(
@@ -603,6 +600,56 @@ describe("devices routes", () => {
         expect(rScreen.statusCode).toBe(200);
         expect(rScreen.json().screenshot).toBe(Buffer.from(FAKE_PNG).toString("base64"));
         expect(spawnWait).toHaveBeenCalledWith(["'screencap'", "'-p'"]);
+
+        // maxWidth downscales to a JPEG of at most that width; scale is reported.
+        const rSmall = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "screenshot", maxWidth: 10 },
+        });
+        expect(rSmall.statusCode).toBe(200);
+        expect(rSmall.json()).toMatchObject({
+          mimeType: "image/jpeg",
+          width: 10,
+          height: 5,
+          nativeWidth: 40,
+          nativeHeight: 20,
+        });
+        const jpegBytes = Buffer.from(rSmall.json().screenshot, "base64");
+        expect(jpegBytes[0]).toBe(0xff);
+        expect(jpegBytes[1]).toBe(0xd8);
+
+        // maxWidth: 0 returns the unmodified native PNG.
+        const rNative = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "screenshot", maxWidth: 0 },
+        });
+        expect(rNative.json().mimeType).toBe("image/png");
+        expect(rNative.json().screenshot).toBe(Buffer.from(FAKE_PNG).toString("base64"));
+
+        // A signature + IEND without a readable header is a 502, not an image.
+        spawnWait.mockResolvedValueOnce(
+          Buffer.concat([
+            Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+            Buffer.from("junk"),
+            Buffer.from("IEND\0\0\0\0", "latin1"),
+          ]),
+        );
+        const rBad = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "screenshot" },
+        });
+        expect(rBad.statusCode).toBe(502);
+
+        // Negative maxWidth is an invalid body.
+        const rNeg = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "screenshot", maxWidth: -1 },
+        });
+        expect(rNeg.statusCode).toBe(400);
 
         // No PNG in the output at all → 502 carrying the head of the output.
         spawnWait.mockResolvedValueOnce(Buffer.from("screencap: not allowed\x00"));

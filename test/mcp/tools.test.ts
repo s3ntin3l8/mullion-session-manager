@@ -811,13 +811,24 @@ describe("use_device and device_action handlers (PR #1324)", () => {
   });
 
   it("device_action is an alias with the same handler behavior", async () => {
-    const deviceAction = vi.fn().mockResolvedValue({ screenshot: "base64" });
-    const result = await devActionTool.handler(
-      { deviceId: "2", action: "screenshot" },
+    const deviceAction = vi
+      .fn()
+      .mockResolvedValue({ screenshot: "base64", mimeType: "image/png", width: 10, height: 20 });
+    const result = (await devActionTool.handler(
+      { deviceId: "2", action: "screenshot", maxWidth: 0 },
       { deviceAction },
-    );
-    expect(deviceAction).toHaveBeenCalledWith("2", { action: "screenshot" });
-    expect(JSON.parse(result)).toEqual({ screenshot: "base64" });
+    )) as unknown as { content: Array<{ type: string; text?: string }> };
+    expect(deviceAction).toHaveBeenCalledWith("2", { action: "screenshot", maxWidth: 0 });
+    expect(result.content[0]).toEqual({ type: "image", mimeType: "image/png", data: "base64" });
+    expect(result.content[1].text).toContain("image coordinates equal tap/swipe pixels");
+  });
+
+  it("screenshot defaults maxWidth to 720 and rejects a reply with no image", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({});
+    await expect(
+      useDevTool.handler({ deviceId: "2", action: "screenshot" }, { deviceAction }),
+    ).rejects.toThrow("no image");
+    expect(deviceAction).toHaveBeenCalledWith("2", { action: "screenshot", maxWidth: 720 });
   });
 
   it("use_device clipboard get forwards deviceId, action, and op", async () => {
