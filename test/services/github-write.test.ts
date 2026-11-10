@@ -1875,6 +1875,16 @@ describe("github-write service", () => {
           mergeable_state: "clean",
         }),
       );
+      // The head commit's workflow runs (held / not held), read for the status.
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          total_count: 2,
+          workflow_runs: [
+            { id: 1, status: "completed", conclusion: "action_required" },
+            { id: 2, status: "completed", conclusion: "success" },
+          ],
+        }),
+      );
     }
 
     it("assembles the release PR's full status, merging in the poller's cached ciStatus", async () => {
@@ -1907,6 +1917,43 @@ describe("github-write service", () => {
         mergeable: true,
         mergeableState: "clean",
         ciStatus: "success",
+        heldRuns: 1,
+        noRuns: false,
+      });
+    });
+
+    it("still returns the PR when reading its runs fails (no Actions: read)", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { default_branch: "main" }));
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, [
+          {
+            number: 12,
+            html_url: "https://github.com/owner/repo/pull/12",
+            head: { ref: "release-please--branches--main--components--repo" },
+            title: "chore(main): release 0.2.46",
+          },
+        ]),
+      );
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          number: 12,
+          html_url: "https://github.com/owner/repo/pull/12",
+          node_id: "PR_release",
+          draft: false,
+          head: { sha: "deadbeef", ref: "release-please--branches--main--components--repo" },
+          base: { ref: "main" },
+          title: "chore(main): release 0.2.46",
+          state: "open",
+          merged: false,
+          mergeable: true,
+          mergeable_state: "clean",
+        }),
+      );
+      fetchMock.mockResolvedValueOnce(textResponse(403, "Resource not accessible"));
+      expect(await getCachedReleasePullRequestStatus("tok", "owner", "repo")).toMatchObject({
+        number: 12,
+        heldRuns: 0,
+        noRuns: false,
       });
     });
 
