@@ -214,9 +214,11 @@ export function activeFilterCount(f: TaskFilters, hideDone: boolean): number {
   );
 }
 
-/** The picker's "follow the sidebar's project" row, or undefined when there is no project
- * to follow (phone, or before one loads). While there is nothing to follow the option is
- * inert whatever its saved setting, and picking any project switches it off. */
+/** The picker's "follow" row, or undefined when there is no project to follow (before one
+ * loads). On phone there is no visible sidebar, so the row follows the active project (the
+ * one the phone's focused session belongs to, #2864) and is worded that way. While there is
+ * nothing to follow the option is inert whatever its saved setting, and picking any project
+ * switches it off. */
 export function followOption(
   api: {
     followSidebar: boolean;
@@ -224,9 +226,11 @@ export function followOption(
     setFollowSidebar: (next: boolean) => void;
   },
   projects: Array<{ id: number; name: string }>,
+  phone = false,
 ) {
   if (api.followedProjectId === null) return undefined;
   return {
+    label: phone ? "Follow the active project" : "Follow the sidebar's project",
     checked: api.followSidebar,
     projectName: projects.find((p) => p.id === api.followedProjectId)?.name ?? null,
     onChange: api.setFollowSidebar,

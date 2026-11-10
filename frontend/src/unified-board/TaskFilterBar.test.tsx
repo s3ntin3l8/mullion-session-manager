@@ -1205,3 +1205,36 @@ describe("legacy filter keys", () => {
     expect(screen.getByText("plain")).toBeInTheDocument();
   });
 });
+
+describe("follow the active project on phone (#2864)", () => {
+  const renderPhone = () =>
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+  const twoProjectTasks = () => [
+    makeTask({ id: 1, projectId: 1, status: "ready", title: "demo task" }),
+    makeTask({ id: 2, projectId: 2, status: "ready", title: "other task" }),
+  ];
+
+  it("offers the row in the filter sheet, worded for the active project, and narrows the board", async () => {
+    tasks = twoProjectTasks();
+    followedProjectId = 1;
+    const user = userEvent.setup();
+    renderPhone();
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.getByText("other task")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Filter/ }));
+    const row = screen.getByRole("checkbox", { name: /^Follow the active project \(demo\)/ });
+    expect(screen.queryByRole("checkbox", { name: /Follow the sidebar/ })).toBeNull();
+    await user.click(row);
+    expect(localStorage.getItem("crs.taskFollowSidebar")).toBe("1");
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.queryByText("other task")).toBeNull();
+  });
+
+  it("offers nothing to follow while no project is published", async () => {
+    tasks = twoProjectTasks();
+    const user = userEvent.setup();
+    renderPhone();
+    await user.click(screen.getByRole("button", { name: /^Filter/ }));
+    expect(screen.queryByRole("checkbox", { name: /Follow the/ })).toBeNull();
+  });
+});

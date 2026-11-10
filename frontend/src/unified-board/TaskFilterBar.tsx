@@ -65,7 +65,7 @@ export function TaskFilterBar({
       recent={api.recentProjectIds}
       onToggle={api.toggleProject}
       onClear={() => api.setProjectIds([])}
-      follow={followOption(api, projects)}
+      follow={followOption(api, projects, phone)}
     />
   );
   const filterPanel = (

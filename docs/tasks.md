@@ -391,10 +391,11 @@ The strip is on every layout, phone included.
   default, `crs.taskFollowSidebar`), narrows the board to whichever project the
   right sidebar is showing and tracks it as it changes, ignoring the saved
   selection while it is narrowing; picking or unpicking any project turns it off
-  and keeps the resulting selection. The row is only offered while the sidebar
-  has a project to follow: on phone, which has no right sidebar, it is absent and
-  the saved selection applies whatever the setting says (`#2864` tracks following
-  the phone navigator's project); **quick views** — All, Needs me, Running, Blocked, Awaiting
+  and keeps the resulting selection. The row is only offered while there is a
+  project to follow, and the saved selection applies whatever the setting says
+  while there is none. On phone, which has no visible sidebar, it reads "Follow
+  the active project" (`#2864`) and follows the project of the focused panel, the
+  same one the shell resolves for the right sidebar on every layout; **quick views** — All, Needs me, Running, Blocked, Awaiting
   merge — each with a count taken over every other filter; a **Filter** menu
   (epic, agent, and a text search over title, issue number and PR number) whose
   active choices show as removable tokens under the row; and a **Display** menu

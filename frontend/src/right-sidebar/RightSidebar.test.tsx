@@ -74,9 +74,11 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().followedProjectId).toBeNull();
   });
 
-  it("publishes no followed project on phone, where the sidebar renders nothing (#2864)", () => {
+  it("publishes the followed project on phone too, where the sidebar renders nothing, and clears it on unmount (#2864)", () => {
     const view = renderSidebar("phone");
     expect(view.container).toBeEmptyDOMElement();
+    expect(useDashboardStore.getState().followedProjectId).toBe(1);
+    view.unmount();
     expect(useDashboardStore.getState().followedProjectId).toBeNull();
   });
 
