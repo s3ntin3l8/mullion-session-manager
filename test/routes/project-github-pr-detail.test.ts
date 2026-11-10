@@ -694,6 +694,30 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("hand-off tells the session to resolve a merge conflict instead of saying nothing is outstanding", async () => {
+        mockGithub(
+          gqlPr(44, {
+            mergeable: "CONFLICTING",
+            mergeStateStatus: "DIRTY",
+            reviewThreads: { nodes: [] },
+          }),
+          (url) =>
+            url.includes("/actions/runs?head_sha=")
+              ? jsonResponse(200, { workflow_runs: [] })
+              : null,
+        );
+        const app = await buildTestApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/44/handoff`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().prompt).toContain("merge conflict with");
+        expect(res.json().prompt).not.toContain("nothing outstanding");
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("PR preview starts the head branch's preview, refusing forks and previews-off (#2018)", async () => {
         const branchPreview = await import("../../src/services/branch-preview.js");
         const start = vi.spyOn(branchPreview, "getOrCreateBranchPreview").mockResolvedValue({

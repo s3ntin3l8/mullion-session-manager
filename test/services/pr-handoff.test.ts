@@ -169,4 +169,72 @@ describe("buildHandoffPrompt", () => {
     expect(long).toContain("…");
     expect(long.length).toBeLessThan(1200);
   });
+
+  describe("a merge conflict with the base branch", () => {
+    const clean = { ...pr, threads: [], reviews: [] };
+
+    it("tells the session to resolve it, instead of saying nothing is outstanding", () => {
+      const text = buildHandoffPrompt(
+        { ...clean, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
+        [],
+      );
+      expect(text).toContain("merge conflict with `main`");
+      expect(text).toContain("`origin/main`");
+      expect(text).toContain("--force-with-lease");
+      expect(text).not.toContain("nothing outstanding");
+    });
+
+    it("explains the missing CI when there are no failing checks, since GitHub skips workflows on a conflict", () => {
+      const text = buildHandoffPrompt(
+        { ...clean, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
+        [],
+      );
+      expect(text).toContain("does not run a PR's workflows while it conflicts");
+    });
+
+    it("does not add the missing-CI note when checks did fail", () => {
+      const text = buildHandoffPrompt(
+        { ...clean, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
+        ["CI"],
+      );
+      expect(text).toContain("Failing checks: CI");
+      expect(text).not.toContain("does not run a PR's workflows");
+    });
+
+    it("recognises either signal alone", () => {
+      expect(
+        buildHandoffPrompt({ ...clean, baseBranch: "main", mergeable: "CONFLICTING" }, []),
+      ).toContain("merge conflict");
+      expect(
+        buildHandoffPrompt({ ...clean, baseBranch: "main", mergeStateStatus: "DIRTY" }, []),
+      ).toContain("merge conflict");
+    });
+
+    it("names the base generically when it is not known", () => {
+      const text = buildHandoffPrompt({ ...clean, mergeable: "CONFLICTING" }, []);
+      expect(text).toContain("merge conflict with its base branch");
+      expect(text).toContain("Bring the base branch into the branch");
+    });
+
+    it("does not claim a conflict while GitHub is still computing, or when the PR is mergeable", () => {
+      for (const mergeable of ["UNKNOWN", null, "MERGEABLE"] as const) {
+        const text = buildHandoffPrompt(
+          { ...clean, baseBranch: "main", mergeable, mergeStateStatus: "CLEAN" },
+          [],
+        );
+        expect(text).not.toContain("merge conflict");
+        expect(text).toContain("nothing outstanding");
+      }
+    });
+
+    it("lists the conflict alongside review feedback and failing checks", () => {
+      const text = buildHandoffPrompt(
+        { ...pr, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
+        ["CI"],
+      );
+      expect(text).toContain("Unresolved review threads (1):");
+      expect(text).toContain("merge conflict with `main`");
+      expect(text).toContain("Failing checks: CI");
+    });
+  });
 });

@@ -2079,7 +2079,10 @@ lint self-heals" above. The failing checks, with each check's own one-line
 summary (e.g. codecov's "66.66% of diff hit (target 75.00%)"), are listed in
 the worker's prompt (`buildCiFailurePrompt`) and in the sidebar's hand-off
 prompt (`buildHandoffPrompt`), which also reads the non-Actions checks from
-the PR detail's `otherChecks`. A task that is already `done` and waiting on a
+the PR detail's `otherChecks`, and lists a merge conflict with the base branch
+(`mergeable === "CONFLICTING"` or `mergeStateStatus === "DIRTY"`) as its own
+section: GitHub runs no workflows on a conflicting PR, so an empty checks list
+there is a symptom of the conflict, not a green CI. A task that is already `done` and waiting on a
 merge cannot be returned; its `mergeError` names the red checks instead.
 
 **`mergeableState === "blocked"` was considered and rejected** for the same
