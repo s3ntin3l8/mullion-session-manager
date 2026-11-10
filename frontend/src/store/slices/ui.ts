@@ -30,11 +30,18 @@ import {
   readThemeHint,
   resolveTheme,
 } from "../helpers.js";
-import type { DashboardState, UiSlice } from "../types.js";
+import type { DashboardState, SidebarBack, UiSlice } from "../types.js";
 
 // State patch that clears the GitHub drill-in when the right sidebar is about
 // to start showing `view` === "github" from closed or from another view.
 // Already showing GitHub: nothing to reset.
+function sameSidebarTarget(a: SidebarBack, b: SidebarBack): boolean {
+  if (a.kind === "task") return b.kind === "task" && a.taskId === b.taskId;
+  return (
+    b.kind === a.kind && "projectId" in b && a.projectId === b.projectId && a.number === b.number
+  );
+}
+
 function githubEntryReset(
   s: { rightSidebarOpen: boolean; rightSidebarView: string },
   view: string,
@@ -507,7 +514,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     takeSidebarBack: (to) => {
       const entry = get().sidebarBack;
-      if (!entry || JSON.stringify(entry.to) !== JSON.stringify(to)) return null;
+      if (!entry || !sameSidebarTarget(entry.to, to)) return null;
       set({ sidebarBack: null });
       return entry.back;
     },

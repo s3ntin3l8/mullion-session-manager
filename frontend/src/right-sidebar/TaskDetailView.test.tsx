@@ -240,7 +240,7 @@ describe("TaskDetailView", () => {
     await user.click(screen.getByRole("button", { name: "PR #33" }));
     expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33, { kind: "task", taskId: t.id });
     await user.click(screen.getByRole("button", { name: "#12" }));
-    expect(openRightSidebarIssue).toHaveBeenCalledWith(4, 12);
+    expect(openRightSidebarIssue).toHaveBeenCalledWith(4, 12, { kind: "task", taskId: t.id });
   });
 
   it("pops out to the docked panel and goes back", async () => {

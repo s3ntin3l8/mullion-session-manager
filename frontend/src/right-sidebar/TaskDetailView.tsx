@@ -169,7 +169,10 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       taskId: task.id,
     });
   const openIssue = () =>
-    useDashboardStore.getState().openRightSidebarIssue(task.projectId, task.issueNumber as number);
+    useDashboardStore.getState().openRightSidebarIssue(task.projectId, task.issueNumber as number, {
+      kind: "task",
+      taskId: task.id,
+    });
   const relations = taskRelations(task, allTasks);
   const hasHierarchy =
     task.parentIssueNumber !== null ||

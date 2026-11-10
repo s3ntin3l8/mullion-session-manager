@@ -65,6 +65,23 @@ describe("right sidebar actions", () => {
       expect(useDashboardStore.getState().takeSidebarBack({ kind: "task", taskId: 6 })).toBeNull();
       expect(useDashboardStore.getState().takeSidebarBack(task5)).toEqual(pr12);
     });
+    it("matches on kind and ids, not on the shape of the target", () => {
+      useDashboardStore.getState().openRightSidebarPr(3, 12, task5);
+      // Same number, other project; and the same ids under another kind.
+      expect(
+        useDashboardStore.getState().takeSidebarBack({ kind: "pr", projectId: 4, number: 12 }),
+      ).toBeNull();
+      expect(
+        useDashboardStore.getState().takeSidebarBack({ kind: "issue", projectId: 3, number: 12 }),
+      ).toBeNull();
+      expect(useDashboardStore.getState().takeSidebarBack(pr12)).toEqual(task5);
+    });
+    it("returns an issue opened from a task to that task", () => {
+      useDashboardStore.getState().openRightSidebarIssue(3, 7, task5);
+      expect(
+        useDashboardStore.getState().takeSidebarBack({ kind: "issue", projectId: 3, number: 7 }),
+      ).toEqual(task5);
+    });
     it("is cleared by any other navigation", () => {
       const nav = [
         () => useDashboardStore.getState().selectTask(null),
