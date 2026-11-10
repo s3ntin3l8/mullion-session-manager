@@ -48,6 +48,7 @@ import { avdsRoute } from "./routes/avds.js";
 import { browserAutomationRoute } from "./routes/browser-automation.js";
 import { eventsRoute } from "./routes/events.js";
 import { projectsRoute } from "./routes/projects.js";
+import { fsRoute } from "./routes/fs.js";
 import { projectGitHubWritesRoute } from "./routes/project-github-writes.js";
 import { sessionsRoute } from "./routes/sessions.js";
 import { workspacesRoute } from "./routes/workspaces.js";
@@ -566,6 +567,7 @@ export async function buildApp() {
   await app.register(healthRoute);
   await app.register(authRoute);
   await app.register(projectsRoute);
+  await app.register(fsRoute);
   await app.register(projectGitHubWritesRoute);
   await app.register(sessionsRoute);
   await app.register(workspacesRoute);
