@@ -1,5 +1,4 @@
-import { useMemo, useState } from "react";
-import { TaskActions } from "../TaskActions.js";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "../api/types.js";
 import { needsYouReason, taskBucket, type TaskBucket } from "../github/taskMasterSummary.js";
 import { useDashboardStore } from "../store/index.js";
@@ -7,6 +6,8 @@ import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ExternalLinkIcon, RefreshIcon } from "../ui/icons.js";
 import { IconButton, SidebarRow, StatusChip } from "../ui/sidebar/index.js";
 import { taskTone } from "../ui/sidebar/linkDecisions.js";
+import { taskRowLabel } from "../taskStatusModel.js";
+import { TaskDetailView } from "./TaskDetailView.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
@@ -39,28 +40,6 @@ const BUCKET_LABEL: Record<TaskBucket, string> = Object.fromEntries(
   FILTERS.map((f) => [f.key, f.label]),
 ) as Record<TaskBucket, string>;
 
-// #2559 — what a row's leading number means.
-//
-// It used to be `#${task.issueNumber ?? task.id}`: a task linked to an issue
-// wore the issue number, a task without one wore its own task id, and both
-// wore the same bare "#N" form. So two different rows could read the same —
-// a task for issue #10 and a different task whose id is 10 were both "#10" —
-// and the chips under the row ("Issue #10", "PR #12") then said the same
-// thing again.
-//
-// The board already answers this: a task card names the task by its GitHub
-// issue number (unified-board/TaskCard.tsx's issue badge, "#42" with the
-// GitHub icon) and shows no number at all for a task with no issue. The
-// sidebar does the same, so the two surfaces agree on what a task is called.
-// A task with no issue has no issue number to show, so it leads with its own
-// id — spelled "Task #N", the repo's own wording for a task id (the task
-// chip's "Task #5 — open task", the source-control row's "owned by task #7")
-// — never in the bare "#N" form that means an issue number here. The linked
-// issue and PR keep their own "Issue #N" / "PR #N" chips under the row.
-function taskRowLabel(task: Task): string {
-  return task.issueNumber != null ? `#${task.issueNumber}` : `Task #${task.id}`;
-}
-
 // Task Master's active work for the followed project, in the sidebar: what is
 // running, what needs you, with the same per-status actions as the task panel.
 // Done, backlog and archived tasks belong to the board and are not listed.
@@ -69,8 +48,36 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
   const allTasks = useDashboardStore((s) => s.tasks);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
+  const selectedTaskId = useDashboardStore((s) => s.selectedTaskId);
+  const selectTask = useDashboardStore((s) => s.selectTask);
   const [filter, setFilter] = useState<StatusFilter>("all");
-  const [openId, setOpenId] = useState<number | null>(null);
+  // Opening a task swaps the list for its detail inside this same component,
+  // so the filter above survives the round trip; the scroll position does not
+  // (the content changes height), so it is saved on the way in and restored on
+  // the way back.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const savedScroll = useRef<number | null>(null);
+  const scroller = () => {
+    for (let el = rootRef.current?.parentElement ?? null; el; el = el.parentElement) {
+      const { overflowY } = getComputedStyle(el);
+      if ((overflowY === "auto" || overflowY === "scroll") && el.scrollHeight > el.clientHeight) {
+        return el;
+      }
+    }
+    return null;
+  };
+  const openTask = (id: number) => {
+    savedScroll.current = scroller()?.scrollTop ?? null;
+    selectTask(id);
+  };
+  const backToList = () => selectTask(null);
+  const inDetail = selectedTaskId !== null;
+  useLayoutEffect(() => {
+    if (inDetail || savedScroll.current === null) return;
+    const el = scroller();
+    if (el) el.scrollTop = savedScroll.current;
+    savedScroll.current = null;
+  });
 
   const rows = useMemo(() => {
     const out: Array<{ task: Task; bucket: TaskBucket; reason: string | null }> = [];
@@ -98,8 +105,10 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
   const openIssue = (issueNumber: number) =>
     useDashboardStore.getState().openRightSidebarIssue(projectId, issueNumber);
 
+  if (inDetail) return <TaskDetailView taskId={selectedTaskId} onBack={backToList} />;
+
   return (
-    <div className="tasks-sidebar-view">
+    <div className="tasks-sidebar-view" ref={rootRef}>
       <SidebarHeader
         label={VIEW_TITLES.tasks}
         context={
@@ -145,7 +154,6 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
             ))}
           </div>
           {shown.map(({ task, bucket, reason }) => {
-            const open = openId === task.id;
             return (
               <SidebarRow
                 key={task.id}
@@ -153,10 +161,12 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 lead={<span className={`sb-dot sb-dot--${DOT_TONE[bucket]}`} aria-hidden="true" />}
                 title={`${taskRowLabel(task)} ${task.title}`}
                 meta={reason ?? BUCKET_LABEL[bucket]}
-                expanded={open}
-                onClick={() => setOpenId(open ? null : task.id)}
+                onClick={() => openTask(task.id)}
                 actions={
-                  <IconButton label="Open task" onClick={() => requestOpenTask(task.id)}>
+                  <IconButton
+                    label="Pop out to a docked panel"
+                    onClick={() => requestOpenTask(task.id)}
+                  >
                     <ExternalLinkIcon size={13} />
                   </IconButton>
                 }
@@ -186,7 +196,6 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
                         </StatusChip>
                       )}
                     </div>
-                    {open && <TaskActions task={task} />}
                   </>
                 }
               />

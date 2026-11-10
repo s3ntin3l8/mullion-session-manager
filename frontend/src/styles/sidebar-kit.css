@@ -1140,3 +1140,166 @@ button.sb-chip--label[aria-pressed="true"] {
   gap: 6px;
   padding: 10px var(--rs-pad-x, 12px);
 }
+
+/* ───────── Tasks detail (epic #2847): status first, then details ───────── */
+.sb-taskstatus {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px var(--rs-pad-x, 12px);
+  border-bottom: 1px solid var(--border-soft);
+}
+.sb-taskstatus-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.sb-taskstatus-badge {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.sb-taskstatus-since {
+  color: var(--dim);
+  font-size: 0.6875rem;
+}
+.sb-taskstatus-attn {
+  margin-left: auto;
+}
+.sb-taskstatus-next {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.sb-taskstatus-next b {
+  color: var(--fg);
+}
+.sb-steps {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.625rem;
+  color: var(--dim);
+}
+.sb-step {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 3px;
+  border-top: 2px solid var(--border);
+}
+.sb-step-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sb-step--done {
+  border-color: var(--g);
+  color: var(--status-success-fg);
+}
+.sb-step--current {
+  border-color: var(--b);
+  color: var(--status-info-fg);
+  font-weight: 700;
+}
+.sb-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+  font-size: 0.6875rem;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.sb-link:hover {
+  text-decoration: underline;
+}
+.sb-link:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+.sb-dim {
+  color: var(--dim);
+}
+.sb-kv {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 0.75rem;
+}
+.sb-kv dt {
+  color: var(--dim);
+}
+.sb-kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sb-kv dd.sb-pills {
+  display: flex;
+}
+.sb-pr-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+}
+.sb-actions-block {
+  padding: 8px var(--rs-pad-x, 12px);
+  border-bottom: 1px solid var(--border-soft);
+}
+.sb-body {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.sb-hier-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+.sb-hier-label {
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.sb-hier-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.75rem;
+}
+.sb-hier-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+@container sidebar-frame (max-width: 300px) {
+  .sb-step-name {
+    display: none;
+  }
+  .sb-kv {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sb-kv dt {
+    display: none;
+  }
+  .sb-taskstatus,
+  .sb-actions-block {
+    padding-inline: 8px;
+  }
+}

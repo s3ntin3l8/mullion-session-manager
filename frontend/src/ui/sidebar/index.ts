@@ -17,6 +17,7 @@ export {
 export { ReviewGateChip, type ReviewGateChipProps } from "./ReviewGateChip.js";
 export { SessionPills, type SessionPillsProps } from "./SessionPills.js";
 export { TaskChip, type TaskChipProps } from "./TaskChip.js";
+export { TaskStatusBlock, type TaskStatusBlockProps } from "./TaskStatusBlock.js";
 export { SidebarRow, type SidebarRowProps } from "./SidebarRow.js";
 export { SidebarSection, type SidebarSectionProps } from "./SidebarSection.js";
 export { StatusChip, type StatusChipProps } from "./StatusChip.js";

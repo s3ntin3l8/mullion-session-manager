@@ -1,0 +1,384 @@
+import { useState, type ReactNode } from "react";
+import { SessionTimeline } from "../SessionTimeline.js";
+import { TaskActions } from "../TaskActions.js";
+import type { Session, Task, TaskBlocker } from "../api/types.js";
+import { commandToBinary } from "../cliLogos.js";
+import { matchSessionPr } from "../github/matchSessionPr.js";
+import { prStatuses, prTriadItems, type PrStatusInput } from "../github/prPhase.js";
+import { parseReviewRounds } from "../lib/reviewRounds.js";
+import { reviewPhaseText } from "../needsHuman.js";
+import { STATUS_PRESENTATION, formatStatusLabel } from "../sessionStatus.js";
+import { useDashboardStore } from "../store/index.js";
+import {
+  taskStatusBadge,
+  taskRelations,
+  taskRowLabel,
+  findTaskForIssue,
+} from "../taskStatusModel.js";
+import { EmptyStateNote } from "../ui/EmptyState.js";
+import { ExternalLinkIcon } from "../ui/icons.js";
+import { Markdown } from "../ui/Markdown.js";
+import {
+  DetailHeader,
+  IconButton,
+  SidebarSection,
+  StatusChip,
+  StatusTriad,
+  TaskStatusBlock,
+} from "../ui/sidebar/index.js";
+
+// The Tasks sidebar's detail mode (epic #2847): one task, status first. It
+// reads its own task by id from the store, so it does not depend on what the
+// list is scoped to: a backlog, done, archived or other-project task opens.
+// The section order is the design's: status block, review, pull request,
+// actions, details, hierarchy, timeline.
+
+const BODY_COLLAPSED_CHARS = 280;
+
+function SessionPill({ role, session }: { role: string; session: Session | undefined }) {
+  const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
+  if (!session) return <span className="sb-dim">{role}: none</span>;
+  const presentation = STATUS_PRESENTATION[session.sessionStatus];
+  return (
+    <StatusChip
+      tone="info"
+      onClick={() => requestOpenSession(session.id)}
+      title={`Open the ${role} session`}
+    >
+      {role} · {formatStatusLabel(presentation, session.sessionStatusDetail, "compact")}
+      <ExternalLinkIcon size={10} aria-hidden="true" />
+    </StatusChip>
+  );
+}
+
+/** A reference to another task, or to its bare GitHub issue when no task tracks it. */
+function TaskRef({
+  label,
+  task,
+  blocker,
+  trailing,
+}: {
+  label: string;
+  task?: Task;
+  blocker?: TaskBlocker;
+  trailing?: ReactNode;
+}) {
+  const selectTask = useDashboardStore((s) => s.selectTask);
+  return (
+    <div className="sb-hier-row">
+      {task ? (
+        <button
+          type="button"
+          className="sb-link"
+          title={`Open task: ${task.title}`}
+          onClick={() => selectTask(task.id)}
+        >
+          {label}
+        </button>
+      ) : blocker?.htmlUrl ? (
+        <a className="sb-link" href={blocker.htmlUrl} target="_blank" rel="noreferrer">
+          {label}
+          <ExternalLinkIcon size={10} aria-hidden="true" />
+        </a>
+      ) : (
+        <span>{label}</span>
+      )}
+      <span className="sb-hier-title">{task?.title ?? blocker?.title ?? ""}</span>
+      {trailing}
+    </div>
+  );
+}
+
+function RelatedList({ title, tasks }: { title: string; tasks: Task[] }) {
+  const [all, setAll] = useState(false);
+  if (tasks.length === 0) return null;
+  const shown = all ? tasks : tasks.slice(0, 3);
+  return (
+    <div className="sb-hier-group">
+      <div className="sb-hier-label">
+        {title} {tasks.length}
+      </div>
+      {shown.map((t) => {
+        const badge = taskStatusBadge(t);
+        return (
+          <TaskRef
+            key={t.id}
+            label={taskRowLabel(t)}
+            task={t}
+            trailing={<StatusChip tone={badge.tone}>{badge.label.toLowerCase()}</StatusChip>}
+          />
+        );
+      })}
+      {tasks.length > 3 && !all && (
+        <button type="button" className="sb-link" onClick={() => setAll(true)}>
+          + {tasks.length - 3} more
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () => void }) {
+  const task = useDashboardStore((s) => s.tasks.find((t) => t.id === taskId));
+  const allTasks = useDashboardStore((s) => s.tasks);
+  const sessions = useDashboardStore((s) => s.sessions);
+  const projects = useDashboardStore((s) => s.projects);
+  const prsByProject = useDashboardStore((s) => s.prsByProject);
+  const selectTask = useDashboardStore((s) => s.selectTask);
+  const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
+  const [bodyOpen, setBodyOpen] = useState(false);
+
+  if (!task) {
+    return (
+      <div className="tasks-sidebar-view">
+        <DetailHeader title="Task" onBack={onBack} />
+        <EmptyStateNote>This task no longer exists.</EmptyStateNote>
+      </div>
+    );
+  }
+
+  const projectName = projects.find((p) => p.id === task.projectId)?.name ?? task.projectName;
+  const worker =
+    task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
+  const reviewer =
+    task.reviewSessionId !== null ? sessions.find((s) => s.id === task.reviewSessionId) : undefined;
+  const rounds = parseReviewRounds(task.reviewFindings);
+  const phaseText = reviewPhaseText(
+    task.reviewPhase,
+    task.reReviewAt,
+    task.reviewFindings !== null,
+  );
+  const showReview =
+    task.status === "reviewing" ||
+    task.status === "done" ||
+    task.reviewSessionId !== null ||
+    task.reviewRunId !== null ||
+    task.reviewFindings !== null ||
+    worker !== undefined;
+  const pr =
+    task.prNumber !== null
+      ? matchSessionPr(prsByProject[task.projectId]?.prs, {
+          branch: task.branchName,
+          taskPrNumber: task.prNumber,
+        })
+      : undefined;
+  const openPr = () =>
+    useDashboardStore.getState().openRightSidebarPr(task.projectId, task.prNumber as number);
+  const openIssue = () =>
+    useDashboardStore.getState().openRightSidebarIssue(task.projectId, task.issueNumber as number);
+  const relations = taskRelations(task, allTasks);
+  const hasHierarchy =
+    task.parentIssueNumber !== null ||
+    relations.blockedBy.length > 0 ||
+    relations.blocks.length > 0 ||
+    relations.siblings.length > 0 ||
+    relations.children.length > 0 ||
+    (task.subIssueTotal !== null && task.subIssueTotal > 0);
+  const body = task.body?.trim() ?? "";
+  const longBody = body.length > BODY_COLLAPSED_CHARS;
+
+  return (
+    <div className="tasks-sidebar-view tasks-detail" data-testid="task-detail-view">
+      <DetailHeader
+        title={`${taskRowLabel(task)} ${task.title}`}
+        onBack={onBack}
+        externalUrl={task.htmlUrl}
+        externalLabel="Open the issue on GitHub"
+        actions={
+          <IconButton label="Pop out to a docked panel" onClick={() => requestOpenTask(task.id)}>
+            <ExternalLinkIcon size={13} />
+          </IconButton>
+        }
+      />
+      <TaskStatusBlock
+        task={task}
+        renderBlocker={(b) => {
+          const t = findTaskForIssue(allTasks, b);
+          return t ? (
+            <button type="button" className="sb-link" onClick={() => selectTask(t.id)}>
+              #{b.number}
+            </button>
+          ) : b.htmlUrl ? (
+            <a className="sb-link" href={b.htmlUrl} target="_blank" rel="noreferrer">
+              #{b.number}
+            </a>
+          ) : (
+            `#${b.number}`
+          );
+        }}
+      />
+
+      {showReview && (
+        <SidebarSection title="Review" persistKey="task-detail-review">
+          <dl className="sb-kv">
+            <dt>Verdict</dt>
+            <dd>
+              {rounds?.latest.verdict ?? task.lastReviewVerdict ?? "none yet"}
+              {rounds?.latest.counts && (
+                <span className="sb-dim">
+                  {" "}
+                  · {rounds.latest.counts.critical} critical, {rounds.latest.counts.warnings}{" "}
+                  warnings, {rounds.latest.counts.suggestions} suggestions
+                </span>
+              )}
+            </dd>
+            <dt>Round</dt>
+            <dd>
+              {rounds ? `${rounds.latest.round}` : "—"}
+              {task.autoReturnRounds > 0 && (
+                <span className="sb-dim">
+                  {" "}
+                  · {task.autoReturnRounds} auto-return{task.autoReturnRounds === 1 ? "" : "s"}
+                  {task.autoReturnCapped ? " (limit reached)" : ""}
+                </span>
+              )}
+            </dd>
+            {phaseText && (
+              <>
+                <dt>Phase</dt>
+                <dd>{phaseText}</dd>
+              </>
+            )}
+            <dt>Approval</dt>
+            <dd>
+              {task.approvalState === "awaiting-human"
+                ? "waiting for a human"
+                : task.approvalState === "auto-pending"
+                  ? "automatic when the review passes"
+                  : "—"}
+            </dd>
+            <dt>Sessions</dt>
+            <dd className="sb-pills">
+              <SessionPill role="worker" session={worker} />
+              <SessionPill role="reviewer" session={reviewer} />
+            </dd>
+          </dl>
+        </SidebarSection>
+      )}
+
+      {task.prNumber !== null && (
+        <SidebarSection title="Pull request" persistKey="task-detail-pr">
+          <div className="sb-pr-line">
+            <button
+              type="button"
+              className="sb-link"
+              onClick={openPr}
+              title="Open the pull request"
+            >
+              PR #{task.prNumber}
+            </button>
+            <span className="sb-hier-title">{task.prTitle ?? ""}</span>
+          </div>
+          {pr && (
+            <StatusTriad
+              items={prTriadItems(prStatuses(pr as unknown as PrStatusInput, pr.relayReview), () =>
+                openPr(),
+              )}
+            />
+          )}
+        </SidebarSection>
+      )}
+
+      <div className="sb-actions-block">
+        <TaskActions task={task} />
+      </div>
+
+      <SidebarSection title="Details" persistKey="task-detail-details">
+        <dl className="sb-kv">
+          <dt>Project</dt>
+          <dd>{projectName}</dd>
+          <dt>Issue</dt>
+          <dd>
+            {task.issueNumber !== null ? (
+              <button type="button" className="sb-link" onClick={openIssue}>
+                #{task.issueNumber}
+              </button>
+            ) : (
+              "none (local task)"
+            )}
+          </dd>
+          <dt>Agent</dt>
+          <dd>
+            {task.agentCommand ? commandToBinary(task.agentCommand) : (task.agent ?? "default")}
+          </dd>
+        </dl>
+        {body && (
+          <div className="sb-body">
+            <Markdown
+              text={bodyOpen || !longBody ? body : `${body.slice(0, BODY_COLLAPSED_CHARS)}…`}
+            />
+            {longBody && (
+              <button type="button" className="sb-link" onClick={() => setBodyOpen((v) => !v)}>
+                {bodyOpen ? "Show less" : "Show more"}
+              </button>
+            )}
+          </div>
+        )}
+      </SidebarSection>
+
+      {hasHierarchy && (
+        <SidebarSection title="Hierarchy" persistKey="task-detail-hierarchy">
+          {task.parentIssueNumber !== null && (
+            <div className="sb-hier-group">
+              <div className="sb-hier-label">Epic</div>
+              {relations.parent ? (
+                <TaskRef label={`#${task.parentIssueNumber}`} task={relations.parent} />
+              ) : (
+                <div className="sb-hier-row">
+                  <a
+                    className="sb-link"
+                    href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    #{task.parentIssueNumber}
+                    <ExternalLinkIcon size={10} aria-hidden="true" />
+                  </a>
+                  <span className="sb-hier-title">{task.parentIssueTitle ?? ""}</span>
+                </div>
+              )}
+            </div>
+          )}
+          {task.subIssueTotal !== null && task.subIssueTotal > 0 && (
+            <div className="sb-hier-group">
+              <div className="sb-hier-label">Sub-issues</div>
+              <div className="sb-dim">
+                {task.subIssueCompleted ?? 0} of {task.subIssueTotal} complete
+              </div>
+            </div>
+          )}
+          {relations.blockedBy.length > 0 && (
+            <div className="sb-hier-group">
+              <div className="sb-hier-label">Blocked by</div>
+              {relations.blockedBy.map(({ blocker, task: t }) => (
+                <TaskRef
+                  key={`${blocker.owner}/${blocker.repo}#${blocker.number}`}
+                  label={`#${blocker.number}`}
+                  task={t}
+                  blocker={blocker}
+                  trailing={
+                    t ? (
+                      <StatusChip tone={taskStatusBadge(t).tone}>
+                        {taskStatusBadge(t).label.toLowerCase()}
+                      </StatusChip>
+                    ) : undefined
+                  }
+                />
+              ))}
+            </div>
+          )}
+          <RelatedList title="Also blocked by the same task" tasks={relations.siblings} />
+          <RelatedList title="Blocks" tasks={relations.blocks} />
+          <RelatedList title="Sub-issue tasks" tasks={relations.children} />
+        </SidebarSection>
+      )}
+
+      <SidebarSection title="Timeline" persistKey="task-detail-timeline">
+        <SessionTimeline
+          surface="task"
+          params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }}
+        />
+      </SidebarSection>
+    </div>
+  );
+}
