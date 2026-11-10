@@ -75,6 +75,7 @@
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.8",
     "fastify-plugin": "^6.0.1",
+    "jpeg-js": "^0.4.4",
     "node-pty": "^1.1.0",
     "openid-client": "^6.8.9",
     "pino": "^10.4.0",

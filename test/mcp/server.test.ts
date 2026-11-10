@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import net from "node:net";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // Issue #271 — integration test for the real server.mjs subprocess entry
 // point (the thin JSON-RPC/stdio shim that tools.test.ts/client.test.ts
@@ -233,6 +237,68 @@ describe("mcp/server.mjs (issue #271)", () => {
     };
     expect(result.isError).toBe(false);
     expect(result.content[0].text).toContain("Declined");
+  });
+
+  it("use_device screenshot yields an image block plus a scale text block (issue #2884)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-shot-"));
+    const sock = path.join(dir, "c.sock");
+    const requests: Array<{ op: string; body: Record<string, unknown> }> = [];
+    const srv = net.createServer((c) => {
+      let buf = "";
+      c.on("data", (d) => {
+        buf += d.toString();
+        let nl;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const msg = JSON.parse(buf.slice(0, nl));
+          buf = buf.slice(nl + 1);
+          if (msg.op !== "device.action") continue;
+          requests.push(msg);
+          c.write(
+            `${JSON.stringify({
+              id: msg.id,
+              ok: true,
+              status: 200,
+              result: {
+                screenshot: "/9j/AAA=",
+                mimeType: "image/jpeg",
+                width: 672,
+                height: 1496,
+                nativeWidth: 1344,
+                nativeHeight: 2992,
+              },
+            })}\n`,
+          );
+        }
+      });
+    });
+    await new Promise<void>((r) => srv.listen(sock, r));
+    try {
+      child = spawnServer({ MULLION_SOCKET_PATH: sock, MULLION_HOOK_TOKEN: "t" });
+      const reader = new ResponseReader(child);
+      send(child, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "use_device", arguments: { deviceId: "3", action: "screenshot" } },
+      });
+      const response = await reader.waitForId(1);
+      const result = response.result as {
+        content: Array<{ type: string; mimeType?: string; data?: string; text?: string }>;
+        isError: boolean;
+      };
+      expect(result.isError).toBe(false);
+      expect(result.content[0]).toEqual({
+        type: "image",
+        mimeType: "image/jpeg",
+        data: "/9j/AAA=",
+      });
+      expect(result.content[1].text).toContain("672x1496 of native 1344x2992");
+      expect(result.content[1].text).toContain("multiply image coordinates by 2");
+      expect(requests[0].body).toMatchObject({ action: "screenshot", maxWidth: 720 });
+    } finally {
+      srv.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("tools/call for an unknown tool returns isError: true, not a protocol error", async () => {

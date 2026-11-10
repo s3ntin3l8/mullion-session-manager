@@ -190,7 +190,10 @@ mcp_servers.mullion.*` overrides for Codex, its own `mcp.<name>` config
   this for `get_scrollback`, `list_actions`, `browser_action`, `use_browser`,
   `promote_to_worktree`, `report_status`, `spawn_child_session`, `list_devices`,
   `start_device`/`stop_device`, and `use_device`/`device_action` — the ops
-  actually reachable at session scope.
+  actually reachable at session scope. `use_device` `screenshot` comes back as
+  an image block, downscaled to 720 px wide by default (`maxWidth`, 0 = native)
+  with a text line giving the scale; `tap`/`swipe` take native pixels, so
+  multiply coordinates read off the image by that factor.
 - **`mullion` CLI** — better when you need to reason about `--json` output
   directly in a shell pipeline, run something interactively (`mullion
 session exec`), or for `device create`/`device pair`/`device
