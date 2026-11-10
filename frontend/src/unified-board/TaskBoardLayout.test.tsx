@@ -43,6 +43,7 @@ let gitDiffStats: Record<number, GitDiffStats | null>;
 let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 let hideEndedSessions: boolean;
+let selectedTaskId: number | null = null;
 
 const setKanbanColumnOrder = vi.fn((columnId: string, order: number[]) => {
   kanbanOrder = { ...kanbanOrder, [columnId]: order };
@@ -62,6 +63,7 @@ const clearDoneTasks = vi.fn(async (): Promise<ClearDoneResult> => ({
 function storeState() {
   return {
     pendingOpenTaskId: null,
+    selectedTaskId,
     setPendingOpenTaskId: vi.fn(),
     sessions,
     projects,
@@ -312,6 +314,21 @@ describe("compact card", () => {
     expect(cardByTitle("picked")).toHaveClass("task-card-selected");
     expect(cardByTitle("picked")).toHaveAttribute("aria-current", "true");
     expect(cardByTitle("other")).not.toHaveClass("task-card-selected");
+  });
+
+  it("follows the store's selection (what the sidebar shows) when no prop is passed", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "picked" }),
+      makeTask({ id: 2, status: "ready", title: "other" }),
+    ];
+    selectedTaskId = 2;
+    try {
+      renderBoard();
+      expect(cardByTitle("other")).toHaveClass("task-card-selected");
+      expect(cardByTitle("picked")).not.toHaveClass("task-card-selected");
+    } finally {
+      selectedTaskId = null;
+    }
   });
 });
 

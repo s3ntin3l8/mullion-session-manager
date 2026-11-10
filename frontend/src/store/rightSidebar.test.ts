@@ -38,6 +38,20 @@ describe("right sidebar actions", () => {
     expect(localStorage.getItem("crs.rightSidebarOpen")).toBe("1");
   });
 
+  it("openRightSidebarTask selects the task and opens the Tasks view, persisted", () => {
+    useDashboardStore.setState({ selectedTaskId: null });
+    useDashboardStore.getState().openRightSidebarTask(42);
+
+    const s = useDashboardStore.getState();
+    expect(s.selectedTaskId).toBe(42);
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarView).toBe("tasks");
+    expect(localStorage.getItem("crs.rightSidebarView")).toBe("tasks");
+    expect(localStorage.getItem("crs.rightSidebarOpen")).toBe("1");
+    useDashboardStore.getState().selectTask(null);
+    expect(useDashboardStore.getState().selectedTaskId).toBeNull();
+  });
+
   it("openRightSidebarView with a project bumps a nonce so repeats still fire", () => {
     useDashboardStore.getState().openRightSidebarView("files", 5);
     const first = useDashboardStore.getState().rightSidebarProjectRequest;

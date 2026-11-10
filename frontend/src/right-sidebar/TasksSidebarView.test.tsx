@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Task } from "../api/types.js";
 import { useDashboardStore } from "../store/index.js";
@@ -18,6 +18,10 @@ const task = (o: Partial<Task>): Task =>
     approvalState: null,
     archivedAt: null,
     failureReason: null,
+    blockedState: "clear",
+    blockers: [],
+    parentIssueNumber: null,
+    parentIssueRepo: null,
     ...o,
   }) as Task;
 
@@ -26,6 +30,7 @@ const renderView = () => render(<TasksSidebarView projectId={4} actions={actions
 
 beforeEach(() => {
   useDashboardStore.setState({
+    selectedTaskId: null,
     taskMasterEnabled: true,
     refreshTasks: vi.fn().mockResolvedValue(undefined),
     tasks: [
@@ -99,12 +104,89 @@ describe("TasksSidebarView", () => {
     expect(screen.getByText(/Broken job/)).toBeTruthy();
   });
 
-  it("expands a row to the task panel's own actions", async () => {
+  it("opens a task's detail from its row, with the task panel's own actions", async () => {
     const user = userEvent.setup();
     renderView();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /Broken job/ }));
+    expect(useDashboardStore.getState().selectedTaskId).toBe(2);
+    expect(screen.getByTestId("task-detail-view")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByText("FAILED")).toBeTruthy();
+  });
+
+  it("goes back to the list with the status filter it had", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(screen.getByRole("button", { name: "1 failed" }));
+    await user.click(screen.getByRole("button", { name: /Broken job/ }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(useDashboardStore.getState().selectedTaskId).toBeNull();
+    expect(screen.getByRole("button", { name: "1 failed" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.queryByText(/Fresh work/)).toBeNull();
+  });
+
+  it("opens a done, archived or other-project task without touching the list's scope", async () => {
+    const user = userEvent.setup();
+    renderView();
+    for (const [id, title] of [
+      [4, "Finished"],
+      [3, "Old failure"],
+      [5, "Other project"],
+    ] as const) {
+      act(() => useDashboardStore.getState().selectTask(id));
+      expect(screen.getByTestId("task-detail-view").textContent).toContain(title);
+      await user.click(screen.getByRole("button", { name: "Back" }));
+      // The list is exactly what it was: this project's active tasks.
+      expect(screen.getByText(/Fresh work/)).toBeTruthy();
+      expect(screen.queryByText(/Other project/)).toBeNull();
+    }
+  });
+
+  it("puts the list back at the scroll position it had before the detail opened", async () => {
+    const user = userEvent.setup();
+    // jsdom has no layout: give the wrapper a scroll box the view can find.
+    let top = 0;
+    const box = document.createElement("div");
+    box.style.overflowY = "auto";
+    Object.defineProperty(box, "scrollHeight", { value: 1000 });
+    Object.defineProperty(box, "clientHeight", { value: 100 });
+    Object.defineProperty(box, "scrollTop", { get: () => top, set: (v: number) => (top = v) });
+    document.body.appendChild(box);
+    render(<TasksSidebarView projectId={4} actions={actions} />, { container: box });
+    top = 250;
+    await user.click(screen.getByRole("button", { name: /Broken job/ }));
+    top = 0; // the detail is shorter: the browser clamps the scroll
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(top).toBe(250);
+    box.remove();
+  });
+
+  it("leaves the scroll alone when the list is too short to scroll", async () => {
+    const user = userEvent.setup();
+    let top = 0;
+    const box = document.createElement("div");
+    box.style.overflowY = "auto";
+    Object.defineProperty(box, "scrollHeight", { value: 100 });
+    Object.defineProperty(box, "clientHeight", { value: 100 });
+    Object.defineProperty(box, "scrollTop", { get: () => top, set: (v: number) => (top = v) });
+    document.body.appendChild(box);
+    render(<TasksSidebarView projectId={4} actions={actions} />, { container: box });
+    await user.click(screen.getByRole("button", { name: /Broken job/ }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(top).toBe(0);
+    box.remove();
+  });
+
+  it("says so, with a way back, when the selected task is gone", async () => {
+    const user = userEvent.setup();
+    renderView();
+    act(() => useDashboardStore.getState().selectTask(999));
+    expect(screen.getByText("This task no longer exists.")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText(/Fresh work/)).toBeTruthy();
   });
 
   it("opens the linked PR and issue in the GitHub view", async () => {
@@ -124,7 +206,7 @@ describe("TasksSidebarView", () => {
     const requestOpenTask = vi.fn();
     useDashboardStore.setState({ requestOpenTask });
     renderView();
-    await user.click(screen.getAllByRole("button", { name: "Open task" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Pop out to a docked panel" })[0]);
     expect(requestOpenTask).toHaveBeenCalledWith(2);
     await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Open task board" }));
@@ -159,15 +241,6 @@ describe("TasksSidebarView", () => {
     expect(screen.getByText(/Merge stuck/)).toBeTruthy();
     expect(screen.getByText("merge failed: conflict")).toBeTruthy();
     expect(screen.getByRole("button", { name: "1 needs attention" })).toBeTruthy();
-  });
-
-  it("tells assistive tech which row is expanded", async () => {
-    const user = userEvent.setup();
-    renderView();
-    const title = screen.getByRole("button", { name: /Broken job/ });
-    expect(title.getAttribute("aria-expanded")).toBe("false");
-    await user.click(title);
-    expect(title.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("marks the selected status chip as pressed, not expanded", async () => {

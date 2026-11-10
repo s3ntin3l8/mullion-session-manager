@@ -111,7 +111,7 @@ export function UnifiedBoard({
   onSessionEnded,
   phone = false,
   columnCount = 1,
-  selectedTaskId = null,
+  selectedTaskId: selectedTaskIdProp,
 }: {
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
@@ -122,10 +122,14 @@ export function UnifiedBoard({
   // With `phone`: how many adjacent status columns show at once (1 on phone,
   // 2 on tablet, where the board has the width for a pair).
   columnCount?: number;
-  // The task the sidebar detail is showing (wired by the sidebar-detail work, #2842);
-  // its card is ringed. The board holds no selection of its own.
+  // The task whose card is ringed. Unset = the store's selection (the task the
+  // right sidebar shows in detail, #2842); the board holds no selection of its own.
   selectedTaskId?: number | null;
 }) {
+  const storeSelectedTaskId = useDashboardStore((s) => s.selectedTaskId);
+  const selectedTaskId =
+    selectedTaskIdProp === undefined ? storeSelectedTaskId : selectedTaskIdProp;
+
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription). `refreshTasks`/`updateTask`/`createTask`/`deleteSession`/
   // `setViewMode`/`setKanbanColumnOrder` are all pure action-callers (used

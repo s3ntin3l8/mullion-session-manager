@@ -69,6 +69,23 @@ describe("RightSidebar", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it("clears a selected task when the followed project changes while the drawer is collapsed", () => {
+    const other = { id: 2, name: "other", cwd: "/x/other", hostId: "local" } as Project;
+    useDashboardStore.setState({
+      projects: [PROJECT, other],
+      gitStatuses: { 1: status(), 2: status() },
+    });
+    renderSidebar();
+    act(() => useDashboardStore.getState().selectTask(5));
+    expect(useDashboardStore.getState().selectedTaskId).toBe(5);
+    // Another project is requested (and so pinned) with the drawer still closed.
+    act(() =>
+      useDashboardStore.setState({ rightSidebarProjectRequest: { projectId: 2, nonce: 1 } }),
+    );
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().selectedTaskId).toBeNull();
+  });
+
   it("shows only the rail while closed", () => {
     renderSidebar();
     expect(screen.getByRole("navigation", { name: "Right sidebar" })).toBeTruthy();

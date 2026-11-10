@@ -226,6 +226,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     splitRequest: null,
     openSessionRequest: null,
     openTaskRequest: null,
+    selectedTaskId: null,
+    taskSelectionSeq: 0,
     pendingOpenTaskId: null,
     highlightedPanelId: null,
     activePanelId: null,
@@ -483,6 +485,22 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set((state) =>
         state.openSessionRequest?.nonce === nonce ? { openSessionRequest: null } : state,
       );
+    },
+
+    selectTask: (taskId) => {
+      set((s) => ({ selectedTaskId: taskId, taskSelectionSeq: s.taskSelectionSeq + 1 }));
+    },
+
+    openRightSidebarTask: (taskId) => {
+      writeString(STORAGE_KEYS.rightSidebarView, "tasks");
+      writeBool(STORAGE_KEYS.rightSidebarOpen, true);
+      set((s) => ({
+        selectedTaskId: taskId,
+        taskSelectionSeq: s.taskSelectionSeq + 1,
+        rightSidebarView: "tasks",
+        rightSidebarOpen: true,
+        ...githubEntryReset(s, "tasks"),
+      }));
     },
 
     setPendingOpenTaskId: (taskId) => {

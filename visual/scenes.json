@@ -126,6 +126,7 @@
     {
       "name": "tasks-tab",
       "path": "/",
+      "baseline": true,
       "tags": ["presentation", "check", "audit"],
       "viewports": ["desktop"],
       "steps": [
@@ -143,6 +144,39 @@
         },
         {
           "waitFor": "text=need you"
+        }
+      ],
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tasks-detail",
+      "path": "/",
+      "baseline": true,
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+        },
+        {
+          "waitFor": "text=need you"
+        },
+        {
+          "click": ".tasks-sidebar-view .sb-row-title >> nth=0"
+        },
+        {
+          "waitFor": "[data-testid=\"task-detail-view\"]"
         }
       ],
       "emphasis": {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
+import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
 import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
 import { attachSidebarSwipeGesture } from "../lib/sidebarSwipeGesture.js";
@@ -37,6 +38,9 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // sidebar follows, so the panel's first paint is already cached (#1970).
   const prefetchGithubProject = useDashboardStore((s) => s.prefetchGithubProject);
   const followedProjectId = followed.effectiveProjectId;
+  // Here, not in the panel or a view: the panel is only mounted while the drawer is open,
+  // and the followed project usually changes while it is collapsed.
+  useClearTaskSelectionOnProjectChange(followedProjectId);
   useEffect(() => {
     if (followedProjectId != null) prefetchGithubProject(followedProjectId);
   }, [followedProjectId, prefetchGithubProject]);

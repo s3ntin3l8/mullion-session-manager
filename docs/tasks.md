@@ -532,6 +532,37 @@ The last two are set whatever the task's status (`reviewing` or `done`) and
 clear themselves when the cause goes away: the conflict or the threads are
 gone, the merge error changes, or the PR merges.
 
+### The Tasks sidebar
+
+The right sidebar's **Tasks** view lists the followed project's active tasks
+(running, needs you, reviewing, ready; backlog, done and archived tasks stay
+on the board). Clicking a row opens that task's **detail inside the sidebar**,
+status first, and the board rings the same task's card: the selection is
+shared state (`selectedTaskId`), not something each surface keeps for itself.
+
+The detail reads, top to bottom:
+
+1. **Status**: the status badge, how long the task has been there, what waits
+   on you, a step tracker (Backlog, Ready, In progress, Reviewing, Done;
+   Claimed is shown as In progress) and one "Next:" sentence. A blocked task
+   names its blocker there as a link.
+2. **Review**: the latest verdict and finding counts, the round and
+   auto-return count, the review phase, the approval mode, and the worker and
+   reviewer sessions (each opens that session).
+3. **Pull request**: the PR link and its CI, review and merge chips; they open
+   the PR in the GitHub view.
+4. **Actions**: the same per-status actions as the drawer below.
+5. **Details**: project, issue link, agent and the issue body (collapsed).
+6. **Hierarchy**: the epic, sub-issue progress, and, for a blocked task, what
+   blocks it and what else waits on the same task; for a blocker, what it
+   blocks. Every task named there is a link that opens that task.
+7. **Timeline**: the task's timeline, with the same Important / All / Custom
+   filter as a session's.
+
+The detail does not depend on the list: a backlog, done, archived or
+other-project task opens too, and Back returns to the list with its filter and
+scroll position. The icon in the header pops the task out to a docked panel.
+
 ### Board actions
 
 Every action below lives in the task detail drawer (Claim/Approve/Reject/

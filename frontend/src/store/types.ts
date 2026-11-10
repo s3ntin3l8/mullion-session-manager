@@ -860,6 +860,16 @@ export interface UiSlice {
   // A task notification click's target: the Unified Board consumes it when it
   // mounts (its drawer's detailTaskId is local state) and clears it. Distinct
   // from openTaskRequest above, which opens a dockview detail panel.
+  // Epic #2847 — the task the right sidebar's Tasks view shows in detail
+  // (null = the list), and the board rings that task's card. Transient: not
+  // persisted. selectTask only sets it; openRightSidebarTask also opens the
+  // drawer on the Tasks view, for callers outside it (the board, notifications).
+  selectedTaskId: number | null;
+  // Bumped on every selection call, even for the same id, so a consumer can tell "the
+  // same task selected again" from "the selection that was already there".
+  taskSelectionSeq: number;
+  selectTask: (taskId: number | null) => void;
+  openRightSidebarTask: (taskId: number) => void;
   pendingOpenTaskId: number | null;
   setPendingOpenTaskId: (taskId: number | null) => void;
   openTaskRequest: { taskId: number; nonce: number } | null;
