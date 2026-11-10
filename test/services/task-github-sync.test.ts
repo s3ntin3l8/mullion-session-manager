@@ -285,8 +285,8 @@ describe("task-github-sync", () => {
       );
     });
 
-    it("done: swaps reviewing->done labels, comments with the PR link when present, and closes", async () => {
-      await syncTaskTransition(app, baseTask({ status: "done" }), project, "done", {
+    it("done: swaps reviewing->done labels and comments with the PR link, leaving the issue open for the merge", async () => {
+      await syncTaskTransition(app, baseTask({ status: "done", prNumber: 9 }), project, "done", {
         prUrl: "https://github.com/test-owner/test-repo/pull/9",
       });
       expect(mockRemoveLabel).toHaveBeenCalledWith(
@@ -306,7 +306,7 @@ describe("task-github-sync", () => {
         5,
         expect.stringContaining("https://github.com/test-owner/test-repo/pull/9"),
       );
-      expect(mockCloseIssue).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo", 5);
+      expect(mockCloseIssue).not.toHaveBeenCalled();
     });
 
     it("done: comments without a PR link when none is set yet (pre-6.7)", async () => {

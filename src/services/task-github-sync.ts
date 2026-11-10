@@ -205,14 +205,26 @@ async function runSync(
     case "done": {
       await removeLabel(token, owner, repo, issueNumber, LABEL_REVIEWING);
       await addLabels(token, owner, repo, issueNumber, [LABEL_DONE]);
+      // `done` means APPROVED, not merged: the PR is usually still open (and
+      // `mergeOnApprove` lands it later, asynchronously). Closing the issue
+      // here would release every `blocked_by` dependent before the blocker's
+      // code is on the default branch, and would read as "completed" next to
+      // a PR that can still conflict. So while a PR is waiting to merge the
+      // issue stays open; the PR body's `Closes #N` closes it on merge, and
+      // closeIssueOnMerge backs that up. A task with no PR to wait for (or
+      // one already merged) closes now, as before.
+      const awaitingMerge = (task.prNumber !== null || extra.prUrl !== undefined) && !task.mergedAt;
+      const approved = extra.prUrl ? `Approved — see ${extra.prUrl}` : "Approved.";
       await createComment(
         token,
         owner,
         repo,
         issueNumber,
-        extra.prUrl ? `Approved — see ${extra.prUrl}` : "Approved.",
+        awaitingMerge
+          ? `${approved} This issue closes when the pull request merges (if the PR is closed without merging it stays open, see #2865).`
+          : approved,
       );
-      await closeIssue(token, owner, repo, issueNumber);
+      if (!awaitingMerge) await closeIssue(token, owner, repo, issueNumber);
       // Terminal — this task will never post another progress comment, so
       // its throttle entry (if any) is dead weight for the rest of the
       // process's life. Pruned on both terminal events (here and "failed"
@@ -335,6 +347,56 @@ export async function syncTaskTransition(
     app.log.warn(
       { taskId: task.id, issueNumber: task.issueNumber, event, err },
       "[task-github-sync] write failed — local task state is unaffected, see the accepted-gap note in this file for retry behavior",
+    );
+    recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
+  }
+}
+
+/**
+ * Closes a task's issue once its PR has merged. The PR body's `Closes #N`
+ * normally does this on GitHub's side; this is the backstop for when it did
+ * not (a PR retargeted at a non-default branch, a hand-edited body), and it
+ * is idempotent — an already-closed issue is left alone. The `→ done`
+ * transition deliberately does not close the issue while a PR is still open
+ * (see runSync), so this is the only place Mullion itself closes it.
+ * Never throws: a GitHub failure is logged and recorded like any other sync
+ * write, and the merge it follows has already committed locally.
+ */
+export async function closeIssueOnMerge(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRef,
+): Promise<void> {
+  if (task.issueNumber === null) return;
+  try {
+    const repoRef = await resolveRepoRef(app, project);
+    const token = repoRef ? await resolveGitHubToken(app, repoRef) : null;
+    if (!repoRef || !token) {
+      // Not a silent drop (#485): a merge with no repo ref or token to close
+      // the issue with would otherwise strand it open, and its dependents
+      // blocked, with no trace.
+      const why = repoRef
+        ? "no GitHub token is connected"
+        : "the project's repo could not be resolved";
+      app.log.warn(
+        { taskId: task.id, issueNumber: task.issueNumber },
+        `[task-github-sync] could not close the issue after the merge: ${why}`,
+      );
+      recordGithubSyncError(
+        app,
+        task.id,
+        `Could not close issue #${task.issueNumber} after the merge: ${why}`,
+      );
+      return;
+    }
+    const { state } = await getIssueState(token, repoRef.owner, repoRef.repo, task.issueNumber);
+    if (state === "closed") return;
+    await closeIssue(token, repoRef.owner, repoRef.repo, task.issueNumber);
+    clearGithubSyncError(app, task.id);
+  } catch (err) {
+    app.log.warn(
+      { taskId: task.id, issueNumber: task.issueNumber, err },
+      "[task-github-sync] closing the issue after the merge failed — the PR's Closes #N is the primary path",
     );
     recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
   }

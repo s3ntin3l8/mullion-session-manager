@@ -8,6 +8,7 @@ import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
 import { clearNeedsHumanOnMerge } from "../services/task-merge-human.js";
 import { cleanupMergedTaskBranch } from "../services/task-approve.js";
+import { closeIssueOnMerge } from "../services/task-github-sync.js";
 import { endReviewingOnPrState } from "../services/task-review-end.js";
 import { invalidateMergedPrs } from "../services/github-merged-prs.js";
 import { invalidatePrDetail } from "../services/github-pr-detail.js";
@@ -321,7 +322,18 @@ export async function webhookRoutes(app: FastifyInstance) {
                     .from(projects)
                     .where(eq(projects.id, projectId))
                     .get();
-                  if (mergedProject) cleanupMergedTaskBranch(app, matchedTask, mergedProject);
+                  if (mergedProject) {
+                    cleanupMergedTaskBranch(app, matchedTask, mergedProject);
+                    // A hand-merged PR never reaches markTaskMerged, and the
+                    // `→ done` sync left the issue open until now: close it
+                    // here (idempotent; `Closes #N` usually did already).
+                    void closeIssueOnMerge(app, matchedTask, mergedProject);
+                  } else {
+                    app.log.warn(
+                      { taskId: matchedTask.id, projectId },
+                      "[webhooks] merged PR's project row is missing — branch cleanup and the issue close were skipped",
+                    );
+                  }
                 }
               }
             }
