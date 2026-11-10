@@ -56,9 +56,9 @@ export const ALLOWLIST = [
   { scope: "src/services/session-backend.ts#interface SessionBackend", why: "the seam" },
   { scope: "src/services/session-backend.ts#LocalBackend", why: "the local backend" },
   { scope: "src/services/session-backend.ts#RemoteBackend", why: "the remote backend" },
-  { scope: "src/routes/internal.ts#import", why: "the agent endpoints' imports" },
+  { scope: "src/routes/internal-worktrees.ts#import", why: "the agent endpoints' imports" },
   {
-    scope: "src/routes/internal.ts#internalRoutes",
+    scope: "src/routes/internal-worktrees.ts#registerWorktreeRoutes",
     why: "the five agent-side endpoints the remote backend calls",
     count: 5,
   },
