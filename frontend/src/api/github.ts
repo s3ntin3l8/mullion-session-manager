@@ -25,6 +25,7 @@ import type {
   DeviceFlowStatus,
   ProjectReleaseStatus,
   ReleaseRunResult,
+  ReleaseApproveRunsResult,
   ReleaseMergeResult,
   RelayReviewState,
 } from "./types.js";
@@ -168,6 +169,12 @@ export const githubApi = {
   // thrown ApiError — only a genuine HTTP error throws.
   postProjectReleaseRun: (projectId: number) =>
     request<ReleaseRunResult>(`/api/projects/${projectId}/release/run`, { method: "POST" }),
+
+  // Approves the release PR's held workflow runs; same 200-with-reason contract.
+  postProjectReleaseApproveRuns: (projectId: number) =>
+    request<ReleaseApproveRunsResult>(`/api/projects/${projectId}/release/approve-runs`, {
+      method: "POST",
+    }),
 
   postProjectReleaseMerge: (projectId: number) =>
     request<ReleaseMergeResult>(`/api/projects/${projectId}/release/merge`, { method: "POST" }),

@@ -14,7 +14,7 @@
 // github-write.ts use the same request path and the same error shape.
 
 import { getDefaultBranch, getPRsStatus } from "./github.js";
-import { GitHubRateLimitError } from "./github-fetch.js";
+import { GitHubApiError, GitHubRateLimitError } from "./github-fetch.js";
 import { githubRequest, GitHubWriteScopeError, getPullRequestByNumber } from "./github-request.js";
 import type { ReleaseDetectionResult, ReleasePullRequestStatus } from "../shared/types.js";
 
@@ -274,6 +274,60 @@ export async function dispatchWorkflow(
   });
 }
 
+export interface HeldRuns {
+  /** Ids of the head commit's runs GitHub is holding for approval. */
+  held: number[];
+  /** Every workflow run GitHub has for the head commit, held or not. */
+  total: number;
+}
+
+/**
+ * Lists the workflow runs for `headSha` that are waiting for someone to click
+ * "Approve and run" — `GET /actions/runs?head_sha=`, keeping those with
+ * `conclusion: "action_required"` (a completed-but-never-started run, the
+ * shape every held run has on a bot-authored PR) or `status: "waiting"`.
+ *
+ * `total` is the number of runs of any kind for that commit: `held` empty with
+ * `total` 0 means no workflow ever fired (a PR opened with the default
+ * `GITHUB_TOKEN` triggers none), which approving cannot fix, while `held`
+ * empty with `total` > 0 just means nothing is waiting.
+ */
+export async function listHeldRuns(
+  token: string,
+  owner: string,
+  repo: string,
+  headSha: string,
+): Promise<HeldRuns> {
+  const result = await githubRequest<{
+    total_count: number;
+    workflow_runs: Array<{ id: number; status: string | null; conclusion: string | null }>;
+  }>(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=100`,
+  );
+  const held = result.workflow_runs
+    .filter((run) => run.conclusion === "action_required" || run.status === "waiting")
+    .map((run) => run.id);
+  return { held, total: result.total_count };
+}
+
+/**
+ * Approves one held run — `POST /actions/runs/:id/approve`, 204/empty on
+ * success. Needs a token with `actions: write` (DISPATCH_PERMISSIONS); a
+ * token without it surfaces as `GitHubWriteScopeError`.
+ */
+export async function approveRun(
+  token: string,
+  owner: string,
+  repo: string,
+  runId: number,
+): Promise<void> {
+  await githubRequest(token, owner, repo, "POST", `/actions/runs/${runId}/approve`);
+}
+
 export interface ReleasePullRequestSummary {
   number: number;
   htmlUrl: string;
@@ -375,6 +429,17 @@ export async function getCachedReleasePullRequestStatus(
     const full = await getPullRequestByNumber(token, owner, repo, summary.number);
     const cachedPrs = getPRsStatus(owner, repo);
     const ciMatch = cachedPrs?.prs.find((p) => p.number === full.number);
+    // A runs-read failure (a token without Actions: read, a rate limit) must
+    // not hide the release PR itself: degrade to "nothing known held".
+    let heldRuns = 0;
+    let noRuns = false;
+    try {
+      const runs = await listHeldRuns(token, owner, repo, full.headSha);
+      heldRuns = runs.held.length;
+      noRuns = runs.total === 0;
+    } catch (err) {
+      if (!(err instanceof GitHubApiError)) throw err;
+    }
     pr = {
       number: full.number,
       htmlUrl: full.htmlUrl,
@@ -385,6 +450,8 @@ export async function getCachedReleasePullRequestStatus(
       mergeable: full.mergeable,
       mergeableState: full.mergeableState,
       ciStatus: ciMatch?.ciStatus ?? null,
+      heldRuns,
+      noRuns,
     };
   }
 

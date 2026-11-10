@@ -30,6 +30,8 @@ import type {
   ReleasePullRequestStatus,
   ReleaseRunReason,
   ReleaseRunResult,
+  ReleaseApproveRunsReason,
+  ReleaseApproveRunsResult,
   ReleaseMergeReason,
   ReleaseMergeResult,
   DockControl,
@@ -71,6 +73,8 @@ export type {
   ReleasePullRequestStatus,
   ReleaseRunReason,
   ReleaseRunResult,
+  ReleaseApproveRunsReason,
+  ReleaseApproveRunsResult,
   ReleaseMergeReason,
   ReleaseMergeResult,
 };
