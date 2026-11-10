@@ -1,9 +1,11 @@
 // The prompt handed to a session working on a PR's branch: what the
-// reviewers left open, plus a pointer to anything red in CI. Built from the
+// reviewers left open, a merge conflict with the base, and a pointer to
+// anything red in CI. Built from the
 // same detail the sidebar shows, as plain text (no HTML) so any agent can
 // read it. HTML in thread comments is flattened, not trusted.
 
 import type { PrDetail } from "./github-pr-detail.js";
+import { hasMergeConflict } from "./github-pr-phase.js";
 
 const MAX_COMMENT_CHARS = 600;
 
@@ -41,7 +43,20 @@ function clip(text: string): string {
 const SUPERSEDING = new Set(["APPROVED", "DISMISSED"]);
 
 export function buildHandoffPrompt(
-  pr: Pick<PrDetail, "number" | "title" | "htmlUrl" | "headBranch" | "threads" | "reviews">,
+  // `baseBranch` and `mergeable` are required on purpose: they drive the
+  // conflict section, and a caller that forgot them would silently get
+  // "nothing outstanding" on a PR that cannot merge.
+  pr: Pick<
+    PrDetail,
+    | "number"
+    | "title"
+    | "htmlUrl"
+    | "headBranch"
+    | "baseBranch"
+    | "mergeable"
+    | "threads"
+    | "reviews"
+  >,
   failingChecks: string[],
 ): string {
   const lines = [`Address the open feedback on PR #${pr.number}: ${pr.title}`, pr.htmlUrl, ""];
@@ -77,6 +92,20 @@ export function buildHandoffPrompt(
     const verb = r.state === "CHANGES_REQUESTED" ? "Changes requested by" : "Review comments from";
     lines.push(`${verb} ${r.author ?? "a reviewer"}: ${clip(htmlToText(r.bodyHtml))}`, "");
   }
+  const conflicting = hasMergeConflict(pr);
+  if (conflicting) {
+    const base = `\`${pr.baseBranch}\``;
+    lines.push(
+      `This PR has a merge conflict with ${base} and cannot merge as it stands.`,
+      `Bring \`origin/${pr.baseBranch}\` into the branch (fetch first, then rebase onto it or merge it — follow this repo's convention), resolve the conflicts keeping the intent of both sides, re-run the repo's verification gate, and push. If you rebase, push with \`--force-with-lease\`.`,
+      ...(failingChecks.length === 0
+        ? [
+            "GitHub does not run a PR's workflows while it conflicts with its base, so missing or stale CI results are expected until this is resolved — do not read them as green.",
+          ]
+        : []),
+      "",
+    );
+  }
   if (failingChecks.length > 0) {
     lines.push(
       `Failing checks: ${failingChecks.join(", ")}`,
@@ -84,7 +113,7 @@ export function buildHandoffPrompt(
       "",
     );
   }
-  if (open.length === 0 && changes.length === 0 && failingChecks.length === 0) {
+  if (open.length === 0 && changes.length === 0 && failingChecks.length === 0 && !conflicting) {
     lines.push("There is nothing outstanding — check the PR for anything left to do.", "");
   }
   lines.push(
