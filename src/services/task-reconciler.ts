@@ -32,7 +32,7 @@ import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
 // module's header.
-import { readPrCheckRuns } from "./pr-check-runs.js";
+import { readPrCheckRuns, type PrCheckRuns } from "./pr-check-runs.js";
 import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
 // One bounded, exponential-backoff retry ledger behind every retry site in
 // this file (draft PR, merge, release, auto-approve) — see the module's
@@ -160,6 +160,7 @@ import {
   recordRateLimitEvent,
 } from "./task-rate-limit-grace.js";
 import { holdRedCiWithoutProgress } from "./task-ci-return-hold.js";
+import { ciAllowsAutoApproval } from "./task-ci-approval-gate.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
 export { REBASE_ATTEMPT_STALE_MS };
 
@@ -311,6 +312,9 @@ async function fetchCurrentCiStatus(
   baseRef: string;
   mergeable: boolean | null;
   mergeableState: string;
+  // Set by the red-CI return once it has read this head's check runs, so the
+  // approval gate does not read the same list again this tick.
+  checkRuns?: PrCheckRuns;
   // False when the Actions-runs lookup itself failed (a non-2xx or a network
   // error): `status` is then `null`, which reads the same as "no Actions runs".
   // Only the red-CI gate's `unstable` arm needs to tell the two apart.
@@ -2389,7 +2393,7 @@ async function processReleaseRequests(app: FastifyInstance): Promise<void> {
 //      round's verdict, never a stale one from an earlier round).
 //   3. That round's verdict (tasks.lastReviewVerdict, written alongside
 //      ingestion in processReviewingTasks above) is "clean".
-//   4. CI on the PR head reads an explicit "success".
+//   4. CI on the PR head reads an explicit "success" (`ciAllowsAutoApproval`).
 //   5. The task is still "reviewing" at the moment of the write — enforced
 //      by approveTask's own CAS, not checked here; a human racing the
 //      sweep simply wins.
@@ -2410,7 +2414,10 @@ async function processReleaseRequests(app: FastifyInstance): Promise<void> {
 // since the whole point of this gate is to BE a gate, not a formality that
 // eventually rubber-stamps itself. "in_progress"/null status, no
 // resolvable repo/token, or a thrown lookup are all simply "not yet" here
-// — forever, until CI genuinely reports success.
+// — forever, until CI genuinely reports success. The one exception is a
+// failed CodeQL / Dependency Review workflow run that no check run backs (a
+// run GitHub lost): `ciAllowsAutoApproval` (task-ci-approval-gate.ts) decides,
+// and logs why whenever it holds.
 const AUTO_APPROVE_RETRY_TTL_MS = 60 * 1000;
 const AUTO_APPROVE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
 const MAX_AUTO_APPROVALS_PER_SWEEP = 20;
@@ -2595,6 +2602,7 @@ async function attemptReturnRedCiToWorker(
     "red-ci-return",
   );
   const allCheckRuns = checkRuns.ok ? checkRuns.runs : [];
+  current.checkRuns = checkRuns;
   // `isRedCheckConclusion` is the one definition of "red" (a bare `failure`,
   // but also `timed_out` and `action_required`, which GitHub's merge gate
   // blocks on just the same) — see its own doc comment.
@@ -3256,7 +3264,7 @@ async function attemptAutoApprove(
   // not a stuck task.
   if (current.mergeable !== true) return;
 
-  if (current.status !== "success") return;
+  if (!(await ciAllowsAutoApproval(app, task, current))) return;
 
   const outcome = await approveTask(app, task, project, "auto-approve");
   if (outcome.ok) {
