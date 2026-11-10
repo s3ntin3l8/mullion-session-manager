@@ -32,6 +32,7 @@ import { projectHostCount } from "./lib/hostBadge.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
+import { PaletteRow } from "./command-palette/PaletteRow.js";
 import {
   AUTO_VALUE,
   OWN_HOST_VALUE,
@@ -131,41 +132,40 @@ function shortenHome(path: string): string {
 function CommandRow({ command, selected, showBreadcrumb, onClick, onMouseEnter }: CommandRowProps) {
   const Icon = command.icon;
   return (
-    <button
+    <PaletteRow
       type="button"
-      className={`cmd-row${selected ? " selected" : ""}`}
+      selected={selected}
       onClick={onClick}
       onMouseEnter={onMouseEnter}
-    >
-      <span
-        className="cmd-row-icon"
-        style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-      >
-        <Icon size={13} style={{ color: "var(--muted)" }} />
-      </span>
-      <span className="cmd-row-body">
-        <span className="cmd-row-title">
-          {showBreadcrumb && command.breadcrumb
-            ? `${command.breadcrumb} › ${command.title}`
-            : command.title}
-        </span>
-        <span className="cmd-row-subtitle">{command.subtitle}</span>
-      </span>
-      {command.availability && (
-        // The command's effect cannot be seen on this device (issue #1881).
-        // The label sits beside the title, where there is room for it; the
-        // full reason is for assistive technology and the tooltip, because
-        // the subtitle next to it is ellipsized and would cut a reason off
-        // mid-word.
-        <span className="cmd-row-availability unavailable" title={command.availability.reason}>
-          <span className="cmd-row-availability-dot" />
-          {command.availability.label}
-          <span className="visually-hidden"> — {command.availability.reason}</span>
-        </span>
-      )}
-      {command.drillIn && <span className="kbd">›</span>}
-      {selected && !command.drillIn && <span className="kbd">↵</span>}
-    </button>
+      icon={<Icon size={13} style={{ color: "var(--muted)" }} />}
+      iconStyle={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+      title={
+        showBreadcrumb && command.breadcrumb
+          ? `${command.breadcrumb} › ${command.title}`
+          : command.title
+      }
+      // Always a span, even when the subtitle is empty — search results
+      // and the blank-query list have always rendered one.
+      subtitle={command.subtitle ?? ""}
+      trailing={
+        <>
+          {command.availability && (
+            // The command's effect cannot be seen on this device (issue #1881).
+            // The label sits beside the title, where there is room for it; the
+            // full reason is for assistive technology and the tooltip, because
+            // the subtitle next to it is ellipsized and would cut a reason off
+            // mid-word.
+            <span className="cmd-row-availability unavailable" title={command.availability.reason}>
+              <span className="cmd-row-availability-dot" />
+              {command.availability.label}
+              <span className="visually-hidden"> — {command.availability.reason}</span>
+            </span>
+          )}
+          {command.drillIn && <span className="kbd">›</span>}
+          {selected && !command.drillIn && <span className="kbd">↵</span>}
+        </>
+      }
+    />
   );
 }
 
@@ -1361,42 +1361,41 @@ export function CommandPalette({
               {filteredProjects.length === 0 ? "No matching projects" : "Launch in which project?"}
             </div>
             {filteredProjects.map((p, idx) => (
-              <button
+              <PaletteRow
                 type="button"
                 key={p.id}
                 id={`cmd-palette-project-opt-${idx}`}
                 role="option"
                 aria-selected={idx === activeProjectIndex}
                 data-index={idx}
-                className={`cmd-row${idx === activeProjectIndex ? " selected" : ""}`}
-                title={p.cwd}
+                selected={idx === activeProjectIndex}
+                rowTitle={p.cwd}
                 onClick={() => {
                   setManualTargetProjectId(p.id);
                   closeProjectPicker();
                 }}
                 onMouseEnter={() => setProjectIndex(idx)}
-              >
-                <span
-                  className="cmd-row-icon"
-                  style={{ background: "color-mix(in srgb, var(--accent-solid) 14%, transparent)" }}
-                >
-                  <FolderIcon size={14} style={{ color: "var(--accent-solid)" }} />
-                </span>
-                <span className="cmd-row-body">
-                  <span className="cmd-row-title">{p.name}</span>
-                  <span className="cmd-row-subtitle">
-                    {(hostCountByProject.get(p.id) ?? 1) > 1
-                      ? `${hostCountByProject.get(p.id)} hosts`
-                      : shortenHome(p.cwd)}
-                  </span>
-                </span>
-                {p.id === effectiveProjectId && (
-                  <span className="cmd-row-current" aria-label="Current project">
-                    ✓
-                  </span>
-                )}
-                {idx === activeProjectIndex && <span className="kbd">↵</span>}
-              </button>
+                icon={<FolderIcon size={14} style={{ color: "var(--accent-solid)" }} />}
+                iconStyle={{
+                  background: "color-mix(in srgb, var(--accent-solid) 14%, transparent)",
+                }}
+                title={p.name}
+                subtitle={
+                  (hostCountByProject.get(p.id) ?? 1) > 1
+                    ? `${hostCountByProject.get(p.id)} hosts`
+                    : shortenHome(p.cwd)
+                }
+                trailing={
+                  <>
+                    {p.id === effectiveProjectId && (
+                      <span className="cmd-row-current" aria-label="Current project">
+                        ✓
+                      </span>
+                    )}
+                    {idx === activeProjectIndex && <span className="kbd">↵</span>}
+                  </>
+                }
+              />
             ))}
           </div>
         ) : subView === "workspace-name" ? (
@@ -1466,32 +1465,23 @@ export function CommandPalette({
                     (part): part is string => Boolean(part),
                   );
                   return (
-                    <button
+                    <PaletteRow
                       key={`session-${session.id}`}
-                      className={`cmd-row${i === navIndex ? " selected" : ""}`}
+                      selected={i === navIndex}
                       onMouseEnter={() => setSelectedIndex(i)}
                       onClick={() => {
                         onOpenSession(session);
                         closeAfterAction();
                       }}
-                    >
-                      <span
-                        className="cmd-row-icon"
-                        style={{
-                          background: "color-mix(in srgb, var(--b) 22%, transparent)",
-                          color: "var(--b)",
-                        }}
-                      >
-                        <TerminalPromptIcon size={13} />
-                      </span>
-                      <span className="cmd-row-body">
-                        <span className="cmd-row-title">{title}</span>
-                        {subtitleParts.length > 0 && (
-                          <span className="cmd-row-subtitle">{subtitleParts.join(" · ")}</span>
-                        )}
-                      </span>
-                      {i === navIndex && <span className="kbd">↵</span>}
-                    </button>
+                      icon={<TerminalPromptIcon size={13} />}
+                      iconStyle={{
+                        background: "color-mix(in srgb, var(--b) 22%, transparent)",
+                        color: "var(--b)",
+                      }}
+                      title={title}
+                      subtitle={subtitleParts.length > 0 ? subtitleParts.join(" · ") : undefined}
+                      trailing={i === navIndex ? <span className="kbd">↵</span> : undefined}
+                    />
                   );
                 })}
               </>
@@ -1504,26 +1494,21 @@ export function CommandPalette({
                   // is empty when `query.trim() === ""`, so no Commands lead.
                   const absoluteIndex = matchingSessions.length + i;
                   return (
-                    <button
+                    <PaletteRow
                       key={`workspace-${workspace.id}`}
-                      className={`cmd-row${absoluteIndex === navIndex ? " selected" : ""}`}
+                      selected={absoluteIndex === navIndex}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => {
                         selectWorkspace(workspace.id);
                         closeAfterWorkspaceSwitch();
                       }}
-                    >
-                      <span
-                        className="cmd-row-icon"
-                        style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                      >
-                        <GridIcon size={13} style={{ color: "var(--muted)" }} />
-                      </span>
-                      <span className="cmd-row-body">
-                        <span className="cmd-row-title">{workspace.name}</span>
-                      </span>
-                      {absoluteIndex === navIndex && <span className="kbd">↵</span>}
-                    </button>
+                      icon={<GridIcon size={13} style={{ color: "var(--muted)" }} />}
+                      iconStyle={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                      title={workspace.name}
+                      trailing={
+                        absoluteIndex === navIndex ? <span className="kbd">↵</span> : undefined
+                      }
+                    />
                   );
                 })}
               </>
@@ -1541,54 +1526,58 @@ export function CommandPalette({
               const absoluteIndex = blankCommands.length + groupOffset + i;
               const logo = resolveLauncherLogo(launcher, theme);
               return (
-                <button
+                <PaletteRow
                   key={launcher.id}
-                  className={`cmd-row${absoluteIndex === navIndex ? " selected" : ""}`}
+                  selected={absoluteIndex === navIndex}
                   onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                   onClick={() => launch(launcher)}
-                >
-                  {logo ? (
-                    <span className="cmd-row-icon cmd-row-icon-logo">
+                  icon={
+                    logo ? (
                       <img src={logo} alt="" width={16} height={16} />
-                    </span>
-                  ) : (
-                    <span
-                      className="cmd-row-icon"
-                      style={{
-                        background:
-                          launcher.kind === "agent" || launcher.kind === "shell"
-                            ? "color-mix(in srgb, var(--b) 22%, transparent)"
-                            : "color-mix(in srgb, var(--g) 18%, transparent)",
-                        color:
-                          launcher.kind === "agent" || launcher.kind === "shell"
-                            ? "var(--b)"
-                            : "var(--g)",
-                      }}
-                    >
-                      {launcher.kind === "agent" ? "✳" : "›"}
-                    </span>
-                  )}
-                  <span className="cmd-row-body">
-                    <span className="cmd-row-title">{launcher.title}</span>
-                    <span className="cmd-row-subtitle">{launcher.command}</span>
-                  </span>
-                  {SOURCE_LABEL[launcher.kind] && (
-                    <span className="cmd-row-source-badge">{SOURCE_LABEL[launcher.kind]}</span>
-                  )}
-                  {launcher.kind === "agent" &&
-                    skipPermissionsAgentIds.has(normalizeAgentId(launcher.id)) && (
-                      <span
-                        className="cmd-row-source-badge"
-                        style={{
-                          color: "var(--o)",
-                          borderColor: "color-mix(in srgb, var(--o) 40%, transparent)",
-                        }}
-                      >
-                        ⚠ skip perms
-                      </span>
-                    )}
-                  {absoluteIndex === navIndex && <span className="kbd">↵</span>}
-                </button>
+                    ) : launcher.kind === "agent" ? (
+                      "✳"
+                    ) : (
+                      "›"
+                    )
+                  }
+                  iconClassName={logo ? "cmd-row-icon-logo" : undefined}
+                  iconStyle={
+                    logo
+                      ? undefined
+                      : {
+                          background:
+                            launcher.kind === "agent" || launcher.kind === "shell"
+                              ? "color-mix(in srgb, var(--b) 22%, transparent)"
+                              : "color-mix(in srgb, var(--g) 18%, transparent)",
+                          color:
+                            launcher.kind === "agent" || launcher.kind === "shell"
+                              ? "var(--b)"
+                              : "var(--g)",
+                        }
+                  }
+                  title={launcher.title}
+                  subtitle={launcher.command}
+                  trailing={
+                    <>
+                      {SOURCE_LABEL[launcher.kind] && (
+                        <span className="cmd-row-source-badge">{SOURCE_LABEL[launcher.kind]}</span>
+                      )}
+                      {launcher.kind === "agent" &&
+                        skipPermissionsAgentIds.has(normalizeAgentId(launcher.id)) && (
+                          <span
+                            className="cmd-row-source-badge"
+                            style={{
+                              color: "var(--o)",
+                              borderColor: "color-mix(in srgb, var(--o) 40%, transparent)",
+                            }}
+                          >
+                            ⚠ skip perms
+                          </span>
+                        )}
+                      {absoluteIndex === navIndex && <span className="kbd">↵</span>}
+                    </>
+                  }
+                />
               );
             })}
             {matchingCommands.length > 0 && (
