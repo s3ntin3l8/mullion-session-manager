@@ -166,7 +166,10 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const openPr = () =>
     useDashboardStore
       .getState()
-      .openRightSidebarPr(task.projectId, task.prNumber as number, { kind: "task", taskId: task.id });
+      .openRightSidebarPr(task.projectId, task.prNumber as number, {
+        kind: "task",
+        taskId: task.id,
+      });
   const openIssue = () =>
     useDashboardStore.getState().openRightSidebarIssue(task.projectId, task.issueNumber as number);
   const relations = taskRelations(task, allTasks);
