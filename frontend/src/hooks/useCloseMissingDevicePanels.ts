@@ -18,7 +18,8 @@ export function useCloseMissingDevicePanels({
   devicesLoaded,
   dockviewApi,
 }: UseCloseMissingDevicePanelsParams): void {
-  // Device-panel counterpart of the session sweep above, for the other half
+  // Device-panel counterpart of the session sweep in
+  // useCloseKilledSessionPanels.ts, for the other half
   // of the "deleted device stays in the list" fix: DELETE now removes the
   // row outright (routes/devices.ts), so a `device-<id>` panel outliving
   // its row would render DevicePane's "this device was deleted" dead end

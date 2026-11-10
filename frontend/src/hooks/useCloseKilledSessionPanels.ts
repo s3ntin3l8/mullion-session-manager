@@ -21,8 +21,9 @@ export function useCloseKilledSessionPanels({
   // switch, page reload), causing the killed session's panel to reappear.
   // Harmless no-op when the panel was already closed via the normal kill
   // flow (PaneTab's sync close before the API call in armOrKill).  Pairs
-  // with the post-restore cleanup in the workspace restore effect (above,
-  // in the `try` block that removes stale panels after `fromJSON`) — when
+  // with the post-restore cleanup in the workspace restore effect
+  // (useWorkspacePersistence.ts, in the `try` block that removes stale
+  // panels after `fromJSON`) — when
   // sessions haven't loaded yet during restore, this effect takes over once
   // `sessions` populates.
   useEffect(() => {

@@ -45,8 +45,9 @@ export function usePushSessionOpen({
   // pending id would be cleared without ever finding a match once they
   // arrive; if it lands mid workspace-restore, opening immediately would
   // get wiped right back out by the restore effect's own clear()+fromJSON().
-  // Reuses the exact same three gates as the ?session= deep-link effect
-  // above (workspaceRestored/sessionsLoaded/!restoringRef.current).
+  // Reuses the exact same three gates as the ?session= deep-link effect in
+  // useSessionDeepLink.ts
+  // (workspaceRestored/sessionsLoaded/!restoringRef.current).
   //
   // Owns its own retry timer (pushRetryTimerRef) rather than riding on the
   // deep-link effect's deepLinkRetryTick, as an earlier version of this
@@ -120,8 +121,8 @@ export function usePushSessionOpen({
     dockviewApi,
     activeWorkspaceId,
     sessionsLoaded,
-    // See the auto-open-child-panel effect's own comment above on why
-    // these two are listed here despite never changing identity.
+    // See useAutoOpenChildPanels.ts's comment on why these two are listed
+    // here despite never changing identity.
     restoringRef,
     restoredWorkspaceIdRef,
   ]);

@@ -32,14 +32,14 @@ export function useWorkspaceLoadRetry({
   // times with backoff (issue #1618) — a single failed fetch used to leave
   // workspacesLoaded false forever, with no active workspace and no autosave.
   // Giving up leaves workspacesLoaded false on purpose: flipping it with an
-  // unknown (not genuinely empty) list would let the bootstrap below create a
-  // duplicate "Default". Instead, giving up re-arms on the browser coming
-  // back online or the tab becoming visible again, starting a fresh bounded
-  // round, so a transient outage can't leave the app workspace-less for the
-  // rest of the session. A failed round sets workspaceLoadFailed so the grid
-  // banner can offer Retry (issue #1638); that bumps workspaceLoadNonce and
-  // this effect starts over. Success clears the flag. workspacesLoaded still
-  // stays false until a round actually resolves.
+  // unknown (not genuinely empty) list would let the bootstrap in
+  // useDefaultWorkspaceBootstrap.ts create a duplicate "Default". Instead,
+  // giving up re-arms on the browser coming back online or the tab becoming
+  // visible again, starting a fresh bounded round, so a transient outage can't
+  // leave the app workspace-less for the rest of the session. A failed round
+  // sets workspaceLoadFailed so the grid banner can offer Retry (issue #1638);
+  // that bumps workspaceLoadNonce and this effect starts over. Success clears
+  // the flag. workspacesLoaded still stays false until a round actually resolves.
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;

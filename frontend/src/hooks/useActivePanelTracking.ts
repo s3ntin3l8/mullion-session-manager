@@ -17,8 +17,9 @@ export function useActivePanelTracking({
   panelsVersion,
 }: UseActivePanelTrackingParams): void {
   // Issue #322: track which dockview panel is currently active so the
-  // notification effect below can suppress desktop notifications for the
-  // pane the user is currently looking at, even when the tab is visible.
+  // notification effect in useAttentionNotifications.ts can suppress desktop
+  // notifications for the pane the user is currently looking at, even when
+  // the tab is visible.
   useEffect(() => {
     if (!dockviewApi) return;
     const setActivePanelId = useDashboardStore.getState().setActivePanelId;

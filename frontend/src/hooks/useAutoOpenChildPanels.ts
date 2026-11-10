@@ -48,24 +48,26 @@ export function useAutoOpenChildPanels({
 }: UseAutoOpenChildPanelsParams): void {
   // Phase 5 (Track B, issue #194 5.4) — this codebase's first
   // backend-state-driven panel ADD (every other effect here only
-  // setActive()s or close()s an already-open panel; see the killed-session
-  // cleanup effect below for that pattern). Opt-in via
+  // setActive()s or close()s an already-open panel; see
+  // useCloseKilledSessionPanels.ts for that pattern). Opt-in via
   // settings.sessions.autoOpenChildPanels (default false) — a spawned child
   // always shows in the sidebar regardless of this flag; this only governs
   // whether ITS PANEL opens with no user gesture behind it. Detection
   // itself lives in panelUtils.ts's newChildSessionIds (unit tested there,
   // same "poll-diff transition, own Set" shape as attentionTransitionPanelIds
-  // above) — this effect is just the Settings gate plus the dockviewApi
-  // calls, with no local state of its own (no setState anywhere in this
-  // effect body — see this repo's react-hooks/set-state-in-effect lint rule).
+  // in useAutoFocusOnAttention.ts) — this effect is just the Settings gate
+  // plus the dockviewApi calls, with no local state of its own (no setState
+  // anywhere in this effect body — see this repo's
+  // react-hooks/set-state-in-effect lint rule).
   //
   // Independent review finding (PR #430) — gated on the workspace-restore
-  // effect above having already applied the CURRENT workspace's saved
-  // layout (restoredWorkspaceIdRef.current === activeWorkspaceId), not just
-  // on dockviewApi existing. Without this, a panel opened here in the
-  // narrow window before restore completes gets silently wiped by that
-  // effect's dockviewApi.clear()+fromJSON() a moment later — and since this
-  // child's id is already recorded as "seen", it would never be retried.
+  // effect in useWorkspacePersistence.ts having already applied the CURRENT
+  // workspace's saved layout (restoredWorkspaceIdRef.current ===
+  // activeWorkspaceId), not just on dockviewApi existing. Without this, a
+  // panel opened here in the narrow window before restore completes gets
+  // silently wiped by that effect's dockviewApi.clear()+fromJSON() a moment
+  // later — and since this child's id is already recorded as "seen", it would
+  // never be retried.
   // Issue #447 fix — `restoredWorkspaceIdRef` is set synchronously at the
   // end of that effect's body, one render before its OWN
   // `restoringRef.current = false` fires (deferred via `setTimeout`) — so
@@ -73,10 +75,10 @@ export function useAutoOpenChildPanels({
   // `restoringRef.current` is still true. On a workspace SWITCH, if a
   // brand-new child happens to arrive in that exact same tick, its
   // `addPanel()` call here would otherwise fire while the "any real layout
-  // change" autosave effect below still treats every change as the
-  // restore's own echo (`restoringRef.current`), so the panel's addition
-  // would never persist and the child's panel would silently not survive a
-  // reload. `shouldAutoOpenChildPanels` (panelUtils.ts) folds in
+  // change" autosave effect in useWorkspacePersistence.ts still treats every
+  // change as the restore's own echo (`restoringRef.current`), so the panel's
+  // addition would never persist and the child's panel would silently not
+  // survive a reload. `shouldAutoOpenChildPanels` (panelUtils.ts) folds in
   // `!restoringRef.current` to skip entirely during that window. This
   // self-heals with no extra bookkeeping: `seenChildSessionIdsRef` is only
   // advanced inside this same gated branch (see below), so a child skipped

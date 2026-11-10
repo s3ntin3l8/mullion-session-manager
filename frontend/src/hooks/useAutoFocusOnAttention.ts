@@ -34,7 +34,8 @@ export function useAutoFocusOnAttention({
   // via Settings -> Notifications & status (default off — see api.ts's
   // autoFocusOnAttention doc comment). Deliberately still poll-diff
   // (`sessions.attention`, not the /ws/events stream the desktop-
-  // notification effect above migrated to for issue #170): this is a
+  // notification effect in useAttentionNotifications.ts migrated to for
+  // issue #170): this is a
   // separate feature with its own settled implementation from #98/PR4, and
   // moving it to the event stream too isn't this PR's scope — only the
   // desktop-notification firing was called out for the migration. The
