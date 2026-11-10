@@ -66,6 +66,9 @@ export async function ciAllowsAutoApproval(
     headSha: string;
     repoRef: GitHubRepoRef;
     runs: { name: string; conclusion: string | null }[];
+    /** False when the Actions-runs lookup failed: `status` is then null, which
+     * is not the same as "no workflow runs". */
+    runsAnswered?: boolean;
     /** The check runs the red-CI return already read this tick, if it did. */
     checkRuns?: PrCheckRuns;
   },
@@ -74,13 +77,22 @@ export async function ciAllowsAutoApproval(
 
   let reason: string;
   if (current.status !== "failure") {
-    reason = current.status === "in_progress" ? "workflow-runs-in-progress" : "no-workflow-runs";
+    reason =
+      current.status === "in_progress"
+        ? "workflow-runs-in-progress"
+        : current.runsAnswered === false
+          ? "workflow-runs-lookup-failed"
+          : "no-workflow-runs";
   } else {
     const failedRuns = current.runs
       .filter((r) => r.conclusion !== null && isRedCheckConclusion(r.conclusion))
       .map((r) => r.name);
     const otherFailures = failedRuns.filter((n) => !LOST_RUN_WORKFLOWS.includes(n));
-    if (otherFailures.length > 0) {
+    if (failedRuns.length === 0) {
+      // `computeCiStatus` counts a `neutral` run as a failure, but the red
+      // predicate does not: with no run named there is nothing to say is lost.
+      reason = "failure-without-a-red-workflow-run";
+    } else if (otherFailures.length > 0) {
       reason = "failed-workflow-not-known-lost";
     } else {
       const token = current.checkRuns

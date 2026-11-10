@@ -149,6 +149,23 @@ describe("ciAllowsAutoApproval", () => {
     expect(holdReason(log)).toBe("no-check-runs");
   });
 
+  it("holds when the status is a failure but no workflow run is red (a neutral run), instead of overriding", async () => {
+    const { app, log } = appWithLog();
+    mockFetchCheckRunsForHead.mockResolvedValue([{ name: "a", conclusion: "success" }]);
+    await expect(
+      ciAllowsAutoApproval(app, task, current("failure", [{ name: "x", conclusion: "neutral" }])),
+    ).resolves.toBe(false);
+    expect(holdReason(log)).toBe("failure-without-a-red-workflow-run");
+  });
+
+  it("says the Actions lookup failed, not that there are no workflow runs", async () => {
+    const { app, log } = appWithLog();
+    await expect(
+      ciAllowsAutoApproval(app, task, { ...current(null), runsAnswered: false }),
+    ).resolves.toBe(false);
+    expect(holdReason(log)).toBe("workflow-runs-lookup-failed");
+  });
+
   it("holds when the check-run lookup cannot be answered, and says that rather than 'not all green'", async () => {
     const { app, log } = appWithLog();
     mockFetchCheckRunsForHead.mockRejectedValue(new Error("HTTP 502"));
