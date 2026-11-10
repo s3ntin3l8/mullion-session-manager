@@ -139,8 +139,8 @@ export function useTaskFilters(
   // with no visible way back. Derived, never written back: a project that reappears
   // keeps its saved selection.
   const knownProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
-  // Following only counts while there is a followed project that still exists (none on
-  // phone, none before a project loads); otherwise the saved selection applies as if the
+  // Following only counts while there is a followed project that still exists (none
+  // before a project loads, or on phone while no panel has focus); otherwise the saved selection applies as if the
   // option were off, so there is never a "following nothing" state.
   const followedId =
     followedProjectId !== null && knownProjectIds.has(followedProjectId) ? followedProjectId : null;

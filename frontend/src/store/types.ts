@@ -883,7 +883,8 @@ export interface UiSlice {
   takeSidebarBack: (to: SidebarBack) => SidebarBack | null;
   // The project the right sidebar currently follows (useFollowedProject's
   // effectiveProjectId), published by RightSidebar so the Task Master board can follow
-  // it too (#2858). Null while no sidebar is mounted (phone) or no project exists.
+  // it too (#2858). Null while no project exists, or on phone while no panel has focus
+  // (#2864: there the first-project fallback is not an "active" project).
   followedProjectId: number | null;
   setFollowedProjectId: (projectId: number | null) => void;
   openTaskRequest: { taskId: number; nonce: number } | null;

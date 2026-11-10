@@ -14,6 +14,9 @@ export const FOLLOW_SENTINEL = "__follow__";
 
 export interface FollowedProject {
   effectiveProjectId: number | null;
+  // The project a focused panel put there (now or earlier), or null when nothing did and
+  // `effectiveProjectId` is only the first-project fallback (or a pin).
+  followSourceId: number | null;
   pinnedProjectId: number | null;
   setPinnedProjectId: (id: number | null) => void;
   dropdownOptions: { value: string; label: string }[];
@@ -146,6 +149,7 @@ export function useFollowedProject(
 
   return {
     effectiveProjectId,
+    followSourceId,
     pinnedProjectId,
     setPinnedProjectId,
     dropdownOptions,

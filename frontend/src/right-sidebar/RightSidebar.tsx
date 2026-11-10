@@ -44,14 +44,17 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // Publish the followed project for the Task Master board's "follow" option (#2858). This
   // is the only place useFollowedProject is resolved for the shell, so the board reads this
   // instead of deriving it a second time. App mounts this on every tier. Phone renders
-  // nothing here, but the project this resolves (the focused panel's project, there being
-  // no picker to pin one) is the one the phone follows; the board words the option for it
-  // (#2864). The phone navigator's own Source Control section is only mounted on its
-  // projects tab, so it cannot be the producer while the Tasks board is showing.
+  // nothing here, but the project a focused panel puts here is the one the phone follows;
+  // the board words the option for it (#2864). With nothing focused the hook only falls
+  // back to the first project, which nothing made "active", so phone publishes null then
+  // (a visible sidebar does show that fallback project, so it still publishes it). The
+  // phone navigator's own Source Control section is only mounted on its projects tab, so
+  // it cannot be the producer while the Tasks board is showing.
   const setFollowedProjectId = useDashboardStore((s) => s.setFollowedProjectId);
+  const publishedProjectId = tier === "phone" ? followed.followSourceId : followedProjectId;
   useEffect(() => {
-    setFollowedProjectId(followedProjectId);
-  }, [followedProjectId, setFollowedProjectId]);
+    setFollowedProjectId(publishedProjectId);
+  }, [publishedProjectId, setFollowedProjectId]);
   // Clear it on unmount only, so a project switch is one store write, not null then id.
   useEffect(() => () => setFollowedProjectId(null), [setFollowedProjectId]);
   useEffect(() => {

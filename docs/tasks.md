@@ -395,7 +395,8 @@ The strip is on every layout, phone included.
   project to follow, and the saved selection applies whatever the setting says
   while there is none. On phone, which has no visible sidebar, it reads "Follow
   the active project" (`#2864`) and follows the project of the focused panel, the
-  same one the shell resolves for the right sidebar on every layout; **quick views** — All, Needs me, Running, Blocked, Awaiting
+  same one the shell resolves for the right sidebar on every layout, and is absent
+  until a panel has had focus; **quick views** — All, Needs me, Running, Blocked, Awaiting
   merge — each with a count taken over every other filter; a **Filter** menu
   (epic, agent, and a text search over title, issue number and PR number) whose
   active choices show as removable tokens under the row; and a **Display** menu

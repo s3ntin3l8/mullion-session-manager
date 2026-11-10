@@ -19,6 +19,8 @@ describe("useFollowedProject", () => {
     const { result } = renderHook(() => useFollowedProject());
 
     expect(result.current.effectiveProjectId).toBe(1);
+    // The fallback is not a project a panel put there.
+    expect(result.current.followSourceId).toBeNull();
     expect(result.current.dropdownValue).toBe(FOLLOW_SENTINEL);
     expect(result.current.dropdownOptions.map((o) => o.label)).toEqual([
       "Follow active panel",
@@ -37,6 +39,7 @@ describe("useFollowedProject", () => {
     const { result } = renderHook(() => useFollowedProject());
 
     expect(result.current.effectiveProjectId).toBe(2);
+    expect(result.current.followSourceId).toBe(2);
     expect(result.current.dropdownOptions[0].label).toBe("◎ b");
   });
 
