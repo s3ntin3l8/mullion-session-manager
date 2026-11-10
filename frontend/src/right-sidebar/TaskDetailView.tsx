@@ -135,11 +135,12 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   // pressed Enter on a card lands nowhere: nothing in the sidebar is focused
   // and nothing is announced (the board's old drawer focused its close button,
   // trapped Tab and closed on Escape for exactly that reason). Focus the Back
-  // button when a task's detail appears or another task replaces it; the view
-  // sits inside a labelled region, so a screen reader announces which task
-  // opened. In the right sidebar DetailHeader portals the header (Back
-  // included) into the drawer's detail slot, outside this view's own root, so
-  // Back is looked up in the slot when there is one and in the root otherwise.
+  // button when a task's detail appears or another task replaces it. In the
+  // right sidebar DetailHeader portals the header (Back included) into the
+  // drawer's detail slot, outside this view's own root, so Back is looked up
+  // in the slot when there is one and in the root otherwise. A screen reader
+  // announces "Back, button" there, not the task; the view's region is labelled
+  // with the task for when focus moves into the body.
   // `detailSlot` is a dependency because the slot element arrives one render
   // after the panel mounts: the first run finds the inline header, the next
   // finds the portalled one.

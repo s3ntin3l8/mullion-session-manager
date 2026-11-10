@@ -33,6 +33,18 @@ describe("useOpenTask", () => {
     expect(state.openTaskRequest).toBeNull();
   });
 
+  it("desktop: records where Back returns when the caller is itself a sidebar detail", () => {
+    const { result } = renderHook(() => useOpenTask());
+    result.current(5, { kind: "issue", projectId: 4, number: 9 });
+    const state = useDashboardStore.getState();
+    expect(state.selectedTaskId).toBe(5);
+    expect(state.takeSidebarBack({ kind: "task", taskId: 5 })).toEqual({
+      kind: "issue",
+      projectId: 4,
+      number: 9,
+    });
+  });
+
   it.each(["tablet", "phone"] as const)("%s: asks for the docked panel", (t) => {
     tier = t;
     const { result } = renderHook(() => useOpenTask());

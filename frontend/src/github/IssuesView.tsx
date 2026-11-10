@@ -594,7 +594,7 @@ export function IssueDetailView({
                 <Button
                   variant="primary"
                   disabled={busy !== null}
-                  onClick={() => openTask(action.taskId)}
+                  onClick={() => openTask(action.taskId, { kind: "issue", projectId, number })}
                 >
                   Open task
                 </Button>
