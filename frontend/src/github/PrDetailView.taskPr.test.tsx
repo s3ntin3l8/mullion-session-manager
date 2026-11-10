@@ -80,6 +80,8 @@ describe("a task PR", () => {
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
       const strip = await screen.findByRole("region", { name: "Task" });
       expect(within(strip).getByTestId("task-status-block")).toBeInTheDocument();
+      // The class the CSS guard in TaskStatusBlock.test.tsx pins (it keeps the menu unclipped).
+      expect(strip).toHaveClass("pr-task-strip");
       expect(screen.getAllByRole("button", { name: "Approve task" })).toHaveLength(1);
       expect(within(strip).getByRole("button", { name: "Approve task" })).toBeInTheDocument();
       // The rest of the PR view is untouched: status, the Mullion card, the pinned area.

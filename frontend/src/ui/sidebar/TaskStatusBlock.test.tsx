@@ -40,11 +40,21 @@ describe("TaskStatusBlock slots", () => {
 // These pin the two rules that keep it reachable; the geometry was measured in a
 // real browser at 260, 300 and 340 px, dark and light.
 describe("the strip's overflow menu stays reachable", () => {
-  // Every declaration block of `selector`, joined (the actions row has two).
-  const rule = (css: string, selector: string) =>
-    [...css.matchAll(new RegExp(`${selector.replace(/[.]/g, "\\.")}\\s*\\{([^}]*)\\}`, "g"))]
-      .map((m) => m[1])
-      .join(" ");
+  // Every declaration block of `selector`, joined (the actions row has two). Plain
+  // string search, not a RegExp built from the selector: nothing here to escape.
+  const rule = (css: string, selector: string) => {
+    const bodies: string[] = [];
+    const head = `${selector} {`;
+    for (let from = 0; ;) {
+      const at = css.indexOf(head, from);
+      if (at < 0) break;
+      const end = css.indexOf("}", at);
+      // Only a rule that starts its own line: not the tail of a longer selector.
+      if (at === 0 || css[at - 1] === "\n") bodies.push(css.slice(at + head.length, end));
+      from = end;
+    }
+    return bodies.join(" ");
+  };
 
   it("is not clipped by the PR card that holds the strip", () => {
     expect(rule(prCss, ".pr-card.pr-task-strip")).toMatch(/overflow:\s*visible/);
