@@ -1364,24 +1364,25 @@ describe("reconcileTasks", () => {
     }
   });
 
-  it("does not advance an untracked session (app.pty has no live handle for it) past idle defaults", async () => {
+  it("does not advance an untracked session whose scope is gone (#2929)", async () => {
     // LocalBackend.liveStatus always sets a key for every requested id —
     // `app.pty.get(id)?.toInfo(...) ?? null` — so an untracked session
-    // reads as `null`, not an omitted key; `defaultDeriveStatusInfo(null)`
-    // then supplies its own idle defaults, which is what this test
-    // actually exercises. (A genuinely *omitted* key is a remote-host-only
-    // possibility — reconcileTasks's own `info === undefined` guard exists
-    // for that case, mirroring session-reconciler.ts's `alive === undefined`
-    // rule, but isn't reachable through a local-only test setup like this
-    // one.)
+    // reads as `null`, not an omitted key. #2929 treats a local null as
+    // "not adopted yet" and asks the scope: a dead one is not respawned,
+    // and `defaultDeriveStatusInfo(null)` then supplies idle defaults,
+    // which is what this test actually exercises. (A genuinely *omitted*
+    // key is a remote-host-only possibility — reconcileTasks's own
+    // `info === undefined` guard exists for that case, mirroring
+    // session-reconciler.ts's `alive === undefined` rule, but isn't
+    // reachable through a local-only test setup like this one.)
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "claimed");
     vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("dead");
 
     await reconcileTasks(app);
 
-    const row = await getTask(app, taskId);
-    expect(row.status).toBe("claimed");
+    expect((await getTask(app, taskId)).status).toBe("claimed");
     await app.close();
   });
 

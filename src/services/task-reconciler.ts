@@ -9,6 +9,7 @@ import type { SessionStatus } from "../shared/types.js";
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import { healUntrackedLocalSession } from "./session-adopt.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
 // attemptAutoRebase's stale-attempt-termination branch below for why this
@@ -3952,6 +3953,22 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
       for (const row of hostRows) {
         const { task, session, project } = row;
 
+        // #2929 — a local null is "not adopted yet". Adopt before ingesting
+        // so a review that finished across a restart is still readable.
+        // Unverifiable liveness retries next tick.
+        if (
+          await healUntrackedLocalSession(
+            app,
+            hostId,
+            String(session.id),
+            liveMap,
+            idleThresholdMs,
+            backend,
+          )
+        ) {
+          continue;
+        }
+
         // Every row here has a review session — the query inner-joins
         // `sessions` on `tasks.reviewSessionId`. That matters: unlike the bare
         // equality this replaced, `hasIngestedCurrentReview` is false for a
@@ -4863,6 +4880,23 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
         for (const row of hostRows) {
           const { task, session, project } = row;
           const now = new Date();
+
+          // #2929 — same "null means not adopted yet" rule as the review
+          // pass. Adopt BEFORE the budget check: a worker that already
+          // finished is salvaged instead of budget-failed, and an
+          // unverifiable scope is retried next tick rather than failed.
+          if (
+            await healUntrackedLocalSession(
+              app,
+              hostId,
+              String(session.id),
+              liveMap,
+              idleThresholdMs,
+              backend,
+            )
+          ) {
+            continue;
+          }
 
           // Budget check first — an expired task is failed regardless of
           // what its session is currently doing. 0 = unlimited (opt out).

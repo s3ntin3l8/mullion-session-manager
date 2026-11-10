@@ -10,10 +10,12 @@ scope so it survives service redeploys/restarts. The `sessions` DB row
 records _intent_ (has this been explicitly killed?); live process state
 lives only in `PtyManager`'s in-memory map, and routes merge the two rather
 than trusting the DB column alone. After a restart that map is empty even though
-the scopes are still running; a session is re-tracked when a terminal attaches
-or, for control-socket ops that need its live PTY, on demand by
-`adoptSurvivingSession` (`src/services/session-adopt.ts`, #2271) — which
-checks the scope first and never respawns a dead one. `sessions.command` and
+the scopes are still running. A session is re-tracked when a terminal attaches,
+on demand by `adoptSurvivingSession` (`src/services/session-adopt.ts`, #2271)
+for a control-socket op that needs its live PTY, and — for the active local
+sessions of claimed, in-progress, and reviewing tasks — at boot and again from
+the task reconciler when a local live-status read comes back null (#2929).
+Adoption checks the scope first and never respawns a dead one. `sessions.command` and
 `workspaces.layout` are deliberately **opaque blobs** — the backend never
 parses a shell command line or a dockview layout, it just stores and
 replays what it's given. **The exception** is `src/services/hook-adapters/`:
