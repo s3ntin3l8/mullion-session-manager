@@ -74,10 +74,25 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().followedProjectId).toBeNull();
   });
 
-  it("publishes no followed project on phone, where the sidebar renders nothing (#2864)", () => {
+  it("publishes the focused panel's project on phone too, where the sidebar renders nothing, and clears it on unmount (#2864)", () => {
+    // Two projects with the focus on the second, so the first-project fallback cannot pass.
+    useDashboardStore.setState({
+      projects: [PROJECT, { ...PROJECT, id: 2, name: "two" } as Project],
+      activePanelId: "git-2",
+    });
     const view = renderSidebar("phone");
     expect(view.container).toBeEmptyDOMElement();
+    expect(useDashboardStore.getState().followedProjectId).toBe(2);
+    view.unmount();
     expect(useDashboardStore.getState().followedProjectId).toBeNull();
+  });
+
+  it("publishes nothing on phone while no panel has focus, though a visible sidebar publishes its fallback project (#2864)", () => {
+    const phone = renderSidebar("phone");
+    expect(useDashboardStore.getState().followedProjectId).toBeNull();
+    phone.unmount();
+    renderSidebar("desktop");
+    expect(useDashboardStore.getState().followedProjectId).toBe(1);
   });
 
   it("writes the store once per project switch, not null in between", () => {

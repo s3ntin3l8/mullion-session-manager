@@ -37,6 +37,8 @@ export function TaskFacetsPanel({
           recent={api.recentProjectIds}
           onToggle={api.toggleProject}
           onClear={() => api.setProjectIds([])}
+          // Facets never render on phone (showFacets={!phone}), so the sidebar wording is
+          // right; pass `phone` here if that ever changes (#2864).
           follow={followOption(api, projects)}
         />
       )}

@@ -49,9 +49,14 @@ export function ProjectPickerPanel({
   recent: number[];
   onToggle: (id: number) => void;
   onClear: () => void;
-  /** The "follow the sidebar's project" option (#2858); omitted when there is no
-   * followed project to offer. */
-  follow?: { checked: boolean; projectName: string | null; onChange: (next: boolean) => void };
+  /** The "follow" option (#2858, #2864 for phone); omitted when there is no followed
+   * project to offer. */
+  follow?: {
+    label: string;
+    checked: boolean;
+    projectName: string | null;
+    onChange: (next: boolean) => void;
+  };
 }) {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();
@@ -100,9 +105,7 @@ export function ProjectPickerPanel({
       )}
       {follow && (
         <CheckItem checked={follow.checked} onChange={() => follow.onChange(!follow.checked)}>
-          {follow.projectName
-            ? `Follow the sidebar's project (${follow.projectName})`
-            : "Follow the sidebar's project"}
+          {follow.projectName ? `${follow.label} (${follow.projectName})` : follow.label}
         </CheckItem>
       )}
     </>
