@@ -169,6 +169,15 @@ describe("host checkout detection routes", () => {
       expect(attach.statusCode).toBe(200);
 
       for (const bad of ["/a/../b", "D:\\a\\..\\b"]) {
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "bad", cwd: tmp, hostCwds: { [macId]: bad } },
+        });
+        expect(created.statusCode, `create ${bad}`).toBe(400);
+      }
+
+      for (const bad of ["/a/../b", "D:\\a\\..\\b"]) {
         const patched = await app.inject({
           method: "PATCH",
           url: `/api/projects/${projectId}`,
