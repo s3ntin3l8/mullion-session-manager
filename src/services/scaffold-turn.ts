@@ -46,9 +46,20 @@ export const DEFAULT_GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
  * ran the read canary (`withReadCanary`) around the turn. An agent build that
  * predates the canary omits it and returns plain stdout, which the primary
  * cannot otherwise tell from a verified turn; `generateScaffoldContent`
- * reports its absence as `canary: false` rather than failing the turn. */
+ * reports its absence as `canary: false` rather than failing the turn.
+ *
+ * `citedPaths` (#2932) is the same kind of optional field: the paths the
+ * cited-path check would look up, and whether each existed in the scratch
+ * worktree, snapshotted before teardown. An agent that predates it omits
+ * the field and the primary falls back to the project checkout. */
 export type GenerationTurnResult =
-  | { outcome: "ok"; stdout: string; sandboxed?: boolean; canary?: boolean }
+  | {
+      outcome: "ok";
+      stdout: string;
+      sandboxed?: boolean;
+      canary?: boolean;
+      citedPaths?: Array<{ path: string; exists: boolean }>;
+    }
   | { outcome: "unsupported-agent"; detail: string }
   | { outcome: "worktree-error"; detail: string }
   | { outcome: "spawn-error"; detail: string };

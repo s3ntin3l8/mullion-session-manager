@@ -17,6 +17,13 @@ export type { GenerationTurnResult };
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
+import {
+  snapshotCitedPathExistence,
+  validateGenerationOutput,
+  type MissingCitedPaths,
+} from "./scaffold-cited-paths.js";
+export { snapshotCitedPathExistence, validateGenerationOutput };
+export type { MissingCitedPaths };
 import { homeMaskArgs, turnEnv } from "./scaffold-sandbox-home.js";
 import {
   FAILURE_LOG_TAIL_CHARS,
@@ -882,104 +889,6 @@ export function assessRewrite(
   const vanished = titles.filter((t) => !haystack.includes(t)).length;
   return vanished / titles.length > 0.6;
 }
-
-/** Cited-path existence counts (issue #2532). */
-export interface MissingCitedPaths {
-  missing: number;
-  cited: number;
-}
-
-/**
- * Post-generation heuristic (issue #1145): checks whether the generated
- * content references concrete file paths from the repo. A turn that read
- * nothing from the repo (e.g. agy with all tool calls denied, or a
- * misconfigured permission set) produces plausible-looking but generic
- * content with no real file references.
- *
- * Returns `{ possiblyGeneric: true }` when the content references paths
- * (embedded in the text) but none of them appear to be real
- * repo-specific paths — a signal that the agent may have fabricated
- * plausible-sounding paths rather than reading real files. Content that
- * references no paths at all (pure prose with zero path tokens) is NOT
- * flagged — that's a different problem (missing specificity) this
- * heuristic does not cover.
- *
- * Paths that look plausible (real extension, not a placeholder or shallow
- * generic path) are then checked against `cwd` (issue #2532): the content is
- * also flagged when fewer than half of its plausible cited paths exist
- * there, and `missingCitedPaths` reports how many could not be found. Paths
- * Mullion's scaffold itself writes (`.claude/skills|agents/`) are excluded,
- * since they do not exist until first applied.
- *
- * A signal, not a hard failure. The caller surfaces it as a warning;
- * tightening to a failure is a follow-up once confidence is high.
- */
-export function validateGenerationOutput(
-  content: GeneratedScaffoldContent,
-  cwd: string,
-): {
-  possiblyGeneric: boolean;
-  referencedPaths: string[];
-  /** Set when some cited paths do not exist in `cwd` (issue #2532). */
-  missingCitedPaths?: MissingCitedPaths;
-} {
-  // Match file path references: src/foo.ts, lib/bar.js, test/baz.test.ts, etc.
-  const pathPattern =
-    /(?:^|\s|`|\()([A-Za-z0-9_/.-]+\.(?:ts|js|mjs|tsx|jsx|json|md|yaml|yml|toml|sh))\b/g;
-  const allText = `${content.skill ?? ""}\n${content.reviewer ?? ""}\n${content.scaffoldRegion}`;
-  const referencedPaths = new Set<string>();
-  let match;
-  while ((match = pathPattern.exec(allText)) !== null) {
-    referencedPaths.add(match[1]);
-  }
-
-  if (referencedPaths.size === 0) {
-    // No path tokens at all — a different problem (missing specificity)
-    // this heuristic does not cover.
-    return { possiblyGeneric: false, referencedPaths: [] };
-  }
-
-  // First filter to paths that look like real repo-specific files.
-  const plausiblePaths = [...referencedPaths].filter((p) => {
-    if (p.includes("..") || path.isAbsolute(p)) return false;
-    // Reject obviously generic / placeholder patterns
-    const segments = p.split("/");
-    if (segments.length === 1) return false; // bare filename like `file.ts`
-    if (segments.some((s) => /^(example|sample|placeholder|foo|bar|baz)$/i.test(s))) return false;
-    if (/^src\/example\//i.test(p)) return false;
-    // Deeper nesting is a strong signal of real content (generic templates
-    // tend to produce shallow paths like `src/index.ts`)
-    if (segments.length >= 3) return true;
-    // Two-segment paths with reasonable dir names are plausible
-    if (segments.length === 2) {
-      const dir = segments[0];
-      // Reject generic directory names
-      if (/^(src|lib|test|tests|docs|config)$/i.test(dir)) return true;
-      return false;
-    }
-    return false;
-  });
-
-  if (plausiblePaths.length === 0) {
-    return { possiblyGeneric: true, referencedPaths: plausiblePaths };
-  }
-
-  // Issue #2532 — a skill that cites one real path and invents the rest used
-  // to pass. Count how many of the cited paths exist in the scratch worktree;
-  // fewer than half is flagged. Paths the scaffold itself writes are skipped
-  // (they do not exist before the first apply).
-  const checkable = plausiblePaths.filter((p) => !SCAFFOLD_OUTPUT_PATH.test(p));
-  const missing = checkable.filter((p) => !fs.existsSync(path.join(cwd, p))).length;
-  const existing = checkable.length - missing;
-  return {
-    possiblyGeneric: checkable.length > 0 && existing * 2 < checkable.length,
-    referencedPaths: plausiblePaths,
-    ...(missing > 0 ? { missingCitedPaths: { missing, cited: checkable.length } } : {}),
-  };
-}
-
-/** Paths Mullion's scaffold writes: absent from the worktree until applied. */
-const SCAFFOLD_OUTPUT_PATH = /^\.claude\/(?:skills|agents)\//;
 
 export interface SpawnGenerationTurnOptions {
   agentCommand: string;
@@ -2077,6 +1986,12 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
    * executes here would defeat the sandboxing this function's own spawn
    * step applies. */
   spawn?: SpawnGenerationTurn;
+  /**
+   * Runs after the turn returns and BEFORE the scratch worktree is torn
+   * down (issue #2932). The cited-path check has to see the directory the
+   * agent read; the `finally` below removes it before this function returns.
+   */
+  onBeforeTeardown?: (worktreePath: string, stdout: string) => void | Promise<void>;
 }
 
 /**
@@ -2143,7 +2058,7 @@ export async function runGenerationTurnInScratchWorktree(
   const { path: worktreePath, branch } = worktreeResult;
 
   try {
-    return await spawn({
+    const stdout = await spawn({
       agentCommand: opts.agentCommand,
       cwd: worktreePath,
       prompt: opts.prompt,
@@ -2151,6 +2066,8 @@ export async function runGenerationTurnInScratchWorktree(
       signal: opts.signal,
       sandbox: opts.sandbox,
     });
+    if (opts.onBeforeTeardown) await opts.onBeforeTeardown(worktreePath, stdout);
+    return stdout;
   } finally {
     await removeWorktree(worktreePath, opts.cwd);
     await deleteBranch(opts.cwd, branch, { force: true }).catch(() => {
@@ -2260,6 +2177,11 @@ export async function generateScaffoldContent(
   let raw: string;
   let sandboxed: boolean;
   let canary = true;
+  // Set on the local path, where the worktree is still alive inside
+  // onBeforeTeardown. The remote path carries the same answer as
+  // `remoteCited`, snapshotted on the agent before ITS teardown.
+  let checked: { possiblyGeneric: boolean; missingCitedPaths?: MissingCitedPaths } | undefined;
+  let remoteCited: Array<{ path: string; exists: boolean }> | undefined;
   if (!opts.hostId || opts.hostId === LOCAL_HOST_ID) {
     raw = await runGenerationTurnInScratchWorktree({
       cwd: opts.cwd,
@@ -2271,6 +2193,19 @@ export async function generateScaffoldContent(
       signal: opts.signal,
       sandbox: opts.sandbox,
       spawn: opts.spawn,
+      onBeforeTeardown: (worktreePath, stdout) => {
+        const parsedNow = parseGeneratedOutput(stdout, opts.slug, {
+          mode: opts.existingInstructions,
+          originalAgentsMd: opts.originalAgentsMd,
+          instructionsOnly,
+          noPointer,
+        });
+        const result = validateGenerationOutput(parsedNow, worktreePath);
+        checked = {
+          possiblyGeneric: result.possiblyGeneric,
+          ...(result.missingCitedPaths ? { missingCitedPaths: result.missingCitedPaths } : {}),
+        };
+      },
     });
     // Issue #1144, #1159 — determine sandboxed status for the local path.
     // The config opt-out short-circuits before isSandboxCapable() in
@@ -2318,6 +2253,9 @@ export async function generateScaffoldContent(
     raw = turn.stdout;
     sandboxed = turn.sandboxed ?? false;
     canary = turn.canary === true;
+    // Absent on an agent that predates #2932: fall back to the checkout,
+    // which is the old (wrong-when-behind) behavior.
+    remoteCited = turn.citedPaths;
   }
 
   const parsed = parseGeneratedOutput(raw, opts.slug, {
@@ -2328,8 +2266,15 @@ export async function generateScaffoldContent(
   });
   // On an instructions-only pass only the region paragraph is agent-produced
   // (the skill and reviewer fields are absent), and it is still worth checking
-  // for fabricated paths.
-  const { possiblyGeneric, missingCitedPaths } = validateGenerationOutput(parsed, opts.cwd);
+  // for fabricated paths. Local already checked the live worktree; remote
+  // uses the snapshot the agent took before tearing its worktree down.
+  const { possiblyGeneric, missingCitedPaths } =
+    checked ??
+    validateGenerationOutput(
+      parsed,
+      opts.cwd,
+      remoteCited ? new Map(remoteCited.map((entry) => [entry.path, entry.exists])) : undefined,
+    );
   return {
     ...parsed,
     sandboxed,

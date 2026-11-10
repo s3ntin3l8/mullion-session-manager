@@ -363,6 +363,40 @@ describe("generateScaffoldContent", () => {
     expect(fs.existsSync(capturedCwd)).toBe(false);
   });
 
+  it("checks cited paths against the scratch worktree, not the project checkout (#2932)", async () => {
+    const cited = "src/routes/listings.ts";
+    const absent = "src/domain/missing.ts";
+    fs.mkdirSync(path.join(repoDir, "src/routes"), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, cited), "export {}\n");
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "add listings", "--no-verify"]);
+    // The checkout is now behind the commit the worktree is cut from.
+    fs.rmSync(path.join(repoDir, cited));
+
+    const result = await generateScaffoldContent({
+      app: fakeApp,
+      hostId: LOCAL_HOST_ID,
+      cwd: repoDir,
+      slug: "demo",
+      agentCommand: "claude",
+      seed: {},
+      hasSkill: false,
+      hasReviewer: false,
+      hasScaffoldRegion: false,
+      spawn: async () =>
+        validOutput("demo").replace(
+          "Real invariant.\n",
+          `Real invariant. See ${cited} and ${absent}.\n`,
+        ),
+    });
+
+    // listings.ts exists in the worktree (it is in HEAD) and is gone from
+    // the checkout. Only the path missing from both is reported.
+    expect(result.missingCitedPaths).toEqual({ missing: 1, cited: 2 });
+    expect(result.possiblyGeneric).toBe(false);
+    expect(fs.existsSync(path.join(repoDir, cited))).toBe(false);
+  });
+
   describe("instructionsOnly (issue #2320)", () => {
     const region =
       "<<<MULLION_SCAFFOLD_REGION_START>>>\nPointer.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n";
