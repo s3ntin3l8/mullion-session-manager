@@ -813,16 +813,39 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   to be posted to GitHub". The marker cannot outlive its cause: a permanent
   failure (a 4xx other than 429, a token without write scope) clears it and is
   recorded in `githubSyncError`. On an **approving** verdict that same
-  permanent failure also sets `tasks.needsHumanReason = "review-post-failed"`
-  (the card and task detail show it with the `githubSyncError` text), because
-  clearing the marker alone would release auto-approve against GitHub's standing
-  `CHANGES_REQUESTED`: `processAutoApprovals` and `processMergeRequests` keep
-  skipping the task (`holdsForReviewPost`) until a human acts — approve or merge
-  it manually (`approveTask` and `POST /api/tasks/:id/merge` clear the reason) —
-  or the next review ingest overwrites it. `deriveApprovalState` reports
-  `awaiting-human` for such a task even on an auto-approving project. A
-  non-approving verdict just clears the marker. A marker older than 24 hours is dropped with a
-  `githubSyncError`; and one on a task that is merged or no longer
+  permanent failure holds the task for a human instead, because clearing the
+  marker alone would release auto-approve against GitHub's standing
+  `CHANGES_REQUESTED`: `clearMarkerAndHold` swaps `tasks.reviewPostPending` for
+  the terminal marker `review-post-failed` (`REVIEW_POST_FAILED_MARKER`) and, in
+  the same statement, sets `tasks.needsHumanReason = "review-post-failed"` only
+  when no other reason is parked there (it never overwrites `cap`,
+  `no-progress`, `rebase-exhausted`, ...). The **marker, not the reason column,
+  is the hold**: `processAutoApprovals` and `processMergeRequests` keep skipping
+  the task (`holdsForReviewPost`, which also honours a legacy row whose reason
+  alone is `review-post-failed`) whatever other reason it carries, and the card
+  and task detail show the `githubSyncError` text. The retry sweep never posts the
+  terminal marker; it keeps it while a human can still act (`reviewing`, or
+  `done` and unmerged) and drops it otherwise. A human exit clears it: approve
+  or `POST /api/tasks/:id/merge` (`clearedFor`), or the next review ingest
+  overwriting the column; **every path that records a merge** clears it too
+  (`clearNeedsHumanOnMerge`, which also releases the reason), since a merged PR
+  has nothing left to hold. `deriveApprovalState` reports `awaiting-human` for
+  such a task even on an auto-approving project. The same hold is set by two
+  other ways an approving post can be lost for good:
+  - **Stale-head drop (#2774).** The payload carries `reviewedHeadSha`, and a
+    retry posts against that commit (`commitId`), never the current head. When
+    the retry runs after the task has left `reviewing` (an auto-return, a worker
+    push) and the PR head has moved past the reviewed commit
+    (`dropIfHeadMoved`), the post is dropped rather than put on a head nobody
+    reviewed: `githubSyncError` says so, and an approving verdict takes the
+    hold above while a non-approving one just clears the marker. The hold
+    survives the drop — that is the point of #2799.
+  - **24 h give-up.** A pending marker older than `REVIEW_POST_MAX_AGE_MS` (24 h
+    from `createdAt`) stops being retried: `githubSyncError` records "Gave up
+    posting … after 24h of transient failures", and an approving verdict takes
+    the same hold.
+
+  A non-approving verdict just clears the marker in each case. A marker on a task that is merged or no longer
   claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
   (rate limit) keeps the marker with `posted: true`, so only the resolution is
   retried; a project on another host whose repo ref can't be resolved
@@ -947,8 +970,13 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   clock) before the verdict. Reads are also deduped per task: the key is the
   review session, its derived status, the turn end (finished reviewers only;
   an exited one writes nothing more, so one read per session) and the verdict
-  time, and it is recorded after a successful read, so an unchanged key is not
-  read again. Once the reviewer has finished its
+  time, and it is recorded only once the read has been dealt with — after a
+  successful ingest, or after a read that found no file or an unstructured one —
+  so an unchanged key is not read again. A failed read, or an ingest that throws
+  (a transient post failure), leaves the key unset and the next tick retries; a
+  throw is contained to its task, and after `MAX_LATE_INGEST_ATTEMPTS` (3)
+  failures for the same key it is recorded anyway and logged, so a persistently
+  failing file is not re-read every tick until the reviewer writes again. Once the reviewer has finished its
   turn (or exited), the file is ingested through the normal path and replaces
   the inconclusive verdict (a human re-prompting the reviewer after its quota
   recovered is the motivating case); the round is labelled "late verdict".
@@ -958,7 +986,10 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   its content hash is remembered per task in memory so a read of the same
   content does not parse it again. A rewrite without a new turn end never
   reaches that point: the read-dedupe key is unchanged, so the file is not read
-  again. The write is a CAS on the verdict still
+  again. These per-task caches (`task-late-findings-cache.ts`) are in memory
+  only: `processReviewingTasks` prunes the entries of every task whose
+  inconclusive verdict is no longer latched (it left `reviewing`, or a verdict
+  replaced it), and the test setup resets them between tests. The write is a CAS on the verdict still
   being `inconclusive` for that
   session, so the re-arm sweep's fresh review cannot be ingested twice. An approving verdict with nothing
   to apply likewise stays put until the CI / auto-approve gates move it.
@@ -993,8 +1024,9 @@ has no fresh id per round the way a session does. Two reconcile passes drive it:
 
 - `processHermesDispatch` (after `processPendingReviewSpawns`) starts the run
   for a `reviewing` task with a PR and no review handle: same CI wait, same
-  auto-rebase hold-back and same claim slot (`reviewSpawnClaimedAt`) as the
-  session spawn. The prompt is `buildReviewPrompt` in `reply` mode with a
+  auto-rebase hold-back, same rapid-exit backoff hold (`rapidExitRetryAfter`,
+  see [the rapid-exit guard](#auto-rebase-758)) and same claim slot
+  (`reviewSpawnClaimedAt`) as the session spawn. The prompt is `buildReviewPrompt` in `reply` mode with a
   `clone` workspace, so Hermes checks out the PR head itself and replies with
   the findings JSON; Mullion posts the review. An unreachable Hermes is retried
   every tick; 30 minutes after the task entered `reviewing` the round is
@@ -1784,14 +1816,18 @@ the task's branch to fix the conflict instead of just backing off:
   the review-stall detector uses; an unreadable head fails open, so the attempt
   is counted as before). "Ended" is `sessionEndedAt`: `workFinishedAt`, else
   `lastTurnEndedAt`, else `errorAt`, so a shell-tail death with no turn-end
-  hook (#2772) and an `api_error` death are covered; a gap within the 5 s clock
+  hook (#2772) and an `api_error` death are covered (a rebase worker sitting in
+  `api_error` is judged rapid like an exited one, #2797); a gap within the 5 s clock
   skew tolerance before the spawn still counts. For the rebase worker,
   such an attempt is refunded from `rebaseAttempts`, counted in
   `rebaseAbortedAttempts`, and the next one waits 10 minutes
-  (`rapidExitRetryAfter`). During that backoff the reviewing sweep spawns no
-  reviewer either (#2773): the retry's pre-removal cleanup would terminate it.
-  The third aborted attempt is not refunded, so the
-  normal give-up applies. The same check protects a suggestions round (an
+  (`rapidExitRetryAfter`). During that backoff neither reviewer starts: the
+  reviewing sweep spawns no CLI reviewer (#2773) and `processHermesDispatch`
+  starts no Hermes run (#2797), since the retry's pre-removal cleanup would
+  terminate a session and stop a run. The third aborted attempt
+  (`MAX_RAPID_REBASE_ABORTS`) is not refunded and sets **no** backoff: the task
+  needs a human and the normal give-up applies, so holding a reviewer for a
+  retry that will not come would only delay it. The same check protects a suggestions round (an
   approved review's nits): a worker that ends that fast with the head
   unchanged does not complete the round. It is re-seeded once after the same
   backoff with the stored prompt (`suggestionsSeedPrompt`); a second rapid
