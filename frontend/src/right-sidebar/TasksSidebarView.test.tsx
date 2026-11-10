@@ -145,15 +145,6 @@ describe("TasksSidebarView", () => {
     }
   });
 
-  it("clears the selection when the followed project changes, but not on mount", () => {
-    useDashboardStore.setState({ selectedTaskId: 2 });
-    const { rerender } = render(<TasksSidebarView projectId={4} actions={actions} />);
-    // Mounted with a task already selected (opened from elsewhere): kept.
-    expect(useDashboardStore.getState().selectedTaskId).toBe(2);
-    rerender(<TasksSidebarView projectId={9} actions={actions} />);
-    expect(useDashboardStore.getState().selectedTaskId).toBeNull();
-  });
-
   it("puts the list back at the scroll position it had before the detail opened", async () => {
     const user = userEvent.setup();
     // jsdom has no layout: give the wrapper a scroll box the view can find.
@@ -170,6 +161,22 @@ describe("TasksSidebarView", () => {
     top = 0; // the detail is shorter: the browser clamps the scroll
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(top).toBe(250);
+    box.remove();
+  });
+
+  it("leaves the scroll alone when the list is too short to scroll", async () => {
+    const user = userEvent.setup();
+    let top = 0;
+    const box = document.createElement("div");
+    box.style.overflowY = "auto";
+    Object.defineProperty(box, "scrollHeight", { value: 100 });
+    Object.defineProperty(box, "clientHeight", { value: 100 });
+    Object.defineProperty(box, "scrollTop", { get: () => top, set: (v: number) => (top = v) });
+    document.body.appendChild(box);
+    render(<TasksSidebarView projectId={4} actions={actions} />, { container: box });
+    await user.click(screen.getByRole("button", { name: /Broken job/ }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(top).toBe(0);
     box.remove();
   });
 

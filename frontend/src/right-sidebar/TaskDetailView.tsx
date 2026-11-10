@@ -311,13 +311,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
               <Markdown text={body} />
             </div>
             {longBody && (
-              <button
-                type="button"
-                className="sb-link"
-                aria-expanded={bodyOpen}
-                aria-controls={`task-body-${task.id}`}
-                onClick={() => setBodyOpen((v) => !v)}
-              >
+              <button type="button" className="sb-link" onClick={() => setBodyOpen((v) => !v)}>
                 {bodyOpen ? "Show less" : "Show more"}
               </button>
             )}

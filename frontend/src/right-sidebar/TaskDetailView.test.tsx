@@ -243,9 +243,6 @@ describe("TaskDetailView", () => {
     renderDetail(t.id);
     const text = screen.getByText(/END/).closest("[id^='task-body-']") as HTMLElement;
     expect(text.className).toContain("sb-body-text--clamped");
-    expect(screen.getByRole("button", { name: "Show more" }).getAttribute("aria-expanded")).toBe(
-      "false",
-    );
     await user.click(screen.getByRole("button", { name: "Show more" }));
     expect(text.className).not.toContain("sb-body-text--clamped");
     await user.click(screen.getByRole("button", { name: "Show less" }));

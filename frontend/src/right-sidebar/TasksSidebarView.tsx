@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "../api/types.js";
 import { needsYouReason, taskBucket, type TaskBucket } from "../github/taskMasterSummary.js";
 import { useDashboardStore } from "../store/index.js";
@@ -71,16 +71,6 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
     selectTask(id);
   };
   const backToList = () => selectTask(null);
-  // The selection is store-global and RightSidebarPanel does not key the view by
-  // project, so following another project would keep showing the last project's
-  // task. Clear it when the followed project changes (not on mount: a task opened
-  // from elsewhere arrives with the view).
-  const lastProjectId = useRef(projectId);
-  useEffect(() => {
-    if (lastProjectId.current === projectId) return;
-    lastProjectId.current = projectId;
-    useDashboardStore.getState().selectTask(null);
-  }, [projectId]);
   const inDetail = selectedTaskId !== null;
   useLayoutEffect(() => {
     if (inDetail || savedScroll.current === null) return;

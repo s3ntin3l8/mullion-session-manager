@@ -1168,6 +1168,7 @@ button.sb-chip--label[aria-pressed="true"] {
   /* needsYouReason can carry unbounded server text (a merge error); ellipsise it
      the way .sb-row-meta does, the full text is in the title. */
   display: inline-block;
+  line-height: 18px; /* inline-block drops .sb-chip's flex centring; the pill is 18px tall */
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
