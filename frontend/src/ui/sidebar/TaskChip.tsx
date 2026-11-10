@@ -1,7 +1,7 @@
 import type { Task } from "../../api/types.js";
 import type { SessionLink } from "../../hooks/useMullionLinks.js";
 import { STATUS_PRESENTATION } from "../../sessionStatus.js";
-import { useDashboardStore } from "../../store/index.js";
+import { useOpenTask } from "../../hooks/useOpenTask.js";
 import { BotIcon } from "../icons.js";
 import { StatusChip } from "./StatusChip.js";
 import { severityTone, splitTaskSessions, taskActiveSession, taskTone } from "./linkDecisions.js";
@@ -21,13 +21,13 @@ export interface TaskChipProps {
 /**
  * Task chip: a bot badge marks it as a Task Master task (not a hand-started
  * session), the status keeps its tone, and a dot shows the task's active
- * session. The lock variant says "owned by task #N" up front. A click opens the
- * task's detail panel through the store's requestOpenTask (the sidebar has no
- * dockview API of its own; see useOpenTaskRequest.ts).
+ * session. The lock variant says "owned by task #N" up front. A click shows the
+ * task: its detail in the sidebar's Tasks view on desktop, the docked panel on
+ * phone and tablet (see hooks/useOpenTask.ts).
  */
 export function TaskChip({ task, locked, sessions, reviewInFlight, onOpen }: TaskChipProps) {
-  const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
-  const open = onOpen ?? requestOpenTask;
+  const openTask = useOpenTask();
+  const open = onOpen ?? openTask;
   const active = sessions
     ? taskActiveSession(task, splitTaskSessions(sessions, task).owned, reviewInFlight)
     : null;

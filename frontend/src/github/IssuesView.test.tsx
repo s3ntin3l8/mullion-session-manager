@@ -677,10 +677,10 @@ describe("Issues with a queued Task Master task but no session", () => {
   it("row offers Claim and Open task instead of Start session", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
     const claimTask = vi.fn(async () => makeTask({ id: 4 }));
-    const requestOpenTask = vi.fn();
+    const openRightSidebarTask = vi.fn();
     useDashboardStore.setState({
       claimTask,
-      requestOpenTask,
+      openRightSidebarTask,
       projects: [makeProject({ id: 1 })],
       tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "ready" })],
     });
@@ -692,7 +692,7 @@ describe("Issues with a queued Task Master task but no session", () => {
     await userEvent.click(screen.getByRole("button", { name: "Claim task" }));
     expect(claimTask).toHaveBeenCalledWith(4);
     await userEvent.click(screen.getByRole("button", { name: "Open task" }));
-    expect(requestOpenTask).toHaveBeenCalledWith(4);
+    expect(openRightSidebarTask).toHaveBeenCalledWith(4);
   });
 
   it("row has no Claim for a claimed task", async () => {
@@ -717,10 +717,10 @@ describe("Issues with a queued Task Master task but no session", () => {
       ),
     );
     const claimTask = vi.fn(async () => makeTask({ id: 4 }));
-    const requestOpenTask = vi.fn();
+    const openRightSidebarTask = vi.fn();
     useDashboardStore.setState({
       claimTask,
-      requestOpenTask,
+      openRightSidebarTask,
       projects: [makeProject({ id: 1 })],
       tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "backlog" })],
     });
@@ -737,7 +737,7 @@ describe("Issues with a queued Task Master task but no session", () => {
     expect(await screen.findByText("Task #4 claimed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open task" }));
-    expect(requestOpenTask).toHaveBeenCalledWith(4);
+    expect(openRightSidebarTask).toHaveBeenCalledWith(4);
   });
 
   it("detail shows the linked task's status strip, with its actions and a link into the Tasks view", async () => {

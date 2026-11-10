@@ -95,7 +95,7 @@ export function TaskCard({
   // Hermes review — the same click-after-drag issue TaskSessionSlot had
   // (see its own comment below): a completed reorder drop on an accepting
   // column still fires a plain click on the source card right after
-  // dragend, which would pop the drawer open uninvited. Unlike the strip,
+  // dragend, which would open the task uninvited. Unlike the strip,
   // this card can't just drop `draggable` — the drag IS the reorder. Guard
   // the click instead: dragend fires BEFORE that trailing click, so the
   // flag has to clear on a timeout, not synchronously in onDragEnd, or it'd
@@ -150,7 +150,7 @@ export function TaskCard({
     : "";
 
   // D3 — time in the task's current status, at scan distance rather than
-  // only in the drawer's own "Created ... Claimed ... Completed" footer
+  // only in the task detail's own "Created ... Claimed ... Completed" footer
   // (TaskDetail.tsx). The timestamp that means "how long has this been
   // sitting here" changes with the column: queuedAt for claimed (task-claim
   // queueing, rate-limit-storm fix — claimed now means "waiting for a
@@ -221,9 +221,9 @@ export function TaskCard({
   );
 
   // #2108 — the push is held until the operator approves a change to
-  // .github/workflows/. The approval control lives in the task drawer, so this
+  // .github/workflows/. The approval control lives in the task detail, so this
   // strip only says WHAT is needed; a click anywhere on the card (the strip
-  // included) opens that drawer.
+  // included) opens that task detail.
   const workflowHold = parseWorkflowChange(task.workflowChange);
   const syncError = visibleTaskSyncError(task);
   // (The strip below is role="status", not this card's usual role="img" +
@@ -293,7 +293,7 @@ export function TaskCard({
             // draggable card; a drag started on it still ends with the
             // trailing post-drop click landing on this anchor.
             // stopPropagation alone only stops handleClick (the card's own
-            // drawer-open handler) from firing — it doesn't stop the
+            // open-task handler) from firing — it doesn't stop the
             // anchor's own default navigation, so the PR would still open
             // in a new tab as an unwanted side effect of the drag. Same
             // suppressClickRef guard the card's own handleClick uses above.
@@ -406,7 +406,7 @@ export function TaskCard({
             <BlockedIcon size={11} aria-hidden="true" />
           </span>
         )}
-        {/* D4 — #485's own drawer-only sync-error banner (TaskDetail.tsx)
+        {/* D4 — #485's own detail-only sync-error banner (TaskDetail.tsx)
             defeats its own stated motivation if a task can be happily
             in_progress while its GitHub sync is silently broken and nothing
             on the board says so.
@@ -516,7 +516,7 @@ export function TaskCard({
       )}
       {/* D5 — "sent back to the worker" is the single most useful fact
           about a task sitting in Reviewing (mirrors TaskDetail.tsx's own
-          round indicator in the drawer).
+          round indicator in the task detail).
           Task 258971's investigation: "returned to worker" is only true
           while a round is actually still cycling — once autoReturnCapped is
           true, the task is (eventually) genuinely parked.

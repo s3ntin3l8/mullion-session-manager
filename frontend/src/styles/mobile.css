@@ -124,8 +124,7 @@
   /* UnifiedBoard.tsx now renders on mobile too (the "tasks" dockview panel
      it replaced was reachable on mobile via the old phone tab strip's maximize path —
      removing it means this overlay is the only way left to reach the task
-     board). Stacks task columns full-width and turns the side drawer into a
-     full-bleed sheet rather than a 380px rail there's no room for. */
+     board). Stacks task columns full-width. */
   .kanban-unified-main {
     flex-direction: column;
   }
@@ -166,42 +165,6 @@
      component that stopped rendering it there would throw. Desktop is
      untouched: that same empty body is a live drop target there. */
   .kanban-column-is-empty .kanban-column-body {
-    display: none;
-  }
-  .kanban-detail-drawer {
-    position: fixed;
-    /* Matches .sidebar-wrapper's own inset-aware top a few rules up in this
-       same block — a bare 44px here left the sheet sliding under a taller,
-       notched-device toolbar, same bug that rule's own comment already
-       covers. No tap-to-dismiss scrim: right/bottom/left are all 0, so the
-       sheet is already full-bleed and there's no visible background left
-       to tap. */
-    inset: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px)) 0 0;
-    padding-bottom: env(safe-area-inset-bottom);
-    padding-left: env(safe-area-inset-left);
-    padding-right: env(safe-area-inset-right);
-    flex: none;
-    z-index: 46;
-    background: var(--bg);
-    /* A stray vertical line has nothing to divide on a full-bleed sheet. */
-    border-left: none;
-  }
-  .kanban-detail-drawer-close {
-    width: 44px;
-    height: 44px;
-  }
-  /* CloseIcon's size prop is a fixed SVG width/height attribute, not
-     something the 44px mobile target can grow on its own — scale the
-     glyph itself up to match the 44px touch target rather than leaving
-     it small in a big box. At 44px the 50%-wide path renders a ~22px X. */
-  .kanban-detail-drawer-close svg {
-    width: 44px;
-    height: 44px;
-  }
-  /* The mobile drawer is a full-bleed fixed sheet (above) with no columns
-     visible behind it to resize against, and mouse drag events don't fire
-     on touch anyway. */
-  .kanban-detail-resize-handle {
     display: none;
   }
   .kanban-lane-body {
@@ -262,7 +225,7 @@
      but not the bottom: in landscape on a notched phone, the home-indicator
      area could otherwise clip the last row of the nav list or scrolled
      section content. Same `env(safe-area-inset-bottom)` pattern already
-     used by `.sidebar-wrapper`/`.kanban-detail-drawer` elsewhere in this
+     used by `.sidebar-wrapper` elsewhere in this
      file, added to each pane's own bottom edge rather than the fixed-size
      `.settings-modal` shell, since these are the parts that actually
      scroll. */

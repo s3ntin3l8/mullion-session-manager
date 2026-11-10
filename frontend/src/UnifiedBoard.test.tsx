@@ -4,13 +4,14 @@
 // This file keeps every test that exercises the BOARD's own state rather
 // than a single sub-component's presentation: task drag-and-drop (spans
 // TaskColumn.tsx's drop targets, TaskCard.tsx's drag source, and this
-// file's own `applyDrop`/`updateTask` call), and the detail drawer plus its
-// resize (both owned entirely by UnifiedBoard itself, not a sub-component).
+// file's own `applyDrop`/`updateTask` call), and how a card click opens a task
+// (the board has no drawer of its own since #2843: it selects the task in the
+// sidebar, or opens the docked panel on phone and tablet).
 // Per-region tests live in unified-board/TasksToolbar.test.tsx,
 // unified-board/TaskColumn.test.tsx, unified-board/TaskCard.test.tsx,
 // unified-board/TaskSessionSlot.test.tsx, and unified-board/LaneCard.test.tsx
 // — see each file's own header comment.
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "./UnifiedBoard.js";
@@ -49,10 +50,9 @@ let gitDiffStats: Record<number, GitDiffStats | null>;
 let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 let hideEndedSessions: boolean;
-let pendingOpenTaskId: number | null = null;
-const setPendingOpenTaskId = vi.fn((id: number | null) => {
-  pendingOpenTaskId = id;
-});
+let selectedTaskId: number | null = null;
+const requestOpenTask = vi.fn();
+const openRightSidebarTask = vi.fn();
 
 const setKanbanColumnOrder = vi.fn((columnId: string, order: number[]) => {
   kanbanOrder = { ...kanbanOrder, [columnId]: order };
@@ -75,8 +75,9 @@ function storeState() {
     setKanbanColumnOrder,
     deleteSession,
     setViewMode,
-    pendingOpenTaskId,
-    setPendingOpenTaskId,
+    selectedTaskId,
+    requestOpenTask,
+    openRightSidebarTask,
     hideEndedSessions,
     refreshTasks,
     updateTask,
@@ -103,38 +104,6 @@ vi.mock("./store/index.js", () => {
   useDashboardStore.getState = storeState;
   return { useDashboardStore };
 });
-
-// TaskDetail.test.tsx (546 lines) already covers TaskDetail comprehensively;
-// stubbing it here keeps this file's mock from also having to grow
-// claimTask/approveTask/rejectTask/retryTask/giveUpTask plus SessionTimeline's
-// own reads. Only the drawer wiring (which taskId, does it open/close, and
-// whether the drawer's own onOpenSession is really the board's wrapped
-// openSession and not the raw prop) is this file's concern — the stub
-// exposes a button that invokes whatever onOpenSession it was actually
-// given, so a test can tell the two apart.
-vi.mock("./TaskDetail.js", () => ({
-  TaskDetail: ({
-    params,
-    onOpenSession,
-    onDeleted,
-  }: {
-    params: { taskId: number };
-    onOpenSession: (session: Session) => void;
-    onDeleted?: () => void;
-  }) => (
-    <div data-testid="task-detail-stub" data-task-id={params.taskId}>
-      <button onClick={() => onDeleted?.()}>stub delete task</button>
-      <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
-        stub open session
-      </button>
-      {/* Mirrors TaskDetail's real Claim/Approve buttons, which render
-          disabled when taskMasterEnabled is off — a disabled button that a
-          querySelectorAll focus-trap counts as focusable but that .focus()
-          can never actually land on. */}
-      <button disabled>disabled stub action</button>
-    </div>
-  ),
-}));
 
 // jsdom doesn't implement DataTransfer/DragEvent — mirrors KanbanBoard.test.tsx's
 // and TasksPanel.test.tsx's own stub.
@@ -188,16 +157,16 @@ beforeEach(() => {
   hideEndedSessions = false;
   setKanbanColumnOrder.mockClear();
   setViewMode.mockClear();
-  setPendingOpenTaskId.mockClear();
-  pendingOpenTaskId = null;
+  requestOpenTask.mockClear();
+  openRightSidebarTask.mockClear();
+  selectedTaskId = null;
   deleteSession.mockClear();
   refreshTasks.mockClear();
   updateTask.mockClear();
   createTask.mockClear();
-  // The detail drawer's width (UnifiedBoard.tsx) reads/writes
-  // crs.taskDrawerWidth — same precedent as Dock.test.tsx's own
-  // localStorage.clear(), so a resize left over from one test can't leak
-  // its width into the next.
+  // The board's persisted filter and layout settings — same precedent as
+  // Dock.test.tsx's own localStorage.clear(), so one test's choice can't leak
+  // into the next.
   localStorage.clear();
 });
 
@@ -225,8 +194,8 @@ describe("UnifiedBoard task drag-and-drop", () => {
 
   // Hermes review — a completed HTML5 drag-and-drop still fires a plain
   // click on the source element right after dragend. Without a guard, a
-  // drag-reorder would also pop the task's drawer open uninvited.
-  it("suppresses the click that follows a completed drag-reorder, so it doesn't also open the drawer", () => {
+  // drag-reorder would also open the task's detail uninvited.
+  it("suppresses the click that follows a completed drag-reorder, so it doesn't also open the task", () => {
     tasks = [
       makeTask({ id: 1, status: "ready", boardOrder: 0, title: "first" }),
       makeTask({ id: 2, status: "ready", boardOrder: 1, title: "second" }),
@@ -244,7 +213,8 @@ describe("UnifiedBoard task drag-and-drop", () => {
     cards[0].dispatchEvent(createDragEvent("dragend", dataTransfer));
 
     fireEvent.click(cards[0]);
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+    expect(openRightSidebarTask).not.toHaveBeenCalled();
+    expect(requestOpenTask).not.toHaveBeenCalled();
   });
 
   it("persists a cross-column drag between backlog and ready with a status patch", () => {
@@ -364,20 +334,53 @@ describe("UnifiedBoard task drag-and-drop", () => {
 // board actually wiring it up — persistence, rendering, and that a drag
 // inside a filtered column produces the same updateTask calls dragging the
 // same two cards with no filter active would.
-describe("UnifiedBoard pending task id (task notification click)", () => {
-  it("opens the drawer for a pending id on mount and clears it", async () => {
-    tasks = [makeTask({ id: 9, status: "ready", title: "needs approval" })];
-    pendingOpenTaskId = 9;
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect((await screen.findByTestId("task-detail-stub")).getAttribute("data-task-id")).toBe("9");
-    expect(setPendingOpenTaskId).toHaveBeenCalledWith(null);
+describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
+  it("desktop: a card click shows the task in the sidebar's Tasks detail, not a drawer", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    const user = userEvent.setup();
+    const { container } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Open me"));
+
+    expect(openRightSidebarTask).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarTask).toHaveBeenCalledWith(5);
+    expect(requestOpenTask).not.toHaveBeenCalled();
+    expect(container.querySelector(".kanban-detail-drawer")).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
   });
 
-  it("leaves the drawer closed with no pending id", () => {
-    tasks = [makeTask({ id: 9, status: "ready" })];
+  it("phone and tablet: a card click asks for the full-screen docked panel instead", async () => {
+    tasks = [makeTask({ id: 7, status: "in_progress", title: "Open on phone" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+
+    await user.click(screen.getByText("Open on phone"));
+
+    expect(requestOpenTask).toHaveBeenCalledTimes(1);
+    expect(requestOpenTask).toHaveBeenCalledWith(7);
+    expect(openRightSidebarTask).not.toHaveBeenCalled();
+  });
+
+  it("rings the card whose task the store has selected, and only that one", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "first" }),
+      makeTask({ id: 2, status: "ready", title: "second" }),
+    ];
+    selectedTaskId = 2;
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
-    expect(setPendingOpenTaskId).not.toHaveBeenCalled();
+
+    const current = document.querySelectorAll('.task-card[aria-current="true"]');
+    expect(current).toHaveLength(1);
+    expect(current[0].textContent).toContain("second");
+  });
+
+  it("keeps the selection ring when the sidebar's selection is for a task the filters hide", () => {
+    tasks = [makeTask({ id: 1, status: "ready", title: "only visible" })];
+    selectedTaskId = 99;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(document.querySelectorAll('.task-card[aria-current="true"]')).toHaveLength(0);
+    expect(screen.getByText("only visible")).toBeInTheDocument();
   });
 });
 
@@ -469,271 +472,6 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
     expect(screen.getByText(/mullion-task/)).toBeInTheDocument();
     expect(screen.queryByText("Couldn't load tasks.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-  });
-});
-
-describe("UnifiedBoard detail drawer", () => {
-  it("opens the drawer with the right taskId when a card body is clicked, and closes it", async () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
-    await user.click(screen.getByText("Open me"));
-
-    const stub = screen.getByTestId("task-detail-stub");
-    expect(stub.dataset.taskId).toBe("5");
-
-    await user.click(screen.getByLabelText("Close task detail"));
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
-  });
-
-  it("closes the drawer once TaskDetail reports its task was deleted", async () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Delete me" })];
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    await user.click(screen.getByText("Delete me"));
-    expect(screen.getByTestId("task-detail-stub")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "stub delete task" }));
-
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
-  });
-
-  it("passes the board's own onOpenSession prop straight through to TaskDetail, unwrapped", async () => {
-    // Issue: this used to assert a local setViewMode-then-onOpenSession
-    // wrapper UnifiedBoard built itself. That invariant has moved to
-    // usePanelOpener.ts's own leaveTaskView (called first inside every
-    // opener it returns, including onOpenSession) — see that hook's own
-    // tests for the "resets viewMode before opening" ordering. This board
-    // no longer knows or cares about viewMode at all; it just forwards
-    // whatever onOpenSession it was given, verbatim, to the drawer, a
-    // card's nested session strip, and the ad-hoc lane.
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    const onOpenSession = vi.fn();
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={vi.fn()} />);
-
-    await user.click(screen.getByText("Open me"));
-    await user.click(screen.getByText("stub open session"));
-
-    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
-    expect(setViewMode).not.toHaveBeenCalled();
-  });
-
-  // Independent review — this cleanup also runs on UnifiedBoard's own
-  // unmount, not just a normal drawer close: openSession calls
-  // setViewMode("list") before onOpenSession, and App.tsx only renders
-  // UnifiedBoard while viewMode === "kanban", so opening a session from
-  // inside the drawer (or from a strip on another card while a drawer is
-  // open) unmounts the whole board with detailTaskId still set. By then the
-  // triggering card has already been detached along with the rest of the
-  // tree, so calling .focus() on it is a no-op; isConnected skips that call
-  // rather than fighting a view switch already in flight.
-  it("skips the no-op focus-restore when the board unmounts instead of a normal drawer close", async () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    const user = userEvent.setup();
-    const { unmount } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    const card = screen.getByText("Open me").closest(".task-card") as HTMLElement;
-
-    await user.click(card);
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    // Spy after the opening click (which itself focuses the card as part of
-    // simulating a real pointer interaction) — only the cleanup's own call
-    // is under test here.
-    const focusSpy = vi.spyOn(card, "focus");
-    expect(() => unmount()).not.toThrow();
-    expect(focusSpy).not.toHaveBeenCalled();
-  });
-
-  // Hermes review — the drawer was a bare <aside> with no dialog semantics:
-  // no role="dialog", focus never moved in on open, and it was never
-  // restored on close.
-  it("has dialog semantics, moves focus in on open, and restores it on close", async () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    const card = screen.getByText("Open me").closest(".task-card") as HTMLElement;
-    card.focus();
-    await user.click(card);
-
-    const dialog = screen.getByRole("dialog", { name: "Task detail" });
-    // Deliberately NOT aria-modal — Hermes review: the background is not
-    // actually inert (clicking another card switches the drawer's task by
-    // design, there's no backdrop), and ARIA APG requires aria-modal only
-    // when the background truly is inert. role="dialog" plus the existing
-    // focus management is honest about what this drawer actually is.
-    expect(dialog).not.toHaveAttribute("aria-modal");
-    expect(screen.getByLabelText("Close task detail")).toHaveFocus();
-
-    await user.click(screen.getByLabelText("Close task detail"));
-    expect(card).toHaveFocus();
-  });
-
-  // Hermes review — Escape used to be a window-level listener, so it also
-  // closed the drawer for a keypress meant for an unrelated modal (e.g. the
-  // command palette) sitting above the board. Scoping it to the drawer's
-  // own onKeyDown means it only fires when focus is actually inside it.
-  it("closes on Escape only when focus is inside the drawer, not from elsewhere", async () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    await user.click(screen.getByText("Open me"));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    // An Escape dispatched outside the dialog (nothing inside it focused)
-    // must not close it - this is what proves the handler is scoped to the
-    // drawer's own subtree via bubbling, not attached to window.
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  // A disabled button (e.g. TaskDetail's Claim/Approve when Task Master is
-  // off) can't actually receive focus — a trap that treats it as focusable
-  // anyway "wraps" onto a dead end and leaves focus stuck instead.
-  it("skips disabled elements when computing the Tab focus-trap boundaries", async () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    await userEvent.setup().click(screen.getByText("Open me"));
-
-    const closeButton = screen.getByLabelText("Close task detail");
-    const stubOpenButton = screen.getByText("stub open session");
-    expect(closeButton).toHaveFocus();
-
-    fireEvent.keyDown(closeButton, { key: "Tab", shiftKey: true });
-    expect(stubOpenButton).toHaveFocus();
-  });
-
-  // Switching straight from one card's drawer to another's must not lose
-  // the original click target: React runs the outgoing drawer's cleanup
-  // (which restores focus to whatever was captured) before the incoming
-  // drawer's effect body runs, so capturing "last focused" inside the
-  // effect itself would read the element focus was just moved BACK to,
-  // not the card that was actually clicked to open the new drawer.
-  it("restores focus to the second card, not the first, after switching drawers directly", async () => {
-    tasks = [
-      makeTask({ id: 5, status: "ready", title: "First task" }),
-      makeTask({ id: 6, status: "ready", title: "Second task" }),
-    ];
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    const firstCard = screen.getByText("First task").closest(".task-card") as HTMLElement;
-    const secondCard = screen.getByText("Second task").closest(".task-card") as HTMLElement;
-
-    firstCard.focus();
-    await user.click(firstCard);
-    expect(screen.getByTestId("task-detail-stub").dataset.taskId).toBe("5");
-
-    secondCard.focus();
-    await user.click(secondCard);
-    expect(screen.getByTestId("task-detail-stub").dataset.taskId).toBe("6");
-
-    await user.click(screen.getByLabelText("Close task detail"));
-    expect(secondCard).toHaveFocus();
-  });
-});
-
-// Hermes review — a first version of this PR claimed the drawer was
-// "resizable via a drag handle ... clamped against the measured board
-// width" with no implementation to back it up: no handle, no width state,
-// no clamp, no test. This suite covers the actual implementation.
-describe("UnifiedBoard detail drawer resize", () => {
-  it("renders the resize handle only while the drawer is open", async () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    expect(document.querySelector(".kanban-detail-resize-handle")).toBeNull();
-    await user.click(screen.getByText("Open me"));
-    expect(document.querySelector(".kanban-detail-resize-handle")).toBeInTheDocument();
-  });
-
-  it("grows the drawer on a leftward drag and persists the width to localStorage", () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    fireEvent.click(screen.getByText("Open me"));
-
-    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
-    // jsdom does no layout, so clientWidth is 0 by default — mocked here to
-    // a realistic board width so the clamp (container width - 240px column
-    // reserve) doesn't immediately floor every resize to MIN_DRAWER_WIDTH.
-    Object.defineProperty(main, "clientWidth", { value: 1600, configurable: true });
-    const handle = document.querySelector(".kanban-detail-resize-handle") as HTMLElement;
-
-    fireEvent.mouseDown(handle, { clientX: 800 });
-    expect(document.body.style.cursor).toBe("col-resize");
-    // Handle sits on the drawer's LEFT border — dragging left (clientX
-    // decreases) grows the drawer, same direction Dock.tsx's own height
-    // handle uses on its own axis.
-    fireEvent.mouseMove(window, { clientX: 750 });
-    fireEvent.mouseUp(window);
-
-    expect(document.body.style.cursor).toBe("");
-    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("430px");
-    expect(localStorage.getItem("crs.taskDrawerWidth")).toBe("430");
-  });
-
-  // Independent review — the only assertion the drag test above makes on
-  // localStorage is its FINAL value after mouseup, which would still pass
-  // even if the persist effect's own dependency array were accidentally
-  // widened to write on every intermediate value during the drag (exactly
-  // what its `eslint-disable-next-line react-hooks/exhaustive-deps` exists
-  // to prevent). This asserts the width var updates live but nothing is
-  // written to localStorage until the drag actually ends.
-  it("does not write to localStorage mid-drag, only once the drag ends", () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    fireEvent.click(screen.getByText("Open me"));
-
-    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
-    Object.defineProperty(main, "clientWidth", { value: 1600, configurable: true });
-    const handle = document.querySelector(".kanban-detail-resize-handle") as HTMLElement;
-
-    fireEvent.mouseDown(handle, { clientX: 800 });
-    fireEvent.mouseMove(window, { clientX: 750 });
-    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("430px");
-    expect(localStorage.getItem("crs.taskDrawerWidth")).toBeNull();
-
-    fireEvent.mouseUp(window);
-    expect(localStorage.getItem("crs.taskDrawerWidth")).toBe("430");
-  });
-
-  it("clamps the drawer width so at least one column stays visible", () => {
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    fireEvent.click(screen.getByText("Open me"));
-
-    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
-    // A narrow board (500px) reserves 240px for columns, capping the
-    // drawer at 260px — below MIN_DRAWER_WIDTH (300), so the floor wins.
-    Object.defineProperty(main, "clientWidth", { value: 500, configurable: true });
-    const handle = document.querySelector(".kanban-detail-resize-handle") as HTMLElement;
-
-    fireEvent.mouseDown(handle, { clientX: 800 });
-    fireEvent.mouseMove(window, { clientX: 0 });
-    fireEvent.mouseUp(window);
-
-    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("300px");
-  });
-
-  it("restores a persisted width on mount", async () => {
-    localStorage.setItem("crs.taskDrawerWidth", "500");
-    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
-    const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-
-    await user.click(screen.getByText("Open me"));
-    const main = document.querySelector(".kanban-unified-main") as HTMLElement;
-    expect(main.style.getPropertyValue("--task-drawer-width")).toBe("500px");
   });
 });
 
@@ -1040,31 +778,5 @@ describe("UnifiedBoard phone layout", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(document.querySelectorAll(".kanban-card")).toHaveLength(0);
     expect(document.querySelector(".kanban-lane-count")?.textContent).toBe("2");
-  });
-
-  describe("Android back closes the task detail", () => {
-    beforeEach(() => {
-      resetPhoneBackStackForTests();
-      vi.spyOn(window.history, "pushState").mockImplementation(() => {});
-      vi.spyOn(window.history, "back").mockImplementation(() => {});
-    });
-    afterEach(() => {
-      resetPhoneBackStackForTests();
-      vi.restoreAllMocks();
-    });
-
-    it("on phone, but never off phone", async () => {
-      renderPhone();
-      await userEvent.click(screen.getByText("ip1"));
-      expect(screen.getByRole("dialog", { name: "Task detail" })).toBeInTheDocument();
-      act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
-      expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
-    });
-
-    it("does not register a history entry off phone", async () => {
-      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-      await userEvent.click(screen.getByText("ip1"));
-      expect(window.history.pushState).not.toHaveBeenCalled();
-    });
   });
 });

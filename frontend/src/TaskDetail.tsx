@@ -91,7 +91,7 @@ function SessionAttentionBanner({
   );
 }
 
-// The sidebar PR view's "Hand off", offered from the drawer: a plain ad-hoc
+// The sidebar PR view's "Hand off", offered from the task detail: a plain ad-hoc
 // session on the PR's branch, seeded with what is wrong with the PR. It is
 // not the task's worker session, so it never touches the task's status,
 // autoReturnRounds or worker/reviewer slots. `prNumber` is the open PR (the
@@ -216,8 +216,8 @@ export function TaskDetail({
     { enabled: task !== undefined },
   );
 
-  // A workspace layout can restore this panel (by taskId), or the unified
-  // board's drawer can open it, before the store's own task list has loaded
+  // A workspace layout can restore this panel (by taskId), or the Tasks
+  // sidebar's pop-out or a phone/tablet card click can open it, before the store's own task list has loaded
   // — same "poll the full list, don't fetch a single row" convention
   // UnifiedBoard.tsx's own mount effect follows, rather than a separate
   // single-task fetch that'd duplicate Task's shape in local component

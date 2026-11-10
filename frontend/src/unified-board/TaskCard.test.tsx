@@ -47,11 +47,11 @@ const deleteSession = vi.fn(async () => {});
 const refreshTasks = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 const createTask = vi.fn(async () => makeTask({}));
+const requestOpenTask = vi.fn();
+const openRightSidebarTask = vi.fn();
 
 function storeState() {
   return {
-    pendingOpenTaskId: null,
-    setPendingOpenTaskId: vi.fn(),
     sessions,
     hosts,
     projects,
@@ -66,6 +66,8 @@ function storeState() {
     refreshTasks,
     updateTask,
     createTask,
+    requestOpenTask,
+    openRightSidebarTask,
     settings: { sessions: { confirmBeforeKill: false } },
     theme: "dark",
     events,
@@ -84,23 +86,6 @@ vi.mock("../store/index.js", () => {
   useDashboardStore.getState = storeState;
   return { useDashboardStore };
 });
-
-vi.mock("../TaskDetail.js", () => ({
-  TaskDetail: ({
-    params,
-    onOpenSession,
-  }: {
-    params: { taskId: number };
-    onOpenSession: (session: Session) => void;
-  }) => (
-    <div data-testid="task-detail-stub" data-task-id={params.taskId}>
-      <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
-        stub open session
-      </button>
-      <button disabled>disabled stub action</button>
-    </div>
-  ),
-}));
 
 // jsdom doesn't implement DataTransfer/DragEvent — mirrors KanbanBoard.test.tsx's
 // and TasksPanel.test.tsx's own stub.
@@ -154,6 +139,8 @@ beforeEach(() => {
   refreshTasks.mockClear();
   updateTask.mockClear();
   createTask.mockClear();
+  requestOpenTask.mockClear();
+  openRightSidebarTask.mockClear();
   localStorage.clear();
 });
 
@@ -322,7 +309,7 @@ describe("UnifiedBoard task columns", () => {
 
     await user.click(screen.getByRole("link", { name: /#12/ }));
 
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+    expect(openRightSidebarTask).not.toHaveBeenCalled();
   });
 
   // Hermes review, PR #577/#580 — the PR badge sits inside the draggable
@@ -371,7 +358,7 @@ describe("UnifiedBoard task columns", () => {
     // own navigation too, not just the card's drawer-open handler.
     const notPrevented = fireEvent.click(link);
     expect(notPrevented).toBe(false);
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+    expect(openRightSidebarTask).not.toHaveBeenCalled();
   });
 
   it("shows a disabled-claim hint on a ready card when taskMasterEnabled is off", () => {
@@ -511,7 +498,7 @@ describe("UnifiedBoard task columns", () => {
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
       const link = screen.getByRole("link", { name: /epic #30/ });
       await user.click(link);
-      expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+      expect(openRightSidebarTask).not.toHaveBeenCalled();
     });
 
     it("shows a sub-issue N/M chip when subIssueTotal is positive", () => {
@@ -827,14 +814,14 @@ describe("UnifiedBoard task columns", () => {
       );
     });
 
-    it("clicking the strip opens the task drawer, where the approval control lives", async () => {
+    it("clicking the strip opens the task in the sidebar, where the approval control lives", async () => {
       const user = userEvent.setup();
       tasks = [makeTask({ id: 9, status: "reviewing", workflowChange: hold })];
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
       await user.click(screen.getByText("Needs workflow approval"));
 
-      expect(screen.getByTestId("task-detail-stub")).toBeInTheDocument();
+      expect(openRightSidebarTask).toHaveBeenCalledWith(9);
     });
   });
 

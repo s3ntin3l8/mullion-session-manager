@@ -207,7 +207,7 @@ deliberately narrow:
 Projects that organize their roadmap with GitHub sub-issues (a parent
 tracking issue with several children) get that structure surfaced on the
 board: a child card names its parent, the toolbar can filter to one parent
-("phase"), and the drawer lists both directions.
+("phase"), and the task detail lists both directions.
 
 **Parentage costs zero extra GitHub calls.** `parent_issue_url` and
 `sub_issues_summary` ride the exact same `listLabeledIssues` response
@@ -364,7 +364,7 @@ bug. `UnifiedBoard.tsx`'s toolbar gets a phase `<select>` (not chips, like
 the project filter — a full-title option list runs long) that composes with
 the project/blocked-only filters through the same `absoluteDropIndex`
 translation that keeps `boardOrder` correct under any combination of them.
-`TaskDetail.tsx`'s drawer gets a "Hierarchy" section listing the parent link
+`TaskDetail.tsx`'s detail gets a "Hierarchy" section listing the parent link
 and any sibling tasks that are themselves known (labeled) Task Master tasks
 — a child issue without the task label still counts toward `subIssueTotal`
 but isn't individually listed, since nothing on this side of the API knows
@@ -794,7 +794,7 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   from the primary identity, so the round's findings still land either way.
   Either way, the rendered text is also appended to `tasks.reviewFindings` —
   durable across the worktree's own eventual removal, and rendered in the
-  task detail drawer's Review card.
+  task detail's Review card.
 
 - **A lost post is retried, and holds auto-approve (`#2749`).** The ingest
   write in `processReviewingTasks` also stores a retry payload (the rendered
@@ -814,7 +814,7 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   failure (a 4xx other than 429, a token without write scope) clears it and is
   recorded in `githubSyncError`. On an **approving** verdict that same
   permanent failure also sets `tasks.needsHumanReason = "review-post-failed"`
-  (the card and drawer show it with the `githubSyncError` text), because
+  (the card and task detail show it with the `githubSyncError` text), because
   clearing the marker alone would release auto-approve against GitHub's standing
   `CHANGES_REQUESTED`: `processAutoApprovals` and `processMergeRequests` keep
   skipping the task (`holdsForReviewPost`) until a human acts — approve or merge
@@ -905,7 +905,7 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   (`task-reconciler.ts`) checks two signals, and either one parks the task
   exactly like reaching the cap — `autoReturnCapAnnouncedAt` is stamped, a note
   is added to the review comment, and `tasks.needsHumanReason` records why
-  (the board card and drawer show it): `finding-persisted` when an earlier
+  (the board card and task detail show it): `finding-persisted` when an earlier
   finding this round marks `still-open`/`re-broken` was already still open in
   the previous round's rendered review (matched on the reviewer's `ref`), and
   `no-progress` when the last return was a review fix-up yet the PR's live head
@@ -1010,7 +1010,7 @@ has no fresh id per round the way a session does. Two reconcile passes drive it:
   through the same `ingestReviewOutcome` a session review ends in (round
   comment, posted PR review, auto-return, suggestions round, auto-approve).
 
-The UI never reads the id: a run has no session to open, so the card and drawer
+The UI never reads the id: a run has no session to open, so the card and task detail
 show a "Hermes review" badge (running while `reviewRunIngestedId` differs from
 `reviewRunId`, finished once equal), and the Review section (findings, approval
 text) shows for a run as it does for a session. The `unsent:` stand-in is
@@ -1090,7 +1090,7 @@ enters `reviewing` (when one is configured), since refusing outright would
 remove the one artifact (the empty session) that lets a human notice
 something's wrong — but the prompt being skipped for an unseedable adapter
 is no longer silent: the task row's `reviewSeedDelivered` field records it,
-a warning is logged, and the task detail drawer's review card surfaces it
+a warning is logged, and the task detail's review card surfaces it
 directly.
 
 **A remote-hosted spawn's `seedDelivered` is never trusted from local
@@ -1351,7 +1351,7 @@ for exactly what to (re-)provision. A read-only token 403s on the first
 write — every write in the table above (including the very first one, on
 claim), plus a promotion failure (approve), is logged server-side **and**
 recorded on the task's `githubSyncError` field, rendered in the task
-detail drawer regardless of the task's status (see
+detail regardless of the task's status (see
 [`tasks.md`](tasks.md#the-task-board)). If claiming a task never actually
 labels/comments on its GitHub issue, the task itself will now say why —
 `githubSyncError` is not `failureReason`: the latter is rendered for a
@@ -1586,7 +1586,7 @@ The sweep never gives up on a retryable state — `behind`/`unstable`/`blocked`/
 `unknown` all become resolvable on their own (a check goes green, GitHub
 finishes computing mergeability), and a give-up cap would just strand the
 task the same way an unbounded-wait bug would. A **"Merge now"/"Retry
-merge"** button in the task drawer (`POST /api/tasks/:id/merge`) re-arms the
+merge"** button in the task detail (`POST /api/tasks/:id/merge`) re-arms the
 sweep immediately, for cases that need a human to actually go fix something
 first.
 
@@ -1905,7 +1905,7 @@ one `app.log.warn` in `task-reconciler.ts`. `withPrTitleFallback`
 (`routes/tasks.ts`) computes the actual "did this fall back to a
 non-conventional title" signal (not the same as raw `prTitle === null` — an
 already-conventional issue title also leaves `prTitle` null but needs no
-worker title at all) and TaskDetail.tsx renders it in the task drawer.
+worker title at all) and TaskDetail.tsx renders it in the task detail.
 
 ### Autorelease after tasks land (`#744`)
 
@@ -1943,7 +1943,7 @@ PR out of a task landing — autorelease waits indefinitely in that
 configuration; a human still needs the manual Run button there.
 
 Failures are recorded per-task on `tasks.releaseError` (rendered in the task
-drawer, same posture as `mergeError`) and retried indefinitely — same
+detail, same posture as `mergeError`) and retried indefinitely — same
 never-give-up reasoning as the merge sweep's own table — with one exception:
 if the repo turns out to have no release-please workflow at all, the sweep
 gives up and clears the intent (retrying forever against a misconfigured

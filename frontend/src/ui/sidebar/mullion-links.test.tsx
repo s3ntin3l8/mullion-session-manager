@@ -146,12 +146,14 @@ describe("TaskChip", () => {
   });
 
   // #2020 — with no onOpen, a click asks the app shell to open the task.
-  it("dispatches requestOpenTask when no onOpen is given", () => {
+  it("shows the task in the sidebar's Tasks view (desktop) when no onOpen is given", () => {
     const requestOpenTask = vi.fn();
-    useDashboardStore.setState({ requestOpenTask });
+    const openRightSidebarTask = vi.fn();
+    useDashboardStore.setState({ requestOpenTask, openRightSidebarTask });
     render(<TaskChip task={{ id: 4, status: "in_progress" }} />);
     fireEvent.click(screen.getByRole("button", { name: /#4 · in_progress/ }));
-    expect(requestOpenTask).toHaveBeenCalledWith(4);
+    expect(openRightSidebarTask).toHaveBeenCalledWith(4);
+    expect(requestOpenTask).not.toHaveBeenCalled();
   });
 });
 

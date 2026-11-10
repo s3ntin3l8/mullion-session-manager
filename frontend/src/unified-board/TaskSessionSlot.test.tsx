@@ -45,11 +45,11 @@ const deleteSession = vi.fn(async () => {});
 const refreshTasks = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 const createTask = vi.fn(async () => makeTask({}));
+const requestOpenTask = vi.fn();
+const openRightSidebarTask = vi.fn();
 
 function storeState() {
   return {
-    pendingOpenTaskId: null,
-    setPendingOpenTaskId: vi.fn(),
     sessions,
     projects,
     tasks,
@@ -63,6 +63,8 @@ function storeState() {
     refreshTasks,
     updateTask,
     createTask,
+    requestOpenTask,
+    openRightSidebarTask,
     settings: { sessions: { confirmBeforeKill: false } },
     theme: "dark",
     events,
@@ -81,23 +83,6 @@ vi.mock("../store/index.js", () => {
   useDashboardStore.getState = storeState;
   return { useDashboardStore };
 });
-
-vi.mock("../TaskDetail.js", () => ({
-  TaskDetail: ({
-    params,
-    onOpenSession,
-  }: {
-    params: { taskId: number };
-    onOpenSession: (session: Session) => void;
-  }) => (
-    <div data-testid="task-detail-stub" data-task-id={params.taskId}>
-      <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
-        stub open session
-      </button>
-      <button disabled>disabled stub action</button>
-    </div>
-  ),
-}));
 
 beforeEach(() => {
   sessions = [];
@@ -118,6 +103,8 @@ beforeEach(() => {
   refreshTasks.mockClear();
   updateTask.mockClear();
   createTask.mockClear();
+  requestOpenTask.mockClear();
+  openRightSidebarTask.mockClear();
   localStorage.clear();
 });
 
@@ -211,7 +198,7 @@ describe("UnifiedBoard nested task session strip", () => {
 
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
     expect(setViewMode).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+    expect(openRightSidebarTask).not.toHaveBeenCalled();
   });
 
   // Hermes review — the strip used to be draggable with the session MIME

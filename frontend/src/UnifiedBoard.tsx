@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -19,13 +18,9 @@ import {
 } from "./tasksBoard.js";
 import type { PhoneSegmentId } from "./tasksBoard.js";
 import { taskLinkedSessionIds, adhocSessionsByColumn } from "./boardLanes.js";
-import { TaskDetail } from "./TaskDetail.js";
 import type { Session, TaskStatus } from "./api/index.js";
 import { ApiError } from "./api/index.js";
-import { CloseIcon, LayersIcon } from "./ui/icons.js";
-import { useDragResize } from "./hooks/useDragResize.js";
-import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
-import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
+import { LayersIcon } from "./ui/icons.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { TaskFilterBar } from "./unified-board/TaskFilterBar.js";
 import { TaskFacetsPanel } from "./unified-board/TaskFacetsPanel.js";
@@ -44,16 +39,6 @@ import {
 } from "./unified-board/taskLanes.js";
 import { AdhocLane } from "./unified-board/AdhocLane.js";
 
-// Detail drawer resize (see the drag-handle logic in UnifiedBoard below) —
-// same localStorage-key naming convention as store.ts's sidebarWidth.
-const DEFAULT_DRAWER_WIDTH = 380; // .kanban-detail-drawer's own prior fixed width
-const MIN_DRAWER_WIDTH = 300;
-// Reserves at least this much width for the columns behind the drawer —
-// .kanban-unified-columns .kanban-column's own min-width (160px) plus part
-// of the next column, so dragging the drawer wide never collapses
-// the board down to zero visible columns.
-const MIN_COLUMNS_WIDTH = 240;
-
 // The window's inner width, for the facets panel's "Auto" setting.
 function useViewportWidth(): number {
   const [width, setWidth] = useState(() => window.innerWidth);
@@ -63,10 +48,6 @@ function useViewportWidth(): number {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   return width;
-}
-
-function clampDrawerWidth(n: number, maxW: number): number {
-  return Math.min(Math.max(n, MIN_DRAWER_WIDTH), Math.max(MIN_DRAWER_WIDTH, maxW));
 }
 
 // What the empty-board note says when filters hide every task.
@@ -100,8 +81,8 @@ function emptyBoardMessage(f: TaskFilters): string {
 //
 // Split into unified-board/*.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — this file now owns the board's
-// own orchestration (task drag-and-drop, the detail drawer and its resize,
-// the ad-hoc lane's collapse/grouping) while TaskFilterBar/TaskColumn/
+// own orchestration (task drag-and-drop, opening a task in the sidebar or the docked
+// panel, the ad-hoc lane's collapse/grouping) while TaskFilterBar/TaskColumn/
 // TaskCard/TaskSessionSlot/LaneCard live in unified-board/ as focused,
 // mostly-presentational components.
 export function UnifiedBoard({
@@ -279,164 +260,21 @@ export function UnifiedBoard({
     }
   };
 
-  // The detail drawer, inline in the board rather than a dockview panel —
-  // TaskDetail.tsx already takes { params: { taskId }, onOpenSession } with
-  // every read a store selector, so it renders standalone with zero changes.
-  // Deleting from the drawer closes it (onDeleted below). A task that
-  // vanishes any other way still gets TaskDetail's own
-  // `if (!task) return "Task not found."`.
-  const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
-  const drawerRef = useRef<HTMLElement>(null);
-  const drawerCloseButtonRef = useRef<HTMLButtonElement>(null);
-  // Whatever had focus (the clicked task card) before the drawer opened —
-  // Hermes review: a bare <aside> with no dialog semantics never moved
-  // focus in, so a keyboard user opening it via Enter had to tab through
-  // every remaining card/column to reach the close button, and closing it
-  // never returned focus to where they were. Moving focus in/out here is
-  // what makes role="dialog" below actually true rather than just labeled.
-  // Captured at the click site (openDetail), not inside the effect: with
-  // React running the outgoing effect's cleanup before the incoming effect's
-  // body, capturing document.activeElement inside the effect would read the
-  // element focus was JUST moved to by that same cleanup when switching
-  // straight from one card's drawer to another's, losing the real target.
-  const lastFocusedRef = useRef<HTMLElement | null>(null);
-  const openDetail = useCallback(
+  // A card click selects the task and shows its detail (#2843: the board no
+  // longer has a drawer of its own). Desktop: the right sidebar's Tasks view
+  // opens in detail mode beside the board. `phone` is the compact board
+  // layout (phone and tablet): App.tsx renders no right sidebar on phone and
+  // floats it over the navigator drawer on tablet, where the board lives, so
+  // those tiers open the full-screen docked TaskDetail panel instead
+  // (usePhoneTasksNavigator keeps the Tasks view/navigator in step).
+  const openTask = useCallback(
     (taskId: number) => {
-      lastFocusedRef.current = document.activeElement as HTMLElement | null;
-      setDetailTaskId(taskId);
+      const state = useDashboardStore.getState();
+      if (phone) state.requestOpenTask(taskId);
+      else state.openRightSidebarTask(taskId);
     },
-    [setDetailTaskId],
+    [phone],
   );
-
-  // A task notification click (hooks/useTaskNotificationOpen.ts) leaves the
-  // task id in the store; this board may mount after it was set (cold start,
-  // or Tasks was not showing), so consume it on mount and whenever it changes.
-  const pendingOpenTaskId = useDashboardStore((s) => s.pendingOpenTaskId);
-  useEffect(() => {
-    if (pendingOpenTaskId == null) return;
-    // Deferred: react-hooks/set-state-in-effect disallows a synchronous
-    // setState from an effect body (same pattern as useSessionDeepLink).
-    const timer = setTimeout(() => {
-      useDashboardStore.getState().setPendingOpenTaskId(null);
-      openDetail(pendingOpenTaskId);
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [pendingOpenTaskId, openDetail]);
-
-  usePhoneBackStack(phone && detailTaskId !== null, () => setDetailTaskId(null));
-
-  useEffect(() => {
-    if (detailTaskId === null) return;
-    drawerCloseButtonRef.current?.focus();
-    return () => {
-      // This cleanup also runs on UnifiedBoard's own unmount, not just a
-      // normal drawer close — onOpenSession (usePanelOpener.ts's own
-      // leaveTaskView, called first inside every one of its openers,
-      // including this one) resets viewMode to "list" before actually
-      // opening the panel, and that view switch unmounts the whole board
-      // (App.tsx only renders it while viewMode === "kanban"). By the time
-      // this cleanup runs in that case, lastFocusedRef's card has already
-      // been detached along with the rest of the tree, so .focus() on it is
-      // a no-op — isConnected skips that no-op restore rather than fighting
-      // a view switch that's already in flight.
-      if (lastFocusedRef.current?.isConnected) {
-        lastFocusedRef.current.focus();
-      }
-    };
-  }, [detailTaskId]);
-
-  // Escape and the Tab focus-trap both live on the drawer's own onKeyDown
-  // (native bubbling from whatever's focused inside it), not a window-level
-  // listener — Hermes review: a window listener closes the drawer on ANY
-  // Escape anywhere, including one meant for the command palette (a
-  // separate modal, reachable globally, with its own Escape handling
-  // scoped to its search input) sitting above this board. Scoping to the
-  // drawer means Escape only closes it when focus is actually inside it.
-  const onDrawerKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      setDetailTaskId(null);
-      return;
-    }
-    if (e.key !== "Tab" || !drawerRef.current) return;
-    const focusable = drawerRef.current.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
-
-  // ---- Detail drawer width (drag handle on the drawer's left border) ----
-  // Same self-contained localStorage + mousedown/mousemove/mouseup pattern
-  // as Dock.tsx's own height handle — deliberately NOT threaded through the
-  // store, since nothing outside this component reads it. Unlike Dock's
-  // resize (which clamps against a fixed floor and the grid's own min
-  // height), the drawer's neighbor here is seven columns with no natural
-  // ceiling of their own (.kanban-unified-tasks is `overflow-x: auto`), so
-  // dragging without an upper clamp could push the drawer wide enough to
-  // scroll every column out of view. mainRef measures the actual rendered
-  // width of .kanban-unified-main at drag start so the clamp adapts to
-  // whatever window size the drag happens to start at.
-  const mainRef = useRef<HTMLDivElement>(null);
-  const [drawerWidth, setDrawerWidth] = useState(() => {
-    const n = readNumber(STORAGE_KEYS.taskDrawerWidth, NaN);
-    return Number.isFinite(n) && n > 0 ? clampDrawerWidth(n, Infinity) : DEFAULT_DRAWER_WIDTH;
-  });
-  // Handle sits on the drawer's LEFT border: dragging left (clientX
-  // decreases) grows the drawer, matching the direction the border itself
-  // moves — hence `invert: true`. Persists on drag end only via
-  // `onCommit` (see the mount-time-clamp comment below for why that's
-  // deliberately NOT also persisted).
-  const { onMouseDown: onResizeMouseDown } = useDragResize({
-    axis: "x",
-    invert: true,
-    min: MIN_DRAWER_WIDTH,
-    getMax: () => {
-      const containerWidth = mainRef.current?.clientWidth ?? Infinity;
-      return Math.max(MIN_DRAWER_WIDTH, containerWidth - MIN_COLUMNS_WIDTH);
-    },
-    value: drawerWidth,
-    onChange: setDrawerWidth,
-    onCommit: (w) => writeNumber(STORAGE_KEYS.taskDrawerWidth, w),
-    cursor: "col-resize",
-  });
-
-  // Independent review — the initial useState above only applies
-  // clampDrawerWidth's floor (maxW: Infinity), since the ceiling depends on
-  // a container width that isn't measurable yet at that point in render.
-  // The actual ceiling was previously enforced ONLY at the start of a drag
-  // (onResizeMouseDown), so a width persisted from a wide monitor stayed
-  // completely unclamped on a later, narrower mount or window resize —
-  // exactly the "columns squeezed to zero" failure mode this feature's own
-  // clamp exists to prevent, just not caught until the user next dragged
-  // the handle. Re-clamping here (mount + every window resize) closes that
-  // gap. Uses the functional setState form so this doesn't need
-  // `drawerWidth` in its own deps — recomputing the clamp on every
-  // unrelated resize is cheap and idempotent, so no debounce.
-  useEffect(() => {
-    const clampToContainer = () => {
-      // Falsy (0 or undefined), not just undefined — a genuinely unmeasured
-      // container (no ref yet, or read before the browser's first layout
-      // pass) reports 0 too, and clamping against that would floor the
-      // drawer to MIN_DRAWER_WIDTH on every mount rather than skip until a
-      // real measurement is available.
-      const containerWidth = mainRef.current?.clientWidth;
-      if (!containerWidth) return;
-      const maxW = Math.max(MIN_DRAWER_WIDTH, containerWidth - MIN_COLUMNS_WIDTH);
-      setDrawerWidth((w) => clampDrawerWidth(w, maxW));
-    };
-    clampToContainer();
-    window.addEventListener("resize", clampToContainer);
-    return () => window.removeEventListener("resize", clampToContainer);
-  }, []);
 
   // Per-status counts (after the board's filters) for the phone strip, and
   // which column the phone shows: the user's pick if it's still offered,
@@ -496,11 +334,7 @@ export function UnifiedBoard({
 
   return (
     <div className="kanban-unified">
-      <div
-        className="kanban-unified-main"
-        ref={mainRef}
-        style={{ "--task-drawer-width": `${drawerWidth}px` } as CSSProperties}
-      >
+      <div className="kanban-unified-main">
         {!tasksLoaded && (
           <span className="visually-hidden" role="status">
             Loading tasks
@@ -743,7 +577,7 @@ export function UnifiedBoard({
                             tasks={columnTasks}
                             taskMasterEnabled={taskMasterEnabled}
                             acceptsDrop={acceptsDrop}
-                            onOpen={(task) => openDetail(task.id)}
+                            onOpen={(task) => openTask(task.id)}
                             onOpenSession={onOpenSession}
                             onDrop={(draggedId, index) =>
                               applyDrop(
@@ -770,55 +604,6 @@ export function UnifiedBoard({
             </div>
           </div>
         </div>
-        {detailTaskId !== null && (
-          <>
-            {/* Sibling BEFORE the aside, not inside it — the Tab focus-trap
-                (onDrawerKeyDown below) only queries drawerRef.current's own
-                subtree, and this is deliberately not a tab stop (mouse-only,
-                matching Dock.tsx's own resize handle), so keeping it outside
-                the aside is what keeps it from ever being counted as a
-                focusable inside the trap. Hidden on mobile (styles.css) —
-                the drawer there is a full-bleed fixed sheet with nothing to
-                resize. */}
-            <div className="kanban-detail-resize-handle" onMouseDown={onResizeMouseDown} />
-            <aside
-              ref={drawerRef}
-              className="kanban-detail-drawer"
-              role="dialog"
-              aria-label="Task detail"
-              onKeyDown={onDrawerKeyDown}
-            >
-              {/* A fixed header bar rather than the close button floating
-                  absolutely over TaskDetail's own content — it used to sit
-                  directly on top of TaskDetail's status badge (see
-                  .task-detail-header's own padding-right comment in
-                  styles.css) and was a 22px target, well under the 44px
-                  mobile minimum where it's the drawer's only way out. Must
-                  stay the drawer's first child, with the close button its
-                  first (and only) focusable — the Tab focus-trap test
-                  (UnifiedBoard.test.tsx) asserts shift-Tab from this button
-                  wraps to the LAST focusable inside the aside, which only
-                  holds if nothing focusable sits before it. */}
-              <div className="kanban-detail-drawer-header">
-                <span className="kanban-detail-drawer-header-label">Task</span>
-                <button
-                  ref={drawerCloseButtonRef}
-                  type="button"
-                  className="kanban-detail-drawer-close"
-                  aria-label="Close task detail"
-                  onClick={() => setDetailTaskId(null)}
-                >
-                  <CloseIcon size={18} />
-                </button>
-              </div>
-              <TaskDetail
-                params={{ taskId: detailTaskId }}
-                onOpenSession={onOpenSession}
-                onDeleted={() => setDetailTaskId(null)}
-              />
-            </aside>
-          </>
-        )}
       </div>
       <AdhocLane
         laneColumns={laneColumns}

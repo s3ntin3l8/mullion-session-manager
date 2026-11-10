@@ -1096,10 +1096,12 @@ export function App() {
     restoredWorkspaceIdRef,
   });
 
-  // #2149 — a task push notification click opens the Tasks board drawer.
-  useTaskNotificationOpen();
+  // #2149 — a task push notification click opens that task: the sidebar's
+  // Tasks detail on desktop, the full-screen docked panel on phone/tablet.
+  useTaskNotificationOpen(compact);
 
-  // Issue #2020 — resolves requestOpenTask (a sidebar task chip has no
+  // Issue #2020 — resolves requestOpenTask (the Tasks detail's pop-out, and
+  // every "show me this task" on phone and tablet; the sidebar has no
   // dockview API of its own). Same ordering contract as the hook above.
   useOpenTaskRequest({
     dockviewApi,
