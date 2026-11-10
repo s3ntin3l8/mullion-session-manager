@@ -179,7 +179,9 @@ describe("launcher host target: placement:auto and targetHostId (issue #2237)", 
       url: "/api/sessions",
       payload: { projectId, command: "bash", targetHostId: hostId },
     });
-    expect(backend.spawn.mock.calls[0]![0]).toHaveProperty("palette", undefined);
+    // The wire shape (what the agent receives), not whether the key is present.
+    const body = JSON.parse(JSON.stringify(backend.spawn.mock.calls[0]![0]));
+    expect(body).not.toHaveProperty("palette");
   });
 
   it("POST targetHostId for a host with no path for the project is a 409 (issue #2237)", async () => {

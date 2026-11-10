@@ -246,7 +246,7 @@ export const spawnSessionSchema = {
       // field.
       taskId: { type: "integer" },
       githubAuth: SESSION_GITHUB_AUTH_SCHEMA,
-      // #2528 — the creating dashboard's palette; an older agent strips it.
+      // #2857 — the creating dashboard's palette; an older agent strips it.
       palette: paletteSchema,
       browserTarget: BROWSER_TARGET_SCHEMA,
       gitIdentity: {
