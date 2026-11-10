@@ -58,7 +58,11 @@ export async function enqueueRetry(
     const patch: Partial<typeof tasks.$inferInsert> = {
       status: "claimed",
       queuedAt: new Date(),
-      resumeQueued: true,
+      // Not queued for dispatch yet: the old session is killed first (below),
+      // so a sweep cannot resume the branch while that worker still holds it.
+      // dispatchClaimedTask and dispatchQueuedRetry both skip this row until
+      // the flag is set.
+      resumeQueued: false,
       // A human retry resumes the same branch with a worker that may well
       // rebase this time: a spent auto-rebase budget must not outlive it
       // (same reasoning as the Reject route in routes/tasks.ts).
@@ -74,7 +78,11 @@ export async function enqueueRetry(
       completedAt: null,
       claimedAt: null,
       startedAt: null,
-      sessionId: null,
+      // sessionId is cleared after the old session is killed (below).
+      // Stale "needs a human" markers from the failed run (give-up from review).
+      autoReturnCapAnnouncedAt: null,
+      needsHumanReason: null,
+      approvalCarriedAt: null,
       prUrl: null,
       prNumber: null,
       // Review fix (#1015) — resuming a failed task must un-hide it, or it
@@ -113,9 +121,8 @@ export async function enqueueRetry(
     };
   }
 
-  // The reservation nulled tasks.sessionId, so this task's OLD session is now
-  // unreachable from the row: kill it rather than leave an orphan. Best-effort
-  // — a kill failure must not block the retry.
+  // Kill the task's OLD session before the retry becomes dispatchable, rather
+  // than leave an orphan. Best-effort — a kill failure must not block the retry.
   if (task.sessionId !== null) {
     try {
       await killSession(app, task.sessionId, "detach");
@@ -126,6 +133,13 @@ export async function enqueueRetry(
       );
     }
   }
+
+  // Now dispatchable: the old worker is gone, so release the row to the sweep.
+  app.db
+    .update(tasks)
+    .set({ sessionId: null, resumeQueued: true })
+    .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+    .run();
 
   // Recorded AFTER the write: the transition listener (task-dispatch.ts)
   // schedules a dispatch sweep on any move into "claimed", so a free slot

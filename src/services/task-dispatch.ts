@@ -188,7 +188,7 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // not this task's fault, and no room left either way.
       return;
     }
-    if (resumeQueued && outcome.reason !== "not-queued") {
+    if (resumeQueued && outcome.reason !== "not-queued" && outcome.reason !== "not-found") {
       app.log.info(
         { taskId, reason: outcome.reason, detail: outcome.detail },
         "[task-dispatch] queued retry did not start, task failed (no retry pending)",

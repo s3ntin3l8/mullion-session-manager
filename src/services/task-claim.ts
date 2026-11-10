@@ -327,6 +327,7 @@ export function failQueuedTask(
   if (!project) return false;
   const patch: Partial<typeof tasks.$inferInsert> = {
     status: "failed",
+    resumeQueued: false,
     failureReason: opts.detail,
     failureDiagnostics: null,
     dispatchFailingSince: null,
@@ -1610,15 +1611,8 @@ export async function dispatchQueuedRetry(
       result.initialPromptApplied,
     );
 
-    // Task-claim queueing (rate-limit-storm fix) — status goes straight to
-    // "in_progress" here, not "claimed": retryTask stays a single-phase,
-    // unsplit operation (see this function's own doc comment on why —
-    // the fresh-claim-vs-resume discriminator problem), but
-    // `CONCURRENCY_CAPPED_STATUSES` now only counts "in_progress". A
-    // successfully retried task already has a real, running session by
-    // this point — leaving it at "claimed" would make it invisible to
-    // MULLION_TASK_MAX_CONCURRENT entirely (a "claimed" row is defined
-    // everywhere else as session-less/queued), silently uncapping retries.
+    // The row is already `in_progress` (reserved above, which is what holds the
+    // concurrency slot); this commits the session it now has.
     const patch: Partial<typeof tasks.$inferInsert> = {
       status: "in_progress",
       startedAt: new Date(),
