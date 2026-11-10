@@ -1,6 +1,6 @@
 // Task-claim queueing (rate-limit-storm fix) — the scheduler half of the
-// claim/dispatch split (task-claim.ts). `enqueueTask` and `retryTask` write
-// "claimed" unconditionally; this module is what actually turns a queued
+// claim/dispatch split (task-claim.ts). `enqueueTask` and `enqueueRetry`
+// (task-retry.ts) write "claimed" unconditionally; this module is what actually turns a queued
 // row into a running worker, respecting MULLION_TASK_MAX_CONCURRENT.
 //
 // Two triggers call `dispatchQueuedTasks`:
@@ -22,7 +22,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { dispatchClaimedTask, failQueuedTask } from "./task-claim.js";
+import { dispatchClaimedTask, dispatchQueuedRetry, failQueuedTask } from "./task-claim.js";
 import { registerTaskTransitionListener } from "./task-state.js";
 
 // Same backoff shape as task-reconciler.ts's retryStrandedDraftPRs /
@@ -154,13 +154,13 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
   const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
   const now = Date.now();
   const queued = app.db
-    .select({ id: tasks.id })
+    .select({ id: tasks.id, resumeQueued: tasks.resumeQueued })
     .from(tasks)
     .where(eq(tasks.status, "claimed"))
     .orderBy(asc(tasks.boardOrder), asc(tasks.id))
     .all();
 
-  for (const { id: taskId } of queued) {
+  for (const { id: taskId, resumeQueued } of queued) {
     if (isBackedOff(taskId, now)) continue;
 
     // Re-checked every iteration, not hoisted above the loop — a prior
@@ -172,7 +172,13 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       .all().length;
     if (inFlight >= maxConcurrent) return;
 
-    const outcome = await dispatchClaimedTask(app, taskId);
+    // A queued retry resumes its preserved branch (task-retry.ts) instead of
+    // cutting a fresh worktree. Its failures are terminal — the row is
+    // already `failed` with the reason (Retry again is the human's call) —
+    // so there is nothing to back off.
+    const outcome = resumeQueued
+      ? await dispatchQueuedRetry(app, taskId)
+      : await dispatchClaimedTask(app, taskId);
     if (outcome.ok) {
       clearDispatchBackoff(taskId);
       continue;
@@ -181,6 +187,13 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // Lost a race with another dispatch attempt for the last slot —
       // not this task's fault, and no room left either way.
       return;
+    }
+    if (resumeQueued && outcome.reason !== "not-queued") {
+      app.log.info(
+        { taskId, reason: outcome.reason, detail: outcome.detail },
+        "[task-dispatch] queued retry did not start, task failed (no retry pending)",
+      );
+      continue;
     }
     if (outcome.reason === "placement-refused") {
       // The claim was refused outright and the task is already `failed`, with

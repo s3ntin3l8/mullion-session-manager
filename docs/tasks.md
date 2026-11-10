@@ -340,7 +340,11 @@ waiting for a free concurrency slot. It never holds a session; see the
   supersedes the two-step "flip to ready, then claim" flow they would
   otherwise have required for a task Retry can actually resume. Gated on
   Task Master being enabled, same as Claim, since it also spawns a session.
-  Still cap-checked — a retry can still 429 at capacity. A task copy that a
+  Retry is **queued**, like a claim: the route answers `202` with the task
+  row and the task waits in `claimed` (`resumeQueued`) until the dispatch
+  sweep finds a free concurrency slot, so a full cap delays a retry instead
+  of refusing it. The budget clock starts at dispatch, not while queued. A
+  task copy that a
   project merge superseded is refused with a 409 instead of retried
   (`#2292` — see "Merging two projects" below).
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
@@ -633,7 +637,7 @@ non-Abandon-path task) are not gated either way.
   the session already exited, a fresh one is re-seeded in the **same**
   worktree. Unlike an automatic auto-return round, Reject never spends
   `tasks.autoReturnRounds`.
-- **Retry** (`failed → in_progress`) — resumes a failed task's preserved
+- **Retry** (`failed → claimed → in_progress`) — queues a resume of a failed task's preserved
   branch into a fresh worktree and spawns a new worker; see "Lifecycle"
   above for its own reservation mechanics. Only available when the task
   has a preserved branch (a task that failed before ever committing

@@ -1419,6 +1419,9 @@ export const tasks = sqliteTable(
     // Re-runs of the failed Actions jobs on `ciReturnHeadSha` (capped by
     // MAX_CI_RERUNS_PER_HEAD); reset whenever a new head is returned.
     ciRerunCount: integer("ci_rerun_count").notNull().default(0),
+    // A `claimed` row that is a queued RETRY: when a slot frees, the dispatch
+    // sweep resumes the preserved branch instead of cutting a fresh worktree.
+    resumeQueued: integer("resume_queued", { mode: "boolean" }).notNull().default(false),
     // Suggestions-round workers that ended within RAPID_EXIT_MS with the PR
     // head unchanged.
     suggestionsRapidExits: integer("suggestions_rapid_exits").notNull().default(0),

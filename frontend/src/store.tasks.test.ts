@@ -83,7 +83,8 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
         return jsonResponse(200, { ...TASK, status: "in_progress" });
       }
       if (url === "/api/tasks/1/retry") {
-        return jsonResponse(201, { id: 101, projectId: 1, command: "claude", seedDelivered: true });
+        // Queued, not started: the response is the task row (202, like claim).
+        return jsonResponse(202, { ...TASK, status: "claimed" });
       }
       if (url === "/api/tasks/1/give-up") {
         return jsonResponse(200, { ...TASK, status: "failed" });
@@ -219,10 +220,10 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
   });
 
   // #483
-  it("retryTask returns the resumed session and refreshes sessions + tasks", async () => {
+  it("retryTask returns the queued task and refreshes the task list", async () => {
     tasksResponse = []; // simulates the retried task dropping out of the failed column
-    const session = await useDashboardStore.getState().retryTask(1);
-    expect(session).toMatchObject({ id: 101, projectId: 1 });
+    const task = await useDashboardStore.getState().retryTask(1);
+    expect(task).toMatchObject({ id: 1, status: "claimed" });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/tasks/1/retry",
       expect.objectContaining({ method: "POST" }),

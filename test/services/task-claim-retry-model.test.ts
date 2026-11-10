@@ -41,7 +41,7 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { retryTask } = await import("../../src/services/task-claim.js");
+const { retryTask } = await import("../helpers/retry-task.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const { resolveReviewerSmallModel } = await import("../../src/services/task-model-patch.js");
 const { createWorktree, removeWorktreeIfClean } =

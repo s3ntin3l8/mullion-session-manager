@@ -241,6 +241,8 @@ export async function enqueueTask(
     const patch: Partial<typeof tasks.$inferInsert> = {
       status: "claimed",
       queuedAt: new Date(),
+      // A fresh claim cuts a new worktree; never inherit a queued-retry flag.
+      resumeQueued: false,
       worktreePath: predictedWorktreePath,
       branchName,
       // Issue #1997 — a queued task's `failureReason` means "why it is not
@@ -495,7 +497,8 @@ export async function dispatchClaimedTask(
   taskId: number,
 ): Promise<DispatchTaskOutcome> {
   const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
-  if (!task || task.status !== "claimed" || task.sessionId !== null) {
+  // A queued retry (resumeQueued) belongs to dispatchQueuedRetry.
+  if (!task || task.status !== "claimed" || task.sessionId !== null || task.resumeQueued) {
     return { ok: false, reason: "not-queued" };
   }
 
@@ -1180,8 +1183,7 @@ export type RetryTaskOutcome =
       ok: false;
       reason:
         | "not-found"
-        | "not-failed"
-        | "superseded"
+        | "not-queued"
         | "cap"
         | "no-worktree"
         | "remote-not-supported"
@@ -1233,59 +1235,47 @@ export type RetryTaskOutcome =
  * the row does not re-arm the duplicate. This is the retry-side twin of
  * #2291's claim-side refusal (an archived task is never claimed).
  */
-export async function retryTask(
+export async function dispatchQueuedRetry(
   app: FastifyInstance,
   taskId: number,
-  opts: { agent?: string | null; reviewAgent?: string | null } = {},
 ): Promise<RetryTaskOutcome> {
   const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
   if (!task) return { ok: false, reason: "not-found" };
+  // Only a queued retry (enqueueRetry in task-retry.ts) is resumed here; a
+  // fresh claim goes through dispatchClaimedTask.
+  if (task.status !== "claimed" || !task.resumeQueued || task.sessionId !== null) {
+    return { ok: false, reason: "not-queued" };
+  }
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-found" };
 
-  const effectiveAgent = opts.agent !== undefined ? opts.agent : task.agent;
-  // Issue #2491 — same agent-change revalidation as enqueueTask; the retry
-  // then runs with the surviving task-level choice.
-  const agentChangeModelPatch = agentChangeModelClears(app, task, project, opts);
-  const modelOverride =
-    "modelOverride" in agentChangeModelPatch ? null : (task.modelOverride ?? null);
-  const smallModelOverride =
-    "smallModelOverride" in agentChangeModelPatch ? null : (task.smallModelOverride ?? null);
+  // enqueueRetry already revalidated the agent/model choice and persisted it
+  // on the row, so the queued retry runs with whatever survived.
+  const modelOverride = task.modelOverride ?? null;
+  const smallModelOverride = task.smallModelOverride ?? null;
 
   const command = resolveAgentCommand(app, {
-    taskAgent: effectiveAgent,
+    taskAgent: task.agent,
     issueBody: task.body,
     projectDefaultAgent: project.defaultAgent,
   });
   const seedCapable = commandSupportsSeed(command);
 
-  // Same atomic reservation shape as claimTask's own — see that function's
-  // doc comment for why the cap check and the status flip must succeed or
-  // fail together. The branchName check is INSIDE this transaction's
-  // status gate, not before it (independent of whether the task is even
-  // "failed" yet) — a "ready"/"reviewing"/etc. task with no branch must
-  // report "not-failed", the true diagnosis, not the misleading
-  // "no-worktree" a pre-transaction check would produce.
+  // Same atomic reservation shape as dispatchClaimedTask: the cap check and
+  // the claimed -> in_progress flip succeed or fail together. The budget clock
+  // (claimedAt) starts HERE, at dispatch, so time spent queued behind a full
+  // cap is not charged against the retry's budget.
   const taskMasterConfig = resolveTaskMasterConfig(app);
   const maxConcurrent = taskMasterConfig.maxConcurrent;
   const reservation = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
-    if (!current || current.status !== "failed") {
-      return { reserved: false as const, currentStatus: current?.status };
+    if (!current || current.status !== "claimed" || !current.resumeQueued) {
+      return { reserved: false as const };
     }
-    // #2292 — a copy a project merge superseded must never be retried: it
-    // would resume the branch and spawn a second worker for an issue another
-    // task already owns. Checked BEFORE the branchName gate below, because
-    // "superseded" is the true diagnosis and "no-worktree" is only a symptom
-    // of it — and inside the transaction, like that gate, so the refusal
-    // cannot race the reservation.
-    if (current.supersededAt !== null) {
-      return { reserved: false as const, superseded: true as const };
-    }
-    if (!current.branchName) {
-      return { reserved: false as const, noBranch: true as const };
-    }
+    // Defensive: enqueueRetry refuses a branchless task, so this is a row
+    // written by something else.
+    if (!current.branchName) return { reserved: false as const, noBranch: true as const };
     const inFlight = tx
       .select({ id: tasks.id })
       .from(tasks)
@@ -1296,94 +1286,43 @@ export async function retryTask(
     }
     tx.update(tasks)
       .set({
-        status: "claimed",
+        status: "in_progress",
         claimedAt: new Date(),
-        // A human retry resumes the same branch with a worker that may well
-        // rebase this time: a spent auto-rebase budget must not outlive it
-        // (same reasoning as the Reject route in routes/tasks.ts).
-        rebaseAttempts: 0,
-        // Clearing the prior attempt's leftovers so the retried task
-        // doesn't carry its old failure text / stale PR link / dead
-        // session id forward. worktreePath/branchName are left as-is —
-        // they're the deterministic, still-correct values this retry is
-        // about to resume onto. prUrl and prNumber are cleared together —
-        // never one alone — so the row can't end up with a prNumber but no
-        // prUrl (or vice versa), which is exactly the inconsistent pair
-        // that made the PR link vanish from the UI (#972).
-        failureReason: null,
-        failureDiagnostics: null,
-        // Issue #1997 — a retry starts a fresh run; a clock left by an earlier
-        // queue spell (a task failed by another route) must not carry over.
-        dispatchFailingSince: null,
-        dispatchHeld: false,
-        completedAt: null,
-        sessionId: null,
-        prUrl: null,
-        prNumber: null,
-        // Review fix (#1015) — a failed task can be archived (hidden from
-        // the board by default) without losing its Retry affordance;
-        // resuming it must un-hide it too, or it vanishes from the board
-        // the instant it starts running again (still holding a
-        // maxConcurrent slot) until someone happens to toggle "Show
-        // archived". mergedAt is left alone: nothing ever sets it on a
-        // non-`done` task, so there's nothing to clear.
-        archivedAt: null,
+        startedAt: new Date(),
+        resumeQueued: false,
       })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "failed")))
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
     return { reserved: true as const, branchName: current.branchName };
   });
 
   if (!reservation.reserved) {
     if ("capped" in reservation && reservation.capped) {
-      // See claimTask's identical branch above for why this is logged here
-      // rather than via recordTaskTransition — the reservation transaction
-      // short-circuited before any status changed.
-      app.log.info({ taskId, limit: maxConcurrent }, "task retry: at capacity");
       return { ok: false, reason: "cap", limit: maxConcurrent, detail: capDetail(maxConcurrent) };
     }
-    // #2292 — the reservation transaction short-circuited before any status
-    // changed, so there is nothing to roll back: the row is still `failed`,
-    // still archived, still holding its branch. Refusing here is what keeps
-    // the copy from spawning a duplicate worker.
-    if ("superseded" in reservation && reservation.superseded) {
-      app.log.info(
-        { taskId },
-        "task retry: refused — the task copy was superseded by a project merge",
-      );
-      return { ok: false, reason: "superseded", detail: SUPERSEDED_RETRY_DETAIL };
-    }
     if ("noBranch" in reservation && reservation.noBranch) {
+      failQueuedTask(app, taskId, {
+        detail: "Task has no recorded branch to resume — nothing to retry",
+        via: "dispatch-give-up",
+        hostId: null,
+      });
       return {
         ok: false,
         reason: "no-worktree",
         detail: "Task has no recorded branch to resume — nothing to retry",
       };
     }
-    return {
-      ok: false,
-      reason: "not-failed",
-      detail: `Task is not failed (status: ${reservation.currentStatus ?? "unknown"})`,
-    };
+    // Lost a race with another dispatch of this same task.
+    return { ok: false, reason: "not-queued" };
   }
-
-  // The reservation above already nulled tasks.sessionId — this task's
-  // OLD session (from `task`, read before the transaction) is now
-  // unreachable from the row, so kill it here rather than leaving it an
-  // orphan: nothing else in this codebase ever terminates it once the
-  // pointer is gone. Best-effort — a kill failure must not block the retry
-  // itself, same posture as every other fire-and-forget cleanup on this
-  // path (see `release`'s own worktree cleanup below).
-  if (task.sessionId !== null) {
-    try {
-      await killSession(app, task.sessionId, "detach");
-    } catch (err) {
-      app.log.warn(
-        { err, taskId, sessionId: task.sessionId },
-        "task retry: failed to kill the previous session, leaving it as-is",
-      );
-    }
-  }
+  const branchName = reservation.branchName;
+  recordTaskTransition(app, {
+    taskId,
+    projectId: project.id,
+    from: "claimed",
+    to: "in_progress",
+    via: "retry-dispatch",
+  });
 
   // Mirrors claimTask's own release() — puts the reservation back rather
   // than leaving a "claimed" row with nothing spawned behind it. Releases
@@ -1431,7 +1370,7 @@ export async function retryTask(
     const updated = app.db
       .update(tasks)
       .set({ status: "failed", failureReason: reason, failureDiagnostics: null })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress"), isNull(tasks.sessionId)))
       .run();
     // #488 — previously unlogged: retry's own rollback back to "failed" had
     // no signal of any kind before.
@@ -1439,15 +1378,13 @@ export async function retryTask(
       recordTaskTransition(app, {
         taskId,
         projectId: project.id,
-        from: "claimed",
+        from: "in_progress",
         to: "failed",
         via: "retry-release",
         context: { reason },
       });
     }
   }
-
-  const branchName = reservation.branchName;
 
   // Issue #1724 — the task's worktree was cut on the host its WORKER was
   // placed on, which is not necessarily the project's own host. So the
@@ -1640,13 +1577,12 @@ export async function retryTask(
           needsHumanReason: null,
           approvalCarriedAt: null,
         };
-        if (opts.agent !== undefined) keptPatch.agent = opts.agent;
-        if (opts.reviewAgent !== undefined) keptPatch.reviewAgent = opts.reviewAgent;
-        Object.assign(keptPatch, agentChangeModelPatch);
         const adopted = app.db
           .update(tasks)
           .set(keptPatch)
-          .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+          .where(
+            and(eq(tasks.id, taskId), eq(tasks.status, "in_progress"), isNull(tasks.sessionId)),
+          )
           .run();
         committed = true;
         if (adopted.changes === 0) {
@@ -1659,14 +1595,6 @@ export async function retryTask(
           await killSession(app, kept.id);
           return { ok: false, reason: "spawn-failed", detail: reason };
         }
-        recordTaskTransition(app, {
-          taskId,
-          projectId: project.id,
-          from: "failed",
-          to: "in_progress",
-          via: "retry",
-          context: { command, outcomeUnknown: true },
-        });
         return { ok: false, reason: "spawn-failed", detail: reason };
       }
       await release(reason, worktree);
@@ -1709,20 +1637,8 @@ export async function retryTask(
       needsHumanReason: null,
       approvalCarriedAt: null,
     };
-    if (opts.agent !== undefined) patch.agent = opts.agent;
-    if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
-    Object.assign(patch, agentChangeModelPatch);
-
     app.db.update(tasks).set(patch).where(eq(tasks.id, taskId)).run();
     committed = true;
-    recordTaskTransition(app, {
-      taskId,
-      projectId: project.id,
-      from: "failed",
-      to: "in_progress",
-      via: "retry",
-      context: { command, seedDelivered },
-    });
 
     // Fire-and-forget, same reasoning as claimTask's own sync call.
     void syncTaskTransition(
@@ -1776,7 +1692,7 @@ export async function retryTask(
 // changed between a failure and a bare retry. An unknown project fails open.
 // Only agent fields are passed to the resolver, so its `{ error }` arm is
 // unreachable here and is treated as "nothing to clear".
-function agentChangeModelClears(
+export function agentChangeModelClears(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
