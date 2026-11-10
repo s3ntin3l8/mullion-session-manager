@@ -259,6 +259,18 @@ describe("Claimed folded into In progress", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
     const strip = screen.getByRole("group", { name: "Task status" });
     expect(within(strip).queryByText("Claimed")).toBeNull();
+    // The phone's Active segment folds In progress (and so the queued tasks) with Reviewing.
+    expect(within(strip).getByRole("button", { name: /Active/ })).toHaveTextContent("2");
+  });
+
+  it("counts queued tasks under In progress on the tablet's per-status chips", () => {
+    tasks = [
+      makeTask({ id: 1, status: "claimed", title: "waiting" }),
+      makeTask({ id: 2, status: "in_progress", title: "running" }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone columnCount={2} />);
+    const strip = screen.getByRole("group", { name: "Task status" });
+    expect(within(strip).queryByText("Claimed")).toBeNull();
     expect(within(strip).getByRole("button", { name: /In Progress/ })).toHaveTextContent("2");
   });
 });

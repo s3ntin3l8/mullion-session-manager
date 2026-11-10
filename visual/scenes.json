@@ -210,6 +210,31 @@
       }
     },
     {
+      "name": "tasks-phone",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": "[class*=\"toolbar\"] button >> nth=0"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": "role=button[name=/^Tasks/] >> nth=0"
+        },
+        {
+          "wait": 3000
+        }
+      ],
+      "settle": 500,
+      "baseline": true,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      }
+    },
+    {
       "name": "session-list",
       "path": "/",
       "tags": ["presentation", "check", "audit"],

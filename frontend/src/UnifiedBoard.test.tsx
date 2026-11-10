@@ -787,12 +787,67 @@ describe("UnifiedBoard tablet layout (columnCount 2)", () => {
     expect(shownTitles()[1]).toBe("Failed");
   });
 
-  it("phone (columnCount 1) is still a single column with no split modifier", () => {
+  it("phone (columnCount 1) is never split: its Active segment stacks its two columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
-    expect(shownTitles()).toHaveLength(1);
+    expect(shownTitles()).toEqual(["In Progress", "Reviewing"]);
     expect(document.querySelector(".kanban-unified-columns")).not.toHaveClass(
       "kanban-unified-columns--split",
     );
+  });
+});
+
+describe("UnifiedBoard ad-hoc strip summary", () => {
+  beforeEach(() => {
+    sessions = [
+      makeSession({ id: 11, projectId: 1, name: "w1", sessionStatusSeverity: "busy" }),
+      makeSession({ id: 12, projectId: 1, name: "w2", sessionStatusSeverity: "busy" }),
+      makeSession({ id: 13, projectId: 1, name: "stuck", sessionStatusSeverity: "blocked" }),
+      makeSession({ id: 14, projectId: 1, name: "quiet", sessionStatusSeverity: "dormant" }),
+      // Its project is gone: neither counted, dotted nor drawn.
+      makeSession({ id: 15, projectId: 99, name: "orphan", sessionStatusSeverity: "busy" }),
+    ];
+  });
+
+  const dotTones = () =>
+    Array.from(document.querySelectorAll(".kanban-lane-dot")).map((el) =>
+      el.className.replace("kanban-lane-dot kanban-lane-dot--", ""),
+    );
+
+  it("collapsed, shows the count, one dot per session and a one-line summary", () => {
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".kanban-lane-count")?.textContent).toBe("4");
+    expect(document.querySelector(".kanban-lane-summary")?.textContent).toBe(
+      "2 running · 1 need you · 1 idle",
+    );
+    expect(dotTones()).toEqual(["attention", "running", "running", "idle"]);
+    expect(document.getElementById("kanban-lane-body")).toBeNull();
+  });
+
+  it("keeps the summary while expanded", async () => {
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /Ad-hoc sessions/ }));
+    expect(document.querySelector(".kanban-lane-summary")?.textContent).toBe(
+      "2 running · 1 need you · 1 idle",
+    );
+    expect(document.querySelectorAll(".kanban-card")).toHaveLength(4);
+  });
+
+  it("is the same strip on the phone, where it is new, and expands to the sessions", async () => {
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+    expect(document.querySelector(".kanban-lane-summary")?.textContent).toBe(
+      "2 running · 1 need you · 1 idle",
+    );
+    expect(document.querySelectorAll(".kanban-card")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: /Ad-hoc sessions/ }));
+    expect(document.querySelectorAll(".kanban-card")).toHaveLength(4);
+  });
+
+  it("shows no dots or summary when there are no ad-hoc sessions", () => {
+    sessions = [];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".kanban-lane-count")?.textContent).toBe("0");
+    expect(document.querySelector(".kanban-lane-dots")).toBeNull();
+    expect(document.querySelector(".kanban-lane-summary")).toBeNull();
   });
 });
 
@@ -811,30 +866,47 @@ describe("UnifiedBoard phone layout", () => {
     ];
   });
 
-  it("shows a status strip with per-status counts and only the default column", () => {
+  it("shows a four-segment control with per-segment counts and only the default segment", () => {
     renderPhone();
     const strip = screen.getByRole("group", { name: "Task status" });
-    expect(strip).toHaveTextContent("Ready2");
-    expect(strip).toHaveTextContent("In Progress1");
-    expect(strip).toHaveTextContent("Done1");
-    // Default: In Progress is the first actionable non-empty column.
-    expect(shownTitles()).toEqual(["In Progress"]);
-    expect(screen.getByRole("button", { name: /^In Progress/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(strip).toHaveClass("tasks-phone-strip--segmented");
+    expect(
+      within(strip)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Backlog0", "Ready2", "Active1", "Done1"]);
+    // Default: Active is the first actionable non-empty segment; it shows its
+    // two statuses' columns stacked.
+    expect(shownTitles()).toEqual(["In Progress", "Reviewing"]);
+    expect(screen.getByRole("button", { name: /^Active/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("ip1")).toBeInTheDocument();
     expect(screen.queryByText("r1")).toBeNull();
   });
 
-  it("scrolls the selected chip into view, on mount and when the column changes", async () => {
+  it("folds Reviewing into Active and Failed into Done in the segment counts", () => {
+    tasks = [
+      makeTask({ id: 1, status: "in_progress", title: "a" }),
+      makeTask({ id: 2, status: "claimed", title: "queued" }),
+      makeTask({ id: 3, status: "reviewing", title: "b" }),
+      makeTask({ id: 4, status: "done", title: "c" }),
+      makeTask({ id: 5, status: "failed", title: "d" }),
+    ];
+    renderPhone();
+    const strip = screen.getByRole("group", { name: "Task status" });
+    expect(strip).toHaveTextContent("Active3");
+    expect(strip).toHaveTextContent("Done2");
+  });
+
+  it("on tablet, scrolls the selected chip into view, on mount and when the column changes", async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: scrollIntoView,
     });
     try {
-      renderPhone();
+      render(
+        <UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone columnCount={2} />,
+      );
       expect(scrollIntoView).toHaveBeenCalledTimes(1);
       expect(scrollIntoView.mock.contexts[0]).toHaveTextContent("In Progress");
       await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
@@ -856,22 +928,22 @@ describe("UnifiedBoard phone layout", () => {
   it("drops Done/Failed from the strip under Hide done and falls back from a hidden pick", async () => {
     renderPhone();
     await userEvent.click(screen.getByRole("button", { name: /^Done/ }));
-    expect(shownTitles()).toEqual(["Done"]);
+    expect(shownTitles()).toEqual(["Done", "Failed"]);
     await userEvent.click(screen.getByRole("button", { name: /Filter/ }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Hide Done & Failed" }));
     await userEvent.click(screen.getByRole("button", { name: "Close filters" }));
     expect(screen.queryByRole("button", { name: /^Done/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Failed/ })).toBeNull();
-    expect(shownTitles()).toEqual(["In Progress"]);
+    expect(shownTitles()).toEqual(["In Progress", "Reviewing"]);
   });
 
-  it("has no ad-hoc sessions lane, and keeps its filters out of the page (they live in the sheet)", async () => {
+  it("shows the ad-hoc strip below the list, and keeps its filters out of the page (they live in the sheet)", async () => {
     tasks = [
       makeTask({ id: 1, status: "ready", title: "r1", projectId: 1 }),
       makeTask({ id: 2, status: "ready", title: "r2", projectId: 2 }),
     ];
     renderPhone();
-    expect(screen.queryByText(/Ad-hoc sessions/)).toBeNull();
+    expect(screen.getByRole("button", { name: /Ad-hoc sessions/ })).toBeInTheDocument();
     expect(document.querySelector(".task-filter-bar")).toBeNull();
     expect(screen.queryByRole("group", { name: "Quick views" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /Filter/ }));

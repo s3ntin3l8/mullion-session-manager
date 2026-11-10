@@ -10,21 +10,19 @@ import {
   canDragToColumn,
   computeTaskReorder,
   absoluteDropIndex,
+  PHONE_SEGMENTS,
   defaultPhoneColumn,
+  defaultPhoneSegment,
   foldClaimedCounts,
+  phoneSegmentCount,
   visibleColumnWindow,
 } from "./tasksBoard.js";
-import {
-  taskLinkedSessionIds,
-  adhocSessionsByColumn,
-  LANE_COLUMN_ORDER,
-  laneColumnTitle,
-} from "./boardLanes.js";
-import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
+import type { PhoneSegmentId } from "./tasksBoard.js";
+import { taskLinkedSessionIds, adhocSessionsByColumn } from "./boardLanes.js";
 import { TaskDetail } from "./TaskDetail.js";
 import type { Session, TaskStatus } from "./api/index.js";
 import { ApiError } from "./api/index.js";
-import { ChevronDownIcon, ChevronRightIcon, CloseIcon, LayersIcon } from "./ui/icons.js";
+import { CloseIcon, LayersIcon } from "./ui/icons.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
@@ -44,7 +42,7 @@ import {
   groupLanes,
   laneKeyOf,
 } from "./unified-board/taskLanes.js";
-import { LaneCard } from "./unified-board/LaneCard.js";
+import { AdhocLane } from "./unified-board/AdhocLane.js";
 
 // Detail drawer resize (see the drag-handle logic in UnifiedBoard below) —
 // same localStorage-key naming convention as store.ts's sidebarWidth.
@@ -200,20 +198,6 @@ export function UnifiedBoard({
     () => adhocSessionsByColumn(sessions, linkedSessionIds, hideEndedSessions),
     [sessions, linkedSessionIds, hideEndedSessions],
   );
-  // Counts only sessions that actually render a card below (Hermes review —
-  // a session whose project has since been deleted is still counted by
-  // adhocSessionsByColumn, since that partition has no project data to
-  // check, but its own render loop skips it via `if (!project) return
-  // null`; without this filter the header count could exceed what's
-  // visible).
-  const laneTotal = useMemo(
-    () =>
-      Object.values(laneColumns).reduce(
-        (sum, list) => sum + list.filter((session) => projectsById.has(session.projectId)).length,
-        0,
-      ),
-    [laneColumns, projectsById],
-  );
 
   // Issue: this wrapper used to be the ONLY path in the whole frontend that
   // reset viewMode before opening a session's panel — every other entry
@@ -292,18 +276,6 @@ export function UnifiedBoard({
         });
     }
   };
-
-  const [laneCollapsed, setLaneCollapsed] = useState(true);
-  // Hermes review — dragover can only see dataTransfer.types, not the
-  // dragged id itself (getData is drop-only), so a card can't tell on its
-  // own whether an incoming x-mullion-session drag belongs to its own
-  // severity group. Every group now sits contiguous in one lane (unlike
-  // KanbanBoard's separate columns), so without this a card in a different
-  // group still highlights as a valid target and the drop then silently
-  // no-ops (computeKanbanReorder can't find the id in that group's list).
-  // Same lifted-state pattern as unified-board/TaskColumn.tsx's own
-  // acceptsDrop.
-  const [draggingSessionId, setDraggingSessionId] = useState<number | null>(null);
 
   // The detail drawer, inline in the board rather than a dockview panel —
   // TaskDetail.tsx already takes { params: { taskId }, onOpenSession } with
@@ -488,22 +460,37 @@ export function UnifiedBoard({
           phoneColumns.map((c) => c.id),
         );
 
-  const visibleColumnIds = visibleColumnWindow(
-    phoneColumns.map((c) => c.id),
-    phoneColumn,
-    columnCount,
-  );
+  // Phone proper (one column wide) shows four segments rather than a chip per
+  // status; tablet keeps the per-status window above (tasksBoard.ts).
+  const segmented = phone && columnCount === 1;
+  const [phoneSegmentChoice, setPhoneSegmentChoice] = useState<PhoneSegmentId | null>(null);
+  const phoneSegments = PHONE_SEGMENTS.filter((seg) => !(hideDone && seg.id === "done"));
+  const phoneSegment =
+    phoneSegmentChoice !== null && phoneSegments.some((seg) => seg.id === phoneSegmentChoice)
+      ? phoneSegmentChoice
+      : defaultPhoneSegment(
+          statusCounts,
+          phoneSegments.map((seg) => seg.id),
+        );
+  const visibleColumnIds: TaskStatus[] = segmented
+    ? [...(PHONE_SEGMENTS.find((seg) => seg.id === phoneSegment)?.statuses ?? [])]
+    : visibleColumnWindow(
+        phoneColumns.map((c) => c.id),
+        phoneColumn,
+        columnCount,
+      );
 
   // Keep the selected chip visible: with all seven columns the strip
   // overflows a phone, and the default pick (In Progress) is 4th. Optional
   // call: jsdom has no scrollIntoView.
   const stripRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!phone) return;
+    // The four segments always fit; only the tablet's per-status chips scroll.
+    if (!phone || segmented) return;
     stripRef.current
       ?.querySelector<HTMLElement>('[aria-pressed="true"]')
       ?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
-  }, [phone, phoneColumn]);
+  }, [phone, segmented, phoneColumn]);
 
   return (
     <div className="kanban-unified">
@@ -548,7 +535,29 @@ export function UnifiedBoard({
               />
             }
           />
-          {phone && (
+          {segmented && (
+            <div
+              className="tasks-phone-strip tasks-phone-strip--segmented"
+              role="group"
+              aria-label="Task status"
+            >
+              {phoneSegments.map((segment) => (
+                <button
+                  key={segment.id}
+                  type="button"
+                  className="tasks-phone-strip-chip"
+                  aria-pressed={segment.id === phoneSegment}
+                  onClick={() => setPhoneSegmentChoice(segment.id)}
+                >
+                  {segment.title}
+                  <span className="tasks-phone-strip-count">
+                    {phoneSegmentCount(statusCounts, segment)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {phone && !segmented && (
             <div ref={stripRef} className="tasks-phone-strip" role="group" aria-label="Task status">
               {phoneColumns.map((column) => (
                 <button
@@ -809,97 +818,13 @@ export function UnifiedBoard({
           </>
         )}
       </div>
-      {!phone && (
-        <div className="kanban-unified-lane">
-          <div className="kanban-lane-header">
-            <button
-              type="button"
-              className="kanban-lane-collapse"
-              onClick={() => setLaneCollapsed((v) => !v)}
-              aria-expanded={!laneCollapsed}
-              aria-controls="kanban-lane-body"
-            >
-              {laneCollapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
-              Ad-hoc sessions (no task)
-            </button>
-            <span className="kanban-lane-count">{laneTotal}</span>
-          </div>
-          {!laneCollapsed && (
-            <div className="kanban-lane-body" id="kanban-lane-body">
-              {laneTotal === 0 ? (
-                <div className="kanban-lane-empty">No sessions without a task.</div>
-              ) : (
-                // Filters by the same visible-card count the group's own
-                // title uses below (Hermes review) — using the raw,
-                // unfiltered laneColumns[id].length here rendered an empty
-                // group header (title + a "0" count, no cards) whenever
-                // every session in a group had a since-deleted project.
-                LANE_COLUMN_ORDER.filter(
-                  (id) => laneColumns[id].filter((s) => projectsById.has(s.projectId)).length > 0,
-                ).map((id) => {
-                  const columnSessions = laneColumns[id];
-                  const order = kanbanOrder[id] ?? [];
-                  const orderedSessions = orderSessionsForColumn(columnSessions, order);
-                  const visibleSessionCount = orderedSessions.filter((s) =>
-                    projectsById.has(s.projectId),
-                  ).length;
-                  const acceptsDrop =
-                    draggingSessionId !== null &&
-                    columnSessions.some((s) => s.id === draggingSessionId);
-                  return (
-                    <div className="kanban-lane-group" key={id}>
-                      <div className="kanban-lane-group-title">
-                        {laneColumnTitle(id)} <span>{visibleSessionCount}</span>
-                      </div>
-                      {orderedSessions.map((session, index) => {
-                        const project = projectsById.get(session.projectId);
-                        if (!project) return null;
-                        return (
-                          <LaneCard
-                            key={session.id}
-                            session={session}
-                            project={project}
-                            acceptsDrop={acceptsDrop}
-                            onOpen={() => onOpenSession(session)}
-                            // P9 — not `void`-discarded: SessionRow (nested
-                            // inside LaneCard) now catches a rejection here
-                            // and surfaces it inline, same fix as Sidebar.tsx's
-                            // two identical onEnd call sites. LaneCard's own
-                            // `onEnd: () => void` prop type doesn't need
-                            // widening — TS's void-return bivariance already
-                            // accepts this function's real Promise return
-                            // value, and SessionRow's `Promise.resolve(onEnd())`
-                            // sees the actual returned promise at runtime
-                            // regardless of the narrower static type in
-                            // between.
-                            onEnd={() =>
-                              useDashboardStore
-                                .getState()
-                                .deleteSession(session.id)
-                                .then(() => onSessionEnded(session))
-                            }
-                            onDragBegin={() => setDraggingSessionId(session.id)}
-                            onDragFinish={() => setDraggingSessionId(null)}
-                            onReorder={(draggedId) => {
-                              const next = computeKanbanReorder(
-                                columnSessions,
-                                order,
-                                draggedId,
-                                index,
-                              );
-                              useDashboardStore.getState().setKanbanColumnOrder(id, next);
-                            }}
-                          />
-                        );
-                      })}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      <AdhocLane
+        laneColumns={laneColumns}
+        projectsById={projectsById}
+        kanbanOrder={kanbanOrder}
+        onOpenSession={onOpenSession}
+        onSessionEnded={onSessionEnded}
+      />
     </div>
   );
 }
