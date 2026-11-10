@@ -132,6 +132,9 @@ export const STORAGE_KEYS = {
   taskAgentFilter: "crs.taskAgentFilter",
   taskFacets: "crs.taskFacets",
   taskRecentProjects: "crs.taskRecentProjects",
+  // #2841 — how the board groups its columns (none / epic / project) and card density.
+  taskGroupBy: "crs.taskGroupBy",
+  taskDensity: "crs.taskDensity",
   // #746
   taskHideDone: "crs.taskHideDone",
   // #1015

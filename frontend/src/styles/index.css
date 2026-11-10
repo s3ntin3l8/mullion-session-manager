@@ -45,3 +45,4 @@
 @import "./skeleton.css";
 /* New section — appended last so it cannot reorder any earlier rule (#2840). */
 @import "./task-filter-bar.css";
+@import "./task-board.css";

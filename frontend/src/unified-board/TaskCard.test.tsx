@@ -464,7 +464,7 @@ describe("UnifiedBoard task columns", () => {
 
   // #701 — sub-issue hierarchy chips.
   describe("parent/sub-issue chips (#701)", () => {
-    it("shows the parent's title when known, linking to its GitHub issue", () => {
+    it("shows the epic as a tag linking to its GitHub issue, with the title as its tooltip", () => {
       tasks = [
         makeTask({
           id: 1,
@@ -474,13 +474,12 @@ describe("UnifiedBoard task columns", () => {
         }),
       ];
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-      const link = screen.getByRole("link", {
-        name: /Phase 5 — Tier-1 project introspection/,
-      });
+      const link = screen.getByRole("link", { name: /epic #30/ });
       expect(link).toHaveAttribute("href", "https://github.com/s3ntin3l8/branchdam/issues/30");
+      expect(link).toHaveAttribute("title", "Epic: Phase 5 — Tier-1 project introspection");
     });
 
-    it("falls back to a bare #N when the parent's title hasn't been filled yet", () => {
+    it("still tags the epic by number when its title hasn't been filled yet", () => {
       tasks = [
         makeTask({
           id: 1,
@@ -490,7 +489,7 @@ describe("UnifiedBoard task columns", () => {
         }),
       ];
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-      expect(screen.getByRole("link", { name: /#30/ })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /epic #30/ })).toHaveAttribute("title", "Epic: #30");
     });
 
     it("shows no parent chip when parentIssueNumber is null", () => {
@@ -499,7 +498,7 @@ describe("UnifiedBoard task columns", () => {
       expect(screen.queryByRole("link", { name: /#30/ })).toBeNull();
     });
 
-    it("the parent link stopPropagations, not opening the drawer on click", async () => {
+    it("the epic link stopPropagations, not opening the drawer on click", async () => {
       const user = userEvent.setup();
       tasks = [
         makeTask({
@@ -510,7 +509,7 @@ describe("UnifiedBoard task columns", () => {
         }),
       ];
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-      const link = screen.getByRole("link", { name: /Phase 5/ });
+      const link = screen.getByRole("link", { name: /epic #30/ });
       await user.click(link);
       expect(screen.queryByTestId("task-detail-stub")).toBeNull();
     });

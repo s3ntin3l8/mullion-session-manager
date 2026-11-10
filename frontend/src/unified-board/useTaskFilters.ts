@@ -23,6 +23,8 @@ import {
   matchesQuickView,
 } from "./taskFilters.js";
 import type { FacetsSetting, QuickView, TaskFilters } from "./taskFilters.js";
+import { isCardDensity, isGroupBy } from "./taskLanes.js";
+import type { CardDensity, GroupBy } from "./taskLanes.js";
 
 const MAX_RECENT_PROJECTS = 5;
 
@@ -93,6 +95,17 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
   const [facets, setFacetsState] = useState<FacetsSetting>(() => {
     const raw = readString(STORAGE_KEYS.taskFacets, "");
     return isFacetsSetting(raw) ? raw : "off";
+  });
+
+  // #2841 — display preferences, not filters: how the columns are grouped into lanes
+  // and how roomy a card is. Neither narrows the board.
+  const [groupBy, setGroupByState] = useState<GroupBy>(() => {
+    const raw = readString(STORAGE_KEYS.taskGroupBy, "");
+    return isGroupBy(raw) ? raw : "none";
+  });
+  const [density, setDensityState] = useState<CardDensity>(() => {
+    const raw = readString(STORAGE_KEYS.taskDensity, "");
+    return isCardDensity(raw) ? raw : "compact";
   });
 
   // One-time migration of the legacy keys: write the new ones, drop the old ones.
@@ -226,6 +239,14 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
     setFacetsState(next);
     writeString(STORAGE_KEYS.taskFacets, next);
   }, []);
+  const setGroupBy = useCallback((next: GroupBy) => {
+    setGroupByState(next);
+    writeString(STORAGE_KEYS.taskGroupBy, next);
+  }, []);
+  const setDensity = useCallback((next: CardDensity) => {
+    setDensityState(next);
+    writeString(STORAGE_KEYS.taskDensity, next);
+  }, []);
   // Everything that narrows the board, but not the display settings (hide done, archived,
   // facets), which are preferences rather than filters.
   const clearFilters = useCallback(() => {
@@ -263,6 +284,10 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
     toggleHideDone: () => setHideDone((v) => !v),
     toggleShowArchived: () => setShowArchived((v) => !v),
     setFacets,
+    groupBy,
+    setGroupBy,
+    density,
+    setDensity,
     clearFilters,
   };
 }

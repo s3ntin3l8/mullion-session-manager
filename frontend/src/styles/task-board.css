@@ -1,0 +1,241 @@
+/* Task board cards, columns and lanes (epic #2847, #2841). Imported after
+   task-filter-bar.css and empty-states.css, whose .task-card / .kanban-column rules this
+   refines; only tokens from tokens.css are used (the epic colour is --lane-1…6). */
+
+/* ───────── Lanes ───────── */
+.task-board-lanes {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+}
+.task-board-body--facets > .task-board-lanes {
+  flex: 1;
+  min-width: 0;
+}
+.task-lane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.task-lane-flat {
+  flex: 1;
+  min-height: 0;
+}
+.task-lane:not(.task-lane-flat) .tasks-board {
+  flex: none;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+.task-lane-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--sidebar-2);
+  font-size: 0.75rem;
+  position: sticky;
+  left: 0;
+}
+.task-lane-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--task-epic-colour, var(--dim));
+  flex: none;
+}
+.task-lane-title {
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-lane-bar {
+  width: 90px;
+  height: 5px;
+  border-radius: 9px;
+  background: var(--border);
+  overflow: hidden;
+  flex: none;
+}
+.task-lane-bar i {
+  display: block;
+  height: 100%;
+  background: var(--task-epic-colour, var(--accent));
+}
+.task-lane-progress {
+  color: var(--dim);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+.task-lane-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.task-lane-link:hover {
+  text-decoration: underline;
+}
+.task-lane-header .kanban-column-count {
+  margin-left: auto;
+}
+
+/* ───────── Cards ───────── */
+/* The epic is the card's left edge; a card with no epic keeps the plain border. */
+.task-card {
+  border-left: 3px solid var(--task-epic-colour, var(--border-soft));
+}
+/* empty-states.css sets `border-color` (a shorthand) on :hover and the selected ring does
+   too, which would turn the epic's left edge grey; both re-assert it. */
+.task-card:hover {
+  border-left-color: var(--task-epic-colour, var(--border));
+}
+.task-card-selected,
+.task-card-selected:hover {
+  border-color: var(--ring);
+  border-left-color: var(--task-epic-colour, var(--ring));
+  box-shadow: 0 0 0 1px var(--ring);
+}
+.task-card-meta-links {
+  flex-wrap: nowrap;
+}
+.task-card-meta-spacer {
+  flex: 1;
+}
+.task-card-meta-links .task-card-issue,
+.task-card-meta-links .task-card-pr,
+.task-card-meta-links .task-card-agent,
+.task-card-meta-links .task-card-age {
+  white-space: nowrap;
+}
+/* The project is what tells #310 from #2310 across projects, so it keeps its room and
+   truncates last; the context row wraps rather than clip it to nothing. */
+.task-card-meta-context .task-card-project {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-epic {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 0 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  font-size: 0.625rem;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--dim);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.task-card-epic:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.task-card-epic-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--task-epic-colour, var(--dim));
+}
+/* A queued (Claimed) task shares In progress with running ones: say so at a glance. */
+.task-card-queued {
+  align-self: flex-start;
+  padding: 0 7px;
+  border: 1px solid var(--status-warn-border);
+  border-radius: 999px;
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+}
+
+/* ───────── Density ───────── */
+.task-density-compact .task-card {
+  padding: 6px 8px;
+  gap: 3px;
+}
+.task-density-compact .task-card-meta {
+  gap: 4px;
+}
+.task-density-comfortable .task-card {
+  padding: 10px 11px;
+  gap: 7px;
+}
+.task-density-comfortable .task-card-title {
+  -webkit-line-clamp: 3;
+}
+
+/* ───────── Blocked stack ───────── */
+.task-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-stack-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--status-warn-border);
+  border-radius: 9px;
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  font-size: 0.75rem;
+}
+.task-stack-summary {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.task-stack-summary > span {
+  flex: 1;
+}
+.task-stack-link {
+  color: inherit;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.task-stack-link:hover {
+  text-decoration: underline;
+}
+.task-stack-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ───────── Empty column rail ───────── */
+.kanban-unified-columns .kanban-column-rail {
+  flex: 0 0 34px;
+  min-width: 34px;
+  max-width: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--dim);
+}
+.kanban-column-rail .kanban-column-title {
+  flex: none;
+  writing-mode: vertical-rl;
+  color: var(--dim);
+}

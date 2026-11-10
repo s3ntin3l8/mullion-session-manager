@@ -18,6 +18,21 @@ export const TASK_COLUMNS: { id: TaskStatus; title: string }[] = [
   { id: "failed", title: "Failed" },
 ];
 
+// #2841 — Claimed is a transient state ("queued, waiting for a free slot"), not a
+// place a task lives, so the board shows it inside In progress with a Queued badge.
+// This is a display fold only: the status itself, the drag rules and every server
+// transition are unchanged. BOARD_COLUMNS is what the board and the phone strip render;
+// TASK_COLUMNS (every status) is still the shape of the per-status counts, which
+// foldClaimedCounts then folds, so do not add a Claimed chip back to the strip.
+export const BOARD_COLUMNS: { id: TaskStatus; title: string }[] = TASK_COLUMNS.filter(
+  (c) => c.id !== "claimed",
+);
+
+/** The board column a status is shown in. */
+export function boardColumnOf(status: TaskStatus): TaskStatus {
+  return status === "claimed" ? "in_progress" : status;
+}
+
 // Exhaustive over TaskStatus's closed union (no `default` branch) — an
 // unhandled status added to TASK_STATUSES without a matching case here is a
 // `make typecheck` failure ("not all code paths return a value"), the same
@@ -63,6 +78,19 @@ export function orderTasksForColumn(tasks: Task[], status: TaskStatus): Task[] {
   return tasks
     .filter((t) => t.status === status)
     .sort((a, b) => a.boardOrder - b.boardOrder || a.id - b.id);
+}
+
+// What one board column lists: the tasks of its status, plus Claimed ones in In
+// progress (after the running ones: queued work is waiting behind them). Each group
+// keeps its boardOrder.
+export function boardColumnTasks(tasks: Task[], columnId: TaskStatus): Task[] {
+  if (columnId !== "in_progress") return orderTasksForColumn(tasks, columnId);
+  return [...orderTasksForColumn(tasks, "in_progress"), ...orderTasksForColumn(tasks, "claimed")];
+}
+
+/** Per-status counts as the board shows them: queued tasks count under In progress. */
+export function foldClaimedCounts(counts: Record<TaskStatus, number>): Record<TaskStatus, number> {
+  return { ...counts, in_progress: counts.in_progress + counts.claimed, claimed: 0 };
 }
 
 // Maps each TaskStatus to a stable numeric index so reorder.ts's
