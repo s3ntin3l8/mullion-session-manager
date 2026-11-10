@@ -197,6 +197,10 @@
 .sb-sec {
   border-bottom: 1px solid var(--border-soft);
 }
+.sb-sec-body {
+  /* Keeps the last row (PR chips, key/value blocks) off the section divider. */
+  padding-bottom: 8px;
+}
 .sb-sec-h {
   display: flex;
   align-items: center;

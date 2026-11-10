@@ -8,7 +8,7 @@ import {
 } from "react";
 import { TooltipBubble } from "./Tooltip.js";
 
-/** Hover delay before the tooltip appears; keyboard focus shows it at once. */
+/** Hover delay before the tooltip appears; keyboard (focus-visible) focus shows it at once. */
 const TOOLTIP_HOVER_DELAY_MS = 200;
 
 export interface TooltipTriggerProps {
@@ -69,7 +69,15 @@ export function useTooltip<T extends HTMLElement>(label: string) {
       setDismissed(false);
     },
     onPointerDown: reset,
-    onFocus: () => {
+    onFocus: (e) => {
+      // Script-driven focus (e.g. the detail view moving focus to Back on open)
+      // is not :focus-visible after a pointer interaction; only show the bubble
+      // for keyboard focus. Engines without :focus-visible keep showing it.
+      try {
+        if (!e.currentTarget.matches(":focus-visible")) return;
+      } catch {
+        // unsupported selector: fall through and show
+      }
       setDismissed(false);
       setFocused(true);
     },
