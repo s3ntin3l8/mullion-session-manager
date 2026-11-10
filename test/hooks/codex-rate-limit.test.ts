@@ -99,6 +99,36 @@ describe("parseCodexRateLimitSignal", () => {
     expect(signal!.rateLimited).toBe(true);
   });
 
+  it("reports a rate limit when codex writes usage_limit_exceeded as a bare string", () => {
+    // The shape a real quota-exhausted turn produced (2026-11-10): a variant
+    // with no payload is serialised as a string, not a one-key object.
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-1",
+        error: {
+          message: "You've hit your usage limit. Try again at Nov 11th, 2026 1:04 AM.",
+          codex_error_info: "usage_limit_exceeded",
+        },
+      }),
+    );
+    expect(signal!.rateLimited).toBe(true);
+    expect(signal!.variant).toBe("usage_limit_exceeded");
+    expect(signal!.status).toBeNull();
+  });
+
+  it("does NOT report a rate limit for an unrelated bare-string variant", () => {
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-1",
+        error: { message: "boom", codex_error_info: "other" },
+      }),
+    );
+    expect(signal!.rateLimited).toBe(false);
+    expect(signal!.variant).toBe("other");
+  });
+
   it("does NOT report a rate limit for an ordinary server error", () => {
     // The false positive this guards is the expensive one: a task parked in
     // a rate-limit grace window for minutes on a failure that will not

@@ -306,10 +306,17 @@ export function parseCodexRateLimitSignal(tailText) {
 
   const message = typeof error.message === "string" ? error.message : null;
   const info = error.codex_error_info ?? null;
-  const variant = info && typeof info === "object" ? (Object.keys(info)[0] ?? null) : null;
+  // codex serialises a payload-less variant as a bare string
+  // (`"codex_error_info":"usage_limit_exceeded"`) and a variant with a payload
+  // as a one-key object (`{"response_too_many_failed_attempts":{…}}`). The
+  // bare-string form is what a real usage-limit turn writes, so reading only
+  // the object form missed it and the worker was never marked rate limited.
+  let variant = null;
+  if (typeof info === "string") variant = info || null;
+  else if (info && typeof info === "object") variant = Object.keys(info)[0] ?? null;
 
   let status = null;
-  if (variant !== null && info !== null) {
+  if (variant !== null && info !== null && typeof info === "object") {
     const body = info[variant];
     const raw = body && typeof body === "object" ? body.http_status_code : undefined;
     if (typeof raw === "number") status = raw;
