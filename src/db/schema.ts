@@ -1229,7 +1229,8 @@ export const tasks = sqliteTable(
     // when the task merges (task-merge-human.ts).
     // `pr-closed` — an approved (`done`) task's PR was closed WITHOUT merging
     // (task-pr-closed.ts). Set with a mergeError; only a merge clears it (a
-    // re-armed merge sweep that finds the PR still closed must not re-announce).
+    // re-armed merge sweep that finds the PR still closed must not re-announce,
+    // and restores a mergeError that "Merge now" blanked).
     needsHumanReason: text("needs_human_reason", {
       enum: [
         "cap",

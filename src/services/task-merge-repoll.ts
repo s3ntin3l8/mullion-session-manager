@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks } from "../db/schema.js";
 import { isGitHubRateLimited } from "./github-fetch.js";
@@ -20,9 +20,13 @@ type ProjectRow = typeof projects.$inferSelect;
 //
 // Bounded so it cannot hammer GitHub: a task is only looked at once it has been
 // `done` for REPOLL_GRACE_MS (the webhook normally wins that race), at most
-// once per REPOLL_INTERVAL_MS, never once archived, and at most MAX_REPOLLS_PER_SWEEP per tick.
+// once per REPOLL_INTERVAL_MS (FLAGGED_REPOLL_INTERVAL_MS once flagged), never
+// once archived, and at most MAX_REPOLLS_PER_SWEEP per tick.
 export const REPOLL_GRACE_MS = 30 * 60_000;
 export const REPOLL_INTERVAL_MS = 60 * 60_000;
+// A task already flagged `pr-closed` is polled far less often: the only thing
+// left to find is a human reopening and merging the PR by hand.
+export const FLAGGED_REPOLL_INTERVAL_MS = 6 * 60 * 60_000;
 export const MAX_REPOLLS_PER_SWEEP = 10;
 const MAX_LEDGER_ENTRIES = 500;
 
@@ -73,11 +77,17 @@ export async function repollUnmergedDoneTasks(
         // Archived (cleared) tasks are finished business; do not poll them forever.
         isNull(tasks.archivedAt),
         lte(tasks.completedAt, new Date(now - REPOLL_GRACE_MS)),
-        sql`${tasks.needsHumanReason} IS NOT ${PR_CLOSED_REASON}`,
       ),
     )
+    .orderBy(asc(tasks.completedAt))
     .all()
-    .filter(({ task }) => now - (lastPolledAt.get(task.id) ?? 0) >= REPOLL_INTERVAL_MS)
+    .filter(({ task }) => {
+      const interval =
+        task.needsHumanReason === PR_CLOSED_REASON
+          ? FLAGGED_REPOLL_INTERVAL_MS
+          : REPOLL_INTERVAL_MS;
+      return now - (lastPolledAt.get(task.id) ?? 0) >= interval;
+    })
     .slice(0, MAX_REPOLLS_PER_SWEEP);
 
   for (const { task, project } of rows) {

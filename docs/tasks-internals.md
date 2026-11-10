@@ -1539,9 +1539,12 @@ some other way must be noticed:
   task with a `prNumber`, no `mergedAt` and no `mergeRequestedAt`; a merged PR
   goes through `finishMergedDoneTask` (which closes the issue), a closed one
   through the flag above. Bounded: a task is polled only after 30 minutes in
-  `done`, at most once per hour (in memory), 10 per tick, never while
-  rate-limited, and never once archived or flagged `pr-closed`. An issue a human
-  already closed is not commented on.
+  `done`, oldest first, at most once per hour (in memory; once every six hours
+  after it is flagged `pr-closed`, where the only thing left to find is a human
+  reopening and hand-merging the PR), 10 per tick, never while rate-limited, and
+  never once archived. An issue a human already closed is not commented on. The
+  flag re-asserts its `mergeError` when "Merge now" on a still-closed PR blanked
+  it, without announcing again.
 
 ### Merge on approve
 

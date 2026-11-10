@@ -545,7 +545,9 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
   only its own threads, so resolve these on GitHub.
 - `pr-closed` — an approved task's PR was closed without merging, so nothing
   landed. The issue stays open (a comment says why, and `mullion-done` is
-  removed). Reopen and merge the PR, or Reject or Give up the task; only a merge
+  removed). Reopen the PR and use **Merge now** (a hand-merge is noticed within
+  hours even without a webhook), or, if the work is abandoned, close the issue and
+  archive the task. Reject and Give up do not apply to a `done` task. Only a merge
   clears this reason.
 
 The last two are set whatever the task's status (`reviewing` or `done`) and

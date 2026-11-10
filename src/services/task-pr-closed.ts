@@ -10,6 +10,14 @@ import { LABEL_DONE, recordGithubSyncError } from "./task-github-sync.js";
 /** `tasks.needsHumanReason` for an approved task whose PR was closed without merging. */
 export const PR_CLOSED_REASON = "pr-closed";
 
+// What a human can do with a `done` task: reject and give-up need `reviewing`,
+// so the two that work are "Merge now" (after reopening the PR) and Archive.
+const REMEDY =
+  "Reopen the PR and use Merge now, or, if the work is abandoned, close the issue and archive the task.";
+
+const closedMessage = (prNumber: number): string =>
+  `PR #${prNumber} was closed without merging, so nothing from this approved task landed. ${REMEDY}`;
+
 /**
  * An approved (`done`) task whose PR was CLOSED WITHOUT MERGING has nothing on
  * the default branch, but `done` says "shipped" and the `→ done` sync left its
@@ -32,7 +40,7 @@ export async function flagClosedUnmergedDoneTask(
   project: Pick<typeof projects.$inferSelect, "cwd" | "hostId">,
 ): Promise<boolean> {
   if (task.prNumber === null) return false;
-  const message = `PR #${task.prNumber} was closed without merging, so nothing from this approved task landed. Reopen and merge it, or reject or give up the task.`;
+  const message = closedMessage(task.prNumber);
   const { changes } = app.db
     .update(tasks)
     .set({ needsHumanReason: PR_CLOSED_REASON, mergeError: message })
@@ -45,7 +53,24 @@ export async function flagClosedUnmergedDoneTask(
       ),
     )
     .run();
-  if (changes === 0) return false;
+  if (changes === 0) {
+    // Already flagged: nothing to announce. But "Merge now" on a PR that is
+    // still closed clears `mergeError` (and clearMergeState does again), leaving
+    // the reason with no message, so put it back.
+    app.db
+      .update(tasks)
+      .set({ mergeError: message })
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.needsHumanReason, PR_CLOSED_REASON),
+          isNull(tasks.mergedAt),
+          isNull(tasks.mergeError),
+        ),
+      )
+      .run();
+    return false;
+  }
   broadcastTaskEvent({
     taskId: task.id,
     projectId: task.projectId,
@@ -78,7 +103,7 @@ export async function flagClosedUnmergedDoneTask(
       repoRef.owner,
       repoRef.repo,
       task.issueNumber,
-      `PR #${task.prNumber} was closed without merging, so this issue stays open. The task is flagged for a human: reopen and merge the PR, or reject or give up the task.`,
+      `PR #${task.prNumber} was closed without merging, so this issue stays open and the task is flagged for a human. ${REMEDY}`,
     );
   } catch (err) {
     app.log.warn(

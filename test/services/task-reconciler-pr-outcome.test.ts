@@ -262,17 +262,64 @@ describe("#2865 — an approved task's PR ends without Mullion's merge", () => {
       await app.close();
     });
 
-    it("is not polled again once flagged", async () => {
+    it("is still watched once flagged: a PR reopened and hand-merged with no webhook is finished", async () => {
+      const app = await buildApp();
+      const id = await createTask(app, { mergeRequested: false });
+      mocks.getPullRequestByNumber.mockResolvedValue(closedUnmerged());
+      await reconcileTasks(app);
+      expect(getTask(app, id).needsHumanReason).toBe("pr-closed");
+
+      // A human reopens the PR and merges it on github.com; no webhook arrives.
+      resetRepollLedgerForTests(); // stands in for the six-hour flagged interval elapsing
+      mocks.getPullRequestByNumber.mockResolvedValue(merged());
+      mocks.getIssueState.mockResolvedValue({ state: "open", labels: [] });
+      await reconcileTasks(app);
+
+      const row = getTask(app, id);
+      expect(row.mergedAt).not.toBeNull();
+      expect(row.needsHumanReason).toBeNull();
+      await vi.waitFor(() => expect(mocks.closeIssue).toHaveBeenCalledWith("tok", "o", "r", 55));
+      await app.close();
+    });
+
+    it("looks at a flagged task much less often than an unflagged one, and does not announce again", async () => {
       const app = await buildApp();
       await createTask(app, { mergeRequested: false });
       mocks.getPullRequestByNumber.mockResolvedValue(closedUnmerged());
-      await reconcileTasks(app);
-      resetRepollLedgerForTests(); // so only the flag, not the interval, can stop the second poll
-      mocks.getPullRequestByNumber.mockClear();
+      await reconcileTasks(app); // polled and flagged
+      await reconcileTasks(app); // inside the flagged interval
 
+      expect(mocks.getPullRequestByNumber).toHaveBeenCalledTimes(1);
+      expect(mocks.createComment).toHaveBeenCalledTimes(1);
+
+      // Even once polled again, a PR that is still closed is not re-announced.
+      resetRepollLedgerForTests();
+      await reconcileTasks(app);
+      expect(mocks.getPullRequestByNumber).toHaveBeenCalledTimes(2);
+      expect(mocks.createComment).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("keeps the explanation when Merge now is clicked on a PR that is still closed", async () => {
+      const app = await buildApp();
+      const id = await createTask(app, { mergeRequested: true });
+      mocks.getPullRequestByNumber.mockResolvedValue(closedUnmerged());
+      await reconcileTasks(app);
+      const message = getTask(app, id).mergeError;
+      expect(message).toContain("Merge now");
+
+      // The route's clear: mergeError blanked, the reason kept, the sweep re-armed.
+      app.db
+        .update(tasks)
+        .set({ mergeError: null, mergeRequestedAt: new Date() })
+        .where(eq(tasks.id, id))
+        .run();
       await reconcileTasks(app);
 
-      expect(mocks.getPullRequestByNumber).not.toHaveBeenCalled();
+      const row = getTask(app, id);
+      expect(row.needsHumanReason).toBe("pr-closed");
+      expect(row.mergeError).toBe(message);
+      expect(mocks.createComment).toHaveBeenCalledTimes(1);
       await app.close();
     });
   });
