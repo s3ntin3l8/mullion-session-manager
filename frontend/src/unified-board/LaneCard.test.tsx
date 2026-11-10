@@ -269,18 +269,18 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     const button = screen.getByRole("button", { name: /Ad-hoc sessions/ });
     expect(button).toHaveAttribute("aria-expanded", "false");
     expect(document.querySelector(".kanban-lane-count")).toHaveTextContent("1");
-    expect(document.getElementById("kanban-lane-body")).toBeNull();
+    expect(document.querySelector(".kanban-lane-body")).toBeNull();
     expect(screen.queryByText("working-one")).toBeNull();
     expect(screen.queryByText("No sessions without a task.")).toBeNull();
 
     await user.click(button);
     expect(button).toHaveAttribute("aria-expanded", "true");
-    expect(document.getElementById("kanban-lane-body")).not.toBeNull();
+    expect(document.querySelector(".kanban-lane-body")).not.toBeNull();
     expect(screen.getByText("working-one")).toBeInTheDocument();
 
     await user.click(button);
     expect(button).toHaveAttribute("aria-expanded", "false");
-    expect(document.getElementById("kanban-lane-body")).toBeNull();
+    expect(document.querySelector(".kanban-lane-body")).toBeNull();
     expect(screen.queryByText("working-one")).toBeNull();
   });
 

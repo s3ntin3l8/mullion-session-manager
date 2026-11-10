@@ -7,12 +7,16 @@ import {
   computeTaskReorder,
   absoluteDropIndex,
   defaultPhoneColumn,
+  defaultPhoneSegment,
+  PHONE_SEGMENTS,
+  phoneSegmentCount,
   visibleColumnWindow,
   BOARD_COLUMNS,
   boardColumnOf,
   boardColumnTasks,
   foldClaimedCounts,
 } from "./tasksBoard.js";
+import type { PhoneSegmentId } from "./tasksBoard.js";
 import type { Task, TaskStatus } from "./api/index.js";
 
 function makeTask(overrides: Partial<Task>): Task {
@@ -308,6 +312,51 @@ describe("defaultPhoneColumn", () => {
 
   it("degrades to the first available column when Ready isn't offered", () => {
     expect(defaultPhoneColumn(counts(), ["done", "failed"])).toBe("done");
+  });
+});
+
+describe("phone segments", () => {
+  const counts = (over: Partial<Record<TaskStatus, number>> = {}): Record<TaskStatus, number> => ({
+    backlog: 0,
+    ready: 0,
+    claimed: 0,
+    in_progress: 0,
+    reviewing: 0,
+    done: 0,
+    failed: 0,
+    ...over,
+  });
+  const ALL: PhoneSegmentId[] = ["backlog", "ready", "active", "done"];
+
+  it("covers every board status exactly once, Claimed having been folded away", () => {
+    const statuses = PHONE_SEGMENTS.flatMap((s) => [...s.statuses]);
+    expect(new Set(statuses).size).toBe(statuses.length);
+    expect(statuses.sort()).toEqual(BOARD_COLUMNS.map((c) => c.id).sort());
+  });
+
+  it("counts a segment across its statuses", () => {
+    const active = PHONE_SEGMENTS.find((s) => s.id === "active")!;
+    const done = PHONE_SEGMENTS.find((s) => s.id === "done")!;
+    expect(phoneSegmentCount(counts({ in_progress: 2, reviewing: 3, ready: 9 }), active)).toBe(5);
+    expect(phoneSegmentCount(counts({ done: 1, failed: 4 }), done)).toBe(5);
+  });
+
+  it("opens on Active, then Ready, when they hold something", () => {
+    expect(defaultPhoneSegment(counts({ reviewing: 1, ready: 2, backlog: 5 }), ALL)).toBe("active");
+    expect(defaultPhoneSegment(counts({ ready: 2, backlog: 5 }), ALL)).toBe("ready");
+  });
+
+  it("falls back to the first non-empty segment, else Ready", () => {
+    expect(defaultPhoneSegment(counts({ done: 2, failed: 1 }), ALL)).toBe("done");
+    expect(defaultPhoneSegment(counts({ backlog: 1 }), ALL)).toBe("backlog");
+    expect(defaultPhoneSegment(counts(), ALL)).toBe("ready");
+  });
+
+  it("only offers segments it was given (Hide done removes Done)", () => {
+    const noDone: PhoneSegmentId[] = ["backlog", "ready", "active"];
+    expect(defaultPhoneSegment(counts({ done: 4 }), noDone)).toBe("ready");
+    expect(defaultPhoneSegment(counts({ done: 4, backlog: 1 }), noDone)).toBe("backlog");
+    expect(defaultPhoneSegment(counts(), ["done"])).toBe("done");
   });
 });
 

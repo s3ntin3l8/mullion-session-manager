@@ -97,7 +97,7 @@
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 18
+        "nodes": 19
       }
     ],
     "console": []
@@ -128,7 +128,7 @@
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 18
+        "nodes": 19
       }
     ],
     "console": []
@@ -345,6 +345,48 @@
         "id": "region",
         "impact": "moderate",
         "nodes": 12
+      }
+    ],
+    "console": []
+  },
+  "tasks-phone.phone.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 4
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 8
+      }
+    ],
+    "console": []
+  },
+  "tasks-phone.phone.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 4
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 8
       }
     ],
     "console": []

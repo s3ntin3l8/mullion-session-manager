@@ -3,6 +3,8 @@ import {
   taskLinkedSessionIds,
   adhocSessionsByColumn,
   LANE_COLUMN_ORDER,
+  ADHOC_MAX_DOTS,
+  adhocSummary,
   laneColumnTitle,
 } from "./boardLanes.js";
 import { makeSession, makeTask } from "./test/fixtures.js";
@@ -77,5 +79,82 @@ describe("LANE_COLUMN_ORDER", () => {
 describe("laneColumnTitle", () => {
   it("resolves a KANBAN_COLUMNS title", () => {
     expect(laneColumnTitle("attention")).toBe("Needs Attention");
+  });
+});
+
+describe("adhocSummary", () => {
+  const group = (sessions: ReturnType<typeof makeSession>[]) =>
+    adhocSessionsByColumn(sessions, new Set(), false);
+  const shown = () => true;
+
+  it("folds the five severity groups into running / need you / idle / ended", () => {
+    const columns = group([
+      makeSession({ id: 1, sessionStatusSeverity: "busy" }),
+      makeSession({ id: 2, sessionStatusSeverity: "busy" }),
+      makeSession({ id: 3, sessionStatusSeverity: "blocked" }),
+      makeSession({ id: 4, sessionStatusSeverity: "failed" }),
+      makeSession({ id: 5, sessionStatusSeverity: "done" }),
+      makeSession({ id: 6, sessionStatusSeverity: "dormant" }),
+      makeSession({ id: 7, sessionStatusSeverity: "gone" }),
+    ]);
+    const summary = adhocSummary(columns, shown);
+    expect(summary.total).toBe(7);
+    expect(summary.counts).toEqual({ attention: 2, running: 2, idle: 2, ended: 1 });
+    expect(summary.text).toBe("2 running · 2 need you · 2 idle · 1 ended");
+  });
+
+  it("orders the dots attention first and leaves zero parts out of the text", () => {
+    const columns = group([
+      makeSession({ id: 1, sessionStatusSeverity: "busy" }),
+      makeSession({ id: 2, sessionStatusSeverity: "blocked" }),
+    ]);
+    const summary = adhocSummary(columns, shown);
+    expect(summary.dots).toEqual(["attention", "running"]);
+    expect(summary.text).toBe("1 running · 1 needs you");
+  });
+
+  it('says "needs you" for one session and "need you" for several', () => {
+    const one = adhocSummary(
+      group([makeSession({ id: 1, sessionStatusSeverity: "blocked" })]),
+      shown,
+    );
+    expect(one.text).toBe("1 needs you");
+    const two = adhocSummary(
+      group([
+        makeSession({ id: 1, sessionStatusSeverity: "blocked" }),
+        makeSession({ id: 2, sessionStatusSeverity: "failed" }),
+      ]),
+      shown,
+    );
+    expect(two.text).toBe("2 need you");
+  });
+
+  it("does not count a session the caller says is not shown", () => {
+    const columns = group([
+      makeSession({ id: 1, projectId: 1, sessionStatusSeverity: "busy" }),
+      makeSession({ id: 2, projectId: 99, sessionStatusSeverity: "busy" }),
+    ]);
+    const summary = adhocSummary(columns, (session) => session.projectId === 1);
+    expect(summary.total).toBe(1);
+    expect(summary.dots).toHaveLength(1);
+  });
+
+  it("caps the dots but not the count", () => {
+    const many = Array.from({ length: ADHOC_MAX_DOTS + 6 }, (_, i) =>
+      makeSession({ id: i + 1, sessionStatusSeverity: "busy" }),
+    );
+    const summary = adhocSummary(group(many), shown);
+    expect(summary.total).toBe(ADHOC_MAX_DOTS + 6);
+    expect(summary.dots).toHaveLength(ADHOC_MAX_DOTS);
+  });
+
+  it("is empty for no sessions", () => {
+    const summary = adhocSummary(group([]), shown);
+    expect(summary).toEqual({
+      total: 0,
+      counts: { attention: 0, running: 0, idle: 0, ended: 0 },
+      dots: [],
+      text: "",
+    });
   });
 });

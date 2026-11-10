@@ -201,6 +201,52 @@ export function defaultPhoneColumn(
   );
 }
 
+// Phone board: four segments instead of one chip per status. Active folds In
+// Progress (which already holds the queued tasks) and Reviewing, Done folds
+// Failed, so the control fits a 390px phone without scrolling. A segment shows
+// all of its statuses' columns, stacked (mobile.css stacks .kanban-unified-columns).
+// Tablet keeps the per-status window above: it has the width for two columns.
+export type PhoneSegmentId = "backlog" | "ready" | "active" | "done";
+
+export const PHONE_SEGMENTS: readonly {
+  id: PhoneSegmentId;
+  title: string;
+  statuses: readonly TaskStatus[];
+}[] = [
+  { id: "backlog", title: "Backlog", statuses: ["backlog"] },
+  { id: "ready", title: "Ready", statuses: ["ready"] },
+  { id: "active", title: "Active", statuses: ["in_progress", "reviewing"] },
+  { id: "done", title: "Done", statuses: ["done", "failed"] },
+];
+
+/** Tasks in a segment, from per-status counts that already fold Claimed. */
+export function phoneSegmentCount(
+  counts: Record<TaskStatus, number>,
+  segment: { statuses: readonly TaskStatus[] },
+): number {
+  return segment.statuses.reduce((sum, status) => sum + counts[status], 0);
+}
+
+// Opens on Active, then Ready, when they hold something (the same "what can I
+// act on" order the per-status phone board used), else the first non-empty
+// offered segment, else Ready (where a new task lands).
+export function defaultPhoneSegment(
+  counts: Record<TaskStatus, number>,
+  available: readonly PhoneSegmentId[],
+): PhoneSegmentId {
+  const count = (id: PhoneSegmentId) =>
+    phoneSegmentCount(
+      counts,
+      PHONE_SEGMENTS.find((s) => s.id === id)!,
+    );
+  const usable = (id: PhoneSegmentId) => available.includes(id) && count(id) > 0;
+  return (
+    (["active", "ready"] as const).find(usable) ??
+    available.find((id) => count(id) > 0) ??
+    (available.includes("ready") ? "ready" : (available[0] ?? "ready"))
+  );
+}
+
 // Tablet shows `count` adjacent columns at once (phone shows one). Returns the
 // window of `count` columns that contains `selected`, starting at it and
 // clamped at the end — picking the last chip shows the last `count` columns.

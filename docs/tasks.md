@@ -374,9 +374,15 @@ toolbar all switch to it — it's an overlay over the dockview grid, not a
 panel, so toggling back to list view instantly restores whatever was
 tiled underneath. Task status columns are the board; a task with a linked
 worker or review session renders that session's live status nested on its
-own card, and any session not owned by a task collects in an "ad-hoc
-sessions" lane beneath the columns, grouped by the same severity tiers
-the original session board used.
+own card, and any session not owned by a task collects in the **ad-hoc
+sessions strip** beneath the columns (`#2845`,
+`frontend/src/unified-board/AdhocLane.tsx`). Collapsed — the default — it is one
+row: the title, a count, one status dot per session (needs-you first, then
+running, idle, ended) and a one-line summary such as "9 running · 3 need you ·
+8 idle". Expanded, it lists the sessions grouped by the same severity tiers the
+original session board used (Needs Attention, Working, Finished, Idle,
+Exited). A session whose project was deleted is neither counted nor drawn.
+The strip is on every layout, phone included.
 
 - **Board filters** (`#2840`, `frontend/src/unified-board/TaskFilterBar.tsx`):
   one row above the columns. A **project picker** (searchable, with per-project
@@ -426,6 +432,16 @@ the original session board used.
   card can be dragged between Backlog and Ready inside its lane, never into
   another lane (that would change its parent or project). The phone board stays
   flat. **Card density** (`crs.taskDensity`): Compact (default) or Comfortable.
+- **Phone and tablet** (`#2845`): the board is one status at a time, picked
+  from a control under the toolbar. On a **phone** it is four joined segments —
+  Backlog, Ready, **Active** (In progress, which holds the queued tasks, then
+  Reviewing, stacked) and **Done** (Done, then Failed) — each with a count; it
+  opens on Active, then Ready, when they hold something, and Hide Done & Failed
+  removes the Done segment. On a **tablet** (the compact tier, two columns wide)
+  it is the per-status chips with two adjacent columns side by side. Both keep
+  the same compact card, show the filters in the filter sheet, ignore Group by
+  (the board stays flat) and keep empty columns as full columns rather than
+  rails. Tapping a card opens its detail full-screen.
 - Cards show the title; the linked **issue** number and the **PR** number as
   links to GitHub, the resolved agent name and the time in status; the owning
   **project** (always, since it is what tells one project's `#310` from
