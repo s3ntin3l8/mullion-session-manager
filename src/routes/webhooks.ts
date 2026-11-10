@@ -1,11 +1,18 @@
 import { broadcastTaskEvent } from "../services/task-events.js";
 import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { eq, and, isNull } from "drizzle-orm";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
-import { projects, tasks } from "../db/schema.js";
+import {
+  findReviewingTaskByPr,
+  findTaskBlockerStateByIssue,
+  findTaskByIssue,
+  findUnmergedTaskByPr,
+  getProjectById,
+  listProjectRefsOldestFirst,
+  recordMergeIfUnmerged,
+} from "../services/task-store.js";
 import { clearNeedsHumanOnMerge } from "../services/task-merge-human.js";
 import { cleanupMergedTaskBranch } from "../services/task-approve.js";
 import { closeIssueOnMerge } from "../services/task-github-sync.js";
@@ -178,12 +185,8 @@ export async function webhookRoutes(app: FastifyInstance) {
       app.log.info({ event, repo: repoKey }, "webhook received");
 
       // Find all matching projects
-      const rows = app.db
-        .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
-        .from(projects)
-        // Oldest first: the first project on a repo owns its issue import (#2233).
-        .orderBy(projects.createdAt, projects.id)
-        .all();
+      // Oldest first: the first project on a repo owns its issue import (#2233).
+      const rows = listProjectRefsOldestFirst(app);
 
       // #490 — keeps cwd/hostId alongside id (not just a number[] like
       // before) so the "issues" case below can pass a ProjectRef into
@@ -277,36 +280,24 @@ export async function webhookRoutes(app: FastifyInstance) {
               typeof pr.number === "number"
             ) {
               const now = new Date();
-              const matchedTask = app.db
-                .select()
-                .from(tasks)
-                .where(
-                  and(
-                    eq(tasks.projectId, projectId),
-                    eq(tasks.prNumber, pr.number),
-                    isNull(tasks.mergedAt),
-                  ),
-                )
-                .get();
+              const matchedTask = findUnmergedTaskByPr(app, projectId, pr.number);
               if (matchedTask) {
                 // archivedAt is auto-set only when the task is ALREADY
                 // `done` at merge time (the common case — approve runs
                 // before a human merges the PR). A PR merged early, while
                 // the task still sits in reviewing, only gets mergedAt here;
                 // the reviewing-task ending just below moves it to done.
-                const { changes } = app.db
-                  .update(tasks)
-                  .set(
-                    matchedTask.status === "done"
-                      ? {
-                          mergedAt: now,
-                          archivedAt: now,
-                          needsHumanReason: clearNeedsHumanOnMerge,
-                        }
-                      : { mergedAt: now, needsHumanReason: clearNeedsHumanOnMerge },
-                  )
-                  .where(and(eq(tasks.id, matchedTask.id), isNull(tasks.mergedAt)))
-                  .run();
+                const changes = recordMergeIfUnmerged(
+                  app,
+                  matchedTask.id,
+                  matchedTask.status === "done"
+                    ? {
+                        mergedAt: now,
+                        archivedAt: now,
+                        needsHumanReason: clearNeedsHumanOnMerge,
+                      }
+                    : { mergedAt: now, needsHumanReason: clearNeedsHumanOnMerge },
+                );
                 // Clears the board's "PR open — needs merge" badge live.
                 broadcastTaskEvent({
                   taskId: matchedTask.id,
@@ -317,11 +308,7 @@ export async function webhookRoutes(app: FastifyInstance) {
                 // A reviewing task's merge is cleaned up by endReviewingTask
                 // just below; only an already-done task needs it here.
                 if (changes > 0 && matchedTask.status === "done") {
-                  const mergedProject = app.db
-                    .select()
-                    .from(projects)
-                    .where(eq(projects.id, projectId))
-                    .get();
+                  const mergedProject = getProjectById(app, projectId);
                   if (mergedProject) {
                     cleanupMergedTaskBranch(app, matchedTask, mergedProject);
                     // A hand-merged PR never reaches markTaskMerged, and the
@@ -344,21 +331,9 @@ export async function webhookRoutes(app: FastifyInstance) {
               const prNumber = pr.number;
               const reviewing =
                 typeof prNumber === "number"
-                  ? app.db
-                      .select()
-                      .from(tasks)
-                      .where(
-                        and(
-                          eq(tasks.projectId, projectId),
-                          eq(tasks.prNumber, prNumber),
-                          eq(tasks.status, "reviewing"),
-                        ),
-                      )
-                      .get()
+                  ? findReviewingTaskByPr(app, projectId, prNumber)
                   : undefined;
-              const taskProject = reviewing
-                ? app.db.select().from(projects).where(eq(projects.id, projectId)).get()
-                : undefined;
+              const taskProject = reviewing ? getProjectById(app, projectId) : undefined;
               if (reviewing && taskProject) {
                 void endReviewingOnPrState(app, reviewing, taskProject, {
                   state: "closed",
@@ -480,13 +455,7 @@ export async function webhookRoutes(app: FastifyInstance) {
                   if (action === "unlabeled" && payload.label?.name !== taskLabel) break;
                   const projectRef = matchedProjects.find((p) => p.id === projectId);
                   if (projectRef) {
-                    const [task] = app.db
-                      .select()
-                      .from(tasks)
-                      .where(
-                        and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)),
-                      )
-                      .all();
+                    const task = findTaskByIssue(app, projectId, issue.number);
                     if (task) {
                       const projectRefArg = { cwd: projectRef.cwd, hostId: projectRef.hostId };
                       // Deliberately NOT awaited (Hermes review, PR #510):
@@ -547,11 +516,7 @@ export async function webhookRoutes(app: FastifyInstance) {
             }
             const blockedIssueNumber = payload.blocked_issue?.number;
             if (blockedIssueNumber === undefined) break;
-            const [task] = app.db
-              .select({ id: tasks.id, dependencyCount: tasks.dependencyCount })
-              .from(tasks)
-              .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, blockedIssueNumber)))
-              .all();
+            const task = findTaskBlockerStateByIssue(app, projectId, blockedIssueNumber);
             if (!task) break;
             // Hermes review, PR #670 — `blocked_by_removed` is exactly the
             // action where the stored `dependencyCount` is known-stale in a
@@ -646,11 +611,7 @@ export async function webhookRoutes(app: FastifyInstance) {
           for (const dep of dependents) {
             const candidateProjects = projectsByRepoKey.get(repoKeyOf(dep)) ?? [];
             for (const proj of candidateProjects) {
-              const [task] = app.db
-                .select({ id: tasks.id, dependencyCount: tasks.dependencyCount })
-                .from(tasks)
-                .where(and(eq(tasks.projectId, proj.id), eq(tasks.issueNumber, dep.number)))
-                .all();
+              const task = findTaskBlockerStateByIssue(app, proj.id, dep.number);
               if (!task) continue;
               await refreshTaskBlockers(app, {
                 taskId: task.id,

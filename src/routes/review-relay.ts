@@ -1,6 +1,11 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { and, eq, inArray, or } from "drizzle-orm";
-import { projects, sessions, tasks } from "../db/schema.js";
+import {
+  getProjectById,
+  getSessionById,
+  listProjects,
+  sessionHasActiveTask,
+  type ProjectRow,
+} from "../services/task-store.js";
 import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { getGitStatus } from "../services/git-status.js";
@@ -337,7 +342,7 @@ export function repoRefMemoSize(app: FastifyInstance): number {
 
 async function resolveOtherProjectRef(
   app: FastifyInstance,
-  project: typeof projects.$inferSelect,
+  project: ProjectRow,
 ): Promise<RepoRefResult> {
   let memo = repoRefMemos.get(app.db);
   if (!memo) repoRefMemos.set(app.db, (memo = new Map()));
@@ -385,7 +390,7 @@ interface RelayRepo {
 async function selectRelayRepo(
   app: FastifyInstance,
   reply: FastifyReply,
-  project: typeof projects.$inferSelect,
+  project: ProjectRow,
   requested: string | undefined,
   logLabel: "review-request" | "triage-request",
 ): Promise<RelayRepo | null> {
@@ -432,11 +437,7 @@ async function selectRelayRepo(
     `${ref.owner}/${ref.repo}`.toLowerCase() === wanted;
   if (own && matches(own)) return { owner: own.owner, repo: own.repo, foreign: false };
 
-  const others = app.db
-    .select()
-    .from(projects)
-    .all()
-    .filter((p) => p.id !== project.id);
+  const others = listProjects(app).filter((p) => p.id !== project.id);
   const results = await Promise.all(others.map((p) => resolveOtherProjectRef(app, p)));
   const registered = results
     .map((result) => (result.ok ? result.value : null))
@@ -482,12 +483,12 @@ async function resolveReviewTarget(
   { taskMasterGuard = false }: { taskMasterGuard?: boolean } = {},
 ): Promise<ReviewTarget | null> {
   const requestedPr = requested.prNumber;
-  const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  const session = getSessionById(app, sessionId);
   if (!session) {
     reply.notFound("Session not found");
     return null;
   }
-  const [project] = app.db.select().from(projects).where(eq(projects.id, session.projectId)).all();
+  const project = getProjectById(app, session.projectId);
   if (!project) {
     reply.notFound("Project not found");
     return null;
@@ -612,17 +613,7 @@ function isTaskMasterReviewRequest(
   sessionId: number,
   requestedPr: number | undefined,
 ): boolean {
-  const rows = app.db
-    .select({ prNumber: tasks.prNumber })
-    .from(tasks)
-    .where(
-      and(
-        or(eq(tasks.sessionId, sessionId), eq(tasks.reviewSessionId, sessionId)),
-        inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
-      ),
-    )
-    .all();
-  return rows.some((row) => requestedPr === undefined || row.prNumber === requestedPr);
+  return sessionHasActiveTask(app, sessionId, ACTIVE_TASK_STATUSES, requestedPr);
 }
 
 /**
@@ -640,12 +631,12 @@ async function resolveTriageTarget(
   issueNumber: number,
   requestedRepo: string | undefined,
 ): Promise<TriageTarget | null> {
-  const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  const session = getSessionById(app, sessionId);
   if (!session) {
     reply.notFound("Session not found");
     return null;
   }
-  const [project] = app.db.select().from(projects).where(eq(projects.id, session.projectId)).all();
+  const project = getProjectById(app, session.projectId);
   if (!project) {
     reply.notFound("Project not found");
     return null;

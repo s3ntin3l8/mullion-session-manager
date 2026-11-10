@@ -22,26 +22,6 @@
       "note": "deliberate — the control socket re-enters the routes through app.inject(), by design (docs/architecture.md)."
     },
     {
-      "from": "src/routes/review-relay.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/task-push.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/tasks.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
-      "from": "src/routes/webhooks.ts",
-      "to": "src/db/schema.ts",
-      "note": "pending: moved behind a service by its route-family issue"
-    },
-    {
       "from": "src/services/session-env.ts",
       "to": "src/plugins/env.ts",
       "note": "deliberate — it reads the validated config (app.config), which the plugin owns."

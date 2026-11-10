@@ -1,6 +1,21 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
-import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
+import {
+  deleteTaskWhenStatus,
+  getProjectById,
+  getTaskById,
+  getTaskRowById,
+  insertTask,
+  listDoneTasks,
+  listDoneUnmergedWithPr,
+  listTaskRows,
+  TASK_STATUSES,
+  rearmStaleReview,
+  updateTask,
+  updateTaskCount,
+  type ProjectRow,
+  type TaskPatch,
+  type TaskRow,
+} from "../services/task-store.js";
 import * as mergeHuman from "../services/task-merge-human.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
@@ -15,7 +30,6 @@ import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js
 import { withApprovalState } from "../services/task-approval-row.js";
 import { retryRefusal } from "./task-retry-refusal.js";
 import {
-  TASK_MODEL_COLUMNS,
   TASK_MODEL_SCHEMA_PROPS,
   hasModelFields,
   resolveTaskModelPatch,
@@ -181,164 +195,6 @@ const retryTaskSchema = claimTaskSchema;
 // and the local-CRUD routes below (POST/PATCH/DELETE) are unconditional.
 // Only the claim endpoint further down stays flag-gated, since claiming
 // spawns an agent — genuinely autonomous behavior.
-// Shared row shape for GET /api/tasks and GET /api/tasks/:id — kept as one
-// column list rather than duplicated between the two so a newly-added
-// column can't silently reach one endpoint's response but not the other's.
-const TASK_ROW_COLUMNS = {
-  id: tasks.id,
-  projectId: tasks.projectId,
-  projectName: projects.name,
-  issueNumber: tasks.issueNumber,
-  title: tasks.title,
-  body: tasks.body,
-  htmlUrl: tasks.htmlUrl,
-  status: tasks.status,
-  boardOrder: tasks.boardOrder,
-  sessionId: tasks.sessionId,
-  seedDelivered: tasks.seedDelivered,
-  reviewSessionId: tasks.reviewSessionId,
-  reviewSeedDelivered: tasks.reviewSeedDelivered,
-  // Task-claim queueing (rate-limit-storm fix) — the frontend's own
-  // "review in flight vs. awaiting your approval" predicate compares this
-  // against reviewSessionId (see TaskCard.tsx); wasn't previously exposed
-  // to any API response.
-  reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
-  // #2369 — an external reviewer's run, paired like the session columns above:
-  // the run, when it was dispatched, and the run whose verdict is ingested.
-  // deriveApprovalState reads these off this same row, so they must be named
-  // here or they arrive as `undefined`.
-  reviewRunId: tasks.reviewRunId,
-  reviewRunIngestedId: tasks.reviewRunIngestedId,
-  reviewRunDispatchedAt: tasks.reviewRunDispatchedAt,
-  reviewFindings: tasks.reviewFindings,
-  // How many auto-rebases the task has been through (the drawer says so).
-  // `rebaseStartedAt`, which `reviewPhase`/`reReviewAt` are derived from, is
-  // selected further down with the merge-sweep columns.
-  rebaseAttempts: tasks.rebaseAttempts,
-  // #756 — renamed from reviewRounds: this counter is no longer
-  // review-verdict-only (a red CI check and an unresolved PR
-  // review comment are later auto-return triggers on the same model — see
-  // task-reconciler.ts's AutoReturnReason). lastAutoReturnReason names
-  // which trigger most recently spent a round.
-  autoReturnRounds: tasks.autoReturnRounds,
-  lastAutoReturnReason: tasks.lastAutoReturnReason,
-  // Issue #1038 — see schema.ts's doc comment on this column for why it's
-  // distinct from autoReturnRounds reaching the cap: this is when the
-  // machine actually announced it stopped, not when the counter merely hit
-  // the ceiling. Surfaced as-is (no derived-field treatment like
-  // autoReturnCapped below) — the frontend combines this with
-  // autoReturnCapped/reviewFindingsIngestedSessionId itself to render the
-  // three-state distinction (see TaskCard.tsx/TaskDetail.tsx).
-  autoReturnCapAnnouncedAt: tasks.autoReturnCapAnnouncedAt,
-  needsHumanReason: tasks.needsHumanReason,
-  // Task 258971's investigation: declared on the frontend Task type
-  // (api/types.ts) but never selected here — the same TASK_ROW_COLUMNS
-  // silent-drop that bit #816/#818 (see that PR's own doc comment above).
-  // Every read of `task.lastReviewVerdict` was `undefined` at runtime while
-  // typechecking as `string | null`.
-  lastReviewVerdict: tasks.lastReviewVerdict,
-  // Raw retry payload — not surfaced; withAutoReturnCapped turns it into the
-  // `reviewPostPending` boolean the board shows ("review waiting to be posted").
-  reviewPostPending: tasks.reviewPostPending,
-  // Not surfaced directly — consumed by withAutoReturnCapped below to derive
-  // `autoReturnCapped`, then stripped, same treatment as blockedBy/
-  // withBlockedState just below. Raw per-project config has no reason to
-  // leak into a task response; the frontend only needs the yes/no answer.
-  projectMaxAutoReturnRounds: projects.maxAutoReturnRounds,
-  // Read only to derive `approvalState` / `reviewPhase` (withApprovalState strips them).
-  projectAutoApprove: projects.autoApprove,
-  projectDefaultReviewAgent: projects.defaultReviewAgent,
-  worktreePath: tasks.worktreePath,
-  branchName: tasks.branchName,
-  baseSha: tasks.baseSha,
-  agent: tasks.agent,
-  reviewAgent: tasks.reviewAgent,
-  agentCommand: tasks.agentCommand,
-  // Issue #1954 — where the task REQUIRES its worker to run (`Platform:` /
-  // `Host:`), resolved at dispatch and stored as JSON. Without this entry it
-  // would be written but never reach GET /api/tasks or GET /api/tasks/:id —
-  // the TASK_ROW_COLUMNS silent-drop this constant's other comments record.
-  placementRequirement: tasks.placementRequirement,
-  // Issue #957/#958 — the resolved opencode model(s) the worker actually ran
-  // under, recorded at claim time (task-model-resolve.ts). Was previously
-  // missing here, the exact TASK_ROW_COLUMNS silent-drop that bit #816/#818
-  // (see this file's own doc comments below) — GET /api/tasks and
-  // GET /api/tasks/:id would have returned `undefined` for both.
-  model: tasks.model,
-  smallModel: tasks.smallModel,
-  ...TASK_MODEL_COLUMNS, // #2491
-  prUrl: tasks.prUrl,
-  prNumber: tasks.prNumber,
-  // #761's Conventional Commits title, and the exact TASK_ROW_COLUMNS
-  // silent-drop this constant's own comments record biting #816/#818 and
-  // #957/#958 — was written by task-reconciler.ts and read by
-  // task-promote.ts, but never exposed to GET /api/tasks or
-  // GET /api/tasks/:id. Raw `prTitle === null` is NOT itself "the worker
-  // fell back" — resolvePrTitle (task-prompt.ts) keeps an already-conventional
-  // issue title over a worker-supplied one, so a task can legitimately have
-  // `prTitle === null` and a perfectly fine live PR title. See
-  // `withPrTitleFallback` below for the actual "did this fall back to a
-  // non-conventional title" computation.
-  prTitle: tasks.prTitle,
-  // Not surfaced directly — consumed by withPrTitleFallback below to derive
-  // `prTitleFallback`, then stripped, same treatment as
-  // projectMaxAutoReturnRounds above.
-  projectConventionalCommitTitles: projects.conventionalCommitTitles,
-  // Hermes review, PR #818 — merge-on-approve (#816) and autorelease (#744)
-  // both write these four columns (task-reconciler.ts's attemptMerge/
-  // attemptRelease, POST /api/tasks/:id/merge, resolveReleaseMerge) and both
-  // frontend TaskDetail.tsx components read them straight off the task
-  // object — but neither was ever added here, so GET /api/tasks and
-  // GET /api/tasks/:id never actually returned them. Every consumer of
-  // `undefined !== null` (both hint/error guards) read that as "true," so
-  // TaskMergeStatus's release-pending hint rendered unconditionally and a
-  // real releaseError/mergeError could never surface — this was the root
-  // cause, not the frontend guards themselves.
-  mergeRequestedAt: tasks.mergeRequestedAt,
-  mergeError: tasks.mergeError,
-  // Auto-rebase attempt marker (task-reconciler.ts's attemptAutoRebase): the
-  // PR sidebar reads it to say a done task's conflicts are already owned.
-  rebaseStartedAt: tasks.rebaseStartedAt,
-  releaseRequestedAt: tasks.releaseRequestedAt,
-  releaseError: tasks.releaseError,
-  assignee: tasks.assignee,
-  failureReason: tasks.failureReason,
-  failureDiagnostics: tasks.failureDiagnostics,
-  // Issue #1997 — since when a queued task has been failing to dispatch.
-  dispatchFailingSince: tasks.dispatchFailingSince,
-  githubSyncError: tasks.githubSyncError,
-  // Workflow-change approval gate — raw `{ sha, files }` JSON while a push is
-  // held for the operator (parsed client-side; the approved sha is
-  // deliberately NOT exposed). Listed here because this projection silently
-  // drops any column it doesn't name.
-  workflowChange: tasks.workflowChange,
-  dependencyCount: tasks.dependencyCount,
-  blockedBy: tasks.blockedBy,
-  // #701 — already in their final display shape (unlike blockedBy), no
-  // withBlockedState-style transform needed.
-  parentIssueNumber: tasks.parentIssueNumber,
-  parentIssueRepo: tasks.parentIssueRepo,
-  parentIssueTitle: tasks.parentIssueTitle,
-  subIssueTotal: tasks.subIssueTotal,
-  subIssueCompleted: tasks.subIssueCompleted,
-  createdAt: tasks.createdAt,
-  updatedAt: tasks.updatedAt,
-  // Task-claim queueing (rate-limit-storm fix) — when the task JOINED the
-  // queue, distinct from claimedAt below (when its current worker spell
-  // actually started). See task-claim.ts's enqueueTask/dispatchClaimedTask.
-  queuedAt: tasks.queuedAt,
-  claimedAt: tasks.claimedAt,
-  startedAt: tasks.startedAt,
-  reviewingAt: tasks.reviewingAt,
-  completedAt: tasks.completedAt,
-  // #1015 (archive) — see schema.ts's own doc comments on why these are two
-  // separate columns. Both added here alongside the schema/migration and the
-  // frontend Task type in the same commit — this list has twice silently
-  // dropped a new column before (#816/#818, task 258971's lastReviewVerdict
-  // above), typechecking clean while the API response quietly omitted it.
-  mergedAt: tasks.mergedAt,
-  archivedAt: tasks.archivedAt,
-};
 
 /**
  * #667 — the single place `dependencyGate` (task-dependencies.ts) gets
@@ -421,26 +277,11 @@ export async function tasksRoute(app: FastifyInstance) {
     "/api/tasks",
     { schema: listTasksSchema },
     async (request) => {
-      const filters = [];
-      if (request.query.status !== undefined) {
-        filters.push(eq(tasks.status, request.query.status));
-      }
-      if (request.query.projectId !== undefined) {
-        filters.push(eq(tasks.projectId, Number(request.query.projectId)));
-      }
-      const rows = app.db
-        .select(TASK_ROW_COLUMNS)
-        .from(tasks)
-        .innerJoin(projects, eq(tasks.projectId, projects.id))
-        // `.where(undefined)` omits the clause entirely — no filters means
-        // "every task," same as before this endpoint took query params.
-        .where(filters.length > 0 ? and(...filters) : undefined)
-        // boardOrder is the render/ordering tier (roadmap's Task Model &
-        // Task Board section) — order by it within each status so the
-        // board has a deterministic render order instead of arbitrary
-        // insertion order (Hermes review, PR #471).
-        .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
-        .all();
+      const rows = listTaskRows(app, {
+        status: request.query.status,
+        projectId:
+          request.query.projectId !== undefined ? Number(request.query.projectId) : undefined,
+      });
       const taskMaster = resolveTaskMasterConfig(app);
       const installCap = taskMaster.maxAutoReturnRounds;
       const taskMasterEnabled = taskMaster.enabled;
@@ -462,12 +303,7 @@ export async function tasksRoute(app: FastifyInstance) {
   // shape/withBlockedState treatment the detail view already gets, not a
   // second, drifting definition of "what a task looks like over the wire."
   function selectTaskRow(taskId: number) {
-    const [row] = app.db
-      .select(TASK_ROW_COLUMNS)
-      .from(tasks)
-      .innerJoin(projects, eq(tasks.projectId, projects.id))
-      .where(eq(tasks.id, taskId))
-      .all();
+    const row = getTaskRowById(app, taskId);
     const taskMaster = resolveTaskMasterConfig(app);
     return row
       ? withBlockedState(
@@ -489,13 +325,11 @@ export async function tasksRoute(app: FastifyInstance) {
   });
 
   function getProjectOr404(projectId: number) {
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-    return project ?? null;
+    return getProjectById(app, projectId) ?? null;
   }
 
   function getLocalTaskOr404(taskId: number) {
-    const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
-    return task ?? null;
+    return getTaskById(app, taskId) ?? null;
   }
 
   // Phase 6 (6.9/#233) — local-board creation, works with Task Master off.
@@ -512,19 +346,15 @@ export async function tasksRoute(app: FastifyInstance) {
       const hermesRefusal = hermesReviewAgentRefusal(app, reviewAgent);
       if (hermesRefusal) return reply.badRequest(hermesRefusal);
 
-      const [created] = app.db
-        .insert(tasks)
-        .values({
-          projectId,
-          title,
-          body: body ?? null,
-          status: status ?? "backlog",
-          boardOrder: boardOrder ?? 0,
-          agent: agent ?? null,
-          reviewAgent: reviewAgent ?? null,
-        })
-        .returning()
-        .all();
+      const created = insertTask(app, {
+        projectId,
+        title,
+        body: body ?? null,
+        status: status ?? "backlog",
+        boardOrder: boardOrder ?? 0,
+        agent: agent ?? null,
+        reviewAgent: reviewAgent ?? null,
+      });
       reply.code(201);
       return created;
     },
@@ -587,7 +417,7 @@ export async function tasksRoute(app: FastifyInstance) {
         );
       }
 
-      const patch: Partial<typeof tasks.$inferInsert> = {};
+      const patch: TaskPatch = {};
       if (modelFieldsGiven || agent !== undefined || reviewAgent !== undefined) {
         const modelPatch = resolveTaskModelPatch(
           app,
@@ -608,12 +438,7 @@ export async function tasksRoute(app: FastifyInstance) {
         patch.reviewAgent = reviewAgent;
       }
 
-      const [updated] = app.db
-        .update(tasks)
-        .set(patch)
-        .where(eq(tasks.id, taskId))
-        .returning()
-        .all();
+      const updated = updateTask(app, taskId, patch);
       // #488 — the most user-visible transition (drag-to-ready) had no
       // signal of any kind before. Guarded on the status actually changing:
       // this route also carries boardOrder-only PATCHes (drag-to-reorder
@@ -703,7 +528,7 @@ export async function tasksRoute(app: FastifyInstance) {
   // still applies even under force: Abandon is only ever offered for
   // failed/done tasks, never a task with a live in-flight worker.
   async function checkTaskDeletable(
-    existing: typeof tasks.$inferSelect,
+    existing: TaskRow,
     opts: { force?: boolean } = {},
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (existing.issueNumber !== null) {
@@ -770,8 +595,8 @@ export async function tasksRoute(app: FastifyInstance) {
   // task, its label) are already gone, so a leftover worktree/branch/session
   // is a cleanup gap, not a correctness problem.
   async function teardownAbandonedTask(
-    task: typeof tasks.$inferSelect,
-    project: typeof projects.$inferSelect,
+    task: TaskRow,
+    project: ProjectRow,
   ): Promise<{ worktreeRemoved: boolean; branchDeleted: boolean; unknown: string[] }> {
     // Steps whose connection dropped after the request was sent: the host may
     // have done them, so the caller says so instead of reporting nothing.
@@ -839,7 +664,7 @@ export async function tasksRoute(app: FastifyInstance) {
       // watcher re-ingest this issue into "ready" on its next sweep —
       // auto-claim would then dispatch a fresh worker to the very task the
       // user just asked to get rid of.
-      let project: typeof projects.$inferSelect | null = null;
+      let project: ProjectRow | null = null;
       // Review fix (#1014) — tracked so the CAS-delete-failed branch below
       // can tell the caller the label is ALREADY gone, rather than implying
       // (as the generic "refresh and try again" message would) that nothing
@@ -878,11 +703,8 @@ export async function tasksRoute(app: FastifyInstance) {
         }
       }
 
-      const deleted = app.db
-        .delete(tasks)
-        .where(and(eq(tasks.id, taskId), eq(tasks.status, existing.status)))
-        .run();
-      if (deleted.changes === 0) {
+      const deleted = deleteTaskWhenStatus(app, taskId, existing.status);
+      if (deleted === 0) {
         // Review fix (#1014) — a concurrent status change (a Retry, the
         // reconciler, a second concurrent force-delete) between this
         // handler's own read and this CAS write can land here AFTER the
@@ -932,8 +754,8 @@ export async function tasksRoute(app: FastifyInstance) {
   // delete succeeds, so a branch-check failure only means the branch
   // survives, not that the task reappears.
   async function attemptBranchDeleteForClearDone(
-    task: typeof tasks.$inferSelect,
-    project: typeof projects.$inferSelect,
+    task: TaskRow,
+    project: ProjectRow,
     rateLimited: boolean,
   ): Promise<{ id: number; branch: string } & TaskBranchDelete> {
     const branch = task.branchName!;
@@ -993,14 +815,7 @@ export async function tasksRoute(app: FastifyInstance) {
     async (request) => {
       const { projectIds, deleteBranches } = request.body ?? {};
 
-      const candidates =
-        projectIds && projectIds.length > 0
-          ? app.db
-              .select()
-              .from(tasks)
-              .where(and(eq(tasks.status, "done"), inArray(tasks.projectId, projectIds)))
-              .all()
-          : app.db.select().from(tasks).where(eq(tasks.status, "done")).all();
+      const candidates = listDoneTasks(app, projectIds);
 
       const attempted = candidates.slice(0, MAX_CLEAR_DONE_BATCH);
       const remaining = candidates.length - attempted.length;
@@ -1036,11 +851,7 @@ export async function tasksRoute(app: FastifyInstance) {
           continue;
         }
 
-        const result = app.db
-          .delete(tasks)
-          .where(and(eq(tasks.id, task.id), eq(tasks.status, "done")))
-          .run();
-        if (result.changes === 0) {
+        if (deleteTaskWhenStatus(app, task.id, "done") === 0) {
           failed.push({
             id: task.id,
             error: "Task changed since this check — refresh and try again",
@@ -1082,12 +893,7 @@ export async function tasksRoute(app: FastifyInstance) {
         `Cannot archive a task that hasn't finished (status: ${existing.status})`,
       );
     }
-    const [updated] = app.db
-      .update(tasks)
-      .set({ archivedAt: new Date() })
-      .where(eq(tasks.id, taskId))
-      .returning()
-      .all();
+    const updated = updateTask(app, taskId, { archivedAt: new Date() });
     return updated;
   });
 
@@ -1099,12 +905,7 @@ export async function tasksRoute(app: FastifyInstance) {
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
     const existing = getLocalTaskOr404(taskId);
     if (!existing) return reply.notFound();
-    const [updated] = app.db
-      .update(tasks)
-      .set({ archivedAt: null })
-      .where(eq(tasks.id, taskId))
-      .returning()
-      .all();
+    const updated = updateTask(app, taskId, { archivedAt: null });
     return updated;
   });
 
@@ -1130,19 +931,7 @@ export async function tasksRoute(app: FastifyInstance) {
     async (request) => {
       const { projectIds } = request.body ?? {};
 
-      const doneUnmergedWithPr = and(
-        eq(tasks.status, "done"),
-        isNotNull(tasks.prNumber),
-        isNull(tasks.mergedAt),
-      );
-      const candidates =
-        projectIds && projectIds.length > 0
-          ? app.db
-              .select()
-              .from(tasks)
-              .where(and(doneUnmergedWithPr, inArray(tasks.projectId, projectIds)))
-              .all()
-          : app.db.select().from(tasks).where(doneUnmergedWithPr).all();
+      const candidates = listDoneUnmergedWithPr(app, projectIds);
 
       const attempted = candidates.slice(0, MAX_CLEAR_DONE_BATCH);
       const remaining = candidates.length - attempted.length;
@@ -1188,8 +977,9 @@ export async function tasksRoute(app: FastifyInstance) {
           continue;
         }
         const now = new Date();
-        app.db
-          .update(tasks)
+        updateTaskCount(
+          app,
+          task.id,
           // Review fix — prefers GitHub's own merged_at (the PR's actual
           // merge time) over "whenever this endpoint happened to run," which
           // matters for the backfill case: a task merged days before this
@@ -1197,13 +987,12 @@ export async function tasksRoute(app: FastifyInstance) {
           // Falls back to `now` only when GitHub genuinely doesn't have one
           // (shouldn't happen once pr.merged is confirmed true, but the type
           // is nullable) or a prior run already set one.
-          .set({
+          {
             mergedAt: task.mergedAt ?? (mergedAt ? new Date(mergedAt) : now),
             archivedAt: now,
             needsHumanReason: mergeHuman.clearNeedsHumanOnMerge,
-          })
-          .where(eq(tasks.id, task.id))
-          .run();
+          },
+        );
         archived.push(task.id);
       }
 
@@ -1480,12 +1269,10 @@ export async function tasksRoute(app: FastifyInstance) {
       return reply.conflict("Task has no linked pull request to merge");
     }
 
-    const [updated] = app.db
-      .update(tasks)
-      .set({ mergeRequestedAt: new Date(), ...mergeHuman.clearedFor(existing.needsHumanReason) })
-      .where(eq(tasks.id, taskId))
-      .returning()
-      .all();
+    const updated = updateTask(app, taskId, {
+      mergeRequestedAt: new Date(),
+      ...mergeHuman.clearedFor(existing.needsHumanReason),
+    });
     resetMergeBackoff(taskId);
     return updated;
   });
@@ -1547,9 +1334,10 @@ export async function tasksRoute(app: FastifyInstance) {
           `The task's agent is waiting on a dialog (${waiting}) — answer it, then reject again`,
         );
       }
-      const [updated] = app.db
-        .update(tasks)
-        .set({
+      const updated = updateTask(
+        app,
+        taskId,
+        {
           status: "in_progress",
           failureReason: request.body.feedback ?? null,
           // Same reasoning as retryTask's own reservation (task-claim.ts):
@@ -1584,10 +1372,9 @@ export async function tasksRoute(app: FastifyInstance) {
           // A human sent it back: whatever approval a suggestions round was
           // carrying no longer covers the work, so the next finish re-reviews.
           approvalCarriedAt: null,
-        })
-        .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
-        .returning()
-        .all();
+        },
+        { whenStatus: "reviewing" },
+      );
       if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
       recordTaskTransition(app, {
         taskId,
@@ -1626,17 +1413,17 @@ export async function tasksRoute(app: FastifyInstance) {
           // branch that may carry committed work worth a retryTask picking
           // back up, so the worktree is left in place for that.
           const failedAt = new Date();
-          const failed = app.db
-            .update(tasks)
-            .set({
+          const failed = updateTask(
+            app,
+            taskId,
+            {
               status: "failed",
               failureReason: "re-seed spawn failed after reject",
               completedAt: failedAt,
-            })
-            .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress")))
-            .returning()
-            .all();
-          if (failed.length > 0) {
+            },
+            { whenStatus: "in_progress" },
+          );
+          if (failed) {
             recordTaskTransition(app, {
               taskId,
               projectId: project.id,
@@ -1658,7 +1445,7 @@ export async function tasksRoute(app: FastifyInstance) {
           }
         }
       }
-      const [final] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+      const final = getTaskById(app, taskId);
       return final ?? updated;
     },
   );
@@ -1741,9 +1528,10 @@ export async function tasksRoute(app: FastifyInstance) {
     // One of these is null: the stale review is a session or a run, not both.
     const staleReviewSessionId = existing.reviewSessionId;
     const staleReviewRunId = existing.reviewRunId;
-    const [updated] = app.db
-      .update(tasks)
-      .set({
+    const updated = rearmStaleReview(
+      app,
+      taskId,
+      {
         reviewSessionId: null,
         reviewFindingsIngestedSessionId: null,
         reviewSeedDelivered: null,
@@ -1754,30 +1542,14 @@ export async function tasksRoute(app: FastifyInstance) {
         // keeps round, rearms and head, so without a fresh entry time the second click
         // would replay the first run.
         reviewingAt: new Date(),
-      })
-      .where(
-        and(
-          eq(tasks.id, taskId),
-          eq(tasks.status, "reviewing"),
-          eq(tasks.lastReviewVerdict, existing.lastReviewVerdict),
-          staleReviewSessionId === null
-            ? isNull(tasks.reviewSessionId)
-            : eq(tasks.reviewSessionId, staleReviewSessionId),
-          staleReviewRunId === null
-            ? isNull(tasks.reviewRunId)
-            : eq(tasks.reviewRunId, staleReviewRunId),
-          // Same reasoning as the read-time check above, re-applied at the
-          // write for the same defense-in-depth reason the other three CAS
-          // conditions already are — a concurrent write between the read
-          // and this write could otherwise still let a stale
-          // review handle match while an ingest raced in behind it.
-          reviewIsRun
-            ? isNotNull(tasks.reviewRunIngestedId)
-            : isNotNull(tasks.reviewFindingsIngestedSessionId),
-        ),
-      )
-      .returning()
-      .all();
+      },
+      {
+        lastReviewVerdict: existing.lastReviewVerdict,
+        reviewSessionId: staleReviewSessionId,
+        reviewRunId: staleReviewRunId,
+        reviewIsRun,
+      },
+    );
     if (!updated) {
       return reply.conflict("Task's review state changed before this ran");
     }
@@ -1828,16 +1600,16 @@ export async function tasksRoute(app: FastifyInstance) {
       if (existing.status !== "reviewing") {
         return reply.conflict(`Cannot give up on a task in status "${existing.status}"`);
       }
-      const [updated] = app.db
-        .update(tasks)
-        .set({
+      const updated = updateTask(
+        app,
+        taskId,
+        {
           status: "failed",
           failureReason: request.body.reason ?? "given up during review",
           completedAt: new Date(),
-        })
-        .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
-        .returning()
-        .all();
+        },
+        { whenStatus: "reviewing" },
+      );
       if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
       recordTaskTransition(app, {
         taskId,

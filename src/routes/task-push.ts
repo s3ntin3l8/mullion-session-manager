@@ -15,8 +15,7 @@
 // the target to the caller's OWN session (control-socket.ts). Approving a
 // workflow change is deliberately not reachable from here.
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, isNull } from "drizzle-orm";
-import { projects, tasks } from "../db/schema.js";
+import { findPushableTaskBySession, getProjectById } from "../services/task-store.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveTaskWorkerHost } from "../services/session-live-info.js";
 import { openDraftPRForTask } from "../services/task-promote.js";
@@ -61,19 +60,7 @@ export async function taskPushRoute(app: FastifyInstance) {
 
       // Only a task's WORKER session may push (tasks.sessionId): a reviewer or
       // an ad-hoc session has no branch of its own to push through Mullion.
-      const task = app.db
-        .select()
-        .from(tasks)
-        // `mergedAt IS NULL`: a merged task's lingering worker session must
-        // not be able to force-push (and so recreate) a branch that is gone.
-        .where(
-          and(
-            eq(tasks.sessionId, sessionId),
-            inArray(tasks.status, [...PUSHABLE_STATUSES]),
-            isNull(tasks.mergedAt),
-          ),
-        )
-        .get();
+      const task = findPushableTaskBySession(app, sessionId, PUSHABLE_STATUSES);
       if (!task)
         return reply.notFound("This session is not the worker session of a Task Master task");
       if (task.prNumber === null) {
@@ -81,7 +68,7 @@ export async function taskPushRoute(app: FastifyInstance) {
           "This task has no pull request yet. Finish your turn: Mullion pushes the branch and opens the draft PR itself.",
         );
       }
-      const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get();
+      const project = getProjectById(app, task.projectId);
       if (!project) return reply.notFound("Project not found");
 
       const outcome = await openDraftPRForTask(
