@@ -90,15 +90,18 @@ function sanitizeCandidates(raw: unknown): DiscoveredCandidate[] | null {
   return out;
 }
 
-/** A path that is safe to store in `hostCwds`: absolute POSIX, bounded, no
- * control characters and no `..` segment (the API itself only checks `^/`). */
+/** Pattern for the API schemas: an absolute POSIX path or a Windows drive path
+ * (`D:\\x` or `D:/x`). `isStorablePath` stays the real validator. */
+export const ABSOLUTE_HOST_PATH_PATTERN = "^(/|[A-Za-z]:[\\\\/])";
+
+/** A path that is safe to store in `hostCwds`: absolute (POSIX, or a Windows
+ * drive path such as `D:\\Projects\\x`), bounded, no control characters and
+ * no `..` segment. A UNC path stays refused. */
 export function isStorablePath(cwd: string): boolean {
-  return (
-    cwd.startsWith("/") &&
-    cwd.length <= MAX_FIELD_LENGTH &&
-    !/[\0\r\n]/.test(cwd) &&
-    !cwd.split("/").includes("..")
-  );
+  if (cwd.length > MAX_FIELD_LENGTH || /[\0\r\n]/.test(cwd)) return false;
+  if (cwd.startsWith("/")) return !cwd.split("/").includes("..");
+  if (/^[A-Za-z]:[\\/]/.test(cwd)) return !cwd.split(/[\\/]/).includes("..");
+  return false;
 }
 
 function discoverOnHost(

@@ -152,6 +152,30 @@ describe("host checkout detection routes", () => {
       await app.inject({ method: "POST", url: `/api/hosts/${macId}/detect-checkouts` });
     }
 
+    it("accepts a Windows drive path for a host and refuses a traversal one", async () => {
+      const ok = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { hostCwds: { [macId]: "D:\\Projects\\app" } },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().hostCwds).toEqual({ [macId]: "D:\\Projects\\app" });
+
+      const attach = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/host-checkouts`,
+        payload: { hostId: macId, cwd: "D:\\Projects\\app" },
+      });
+      expect(attach.statusCode).toBe(200);
+
+      const traversal = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/host-checkouts`,
+        payload: { hostId: macId, cwd: "D:\\a\\..\\b" },
+      });
+      expect(traversal.statusCode).toBe(400);
+    });
+
     it("a new project starts with an empty meta", async () => {
       expect((await listed()).hostCwdsMeta).toEqual({ auto: [], declined: [], managed: [] });
     });
