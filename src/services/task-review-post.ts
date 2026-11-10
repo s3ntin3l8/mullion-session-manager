@@ -245,15 +245,19 @@ export async function retryPendingReviewPosts(
     }
     if (now - pending.createdAt > REVIEW_POST_MAX_AGE_MS) {
       // An approving verdict that never posted leaves GitHub's older
-      // CHANGES_REQUESTED standing: hold instead of releasing.
-      const gaveUp = isApprovingVerdict(pending.verdict)
-        ? clearMarkerAndHold(app, task.id, raw)
-        : writeReviewPostPending(app, task.id, raw, null);
+      // CHANGES_REQUESTED standing: hold instead of releasing. A review that
+      // did post (only its own-thread resolution kept failing) holds nothing.
+      const gaveUp =
+        isApprovingVerdict(pending.verdict) && !pending.posted
+          ? clearMarkerAndHold(app, task.id, raw)
+          : writeReviewPostPending(app, task.id, raw, null);
       if (gaveUp) {
         recordGithubSyncError(
           app,
           task.id,
-          "Gave up posting this round's review to GitHub after 24h of transient failures",
+          pending.posted
+            ? "Gave up resolving this round's own review threads on GitHub after 24h of transient failures (the review itself posted)"
+            : "Gave up posting this round's review to GitHub after 24h of transient failures",
         );
       }
       reviewPostRetryBackoff.clear(task.id);

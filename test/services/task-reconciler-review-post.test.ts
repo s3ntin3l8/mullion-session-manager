@@ -629,13 +629,14 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     taskId: number,
     patch: Record<string, unknown>,
     reviewedHeadSha: string | undefined,
+    posted = false,
   ) {
     const marker = JSON.stringify({
       key: "1-1",
       body: "body",
       verdict: "approved",
       ...(reviewedHeadSha ? { reviewedHeadSha } : {}),
-      posted: false,
+      posted,
       createdAt: Date.now(),
     });
     app.db
@@ -644,6 +645,23 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
       .where(eq(tasks.id, taskId))
       .run();
   }
+
+  it("clears, not holds, a posted marker aged past a day whose thread resolution kept failing", async () => {
+    const { app, task, read } = await setup("p-post-expiry-posted");
+    seedMarker(app, task.id, { lastReviewVerdict: "approved" }, "sha-reviewed", true);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 25 * 3_600_000);
+
+    await reconcileTasks(app);
+
+    const row = read();
+    expect(row.reviewPostPending).toBeNull();
+    expect(row.needsHumanReason).not.toBe("review-post-failed");
+    expect(holdsForReviewPost(row)).toBe(false);
+    expect(row.githubSyncError).toContain("review itself posted");
+    expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+    await app.close();
+  });
 
   it("posts a retried review with the stored reviewed head, even though the PR head moved", async () => {
     const { app, task, read } = await setup("p-post-stored-sha");
