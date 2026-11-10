@@ -57,6 +57,7 @@ import type { PromoteDecision } from "../shared/promote-decision.js";
 import type {
   ClearOrphanedTaskWorktreeResult,
   CommitWipChangesResult,
+  ResyncStaleWorktreeResult,
   CreateWorktreeResult,
   PruneWorktreesResult,
   RemoveIfCleanResult,
@@ -1115,6 +1116,17 @@ export class RemoteHostClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, message, gitIdentity }),
+    });
+  }
+
+  /** Resyncs a stale task worktree on this agent's filesystem — mirrors
+   * /internal/git-resync-stale's `{cwd, branch}` -> `ResyncStaleWorktreeResult`.
+   * See git-worktree.ts's resyncStaleWorktree for the safety condition. */
+  resolveResyncStaleWorktree(cwd: string, branch: string): Promise<ResyncStaleWorktreeResult> {
+    return this.request("/internal/git-resync-stale", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, branch }),
     });
   }
 

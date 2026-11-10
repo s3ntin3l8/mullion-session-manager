@@ -68,6 +68,7 @@ import { getPullRequestBody, updatePullRequestBody } from "./github-pr-body.js";
 import { GitHubApiError } from "./github.js";
 import {
   resolveHostGitStatus,
+  resyncHostStaleWorktree,
   resolveHostBaseRef,
   pushHostBranch,
   resolveRepoRef,
@@ -286,7 +287,8 @@ async function preparePromotion(
       },
     };
   }
-  const { isRepo, status } = statusResult.value;
+  const { isRepo } = statusResult.value;
+  let { status } = statusResult.value;
   if (!isRepo) {
     return {
       ok: false,
@@ -312,6 +314,54 @@ async function preparePromotion(
   // the automatic "-> reviewing" path (openDraftPRForTask, best-effort)
   // treats this as "skip the PR for now," not a blocked transition; approve
   // surfaces it as a 409, same as always.
+  // A branch moved from outside the worktree (a rebase in another checkout)
+  // leaves its index and files at the old tip while HEAD follows the ref: the
+  // reversed delta shows as staged changes nothing in the tree actually
+  // lacks. Resync it, but only when the host proves the state equals an
+  // earlier tip of this branch with no unstaged/untracked change (see
+  // resyncStaleWorktree), then re-read the status.
+  if (!status.isClean && !status.hasConflicts) {
+    const resync = await resyncHostStaleWorktree(
+      app,
+      worktreeHostId,
+      task.worktreePath,
+      task.branchName,
+    );
+    // A failed call (unsupported agent, unreachable) keeps the plain refusal.
+    if (resync.ok && resync.value.outcome === "resynced") {
+      app.log.info(
+        {
+          taskId: task.id,
+          branch: task.branchName,
+          staleTree: resync.value.tree,
+          matchedCommit: resync.value.matchedCommit,
+          head: resync.value.head,
+        },
+        "task promote: resynced a worktree left stale by an outside branch move",
+      );
+      const recheck = await resolveHostGitStatus(app, worktreeHostId, task.worktreePath);
+      if (!recheck.ok || !recheck.value.status) {
+        return {
+          ok: false,
+          outcome: {
+            ok: false,
+            reason: "no-worktree",
+            detail: `Could not re-read git status for ${task.worktreePath} after resyncing it (transient failure — retry)`,
+          },
+        };
+      }
+      status = recheck.value.status;
+    } else if (resync.ok && resync.value.outcome === "failed") {
+      return {
+        ok: false,
+        outcome: {
+          ok: false,
+          reason: "dirty-tree",
+          detail: `Worktree is out of date with its branch and could not be resynced: ${resync.value.error}`,
+        },
+      };
+    }
+  }
   if (!status.isClean || status.hasConflicts) {
     return {
       ok: false,

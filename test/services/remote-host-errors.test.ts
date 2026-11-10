@@ -44,6 +44,7 @@ const MUTATING_INTERNAL_POSTS = [
   "/internal/project-files/rename",
   "/internal/project-files/upload",
   "/internal/git-commit-wip",
+  "/internal/git-resync-stale",
   "/internal/run-generation-turn",
   "/internal/run-setup",
   "/internal/bundle-sync/remove",
