@@ -34,7 +34,7 @@ export type ReviewEnd =
   /** Nothing is left to merge: the base branch already has the change. */
   | "superseded";
 
-export const CLOSED_WITHOUT_MERGE_REASON = "PR closed without merging";
+const CLOSED_WITHOUT_MERGE_REASON = "PR closed without merging";
 
 /**
  * True only when the task's branch is verifiably identical to the repo's

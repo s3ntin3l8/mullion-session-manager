@@ -25,7 +25,7 @@ export interface DockPortConflict {
 
 const BARE_PORT = /^\d{1,5}$/;
 
-export function portInUseMessage(port: number, holderSessionId?: number): string {
+function portInUseMessage(port: number, holderSessionId?: number): string {
   return holderSessionId !== undefined
     ? `Port ${port} is in use by session ${holderSessionId}`
     : `Port ${port} is in use by another process`;

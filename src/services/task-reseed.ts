@@ -444,7 +444,7 @@ const pendingAdoptedSeeds = new Map<number, PendingAdoptedSeed>();
 /** An agent still booting reads its argv prompt on its own; do not type over it. */
 export const ADOPTED_SEED_GRACE_MS = 30_000;
 /** Stop re-checking a session that never became typeable. */
-export const ADOPTED_SEED_MAX_AGE_MS = 30 * 60_000;
+const ADOPTED_SEED_MAX_AGE_MS = 30 * 60_000;
 
 /** Letters and digits only, lower-cased: a TUI that wraps a line, indents it,
  * or draws a border/prompt marker inside it changes only whitespace and
@@ -472,7 +472,7 @@ function seedFragments(prompt: string): string[] {
 }
 
 /** Does the rendered output show the seed? A majority of its fragments must be present. */
-export function screenShowsSeed(screen: string, prompt: string): boolean {
+function screenShowsSeed(screen: string, prompt: string): boolean {
   const fragments = seedFragments(prompt);
   if (fragments.length === 0) return false;
   const haystack = alnum(screen);

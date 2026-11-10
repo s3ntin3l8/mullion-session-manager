@@ -10,7 +10,7 @@ import { dirSize } from "./temp-storage.js";
 // outside, so nothing beyond these directories can be targeted. Everything in
 // here is rebuilt or re-downloaded on next use, which is why cleaning is opt-in
 // per cache and only ever runs in the aggressive tier.
-export const CACHE_DIRS = [
+const CACHE_DIRS = [
   { id: "ms-playwright", label: "Playwright browsers", dir: "ms-playwright", base: "cache" },
   { id: "huggingface", label: "Hugging Face models", dir: "huggingface", base: "cache" },
   { id: "pre-commit", label: "pre-commit environments", dir: "pre-commit", base: "cache" },

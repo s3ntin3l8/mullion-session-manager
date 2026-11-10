@@ -8,7 +8,7 @@ import { NO_EPIC } from "./taskFilters.js";
 // and the Display menu. Each is rendered inside a FilterPopover on desktop and inline
 // inside the filter sheet on phone, so one component serves both.
 
-export function CheckItem({
+function CheckItem({
   checked,
   onChange,
   children,

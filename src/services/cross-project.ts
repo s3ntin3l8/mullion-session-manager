@@ -70,7 +70,7 @@ export function targetAccepts(target: ProjectRow, sourceId: number): boolean {
 }
 
 /** Whether the coordinator `source` may reach `target`. */
-export function coordinatorReaches(source: ProjectRow, target: ProjectRow): boolean {
+function coordinatorReaches(source: ProjectRow, target: ProjectRow): boolean {
   if (source.allowCrossProjectSpawn !== true) return false;
   const raw = source.crossProjectTargets;
   // Unset = every project. A value that is set but is not a readable list (a hand
@@ -103,7 +103,7 @@ function readAcceptsMessages(value: string | null | undefined): AcceptsMessagesF
 }
 
 /** Whether `target` takes messages from `sourceId`'s sessions. */
-export function targetAcceptsMessages(target: ProjectRow, sourceId: number): boolean {
+function targetAcceptsMessages(target: ProjectRow, sourceId: number): boolean {
   switch (readAcceptsMessages(target.acceptsMessagesFrom)) {
     case "any":
       return true;

@@ -4,7 +4,7 @@
 // Shared so the server, the dashboard's paste fallback and the tests agree on
 // the exact shape (docs/multi-host.md, "Pairing a desktop Helper").
 
-export const PAIRING_LINK_SCHEME = "mullion:";
+const PAIRING_LINK_SCHEME = "mullion:";
 export const PAIRING_CODE_PATTERN = /^[0-9a-f]{64}$/;
 
 export interface PairingLink {

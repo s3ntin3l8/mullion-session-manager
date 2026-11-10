@@ -94,12 +94,12 @@ import { runLoginShell } from "../login-shell.js";
 
 /** The adapter's stable id — also the `<agent>` argv the shared forwarder
  * receives, so forwarder-core.mjs can dispatch to `mapMcodeEvent`. */
-export const MCODE_ADAPTER_NAME = "mcode";
+const MCODE_ADAPTER_NAME = "mcode";
 
 /** The plugin directory name mcode discovers under `<dataDir>/plugins/`.
  * Host-global and shared with the user's own mcode — hence the marker file
  * and the "no per-session data inside" rule documented in the header. */
-export const MCODE_PLUGIN_DIR_NAME = "mullion";
+const MCODE_PLUGIN_DIR_NAME = "mullion";
 
 /** Issue #1814 — the SECOND plugin directory, in mcode's CODEX plugin format.
  *
@@ -173,7 +173,7 @@ export const MCODE_PERMISSION_PLUGIN_DIR_NAME = "mullion-permission";
  * carries it — see MCODE_PERMISSION_PLUGIN_DIR_NAME) — so skip-permissions
  * would silently stop working. That is why the install checks the host's
  * version and says so out loud. */
-export const MCODE_MIN_VERSION_FOR_CODEX_PLUGIN = "0.6.12";
+const MCODE_MIN_VERSION_FOR_CODEX_PLUGIN = "0.6.12";
 
 /** The host's mcode version, resolved ONCE per process. `null` when it
  * cannot be determined — e.g. mcode is not installed, in which case there is
@@ -270,7 +270,7 @@ export const MCODE_PLUGIN_MARKER_NAME = ".mullion-managed";
 
 /** The marker file's contents. Compared verbatim before a removal, so a
  * user-authored file with the same name is never deleted. */
-export const MCODE_PLUGIN_MARKER_CONTENT =
+const MCODE_PLUGIN_MARKER_CONTENT =
   "This directory is managed by Mullion (hook-adapters/mcode.ts). Remove it with `mullion` uninstall.\n";
 
 /** mcode's own default data dir, relative to $HOME. mcode resolves
@@ -301,7 +301,7 @@ export function resolveMcodeDataDir(): string {
 }
 
 /** Absolute path of mcode's local plugin directory (`<dataDir>/plugins`). */
-export function resolveMcodePluginsDir(): string {
+function resolveMcodePluginsDir(): string {
   return path.join(resolveMcodeDataDir(), "plugins");
 }
 
@@ -344,7 +344,7 @@ export function resolveMcodeShimPath(): string {
  * shared.ts's resolveForwarderShimSourcePath() — the SAME dev/prod
  * resolution the rest of the hook plumbing uses, so the installed shim is
  * always the one that matches the running instance's build. */
-export function resolveMcodeShimSourcePath(): string {
+function resolveMcodeShimSourcePath(): string {
   return path.join(resolveHooksDir(), "mcode-hook-shim.sh");
 }
 
@@ -369,18 +369,6 @@ export function matchesMcodeCommand(command: string): boolean {
   // `mcode` that is actually a directory or a different binary.
   return program === base || program.endsWith(`/${base}`);
 }
-
-/** The hook event names mcode's plugin hook format understands, mapped from
- * the Claude Code vocabulary Mullion's forwarder already speaks. */
-export const MCODE_HOOK_EVENTS = [
-  "SessionStart",
-  "UserPromptSubmit",
-  "PreToolUse",
-  "PostToolUse",
-  "PermissionRequest",
-  "Stop",
-  "SessionEnd",
-] as const;
 
 /** One hook entry for a mcode plugin's `hooks/hooks.json`.
  *
@@ -963,7 +951,7 @@ export function removeMcodePlugin(): void {
  * `PostToolUseFailure`), `stop_failure` (needs `StopFailure`), `subagent`
  * (needs `SubagentStart` / `SubagentStop`).
  */
-export const MCODE_EMITS: readonly HookMessageKind[] = [
+const MCODE_EMITS: readonly HookMessageKind[] = [
   // SessionStart → session_start.
   "session_start",
   // UserPromptSubmit → turn_start.

@@ -6,11 +6,7 @@ import { getStoredSettings } from "./settings.js";
 // FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE — is an outsider: on a
 // public repo they can open issues and comment freely, so their text must
 // never reach an unattended worker agent unvetted.
-export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set([
-  "OWNER",
-  "MEMBER",
-  "COLLABORATOR",
-]);
+const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 /**
  * Whether text authored by `login` with GitHub association `association` may

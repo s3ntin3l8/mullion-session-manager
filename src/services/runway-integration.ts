@@ -13,7 +13,7 @@ import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
 
 /** The `integrations.provider` value for the Runway key. */
-export const RUNWAY_PROVIDER = "runway";
+const RUNWAY_PROVIDER = "runway";
 
 /** Never includes the key — the same "hasKey-only summary" shape as
  * HermesIntegrationSummary. */

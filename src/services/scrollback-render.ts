@@ -11,7 +11,7 @@ const { Terminal } = xtermHeadless as unknown as { Terminal: typeof TerminalType
 const EMULATOR_SCROLLBACK_LINES = 20_000;
 
 /** How many rendered lines (from the end) are returned at most. */
-export const RENDERED_MAX_LINES = 2_000;
+const RENDERED_MAX_LINES = 2_000;
 
 export interface RenderOptions {
   cols: number;

@@ -3,7 +3,7 @@ import { approvalStateText, isMergeNeedsHumanReason, needsHumanText } from "../n
 
 // There is no "waiting" status: a task is waiting when it is `claimed` and
 // `failureReason` is set (dispatch held — host offline, parked).
-export function isWaiting(t: Task): boolean {
+function isWaiting(t: Task): boolean {
   return t.status === "claimed" && !!t.failureReason;
 }
 

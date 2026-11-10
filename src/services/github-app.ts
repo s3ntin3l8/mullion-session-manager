@@ -286,7 +286,7 @@ export const REVIEW_PERMISSIONS = {
 // fallback for this scope: GitHub only lets a GitHub App create check runs, so
 // a user token 403s ("You must authenticate via a GitHub App"). The marker is
 // skipped instead, and resolveChecksToken says why (#1790).
-export const CHECKS_PERMISSIONS = {
+const CHECKS_PERMISSIONS = {
   checks: "write",
   metadata: "read",
 } as const;
@@ -302,7 +302,7 @@ export const CHECKS_PERMISSIONS = {
 // with the new grants 422s THIS mint alone — resolveChecksReadToken then
 // hands back nothing and the caller keeps the read token (Actions-only CI,
 // today's behavior) — instead of every read surface falling to the PAT.
-export const CHECKS_READ_PERMISSIONS = {
+const CHECKS_READ_PERMISSIONS = {
   ...READ_PERMISSIONS,
   checks: "read",
   statuses: "read",

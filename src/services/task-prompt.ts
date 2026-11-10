@@ -1242,7 +1242,7 @@ export function renderCiSummary(ci: ReviewCiInfo): string {
  *   promotion section), so under-reporting here has no automatic fix-up round to
  *   fall back on.
  */
-export function renderRoundsRemaining(roundsRemaining: number): string {
+function renderRoundsRemaining(roundsRemaining: number): string {
   if (roundsRemaining > 0) {
     return [
       `This task has ${roundsRemaining} automatic fix-up round(s) left — a backstop`,

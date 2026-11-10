@@ -143,7 +143,7 @@ export function opencodeConfigDir(sessionsDir: string, id: string): string {
 }
 /** The plugin DIRECTORY `OPENCODE_CONFIG_CONTENT.plugins` points at; v2's
  * loader resolves `server.js` inside it. */
-export function opencodePluginDir(sessionsDir: string, id: string): string {
+function opencodePluginDir(sessionsDir: string, id: string): string {
   return path.join(opencodeConfigDir(sessionsDir, id), "plugin");
 }
 

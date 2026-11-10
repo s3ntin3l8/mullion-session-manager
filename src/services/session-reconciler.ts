@@ -24,7 +24,7 @@ const MSG_BUSY =
  * that window — or a listing cached from before the scope appeared — reads
  * "dead" for a session that is simply not running yet (#2602).
  */
-export const NEW_SESSION_GRACE_MS = 20_000;
+const NEW_SESSION_GRACE_MS = 20_000;
 
 /**
  * Detects sessions whose program exited on its own — user typed `exit`, a

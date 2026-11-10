@@ -14,7 +14,7 @@ import { agentLogLabel, type ScaffoldConflict } from "./scaffold-generate.js";
 
 export { GENERATED_PREVIEW_TTL_MS, PREVIEW_TTL_MS };
 
-export function previewTtlMs(generated: boolean): number {
+function previewTtlMs(generated: boolean): number {
   return generated ? GENERATED_PREVIEW_TTL_MS : PREVIEW_TTL_MS;
 }
 

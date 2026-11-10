@@ -373,12 +373,12 @@ export function serializePlacementConstraints(
 }
 
 /** `project allows only darwin hosts` / `darwin or linux hosts` — the reason a host is excluded. */
-export function describePlatformFlag(platforms: readonly string[]): string {
+function describePlatformFlag(platforms: readonly string[]): string {
   return `project allows only ${platforms.join(" or ")} hosts`;
 }
 
 /** `project requires xcode` / `xcode and android-emulator` — the flag, for refusals. */
-export function describeCapabilityFlag(capabilities: readonly string[]): string {
+function describeCapabilityFlag(capabilities: readonly string[]): string {
   return `project requires ${capabilities.join(" and ")}`;
 }
 

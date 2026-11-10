@@ -650,7 +650,7 @@ export function clearComposeCacheForTests(): void {
  * per-process that a dedicated TTL would be pure overhead. */
 let composeAvailable: boolean | null = null;
 
-export async function isDockerComposeAvailable(forceRefresh = false): Promise<boolean> {
+async function isDockerComposeAvailable(forceRefresh = false): Promise<boolean> {
   if (!forceRefresh && composeAvailable !== null) return composeAvailable;
   const output = await runDocker(["compose", "version"]);
   composeAvailable = output !== null;

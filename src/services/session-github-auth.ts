@@ -136,7 +136,7 @@ export async function refreshSessionGithubAuth(
 
 /** Local session: straight into this process's store (same one a hosted agent
  * fills over /internal). */
-export function deliverLocalSessionGithubAuth(sessionId: string, auth: SessionGithubAuth): void {
+function deliverLocalSessionGithubAuth(sessionId: string, auth: SessionGithubAuth): void {
   setSessionGithubAuth(sessionId, auth);
 }
 

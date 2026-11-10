@@ -71,7 +71,7 @@ export type PromptCheckStage = "before" | "before-submit";
 const promptLocks = new WeakMap<object, Promise<void>>();
 
 /** Serializes `fn` per key (a Session): FIFO, and a throwing `fn` still releases. */
-export async function withPromptLock<T>(key: object, fn: () => Promise<T>): Promise<T> {
+async function withPromptLock<T>(key: object, fn: () => Promise<T>): Promise<T> {
   const previous = promptLocks.get(key) ?? Promise.resolve();
   let release!: () => void;
   const mine = new Promise<void>((resolve) => (release = resolve));

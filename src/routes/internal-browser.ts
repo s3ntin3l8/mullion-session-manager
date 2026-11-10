@@ -22,7 +22,7 @@ import {
 /** What a caller that names no (or a foreign) target is told. An older primary
  * only sends `?projectId=`, which an agent cannot map to one checkout's
  * browser, so the answer says what to do rather than a bare 400. */
-export const MISSING_TARGET_MESSAGE =
+const MISSING_TARGET_MESSAGE =
   "This request names no browser target for this host (projectId, hostId and checkoutRoot are required). The primary is older than this agent: update the primary.";
 
 /** The browser target an agent browser route was asked for (issue #2448). The

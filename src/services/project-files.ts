@@ -544,8 +544,8 @@ export function renameProjectPath(root: string, fromRel: string, toRel: string):
   return { path: to.rel };
 }
 
-export const MAX_SEARCH_VISITED = 20_000;
-export const MAX_SEARCH_RESULTS = 50;
+const MAX_SEARCH_VISITED = 20_000;
+const MAX_SEARCH_RESULTS = 50;
 // Directories a filename search never descends into: VCS internals, vendored
 // dependencies, and this product's own worktree checkouts (a project's
 // .mullion-worktrees/ would otherwise duplicate every file N times).

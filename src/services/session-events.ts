@@ -35,7 +35,7 @@ export function shouldDropForBackpressure(bufferedAmount: number): boolean {
 // add up to more than is useful to dump on connect.
 export const REPLAY_MAX_EVENTS = 500;
 /** Persisted events replayed per remote session when a relayed stream opens (#2125). */
-export const REMOTE_REPLAY_PER_SESSION = 100;
+const REMOTE_REPLAY_PER_SESSION = 100;
 
 interface SeenMessage {
   type: "seen";
@@ -77,7 +77,7 @@ export function isCursorsUpstreamFrame(value: unknown): value is CursorsUpstream
   );
 }
 
-export function sendEvent(socket: SocketLike, event: NotificationEvent): void {
+function sendEvent(socket: SocketLike, event: NotificationEvent): void {
   if (socket.readyState !== socket.OPEN) return;
   if (shouldDropForBackpressure(socket.bufferedAmount)) return;
   socket.send(JSON.stringify(event));

@@ -42,7 +42,7 @@ export function pipeFilteredChannelToChannel(
  * request was already silent by design before this (see this module's own
  * header comment on `SIGN_ONLY_ALLOWLIST`'s enforcement), and stays that
  * way in normal operation; this just makes it observable on demand. */
-export function pipeFilteredRequestDirection(
+function pipeFilteredRequestDirection(
   source: MuxChannel,
   dest: MuxChannel,
   log?: SshAgentRelayLogger,

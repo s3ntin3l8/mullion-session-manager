@@ -110,7 +110,7 @@ export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Pro
 // directories nest (see docker-service-detect.ts's mapServicesToProject
 // doc comment for why the full list is needed rather than just the one
 // project's own cwd).
-export function localProjectCwds(app: FastifyInstance): string[] {
+function localProjectCwds(app: FastifyInstance): string[] {
   return listLocalProjectCwds(app.db);
 }
 

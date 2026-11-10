@@ -9,7 +9,7 @@ import {
 import { TooltipBubble } from "./Tooltip.js";
 
 /** Hover delay before the tooltip appears; keyboard focus shows it at once. */
-export const TOOLTIP_HOVER_DELAY_MS = 200;
+const TOOLTIP_HOVER_DELAY_MS = 200;
 
 export interface TooltipTriggerProps {
   onPointerEnter: (e: PointerEvent<HTMLElement>) => void;

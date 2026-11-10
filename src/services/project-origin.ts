@@ -76,7 +76,7 @@ export function warmProjectOriginUrl(
 }
 
 /** The cached raw origin URL; kicks off a background read when stale or missing. */
-export function cachedProjectOriginUrl(
+function cachedProjectOriginUrl(
   app: FastifyInstance,
   project: { hostId: string; cwd: string },
 ): string | null {

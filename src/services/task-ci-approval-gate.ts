@@ -29,7 +29,7 @@ import { readPrCheckRuns, type PrCheckRuns } from "./pr-check-runs.js";
  * per hour — this runs each sweep tick), so a task waiting here is no longer
  * silent.
  */
-export const LOST_RUN_WORKFLOWS: readonly string[] = ["CodeQL", "Dependency Review"];
+const LOST_RUN_WORKFLOWS: readonly string[] = ["CodeQL", "Dependency Review"];
 
 const WAITING_LOG_INTERVAL_MS = 60 * 60_000;
 const lastLoggedAt = new Map<number, number>();

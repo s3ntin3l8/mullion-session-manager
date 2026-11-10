@@ -281,7 +281,7 @@ export function checksStatus(input: PrStatusInput, jobsByRun?: Record<number, Ru
 }
 
 /** The list of names as prose: "a", "a and b", "a, b and c". */
-export function joinNames(names: readonly string[]): string {
+function joinNames(names: readonly string[]): string {
   return names.length <= 1
     ? (names[0] ?? "")
     : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;

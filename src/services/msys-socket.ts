@@ -33,10 +33,10 @@ import { fitsMsysSunPath } from "../cli/sun-path.mjs";
 // inherits read access for every authenticated user.
 
 /** How long a client may take to finish the handshake before it is dropped. */
-export const MSYS_HANDSHAKE_TIMEOUT_MS = 5_000;
+const MSYS_HANDSHAKE_TIMEOUT_MS = 5_000;
 
 /** Generous: a cold Windows PowerShell start alone can take a second or two. */
-export const MSYS_SOCKET_FILE_TIMEOUT_MS = 15_000;
+const MSYS_SOCKET_FILE_TIMEOUT_MS = 15_000;
 
 const PROBE_TIMEOUT_MS = 2_000;
 const SECRET_BYTES = 16;
@@ -49,7 +49,7 @@ export const MSYS_SOCKET_COOKIE_ENV = "MULLION_MSYS_SOCKET_COOKIE";
 export const MSYS_SOCKET_FILE_EXISTS_EXIT = 3;
 
 /** The most connections that may be in the handshake at once (see listenMsysSocket). */
-export const MSYS_MAX_PENDING_HANDSHAKES = 64;
+const MSYS_MAX_PENDING_HANDSHAKES = 64;
 
 /**
  * The script Windows PowerShell runs to create the socket file. Fixed text:

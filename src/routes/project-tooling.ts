@@ -68,7 +68,7 @@ const writeReviewerAgentSchema = {
   },
 };
 
-export class ProjectSkillContentInvalidError extends Error {
+class ProjectSkillContentInvalidError extends Error {
   constructor(reason: string) {
     super(reason);
     this.name = "ProjectSkillContentInvalidError";

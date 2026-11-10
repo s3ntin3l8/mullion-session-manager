@@ -582,16 +582,6 @@ export function FilePlusIcon(props: IconProps) {
   );
 }
 
-export function FolderPlusIcon(props: IconProps) {
-  return (
-    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <line x1="12" y1="10.5" x2="12" y2="15.5" />
-      <line x1="9.5" y1="13" x2="14.5" y2="13" />
-    </Svg>
-  );
-}
-
 export function ExternalLinkIcon(props: IconProps) {
   return (
     <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -840,26 +830,6 @@ export function DownloadIcon(props: IconProps) {
   );
 }
 
-export function UploadIcon(props: IconProps) {
-  return (
-    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M12 15V4" />
-      <path d="M7.5 8.5 12 4l4.5 4.5" />
-      <path d="M5 19.5h14" />
-    </Svg>
-  );
-}
-
-export function FolderUpIcon(props: IconProps) {
-  return (
-    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <path d="M12 16v-5.5" />
-      <path d="M9.5 12.5 12 10l2.5 2.5" />
-    </Svg>
-  );
-}
-
 export function CopyIcon(props: IconProps) {
   return (
     <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -885,15 +855,6 @@ export function ThreadIcon(props: IconProps) {
     <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
       <path d="M4 5h16v10H9l-5 4z" />
       <path d="M8 9h8M8 12h5" />
-    </Svg>
-  );
-}
-
-// "Pop out to the dock": the toolbar button that opens the view as a full panel.
-export function PopOutIcon(props: IconProps) {
-  return (
-    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M14 4h6v6M20 4l-8 8M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5" />
     </Svg>
   );
 }

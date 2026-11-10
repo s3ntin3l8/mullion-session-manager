@@ -368,7 +368,7 @@ const rehydrateMemos = new WeakMap<FastifyInstance, Map<string, RehydrateMemoEnt
  * reviewer login configured there is nothing to pair, so no state is invented.
  * Memoized per PR: it costs a review read plus the marker reads.
  */
-export async function rehydrateLandedFromMarker(
+async function rehydrateLandedFromMarker(
   app: FastifyInstance,
   token: string,
   t: { owner: string; repo: string; prNumber: number },

@@ -63,8 +63,8 @@ export const MULLION_REGION_PLACEHOLDER = "<<<MULLION_REGION>>>";
 // scaffold): this region is the moved text itself: a re-run adds new moved text
 // after what is there (never replacing it) and skips text already present, so
 // it can't accumulate duplicates either.
-export const MOVED_MARKER_START = "<!-- mullion:moved:start -->";
-export const MOVED_MARKER_END = "<!-- mullion:moved:end -->";
+const MOVED_MARKER_START = "<!-- mullion:moved:start -->";
+const MOVED_MARKER_END = "<!-- mullion:moved:end -->";
 
 // The worktree convention names `.wt/<branch>` as the place worktrees live
 // (workflow-conventions.ts's `worktree` option), so a repo whose committed
@@ -98,7 +98,7 @@ function prettierIgnoresDir(text: string, dir: string): boolean {
  * `prettier --write` rewrites just the other copy and the pair drifts. Returns
  * the tree to add an ignore line for, or null when both or neither are covered
  * (neither: the repo formats both alike). */
-export function missingPrettierIgnoreDir(text: string): ".claude" | ".agents" | null {
+function missingPrettierIgnoreDir(text: string): ".claude" | ".agents" | null {
   const claude = prettierIgnoresDir(text, ".claude");
   const agents = prettierIgnoresDir(text, ".agents");
   if (claude === agents) return null;
