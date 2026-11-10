@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IssueDetailView, IssuesSection } from "./IssuesView.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
@@ -738,6 +738,30 @@ describe("Issues with a queued Task Master task but no session", () => {
     expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open task" }));
     expect(requestOpenTask).toHaveBeenCalledWith(4);
+  });
+
+  it("detail shows the linked task's status strip, with its actions and a link into the Tasks view", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(jsonResponse(200, url.includes("/github/issues/7") ? DETAIL : LIST)),
+      ),
+    );
+    useDashboardStore.setState({
+      taskMasterEnabled: true,
+      projects: [makeProject({ id: 1 })],
+      tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "reviewing" })],
+    });
+    render(<IssueDetailView projectId={1} number={7} onBack={vi.fn()} />);
+    const strip = await screen.findByRole("region", { name: "Task" });
+    expect(within(strip).getByRole("button", { name: "Approve task" })).toBeInTheDocument();
+    await userEvent.click(within(strip).getByRole("button", { name: "Open task →" }));
+    const s = useDashboardStore.getState();
+    expect(s.selectedTaskId).toBe(4);
+    expect(s.sidebarBack).toEqual({
+      to: { kind: "task", taskId: 4 },
+      back: { kind: "issue", projectId: 1, number: 7 },
+    });
   });
 
   it("detail shows an error when the claim fails", async () => {

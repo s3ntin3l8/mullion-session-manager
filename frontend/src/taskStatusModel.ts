@@ -231,3 +231,14 @@ export function taskRelations(task: Task, all: readonly Task[]): TaskRelations {
       : [];
   return { parent, blockedBy, blocks, siblings, children };
 }
+
+/** The statuses the GitHub sidebar's task strip shows actions for: the ones that
+ * wait on a human review or a merge (a ready or backlog task's Claim stays with
+ * the issue's own header actions). */
+export function hasStripActions(task: Task): boolean {
+  return (
+    task.status === "reviewing" ||
+    task.status === "failed" ||
+    (task.status === "done" && task.prNumber !== null)
+  );
+}

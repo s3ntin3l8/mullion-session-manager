@@ -1183,6 +1183,46 @@ button.sb-chip--label[aria-pressed="true"] {
 .sb-taskstatus-next b {
   color: var(--fg);
 }
+.sb-taskstatus-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.sb-taskstatus-actions:empty {
+  display: none;
+}
+/* The "More task actions" menu is anchored to the whole row, not to its small ⋯
+   button: the button sits left of centre, so a panel hanging from its right edge
+   runs off the sidebar's left edge at narrow widths. Spanning the row always fits. */
+.sb-taskstatus-actions {
+  position: relative;
+}
+.sb-taskstatus-actions .sb-pop {
+  position: static;
+}
+.sb-taskstatus-actions .sb-pop-panel {
+  left: 0;
+  right: 0;
+  max-width: none;
+}
+.sb-taskstatus-actions .task-detail-actions {
+  flex: 1;
+  min-width: 0;
+}
+.sb-taskstatus-open {
+  margin-left: auto;
+  font-size: 0.75rem;
+}
+.sb-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sb-menu-list .notif-gate-btn {
+  width: 100%;
+  text-align: left;
+}
 .sb-steps {
   display: flex;
   gap: 2px;

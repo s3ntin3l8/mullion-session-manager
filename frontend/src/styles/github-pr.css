@@ -119,6 +119,11 @@ a.pr-dr-row:hover {
   background: var(--sidebar-2);
   overflow: hidden;
 }
+/* The task strip's "More task actions" menu drops below its own (short) card, so
+   this card must not clip it; nothing inside the strip needs the rounded clip. */
+.pr-card.pr-task-strip {
+  overflow: visible;
+}
 .pr-card-h {
   display: flex;
   flex-wrap: wrap;

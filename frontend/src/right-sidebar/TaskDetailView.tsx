@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
+import { goSidebarBack } from "../sidebarBack.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
 import { commandToBinary } from "../cliLogos.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
@@ -163,9 +164,15 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         })
       : undefined;
   const openPr = () =>
-    useDashboardStore.getState().openRightSidebarPr(task.projectId, task.prNumber as number);
+    useDashboardStore.getState().openRightSidebarPr(task.projectId, task.prNumber as number, {
+      kind: "task",
+      taskId: task.id,
+    });
   const openIssue = () =>
-    useDashboardStore.getState().openRightSidebarIssue(task.projectId, task.issueNumber as number);
+    useDashboardStore.getState().openRightSidebarIssue(task.projectId, task.issueNumber as number, {
+      kind: "task",
+      taskId: task.id,
+    });
   const relations = taskRelations(task, allTasks);
   const hasHierarchy =
     task.parentIssueNumber !== null ||
@@ -181,7 +188,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
     <div className="tasks-sidebar-view tasks-detail" data-testid="task-detail-view">
       <DetailHeader
         title={`${taskRowLabel(task)} ${task.title}`}
-        onBack={onBack}
+        onBack={() => goSidebarBack({ kind: "task", taskId: task.id }, onBack)}
         externalUrl={task.htmlUrl}
         externalLabel="Open the issue on GitHub"
         actions={

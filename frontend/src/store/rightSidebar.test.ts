@@ -52,6 +52,51 @@ describe("right sidebar actions", () => {
     expect(useDashboardStore.getState().selectedTaskId).toBeNull();
   });
 
+  describe("sidebarBack (Tasks ↔ GitHub cross-links, epic #2847)", () => {
+    const task5 = { kind: "task", taskId: 5 } as const;
+    const pr12 = { kind: "pr", projectId: 3, number: 12 } as const;
+    it("records where a cross-linked destination's Back returns, and consumes it once", () => {
+      useDashboardStore.getState().openRightSidebarPr(3, 12, task5);
+      expect(useDashboardStore.getState().takeSidebarBack(pr12)).toEqual(task5);
+      expect(useDashboardStore.getState().takeSidebarBack(pr12)).toBeNull();
+    });
+    it("ignores an entry meant for another destination", () => {
+      useDashboardStore.getState().openRightSidebarTask(5, pr12);
+      expect(useDashboardStore.getState().takeSidebarBack({ kind: "task", taskId: 6 })).toBeNull();
+      expect(useDashboardStore.getState().takeSidebarBack(task5)).toEqual(pr12);
+    });
+    it("matches on kind and ids, not on the shape of the target", () => {
+      useDashboardStore.getState().openRightSidebarPr(3, 12, task5);
+      // Same number, other project; and the same ids under another kind.
+      expect(
+        useDashboardStore.getState().takeSidebarBack({ kind: "pr", projectId: 4, number: 12 }),
+      ).toBeNull();
+      expect(
+        useDashboardStore.getState().takeSidebarBack({ kind: "issue", projectId: 3, number: 12 }),
+      ).toBeNull();
+      expect(useDashboardStore.getState().takeSidebarBack(pr12)).toEqual(task5);
+    });
+    it("returns an issue opened from a task to that task", () => {
+      useDashboardStore.getState().openRightSidebarIssue(3, 7, task5);
+      expect(
+        useDashboardStore.getState().takeSidebarBack({ kind: "issue", projectId: 3, number: 7 }),
+      ).toEqual(task5);
+    });
+    it("is cleared by any other navigation", () => {
+      const nav = [
+        () => useDashboardStore.getState().selectTask(null),
+        () => useDashboardStore.getState().openRightSidebarView("files"),
+        () => useDashboardStore.getState().openRightSidebarTask(5),
+        () => useDashboardStore.getState().openRightSidebarPr(3, 12),
+      ];
+      for (const go of nav) {
+        useDashboardStore.getState().openRightSidebarPr(3, 12, task5);
+        go();
+        expect(useDashboardStore.getState().takeSidebarBack(pr12)).toBeNull();
+      }
+    });
+  });
+
   it("openRightSidebarView with a project bumps a nonce so repeats still fire", () => {
     useDashboardStore.getState().openRightSidebarView("files", 5);
     const first = useDashboardStore.getState().rightSidebarProjectRequest;

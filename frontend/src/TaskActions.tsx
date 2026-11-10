@@ -1,9 +1,12 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { ApiError } from "./api/index.js";
 import type { Task } from "./api/index.js";
 import { TextInput } from "./ui/primitives.js";
+import { IconPopover } from "./ui/sidebar/IconPopover.js";
+import { OverflowIcon } from "./ui/icons.js";
 import {
   awaitingMergeReason,
   isAwaitingMerge,
@@ -41,7 +44,16 @@ const GIVE_UP_HINT =
 // behavior instead of being the one path that pops a terminal. The task
 // card already shows the new session's live status, and "Open session" in
 // TaskDetail's own meta row above opens it on demand.
-export function TaskActions({ task }: { task: Task }) {
+export function TaskActions({
+  task,
+  overflow = false,
+}: {
+  task: Task;
+  /** Epic #2847: keep the primary action inline and put the rest (Re-review,
+   * Reject, Give up, Move to Backlog) behind a `⋯` menu, as the shared status
+   * strip in the GitHub sidebar does. Same buttons, same handlers. */
+  overflow?: boolean;
+}) {
   const {
     taskMasterEnabled,
     claimTask,
@@ -70,6 +82,21 @@ export function TaskActions({ task }: { task: Task }) {
   const disabledHint = !taskMasterEnabled
     ? "Task Master is disabled — enable it to use this action."
     : null;
+
+  // The non-primary actions: inline by default, behind the `⋯` menu when
+  // `overflow` is set. Picking an item closes the menu.
+  const secondary = (items: ReactNode) =>
+    overflow ? (
+      <IconPopover label="More task actions" icon={<OverflowIcon size={14} />}>
+        {(close) => (
+          <div className="sb-menu-list" onClick={close}>
+            {items}
+          </div>
+        )}
+      </IconPopover>
+    ) : (
+      items
+    );
 
   // Backlog<->Ready is the board's only user-driven, non-terminal drag
   // (UnifiedBoard.tsx's DRAG_EDITABLE_STATUSES) — and drag is the ONLY way
@@ -159,13 +186,15 @@ export function TaskActions({ task }: { task: Task }) {
         >
           Claim
         </button>
-        <button
-          className="notif-gate-btn"
-          disabled={submitting}
-          onClick={() => void moveStatus("backlog")}
-        >
-          Move to Backlog
-        </button>
+        {secondary(
+          <button
+            className="notif-gate-btn"
+            disabled={submitting}
+            onClick={() => void moveStatus("backlog")}
+          >
+            Move to Backlog
+          </button>,
+        )}
         {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
         {error && <span className="task-detail-error">{error}</span>}
       </div>
@@ -350,42 +379,46 @@ export function TaskActions({ task }: { task: Task }) {
           reason needed (unlike reject/give-up below), so this fires
           directly on click rather than opening the pendingAction confirm
           flow. */}
-      {taskReReviewEligible(task) && (
-        <button
-          className="notif-gate-btn"
-          disabled={submitting}
-          title={REVIEW_HINT}
-          onClick={async () => {
-            setSubmitting(true);
-            setError(null);
-            try {
-              await reReviewTask(task.id);
-            } catch (err) {
-              setError(err instanceof ApiError ? err.message : "Failed to re-review task");
-            } finally {
-              setSubmitting(false);
-            }
-          }}
-        >
-          Re-review
-        </button>
+      {secondary(
+        <>
+          {taskReReviewEligible(task) && (
+            <button
+              className="notif-gate-btn"
+              disabled={submitting}
+              title={REVIEW_HINT}
+              onClick={async () => {
+                setSubmitting(true);
+                setError(null);
+                try {
+                  await reReviewTask(task.id);
+                } catch (err) {
+                  setError(err instanceof ApiError ? err.message : "Failed to re-review task");
+                } finally {
+                  setSubmitting(false);
+                }
+              }}
+            >
+              Re-review
+            </button>
+          )}
+          <button
+            className="notif-gate-btn notif-gate-deny"
+            disabled={submitting}
+            title={REJECT_HINT}
+            onClick={() => setPendingAction("reject")}
+          >
+            Reject
+          </button>
+          <button
+            className="notif-gate-btn notif-gate-deny"
+            disabled={submitting}
+            title={GIVE_UP_HINT}
+            onClick={() => setPendingAction("give-up")}
+          >
+            Give up
+          </button>
+        </>,
       )}
-      <button
-        className="notif-gate-btn notif-gate-deny"
-        disabled={submitting}
-        title={REJECT_HINT}
-        onClick={() => setPendingAction("reject")}
-      >
-        Reject
-      </button>
-      <button
-        className="notif-gate-btn notif-gate-deny"
-        disabled={submitting}
-        title={GIVE_UP_HINT}
-        onClick={() => setPendingAction("give-up")}
-      >
-        Give up
-      </button>
       {disabledHint && (
         <span className="task-detail-hint">
           {disabledHint} Reject/Give up still work — they're the escape hatches out of review while

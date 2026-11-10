@@ -210,6 +210,26 @@ describe("TaskDetailView", () => {
     expect(requestOpenSession).toHaveBeenCalledWith(8);
   });
 
+  it("returns to the pull request it was reached from, otherwise to the list", async () => {
+    const user = userEvent.setup();
+    const t = task({ status: "reviewing", prNumber: 33, prTitle: "Fix it" });
+    const onBack = vi.fn();
+    const openRightSidebarPr = vi.fn();
+    setTasks([t], { openRightSidebarPr });
+    useDashboardStore.setState({
+      sidebarBack: {
+        to: { kind: "task", taskId: t.id },
+        back: { kind: "pr", projectId: 4, number: 33 },
+      },
+    });
+    renderDetail(t.id, onBack);
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33);
+    expect(onBack).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the pull request and the issue in the GitHub view", async () => {
     const user = userEvent.setup();
     const openRightSidebarPr = vi.fn();
@@ -218,9 +238,9 @@ describe("TaskDetailView", () => {
     setTasks([t], { openRightSidebarPr, openRightSidebarIssue });
     renderDetail(t.id);
     await user.click(screen.getByRole("button", { name: "PR #33" }));
-    expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33);
+    expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33, { kind: "task", taskId: t.id });
     await user.click(screen.getByRole("button", { name: "#12" }));
-    expect(openRightSidebarIssue).toHaveBeenCalledWith(4, 12);
+    expect(openRightSidebarIssue).toHaveBeenCalledWith(4, 12, { kind: "task", taskId: t.id });
   });
 
   it("pops out to the docked panel and goes back", async () => {

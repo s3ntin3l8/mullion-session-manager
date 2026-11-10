@@ -73,6 +73,84 @@ describe("a task PR", () => {
     expect(requestOpenSession).toHaveBeenCalledWith(31);
   });
 
+  describe("the shared task strip", () => {
+    it("shows the strip once, with the task's actions, and no second action block", async () => {
+      stub(PR);
+      seed("reviewing");
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const strip = await screen.findByRole("region", { name: "Task" });
+      expect(within(strip).getByTestId("task-status-block")).toBeInTheDocument();
+      // The class the CSS guard in TaskStatusBlock.test.tsx pins (it keeps the menu unclipped).
+      expect(strip).toHaveClass("pr-task-strip");
+      expect(screen.getAllByRole("button", { name: "Approve task" })).toHaveLength(1);
+      expect(within(strip).getByRole("button", { name: "Approve task" })).toBeInTheDocument();
+      // The rest of the PR view is untouched: status, the Mullion card, the pinned area.
+      expect(screen.getByRole("region", { name: "Mullion" })).toBeInTheDocument();
+      expect(screen.getByText("Checks")).toBeInTheDocument();
+    });
+
+    it("keeps every action the PR view offered reachable from the strip", async () => {
+      stub(PR);
+      seed("reviewing", [], {
+        lastReviewVerdict: "inconclusive",
+        reviewSessionId: 9,
+        reviewFindingsIngestedSessionId: 9,
+      });
+      useDashboardStore.setState({ taskMasterEnabled: true });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const strip = await screen.findByRole("region", { name: "Task" });
+      expect(within(strip).getByRole("button", { name: "Approve task" })).toBeInTheDocument();
+      await userEvent.click(within(strip).getByRole("button", { name: "More task actions" }));
+      for (const name of ["Re-review", "Reject", "Give up"]) {
+        expect(within(strip).getByRole("button", { name })).toBeInTheDocument();
+      }
+    });
+
+    it("has no strip on a PR that no task owns", async () => {
+      stub(PR);
+      useDashboardStore.setState({ projects: [makeProject({ id: 1 })], tasks: [] });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await screen.findByRole("region", { name: "Mullion" });
+      expect(screen.queryByRole("region", { name: "Task" })).toBeNull();
+      expect(screen.queryByTestId("task-status-block")).toBeNull();
+    });
+
+    it("opens the task in the Tasks view, and Back from it returns here", async () => {
+      stub(PR);
+      seed("in_progress");
+      const onBack = vi.fn();
+      render(<PrDetailView projectId={1} number={12} onBack={onBack} />);
+      const strip = await screen.findByRole("region", { name: "Task" });
+      await userEvent.click(within(strip).getByRole("button", { name: "Open task →" }));
+      const s = useDashboardStore.getState();
+      expect(s.selectedTaskId).toBe(5);
+      expect(s.rightSidebarView).toBe("tasks");
+      expect(s.sidebarBack).toEqual({
+        to: { kind: "task", taskId: 5 },
+        back: { kind: "pr", projectId: 1, number: 12 },
+      });
+    });
+
+    it("sends its own Back to the task it was opened from", async () => {
+      stub(PR);
+      seed("in_progress");
+      const onBack = vi.fn();
+      const openRightSidebarTask = vi.fn();
+      useDashboardStore.setState({
+        openRightSidebarTask,
+        sidebarBack: {
+          to: { kind: "pr", projectId: 1, number: 12 },
+          back: { kind: "task", taskId: 5 },
+        },
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={onBack} />);
+      await screen.findByRole("region", { name: "Task" });
+      await userEvent.click(screen.getByRole("button", { name: "Back" }));
+      expect(openRightSidebarTask).toHaveBeenCalledWith(5);
+      expect(onBack).not.toHaveBeenCalled();
+    });
+  });
+
   describe("the pinned review's comments button", () => {
     const pinned = (over: object = {}) => ({
       ...PR,
