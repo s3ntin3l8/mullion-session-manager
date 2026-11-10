@@ -370,6 +370,113 @@ describe("UnifiedBoard task columns", () => {
     expect(openRightSidebarTask).not.toHaveBeenCalled();
   });
 
+  // #2873 — axe nested-interactive: the card root used to be role="button" and
+  // held the issue/PR links and the session strip, i.e. interactive controls
+  // inside a button. The root is a plain container now and the card has ONE
+  // real keyboard control; the links and the strip are separate tab stops.
+  describe("keyboard and accessibility structure (#2873)", () => {
+    const withLinksAndSession = () => {
+      sessions = [makeSession({ id: 7, projectId: 1, command: "claude" })];
+      tasks = [
+        makeTask({
+          id: 1,
+          status: "in_progress",
+          sessionId: 7,
+          title: "Fix the widget",
+          issueNumber: 12,
+          htmlUrl: "https://github.com/o/r/issues/12",
+          prNumber: 13,
+          prUrl: "https://github.com/o/r/pull/13",
+        }),
+      ];
+    };
+
+    it("has no interactive element inside another interactive element", () => {
+      withLinksAndSession();
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+      const card = document.querySelector(".task-card")!;
+      expect(card.getAttribute("role")).toBeNull();
+      expect(card.getAttribute("tabindex")).toBeNull();
+      // Links and the session button exist (so the next check is not vacuous)...
+      expect(card.querySelectorAll("a[href]").length).toBeGreaterThanOrEqual(2);
+      expect(card.querySelector("button.task-card-session-strip-open")).not.toBeNull();
+      // ...and no focusable or widget descendant sits inside a button or a
+      // role="button" element (axe's nested-interactive keys off any of these).
+      const interactive = 'a[href], button, input, select, textarea, [role="button"], [tabindex]';
+      for (const outer of card.querySelectorAll('button, [role="button"]')) {
+        expect(outer.querySelectorAll(interactive)).toHaveLength(0);
+      }
+    });
+
+    it("gives the card one real button that Tab reaches, and Enter and Space open the task", async () => {
+      const user = userEvent.setup();
+      withLinksAndSession();
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+      const open = screen.getByRole("button", { name: "Open task: Fix the widget" });
+      // Tab until the card's button has focus (the filter bar and column
+      // controls come first), proving it is a real tab stop.
+      for (let i = 0; i < 60 && document.activeElement !== open; i += 1) await user.tab();
+      expect(open).toHaveFocus();
+
+      await user.keyboard("{Enter}");
+      expect(openRightSidebarTask).toHaveBeenCalledTimes(1);
+      expect(openRightSidebarTask).toHaveBeenLastCalledWith(1);
+
+      await user.keyboard(" ");
+      expect(openRightSidebarTask).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the issue link, PR link and session button as their own tab stops that do not open the task", async () => {
+      const user = userEvent.setup();
+      const onOpenSession = vi.fn();
+      withLinksAndSession();
+      render(<UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={vi.fn()} />);
+
+      const stops = [
+        screen.getByRole("button", { name: "Open task: Fix the widget" }),
+        screen.getByRole("link", { name: /#12/ }),
+        screen.getByRole("link", { name: /PR #13/ }),
+        document.querySelector<HTMLElement>("button.task-card-session-strip-open")!,
+      ];
+      // They follow the card's open button in DOM (and so tab) order.
+      for (let i = 1; i < stops.length; i += 1) {
+        expect(
+          stops[i - 1].compareDocumentPosition(stops[i]) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+
+      await user.click(stops[1]);
+      await user.click(stops[2]);
+      expect(openRightSidebarTask).not.toHaveBeenCalled();
+
+      await user.click(stops[3]);
+      expect(onOpenSession).toHaveBeenCalledTimes(1);
+      expect(openRightSidebarTask).not.toHaveBeenCalled();
+    });
+
+    it("still opens the task on a pointer click anywhere on the card", async () => {
+      const user = userEvent.setup();
+      withLinksAndSession();
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+      await user.click(screen.getByText("Fix the widget"));
+      expect(openRightSidebarTask).toHaveBeenCalledTimes(1);
+      expect(openRightSidebarTask).toHaveBeenLastCalledWith(1);
+    });
+
+    it("names the session button by its visible text, so the name contains what is shown", () => {
+      withLinksAndSession();
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+      const strip = document.querySelector<HTMLElement>("button.task-card-session-strip-open")!;
+      // No aria-label that differs from the visible text (WCAG 2.5.3).
+      expect(strip.hasAttribute("aria-label")).toBe(false);
+      expect(strip.textContent).toMatch(/^\s*worker\s*·\s*\S/);
+    });
+  });
+
   it("shows a disabled-claim hint on a ready card when taskMasterEnabled is off", () => {
     taskMasterEnabled = false;
     tasks = [makeTask({ id: 1, status: "ready" })];

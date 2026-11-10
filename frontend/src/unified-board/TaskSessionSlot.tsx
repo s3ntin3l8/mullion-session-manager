@@ -50,7 +50,7 @@ export function TaskSessionSlot({
 
   const open = () => onOpenSession(session);
 
-  // Deliberately NOT draggable, and deliberately not its own tab stop.
+  // Deliberately NOT draggable.
   //
   // Hermes review caught a real bug in an earlier version of this component:
   // it WAS draggable with this same MIME, on the (wrong) assumption that
@@ -64,38 +64,42 @@ export function TaskSessionSlot({
   // a misleading affordance actively doing the wrong thing, not a harmlessly
   // dead one. Simplest correct fix: don't make it draggable at all.
   //
-  // Not a tabIndex={0}/role="button" element either — this strip already
-  // sits inside the task card's own role="button"/tabIndex={0}, and nesting
-  // two independently-focusable interactive elements with unrelated actions
-  // is bad for keyboard/screen-reader users. Click (mouse only) still opens
-  // the session directly; keyboard users reach the same session via the
-  // card's own Enter/Space (which opens the task detail) and its Claim/Retry/
-  // "Open session" actions.
+  // The strip is a container with ONE real <button> inside it, so keyboard and
+  // screen-reader users can open the session (it used to be mouse-only because
+  // it sat inside the card's own role="button"; the card root is a plain
+  // container now, see TaskCard.tsx). The strip itself cannot be the button:
+  // the setup badge is a button of its own and must not nest inside one. The
+  // container keeps the click so the whole strip stays a pointer target; the
+  // inner button has no handler, its Enter/Space click bubbles to it. The
+  // button's accessible name is its visible text ("worker · Working"): an
+  // aria-label that differs from the visible text fails WCAG 2.5.3 (axe
+  // label-content-name-mismatch), and the role is part of the visible text.
   return (
+    // The click handler is a pointer convenience: the inner button is the keyboard path and its click bubbles here.
     <span
       className={`task-card-session-strip${tint ? ` ${tint}` : ""}`}
-      title={`${role}: ${label}`}
-      aria-label={`${role} session: ${label}`}
       onClick={(e) => {
         e.stopPropagation();
         open();
       }}
     >
-      <span className="session-dot-wrap">
-        <span className={`session-dot-${presentation.tone}`} />
-      </span>
-      {logo ? (
-        <img src={logo} alt="" className="task-card-session-strip-logo" />
-      ) : (
-        <BotIcon size={10} />
-      )}
-      {/* Hermes review — role lived only in title/aria-label, which a
-          non-focusable span with no role doesn't reliably expose to screen
-          readers. Putting it in the visible text too matches the "ended"
-          chip above, which already reads "worker · ended". */}
-      <span className="task-card-session-strip-label">
-        {role} · {label}
-      </span>
+      <button type="button" className="task-card-session-strip-open" title={`${role}: ${label}`}>
+        <span className="session-dot-wrap">
+          <span className={`session-dot-${presentation.tone}`} />
+        </span>
+        {logo ? (
+          <img src={logo} alt="" className="task-card-session-strip-logo" />
+        ) : (
+          <BotIcon size={10} />
+        )}
+        {/* Hermes review — role lived only in title/aria-label, which a
+            non-focusable span with no role doesn't reliably expose to screen
+            readers. Putting it in the visible text too matches the "ended"
+            chip above, which already reads "worker · ended". */}
+        <span className="task-card-session-strip-label">
+          {role} · {label}
+        </span>
+      </button>
       <SetupBadge sessionId={session.id} status={session.setupStatus} />
     </span>
   );

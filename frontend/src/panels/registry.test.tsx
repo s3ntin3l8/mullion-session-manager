@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Suspense, useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import { makePanelWrapper, components, KanbanBoardOverlay } from "./registry.js";
@@ -626,6 +626,16 @@ describe("KanbanBoardOverlay", () => {
     );
     expect(container.querySelector(".kanban-board-inline")).not.toBeNull();
     expect(container.querySelector(".kanban-board-overlay")).toBeNull();
+  });
+  // #2873 — axe `region`: the board's content has to sit inside a landmark, in
+  // both placements (grid overlay and the phone navigator's in-flow board).
+  it.each([
+    ["overlay", false],
+    ["inline", true],
+  ])("puts the board inside a named Tasks region (%s)", async (_name, inline) => {
+    render(<KanbanBoardOverlay inline={inline} onOpenSession={noop} onSessionEnded={noop} />);
+    const region = screen.getByRole("region", { name: "Tasks" });
+    expect(await within(region).findByTestId("board")).toBeInTheDocument();
   });
 });
 
