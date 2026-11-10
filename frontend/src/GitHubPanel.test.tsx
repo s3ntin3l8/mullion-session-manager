@@ -845,9 +845,9 @@ describe("GitHubPanel", () => {
     // session held at the review gate shows the badge.
     it("opens the task from its chip and badges a session held at the review gate", async () => {
       setup({ ...failingPr, taskId: 7, taskStatus: "in_progress" });
-      const requestOpenTask = vi.fn();
+      const openRightSidebarTask = vi.fn();
       useDashboardStore.setState({
-        requestOpenTask,
+        openRightSidebarTask,
         projects: [makeProject({ id: 1 })],
         sessions: [
           makeSession({
@@ -865,7 +865,7 @@ describe("GitHubPanel", () => {
       const badge = screen.getByText("review gate");
       expect(badge.title).toContain("attn worker: Push to origin?");
       await userEvent.click(screen.getByRole("button", { name: "#7 · in_progress" }));
-      expect(requestOpenTask).toHaveBeenCalledWith(7);
+      expect(openRightSidebarTask).toHaveBeenCalledWith(7);
       // The chip's click stays on the chip: the PR detail did not open.
       expect(screen.queryByRole("region", { name: "Mullion" })).toBeNull();
       useDashboardStore.setState({ projects: [], sessions: [] });

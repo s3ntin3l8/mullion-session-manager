@@ -2,27 +2,27 @@ import { useEffect, useRef } from "react";
 import type { RefObject, KeyboardEvent as ReactKeyboardEvent } from "react";
 
 // P11 — shared focus-management primitive for modals/popovers/menus,
-// extracted from UnifiedBoard.tsx's task-detail drawer (the one place in the
-// app that got this right before this PR — see that component's own doc
-// comments on `lastFocusedRef`/`onDrawerKeyDown` for the underlying
-// rationale this restates in reusable form):
+// extracted from the Unified Board's task-detail drawer (the one place in the
+// app that got this right before this PR; the drawer itself was retired in
+// #2843, when the Tasks sidebar became the one task detail), restated here in
+// reusable form:
 //  - focus moves into the container the moment it becomes active
 //    (`initialFocusRef` if given, else the first focusable descendant)
 //  - Tab/Shift+Tab wraps at the container's boundary instead of escaping
 //    into the page behind it
 //  - focus is restored to whatever was focused right before the container
-//    became active, captured inside this hook's own effect. UnifiedBoard's
-//    drawer captures at the click site instead, specifically because
-//    `detailTaskId` can go directly from one non-null value to a different
-//    one without unmounting in between (switching tasks), which would make
-//    an effect-time capture read focus the OUTGOING effect's own cleanup
-//    just moved to. None of this hook's four call sites (Settings,
+//    became active, captured inside this hook's own effect. The board's old
+//    drawer captured at the click site instead, specifically because its task
+//    id could go directly from one non-null value to a different one without
+//    unmounting in between (switching tasks), which would make an
+//    effect-time capture read focus the OUTGOING effect's own cleanup just
+//    moved to. None of this hook's four call sites (Settings,
 //    CommandPalette — fresh mount per open; NotificationBell's popover,
 //    PaneTab's menu — a plain boolean toggle) have that shape, so capturing
 //    here, at activation, is equivalent and keeps every call site from
 //    having to plumb its own "capture before opening" wiring.
 //
-// Escape is deliberately NOT handled here. UnifiedBoard's own drawer scopes
+// Escape is deliberately NOT handled here. The board's old drawer scoped
 // Escape to itself via onKeyDown specifically so a window-level listener
 // doesn't also catch a keypress meant for some OTHER overlay sitting above
 // it — and this repo's four call sites already have three different Escape

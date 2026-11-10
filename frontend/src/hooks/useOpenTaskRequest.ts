@@ -12,8 +12,9 @@ export interface UseOpenTaskRequestParams {
   restoredWorkspaceIdRef: MutableRefObject<number | null>;
 }
 
-// Issue #2020 — resolves store/slices/ui.ts's requestOpenTask "intent": a
-// task chip in the right sidebar (a PR row, a branch's owning task) has no
+// Issue #2020 — resolves store/slices/ui.ts's requestOpenTask "intent": the
+// right sidebar (the Tasks detail's pop-out, and on phone/tablet every
+// task chip, board card and notification: hooks/useOpenTask.ts) has no
 // dockview API, so it asks the app shell to open the task's detail panel.
 // The task twin of useOpenSessionRequest.ts, with the same gates, the same
 // setTimeout(0) retry while a workspace restores, and the same rule that a

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
 import { goSidebarBack } from "../sidebarBack.js";
@@ -27,6 +27,7 @@ import {
   StatusTriad,
   TaskStatusBlock,
 } from "../ui/sidebar/index.js";
+import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 
 // The Tasks sidebar's detail mode (epic #2847): one task, status first. It
 // reads its own task by id from the store, so it does not depend on what the
@@ -128,10 +129,30 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const selectTask = useDashboardStore((s) => s.selectTask);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
   const [bodyOpen, setBodyOpen] = useState(false);
+  // A task is shown from outside the rail (a board card, a notification, a
+  // task chip in the GitHub or Git views) as often as from inside it, and the
+  // store selection moves no focus by itself. Without this a keyboard user who
+  // pressed Enter on a card lands nowhere: nothing in the sidebar is focused
+  // and nothing is announced (the board's old drawer focused its close button,
+  // trapped Tab and closed on Escape for exactly that reason). Focus the Back
+  // button when a task's detail appears or another task replaces it. In the
+  // right sidebar DetailHeader portals the header (Back included) into the
+  // drawer's detail slot, outside this view's own root, so Back is looked up
+  // in the slot when there is one and in the root otherwise. A screen reader
+  // announces "Back, button" there, not the task; the view's region is labelled
+  // with the task for when focus moves into the body.
+  // `detailSlot` is a dependency because the slot element arrives one render
+  // after the panel mounts: the first run finds the inline header, the next
+  // finds the portalled one.
+  const detailSlot = useContext(SidebarDetailSlotContext);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    (detailSlot ?? rootRef.current)?.querySelector<HTMLElement>('[aria-label="Back"]')?.focus();
+  }, [taskId, detailSlot]);
 
   if (!task) {
     return (
-      <div className="tasks-sidebar-view">
+      <div className="tasks-sidebar-view" ref={rootRef}>
         <DetailHeader title="Task" onBack={onBack} />
         <EmptyStateNote>This task no longer exists.</EmptyStateNote>
       </div>
@@ -185,7 +206,13 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const longBody = body.length > BODY_COLLAPSED_CHARS;
 
   return (
-    <div className="tasks-sidebar-view tasks-detail" data-testid="task-detail-view">
+    <div
+      className="tasks-sidebar-view tasks-detail"
+      data-testid="task-detail-view"
+      ref={rootRef}
+      role="region"
+      aria-label={`Task ${taskRowLabel(task)} ${task.title}`}
+    >
       <DetailHeader
         title={`${taskRowLabel(task)} ${task.title}`}
         onBack={() => goSidebarBack({ kind: "task", taskId: task.id }, onBack)}

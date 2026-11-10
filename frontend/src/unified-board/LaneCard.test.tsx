@@ -46,8 +46,6 @@ const createTask = vi.fn(async () => makeTask({}));
 
 function storeState() {
   return {
-    pendingOpenTaskId: null,
-    setPendingOpenTaskId: vi.fn(),
     sessions,
     projects,
     tasks,
@@ -81,23 +79,6 @@ vi.mock("../store/index.js", () => {
   useDashboardStore.getState = storeState;
   return { useDashboardStore };
 });
-
-vi.mock("../TaskDetail.js", () => ({
-  TaskDetail: ({
-    params,
-    onOpenSession,
-  }: {
-    params: { taskId: number };
-    onOpenSession: (session: Session) => void;
-  }) => (
-    <div data-testid="task-detail-stub" data-task-id={params.taskId}>
-      <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
-        stub open session
-      </button>
-      <button disabled>disabled stub action</button>
-    </div>
-  ),
-}));
 
 // jsdom doesn't implement DataTransfer/DragEvent — mirrors KanbanBoard.test.tsx's
 // and TasksPanel.test.tsx's own stub.

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api } from "../api/index.js";
 import { useIssue, useIssues } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
+import { useOpenTask } from "../hooks/useOpenTask.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
 import type { GitHubIssueLabel, GitHubIssueListItem, GitHubIssueSort } from "../api/types.js";
 import { formatRelativeAge } from "../relativeTime.js";
@@ -373,6 +374,7 @@ function IssueRow({
   onQueue: () => void;
   onClaim: () => void;
 }) {
+  const openTask = useOpenTask();
   const done = issue.taskStatus === "done";
   const showQueue = canQueue && !issue.taskStatus && !queued;
   const action = decideIssueSessionAction(link);
@@ -443,10 +445,7 @@ function IssueRow({
                   <PlayTriangleIcon size={14} />
                 </IconButton>
               )}
-              <IconButton
-                label="Open task"
-                onClick={() => useDashboardStore.getState().requestOpenTask(action.taskId)}
-              >
+              <IconButton label="Open task" onClick={() => openTask(action.taskId)}>
                 <BotIcon size={14} />
               </IconButton>
             </>
@@ -480,6 +479,7 @@ export function IssueDetailView({
   onBack: () => void;
   taskMaster?: TaskMasterInfo | null;
 }) {
+  const openTask = useOpenTask();
   const { data: issue, error: loadError, refresh } = useIssue(projectId, number);
   const [actionError, setActionError] = useState<string | null>(null);
   const error = actionError ?? loadError;
@@ -594,7 +594,7 @@ export function IssueDetailView({
                 <Button
                   variant="primary"
                   disabled={busy !== null}
-                  onClick={() => useDashboardStore.getState().requestOpenTask(action.taskId)}
+                  onClick={() => openTask(action.taskId, { kind: "issue", projectId, number })}
                 >
                   Open task
                 </Button>

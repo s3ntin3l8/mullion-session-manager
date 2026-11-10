@@ -865,13 +865,11 @@ export interface UiSlice {
   // to open the task's detail panel. Resolved by hooks/useOpenTaskRequest.ts
   // (App.tsx), which owns usePanelOpener's onOpenTask. Same nonce-guarded
   // clear as clearOpenSessionRequest.
-  // A task notification click's target: the Unified Board consumes it when it
-  // mounts (its drawer's detailTaskId is local state) and clears it. Distinct
-  // from openTaskRequest above, which opens a dockview detail panel.
   // Epic #2847 — the task the right sidebar's Tasks view shows in detail
   // (null = the list), and the board rings that task's card. Transient: not
   // persisted. selectTask only sets it; openRightSidebarTask also opens the
-  // drawer on the Tasks view, for callers outside it (the board, notifications).
+  // drawer on the Tasks view, for callers outside it (the board, notifications, the
+  // GitHub views' task chips).
   selectedTaskId: number | null;
   // Bumped on every selection call, even for the same id, so a consumer can tell "the
   // same task selected again" from "the selection that was already there".
@@ -883,8 +881,6 @@ export interface UiSlice {
   sidebarBack: { to: SidebarBack; back: SidebarBack } | null;
   // Consumes the Back target recorded for `to`, or null when none applies.
   takeSidebarBack: (to: SidebarBack) => SidebarBack | null;
-  pendingOpenTaskId: number | null;
-  setPendingOpenTaskId: (taskId: number | null) => void;
   // The project the right sidebar currently follows (useFollowedProject's
   // effectiveProjectId), published by RightSidebar so the Task Master board can follow
   // it too (#2858). Null while no sidebar is mounted (phone) or no project exists.

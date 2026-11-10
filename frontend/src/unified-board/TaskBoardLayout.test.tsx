@@ -26,10 +26,8 @@ import { makeProject, makeTask } from "../test/fixtures.js";
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
 // perf fix that replaced its old whole-store destructure) and calls its
 // actions via useDashboardStore.getState() at each call site, while the
-// SessionRows it mounts in the ad-hoc lane use individual selectors, and
-// TaskDetail (stubbed below) would otherwise need its own
-// claim/approve/reject/retry/give-up surface. The mock below serves all
-// three call shapes the way the real zustand hook does: no selector ->
+// SessionRows it mounts in the ad-hoc lane use individual selectors. The
+// mock below serves all three call shapes the way the real zustand hook does: no selector ->
 // whole state, a selector -> selector(state), .getState() -> whole state.
 let sessions: Session[];
 let projects: Project[];
@@ -62,9 +60,7 @@ const clearDoneTasks = vi.fn(async (): Promise<ClearDoneResult> => ({
 
 function storeState() {
   return {
-    pendingOpenTaskId: null,
     selectedTaskId,
-    setPendingOpenTaskId: vi.fn(),
     sessions,
     projects,
     tasks,
@@ -100,27 +96,6 @@ vi.mock("../store/index.js", () => {
   useDashboardStore.getState = storeState;
   return { useDashboardStore };
 });
-
-// TaskDetail.test.tsx (546 lines) already covers TaskDetail comprehensively;
-// stubbing it here keeps this file's mock from also having to grow
-// claimTask/approveTask/rejectTask/retryTask/giveUpTask plus SessionTimeline's
-// own reads.
-vi.mock("../TaskDetail.js", () => ({
-  TaskDetail: ({
-    params,
-    onOpenSession,
-  }: {
-    params: { taskId: number };
-    onOpenSession: (session: Session) => void;
-  }) => (
-    <div data-testid="task-detail-stub" data-task-id={params.taskId}>
-      <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
-        stub open session
-      </button>
-      <button disabled>disabled stub action</button>
-    </div>
-  ),
-}));
 
 beforeEach(() => {
   sessions = [];

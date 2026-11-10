@@ -668,19 +668,26 @@ describe("Issues list ↔ detail round trip", () => {
   });
 });
 
+// The tests below swap store actions for mocks; put the real ones back so a later test
+// that exercises the real action (the status strip's) is not handed a leftover mock.
+const realStoreActions = {
+  claimTask: useDashboardStore.getState().claimTask,
+  openRightSidebarTask: useDashboardStore.getState().openRightSidebarTask,
+};
+
 describe("Issues with a queued Task Master task but no session", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    useDashboardStore.setState({ tasks: [], sessions: [] });
+    useDashboardStore.setState({ tasks: [], sessions: [], ...realStoreActions });
   });
 
   it("row offers Claim and Open task instead of Start session", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
     const claimTask = vi.fn(async () => makeTask({ id: 4 }));
-    const requestOpenTask = vi.fn();
+    const openRightSidebarTask = vi.fn();
     useDashboardStore.setState({
       claimTask,
-      requestOpenTask,
+      openRightSidebarTask,
       projects: [makeProject({ id: 1 })],
       tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "ready" })],
     });
@@ -692,7 +699,7 @@ describe("Issues with a queued Task Master task but no session", () => {
     await userEvent.click(screen.getByRole("button", { name: "Claim task" }));
     expect(claimTask).toHaveBeenCalledWith(4);
     await userEvent.click(screen.getByRole("button", { name: "Open task" }));
-    expect(requestOpenTask).toHaveBeenCalledWith(4);
+    expect(openRightSidebarTask).toHaveBeenCalledWith(4);
   });
 
   it("row has no Claim for a claimed task", async () => {
@@ -717,10 +724,10 @@ describe("Issues with a queued Task Master task but no session", () => {
       ),
     );
     const claimTask = vi.fn(async () => makeTask({ id: 4 }));
-    const requestOpenTask = vi.fn();
+    const openRightSidebarTask = vi.fn();
     useDashboardStore.setState({
       claimTask,
-      requestOpenTask,
+      openRightSidebarTask,
       projects: [makeProject({ id: 1 })],
       tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "backlog" })],
     });
@@ -737,7 +744,13 @@ describe("Issues with a queued Task Master task but no session", () => {
     expect(await screen.findByText("Task #4 claimed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open task" }));
-    expect(requestOpenTask).toHaveBeenCalledWith(4);
+    // Selects the task in the sidebar (not the dock), and Back returns to this issue,
+    // like the status strip's own "Open task →".
+    expect(openRightSidebarTask).toHaveBeenCalledWith(4, {
+      kind: "issue",
+      projectId: 1,
+      number: 7,
+    });
   });
 
   it("detail shows the linked task's status strip, with its actions and a link into the Tasks view", async () => {

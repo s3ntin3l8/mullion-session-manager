@@ -69,7 +69,7 @@ export function TaskSessionSlot({
   // two independently-focusable interactive elements with unrelated actions
   // is bad for keyboard/screen-reader users. Click (mouse only) still opens
   // the session directly; keyboard users reach the same session via the
-  // card's own Enter/Space (which opens the drawer) and its Claim/Retry/
+  // card's own Enter/Space (which opens the task detail) and its Claim/Retry/
   // "Open session" actions.
   return (
     <span

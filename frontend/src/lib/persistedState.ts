@@ -118,7 +118,6 @@ export const STORAGE_KEYS = {
   // session, not one per subagent (see Chips.tsx).
   expandedSubagentHistory: "crs.expandedSubagentHistory",
   sourceControlCollapsed: "crs.sourceControlCollapsed",
-  taskDrawerWidth: "crs.taskDrawerWidth",
   taskProjectFilter: "crs.taskProjectFilter",
   // Legacy (pre-#2840) filter keys. Read once by unified-board/useTaskFilters.ts to
   // migrate into taskQuickView / taskEpicFilter, then removed.

@@ -460,7 +460,7 @@ The strip is on every layout, phone included.
   renders a muted "ended" chip instead. Status itself is the column a card
   sits in, not repeated on the card. The task the detail view is showing is
   ringed.
-- A **host chip** on the card and in the drawer says where the task will run
+- A **host chip** on the card and in the task detail says where the task will run
   (`pinned · <host>`, `auto`, `needs <platform / host>` from its `Platform:` /
   `Host:` lines, or `on <host>` / `on this machine` once a worker session exists). It is read from
   data already on the task, its worker session and its project, never from
@@ -471,7 +471,7 @@ The strip is on every layout, phone included.
   or "approved, auto-approving once CI is green" when the project
   auto-approves, the task has a PR and Task Master is on (the approve sweep's
   own gates; otherwise a human still has to approve) — instead of "returned to worker". The task row carries it as the derived
-  `approvalState` (`awaiting-human` / `auto-pending` / `null`). The drawer's
+  `approvalState` (`awaiting-human` / `auto-pending` / `null`). The task detail's
   Review section leads with the latest round (verdict and finding counts) and
   collapses earlier rounds.
 - **Push notification when a human has to approve (#2252).** The same
@@ -495,11 +495,17 @@ approval` (generic on purpose, no title: a notification tray is outside the
   the autonomous-only ones) always works — `boardOrder` is a purely local
   render tier with no GitHub representation, so it's editable regardless
   of status.
-- Clicking a card opens its detail as an inline drawer on the board's own
-  right side (not a separate panel), with the worker session's embedded
-  timeline and — when a review agent is configured — a distinct "Review"
-  card with the review agent's own timeline, its captured findings text,
-  and (once the task has auto-returned) a round indicator.
+- Clicking a card opens its detail in the right sidebar's Tasks view (the
+  board has no drawer of its own; see "The Tasks sidebar" below), and the
+  board rings the selected card. The detail carries the worker session's
+  embedded timeline and — when a review agent is configured — a distinct
+  "Review" card with the review agent's own timeline, its captured findings
+  text, and (once the task has auto-returned) a round indicator. Phone and
+  tablet have no usable right rail (phone renders none; tablet floats it over
+  the navigator the board sits in), so a card there opens the full-screen
+  docked task detail instead. A task notification click opens the same detail
+  the same way, and the PR and issue chips in the GitHub and Git views show the
+  task in the Tasks view too.
 - **The review checks the diff against the issue's Scope.** The reviewer
   reports each Scope checkbox as `met`, `partial`, `missing` or `deviated`,
   shown as a "Scope check" section in the review and on the PR. A `missing` or
@@ -539,7 +545,7 @@ approval` (generic on purpose, no title: a notification tray is outside the
 
 ### Needs a human
 
-A card is flagged "Needs a human" (card strip and drawer) when automation has
+A card is flagged "Needs a human" (card strip and task detail) when automation has
 stopped and only you can move it. `tasks.needsHumanReason` says why:
 
 - `cap`, `no-progress`, `finding-persisted` — the review loop stopped (round
@@ -580,7 +586,7 @@ The detail reads, top to bottom:
    reviewer sessions (each opens that session).
 3. **Pull request**: the PR link and its CI, review and merge chips; they open
    the PR in the GitHub view.
-4. **Actions**: the same per-status actions as the drawer below.
+4. **Actions**: the same per-status actions as under "Board actions" below.
 5. **Details**: project, issue link, agent and the issue body (collapsed).
 6. **Hierarchy**: the epic, sub-issue progress, and, for a blocked task, what
    blocks it and what else waits on the same task; for a blocker, what it
@@ -594,9 +600,9 @@ scroll position. The icon in the header pops the task out to a docked panel.
 
 ### Board actions
 
-Every action below lives in the task detail drawer (Claim/Approve/Reject/
+Every action below lives in the task detail (Claim/Approve/Reject/
 Retry/Re-review/Give up), or is a delete/archive control reachable from the
-same drawer (Abandon, Archive/Unarchive). Claim, Approve, and Retry are
+same detail (Abandon, Archive/Unarchive). Claim, Approve, and Retry are
 disabled (with an explanatory hint) whenever Task Master is off, since all
 three spawn or promote autonomous work; Reject, Give up, Re-review, Abandon,
 and Archive/Unarchive stay enabled regardless — see "Whether Task Master
@@ -616,7 +622,7 @@ non-Abandon-path task) are not gated either way.
   [`tasks-internals.md`](tasks-internals.md#merge-on-approve) for what
   happens after. A dirty worktree 409s the request rather than silently
   dropping uncommitted work. On a tracking epic with open sub-issues,
-  Approve is advisory, not blocking — it 409s with a warning the drawer
+  Approve is advisory, not blocking — it 409s with a warning the task detail
   turns into a two-stage confirmation, and re-POSTing with `?force=true`
   closes it anyway.
 - **Reject** (`reviewing → in_progress`) — sends the task back to the
@@ -652,7 +658,7 @@ non-Abandon-path task) are not gated either way.
   `inconclusive` verdict. **Deliberately not gated** on Task Master being
   enabled, the same reasoning as Reject/Give-up: a disabled install must
   not permanently strand a task stuck on `inconclusive`. Surfaced as a
-  "Re-review" button in `TaskActions.tsx` (the task drawer) whenever such a review exists; the PR card's Re-review enables on the same condition (`taskReReviewEligible`).
+  "Re-review" button in `TaskActions.tsx` (the task detail) whenever such a review exists; the PR card's Re-review enables on the same condition (`taskReReviewEligible`).
 - **Give up** (`reviewing → failed`) — the other resolver of a `reviewing`
   task besides Approve/Reject, for "stop trying entirely." Closes a
   still-open draft PR. Not automatic on session exit, and ungated, the same
@@ -775,14 +781,14 @@ Two independent choices are resolved per task, most-specific tier wins:
    and a stored Hermes URL and key; until then the routes refuse it, and a
    stored `hermes` resolves to no reviewer (a human reviews) rather than to
    another agent. In the UI, `Hermes` appears in the three review-agent
-   pickers (the task drawer, the project modal, Settings → Task Master's
+   pickers (the task detail, the project modal, Settings → Task Master's
    Default review agent) only while that switch is on and the relay has a
    Hermes URL; a stored `hermes` still shows as "Hermes (Task Master reviews
    off)" after the switch is turned off. Hermes is not a model CLI, so
    Settings → Models never lists it: its model is Review relay → Review
    policy → Model.
 
-   The drawer's Agent and Review agent pickers show the effective choice in
+   The task detail's Agent and Review agent pickers show the effective choice in
    resolution order: a task value, else the issue body's `Agent:` /
    `ReviewAgent:` directive (the unset entry then reads "<agent> (from
    issue)"; for ReviewAgent, `none`/`false` reads "None (disabled) (from
@@ -887,7 +893,7 @@ eligible yet — the task stays queued and is retried with a growing delay (a
 held task waiting for its required host is simply re-checked every poll tick).
 The reason is not hidden:
 
-- **Board card and task drawer** show "Not dispatched yet (3h ago): …" in a
+- **Board card and task detail** show "Not dispatched yet (3h ago): …" in a
   warning tone with a clock icon — distinct from the red triangle a terminal
   `failed` task gets, because the task is still being retried. "(3h ago)" is
   how long the current run of failures has lasted.
@@ -1192,7 +1198,7 @@ extensive design comments.
   claim, Mullion assigns the linked issue to the integration's own login on
   GitHub, but nothing ever writes the local `tasks.assignee` column, so it is
   always null despite being plumbed through the API and rendered in the task
-  detail drawer.
+  detail.
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A re-parenting (or de-parenting) between polls produces no live push
   (`#701`).** Sub-issue hierarchy has no push-based path the way dependency
@@ -1283,14 +1289,14 @@ extensive design comments.
   than waiting for the hourly automatic re-arm, or editing the DB by hand —
   see "Known limitations" above.
 - **A `done` task's PR won't merge (`mergeOnApprove` is on and it's stuck).**
-  Check `tasks.mergeError` in the task drawer — it names the actual cause
+  Check `tasks.mergeError` in the task detail — it names the actual cause
   (`behind`/`unstable`/`blocked`/`dirty`/a required-review gap). "Merge
-  now"/"Retry merge" in the drawer re-arms the sweep immediately. See
+  now"/"Retry merge" in the task detail re-arms the sweep immediately. See
   [`tasks-internals.md`](tasks-internals.md#merge-on-approve) for what each
   `mergeable_state` means and what the sweep does about it, and
   [`tasks-internals.md`](tasks-internals.md#auto-rebase-758) if the project
   has `autoApprove` on and the PR is `dirty`.
-- **The drawer says "Merge status could not be confirmed".** The merge request
+- **The task detail says "Merge status could not be confirmed".** The merge request
   timed out on the wire, and a timeout does not say whether GitHub applied it.
   The sweep first re-reads the PR: if it merged, the task is finished as usual;
   if the read fails too, this neutral message stays (not "PR open" and not a
@@ -1317,7 +1323,7 @@ extensive design comments.
   for Retry to resume. See "Task model" above for the relabel-resurrection
   path that handles this case instead.
 - **A task's GitHub label/comment never appeared.** Check
-  `tasks.githubSyncError` in the task drawer — GitHub sync is best-effort
+  `tasks.githubSyncError` in the task detail — GitHub sync is best-effort
   and does not retry a missed write; see
   [`tasks-internals.md`](tasks-internals.md#github-sync). A read-only
   token 403s on the very first write (claim), so this is often a scope
