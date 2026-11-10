@@ -1,3 +1,4 @@
+import type { TerminalPalette } from "./terminal-query-reply.js";
 import { compareWorktreePaths } from "./worktree-paths.js";
 import type { GitIdentity } from "./git-env.js";
 import type { BrowserTarget } from "./browser-manager.js";
@@ -132,6 +133,10 @@ export function warnHostError(
 
 /** Options for SessionBackend.spawn — one shape shared by the interface, LocalBackend and RemoteBackend. */
 export interface SpawnOpts {
+  // #2528 — the creating dashboard's palette. A local spawn is answered from
+  // the primary's own per-session entry (session-lifecycle.ts); this carries
+  // it to a remote host, which holds the PTY and answers its startup query.
+  palette?: TerminalPalette;
   id: string;
   cwd: string;
   command: string;

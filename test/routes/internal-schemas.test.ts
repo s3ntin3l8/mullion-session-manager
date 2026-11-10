@@ -116,6 +116,17 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
               hint: { type: "string", maxLength: 1024 },
             },
           },
+          // #2528 — the creating dashboard's palette.
+          palette: {
+            type: "object",
+            additionalProperties: false,
+            required: ["foreground", "background", "cursor"],
+            properties: {
+              foreground: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
+              background: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
+              cursor: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
+            },
+          },
           browserTarget: {
             type: "object",
             additionalProperties: false,

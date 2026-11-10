@@ -24,9 +24,11 @@
 // own resolved palette on POST /api/sessions, and the session answers from that
 // for its life (#2528): `theme: "system"` resolves per browser, so two
 // dashboards can disagree, and the creating one is the one the user is looking
-// at. A session created without a palette (a Task Master worker, the control
-// socket, a remote host's own sessions) falls back to the one process-wide
-// palette (last reporter wins), which can still be the other dashboard's. A
+// at. A session on a remote host is answered by that agent, which receives the
+// palette in the spawn body (#2857). A session created without a palette (a Task
+// Master worker, the control socket, an older primary) falls back to the one
+// process-wide palette (last reporter wins), which can still be the other
+// dashboard's. A
 // running session is never re-answered when another pane attaches later: the
 // program asked once, at startup.
 //
