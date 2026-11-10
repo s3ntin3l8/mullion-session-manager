@@ -20,7 +20,7 @@ export interface MountLinksDeps {
 export function attachMountLinks(deps: MountLinksDeps) {
   const { container, isCoarsePointer, setLinkTooltip } = deps;
 
-  // Shared by both link surfaces below — the wrap-aware `ILinkProvider`
+  // Shared by both link surfaces in TerminalPane.tsx — the wrap-aware `ILinkProvider`
   // (regex-matched http(s) URLs, including ones lib/terminalLinks.ts
   // reconstructs across hard-wrapped rows) and the `linkHandler` option
   // (OSC 8 hyperlinks, which xterm core handles entirely on its own). One

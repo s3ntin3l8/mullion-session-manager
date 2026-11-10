@@ -67,8 +67,8 @@ export function attachMountConnection(bag: MountBag, deps: MountConnectionDeps) 
     setStatus(bag.reconnectAttempt === 0 ? "connecting" : "reconnecting");
     setReconnectAttempt(bag.reconnectAttempt);
     setAttachIncompatible(false);
-    // This connection's own identity for the replay guard above — see
-    // connectionGeneration's own comment for why generation comparison
+    // This connection's own identity for the replay guard in TerminalPane.tsx
+    // — see connectionGeneration's comment there for why generation comparison
     // (rather than a shared boolean reset at some point in time) is what
     // makes the guard correct regardless of xterm's write-queue timing.
     // `sawGeometry` is deliberately a plain local here, not hoisted to
@@ -162,7 +162,7 @@ export function attachMountConnection(bag: MountBag, deps: MountConnectionDeps) 
         const geo = parsed;
         // The first "geometry" frame on this connection is sent
         // unconditionally right after the (optional) scrollback backlog —
-        // see connectionGeneration's own comment above — so it's a
+        // see connectionGeneration's comment in TerminalPane.tsx — so it's a
         // reliable end-of-replay sentinel even for a fresh spawn with no
         // backlog at all. term.write() queues in FIFO order and only
         // invokes its callback once that write is fully parsed, so queuing
@@ -201,10 +201,10 @@ export function attachMountConnection(bag: MountBag, deps: MountConnectionDeps) 
           // and are trusted as already within MAX_TERMINAL_COLS/ROWS
           // because the SAME-version backend's own clampTerminalSize()
           // bounds session.size before ever echoing it. A remote-hosted
-          // session (this frame's own comment above) could be talking to a
+          // session (this frame's own comment in TerminalPane.tsx) could be talking to a
           // different-version host whose echo predates that ceiling —
           // clamp here too so this path can't reintroduce the exact
-          // runaway the rest of this file guards against. A no-op in the
+          // runaway TerminalPane.tsx and terminalGridSize.ts guard against. A no-op in the
           // aligned case (geo is already within bounds by construction).
           const clampedGeo = clampTerminalGridSize(geo.cols, geo.rows);
           term.resize(clampedGeo.cols, clampedGeo.rows);
@@ -214,7 +214,7 @@ export function attachMountConnection(bag: MountBag, deps: MountConnectionDeps) 
           // confirming a resize this client initiated) is the signal that
           // the settings-sync effect's font-fit check should (re-)run —
           // this is the trigger for ENTERING a shrunk state; `refit()`
-          // above handles the trigger for LEAVING one.
+          // in TerminalPane.tsx handles the trigger for LEAVING one.
           setFitRetryTick((tick) => tick + 1);
         }
         // Hermes review, PR #708 — proposeDimensions() returns undefined

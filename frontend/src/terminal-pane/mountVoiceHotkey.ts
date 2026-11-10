@@ -20,7 +20,7 @@ export function attachMountVoiceHotkey(deps: MountVoiceHotkeyDeps) {
   const { voiceControllerRef, voiceChordRef, voiceHotkeyPressRef } = deps;
 
   // Voice dictation hotkey hold-tracking. Keydown is handled by
-  // attachKeyConflictHandler above (all three call sites route
+  // attachKeyConflictHandler in lib/terminalKeys.ts (all three call sites route
   // onVoicePress through voiceHotkeyPressRef, assigned here) — release is
   // deliberately NOT handled there. attachCustomKeyEventHandler only ever
   // sees the FOCUSED terminal's own keydown/keyup, but a physical hold can
@@ -31,7 +31,7 @@ export function attachMountVoiceHotkey(deps: MountVoiceHotkeyDeps) {
   // which element currently has focus. (A hold that outlasts focus loss
   // ENTIRELY — no keyup ever arrives at all, e.g. the tab itself is
   // backgrounded — is covered separately by the phase-driven blur/
-  // visibility/pagehide effect further below, which applies uniformly to
+  // visibility/pagehide effect in TerminalPane.tsx, which applies uniformly to
   // a hotkey hold AND a tap-latched mic-button dictation alike; this
   // handler only needs to cover the ordinary "keyup arrives somewhere
   // other than the terminal" case.)
