@@ -88,10 +88,16 @@ async function findRebaseBlocker(
     return `the task is ${task.status}, a worker round is in flight`;
   }
   // A rebase attempt of our own (past its window here) is not a suggestions round.
+  // Nor is the session of a rebase worker the rapid-exit sweep itself aborted
+  // (`rapidExitRetryAfter` is stamped by that abort and cleared only when the
+  // retry spawns): its terminate is best-effort and may have thrown or been
+  // skipped, leaving a dead session with a null `workFinishedAt` in the map,
+  // which must not hold the retry for REBASE_HOLD_MAX_MS on top of the backoff.
   if (
     task.status === "reviewing" &&
     task.approvalCarriedAt !== null &&
     task.rebaseStartedAt === null &&
+    task.rapidExitRetryAfter === null &&
     task.sessionId !== null
   ) {
     try {
@@ -617,9 +623,15 @@ export async function attemptAutoRebase(
  * status, because a bare `lastTurnEndedAt` also fires on a machine-woken,
  * mid-loop turn end and an `errorAt` goes stale once the agent recovers:
  * `lastTurnEndedAt` only when the session is gone (`gone`: derived
- * `exited`; derived `finished` cannot tell a mid-loop turn end from a real
- * one), `errorAt` when it is gone or currently `api_error`. Callers that
+ * `exited`), `errorAt` when it is gone or currently `api_error`. Callers that
  * pass no derived status get `workFinishedAt` only.
+ *
+ * Why `lastTurnEndedAt` is gated on `exited` alone, not also on `finished`, a
+ * shell-tail or `api_error` (a deliberate descope of #2820's first wording):
+ * `deriveSessionStatus` returns `finished` for ANY non-null `lastTurnEndedAt`,
+ * so a `finished` guard is the bare check again and cannot tell a mid-loop turn
+ * end from a real one; a live `api_error` session is covered by `errorAt`.
+ * Only a session that is no longer running makes the last turn end final.
  */
 export function rebaseWorkerFinished(
   info: SessionInfo | null,
@@ -632,7 +644,8 @@ export function rebaseWorkerFinished(
   if (fresh(info.workFinishedAt)) return true;
   // #1735: a bare turn end is not "finished" (a machine-woken, mid-loop turn
   // also ends); a recovered API error's errorAt goes stale the same way. Take
-  // each fallback only when the derived status says the worker is gone.
+  // each fallback only when the derived status says the worker is gone. The
+  // `exited`-only gate for lastTurnEndedAt is explained in the doc comment above.
   if (derived.gone === true && fresh(info.lastTurnEndedAt)) return true;
   return (derived.gone === true || derived.apiError === true) && fresh(info.errorAt);
 }

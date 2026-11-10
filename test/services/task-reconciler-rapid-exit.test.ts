@@ -83,6 +83,8 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks, resetMergeBackoff, autoReturnTask } =
   await import("../../src/services/task-reconciler.js");
+const { settleRapidRebaseExit, attemptAutoRebase } =
+  await import("../../src/services/task-auto-rebase.js");
 const { Session } = await import("../../src/services/pty-manager.js");
 const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
 const { resolveBackend } = await import("../../src/services/session-backend.js");
@@ -924,13 +926,17 @@ describe("a worker that exits within seconds", () => {
     expect(row.rapidExitRetryAfter).toBeNull();
   });
 
-  it("does not count a rebase worker that recovered from an API error as a rapid exit", async () => {
+  it("does not count a live rebase worker with a stale non-api_error errorAt as a rapid exit", async () => {
     const { app, task } = await rebaseTask("p-rebase-recovered-error", { ranMs: 3_000 });
     vi.spyOn(app.pty, "get").mockReturnValue({
       toInfo: () =>
         fakeInfo({
-          errorState: "idle",
+          // Production nulls errorAt together with errorState, so a bare
+          // "idle + errorAt" never exists. A live worker with a non-null errorAt
+          // and no api_error is a tool failure it is still working through.
+          errorState: "tool_failure",
           errorAt: task.rebaseStartedAt!.getTime() + 2_000,
+          activity: "working",
           lastTurnEndedAt: null,
           workFinishedAt: null,
         }),
@@ -939,6 +945,130 @@ describe("a worker that exits within seconds", () => {
     await reconcileTasks(app);
 
     expect(getTask(app, task.id).rebaseAbortedAttempts).toBe(0);
+  });
+
+  it.each([
+    ["lastTurnEndedAt", (t: number) => ({ lastTurnEndedAt: t, workFinishedAt: null })],
+    [
+      "errorAt",
+      (t: number) => ({
+        errorState: "api_error",
+        errorDetail: "overloaded",
+        errorAt: t,
+        lastTurnEndedAt: null,
+        workFinishedAt: null,
+      }),
+    ],
+  ])(
+    "judges a killed rebase worker whose only end signal is %s as a rapid exit",
+    async (_signal, signal) => {
+      const { app, task } = await rebaseTask(`p-rapid-gone-${_signal}`, { ranMs: 3_000 });
+      app.db
+        .update(sessions)
+        .set({ status: "killed" })
+        .where(eq(sessions.id, task.sessionId!))
+        .run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo(signal(task.rebaseStartedAt!.getTime() + 3_000)),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = getTask(app, task.id);
+      expect(row.rebaseAbortedAttempts).toBe(1);
+      expect(row.rebaseAttempts).toBe(0);
+      expect(row.rebaseStartedAt).toBeNull();
+      expect(row.rapidExitRetryAfter).not.toBeNull();
+    },
+  );
+
+  describe("an aborted rebase worker whose terminate failed or was skipped", () => {
+    // A reviewing task with a carried approval is the only shape where
+    // findRebaseBlocker consults the (dead) worker's session at all.
+    async function abortedThenRetried(name: string, opts: { sessionStatus: "active" | "exited" }) {
+      const { app, task } = await rebaseTask(name, { ranMs: 3_000 });
+      vi.spyOn(app.pty, "get").mockRestore();
+      vi.spyOn(Session.prototype, "spawn").mockResolvedValue();
+      const worker = app.pty.getOrCreate({
+        id: String(task.sessionId),
+        command: "claude",
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+      });
+      const endedAt = task.rebaseStartedAt!.getTime() + 3_000;
+      // The api_error death: workFinishedAt stays null, so a session left in
+      // the map reads as a suggestions round still in flight.
+      vi.spyOn(worker, "toInfo").mockReturnValue(
+        fakeInfo({ errorState: "api_error", errorDetail: "overloaded", errorAt: endedAt }) as never,
+      );
+      app.db
+        .update(sessions)
+        .set({ status: opts.sessionStatus })
+        .where(eq(sessions.id, task.sessionId!))
+        .run();
+      app.db
+        .update(tasks)
+        .set({
+          status: "reviewing",
+          completedAt: null,
+          mergeRequestedAt: null,
+          reviewingAt: new Date(Date.now() - 3_600_000),
+          worktreePath: "/tmp/.mullion-worktrees/mullion-task-x",
+          approvalCarriedAt: new Date(),
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+      const create = vi.spyOn(lifecycle, "createSessionRecord");
+      const t0 = Math.floor(Date.now() / 1000) * 1000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+      return { app, task, create, now, t0 };
+    }
+
+    async function expectRetryAtBackoff(ctx: Awaited<ReturnType<typeof abortedThenRetried>>) {
+      const { app, task, create, now, t0 } = ctx;
+      const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
+      // The sweep's judgement of the rapid-exit worker, then the retry attempt.
+      await settleRapidRebaseExit(app, getTask(app, task.id), project);
+      expect(getTask(app, task.id).rebaseAbortedAttempts).toBe(1);
+      // The dead session is still in the map (terminate failed or was skipped).
+      expect(app.pty.get(String(task.sessionId))).toBeDefined();
+      expect(create).not.toHaveBeenCalled();
+
+      const [respawned] = app.db
+        .insert(sessions)
+        .values({ projectId: task.projectId, command: "claude", cwd: "/tmp", status: "active" })
+        .returning()
+        .all();
+      create.mockResolvedValue({
+        ok: true,
+        row: { id: respawned.id },
+        initialPromptApplied: true,
+      } as never);
+      // Just past the backoff, far inside the 30 min suggestions-round hold.
+      now.mockReturnValue(t0 + RAPID_EXIT_BACKOFF_MS + 1000);
+      await attemptAutoRebase(app, getTask(app, task.id), project, "main");
+      const row = getTask(app, task.id);
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(row.sessionId).toBe(respawned.id);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.mergeError ?? "").not.toContain("suggestions round is in flight");
+    }
+
+    it("retries at the backoff when the terminate throws", async () => {
+      const ctx = await abortedThenRetried("p-abort-terminate-throws", { sessionStatus: "active" });
+      // A transient failure: the sweep's best-effort stop throws once, and the
+      // retry's own stop of the old worker then succeeds.
+      vi.spyOn(ctx.app.pty, "terminate").mockRejectedValueOnce(new Error("scope busy"));
+      await expectRetryAtBackoff(ctx);
+    });
+
+    it("retries at the backoff when the session was not active, so the terminate was skipped", async () => {
+      const ctx = await abortedThenRetried("p-abort-not-active", { sessionStatus: "exited" });
+      const terminate = vi.spyOn(ctx.app.pty, "terminate");
+      await expectRetryAtBackoff(ctx);
+      expect(terminate).not.toHaveBeenCalledWith(String(ctx.task.sessionId));
+    });
   });
 
   it("sets no backoff hold when the rapid-exit abort exhausts the attempts", async () => {
@@ -1001,14 +1131,15 @@ describe("a worker that exits within seconds", () => {
     vi.spyOn(commitsPastBase, "resolveCommitsPastBase").mockResolvedValue({
       state: "ahead",
     } as never);
-    // Error state TTL-cleared, only the durable grace admits the task. A stale
-    // errorAt inside the rapid window makes sessionEndedAt(info) non-null, so
+    // Only the durable grace admits the task. An errorAt inside the rapid window makes sessionEndedAt(info) non-null, so
     // only the guarded endedAt keeps this from being judged a rapid exit.
     vi.spyOn(app.pty, "get").mockReturnValue({
       toInfo: () =>
         fakeInfo({
           lastTurnEndedAt: null,
           workFinishedAt: null,
+          errorState: "tool_failure",
+          activity: "working",
           errorAt: task.claimedAt!.getTime() + 20_000,
         }),
     } as never);
