@@ -328,6 +328,11 @@ export async function webhookRoutes(app: FastifyInstance) {
                     // `→ done` sync left the issue open until now: close it
                     // here (idempotent; `Closes #N` usually did already).
                     void closeIssueOnMerge(app, matchedTask, mergedProject);
+                  } else {
+                    app.log.warn(
+                      { taskId: matchedTask.id, projectId },
+                      "[webhooks] merged PR's project row is missing — branch cleanup and the issue close were skipped",
+                    );
                   }
                 }
               }
