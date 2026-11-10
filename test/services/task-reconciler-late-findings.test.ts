@@ -310,6 +310,8 @@ describe("late review findings after an inconclusive ingest", () => {
   });
 
   // Tasks from earlier tests stay latched in the shared DB, so count per task.
+  const autoApprovePolls = (pr: number) =>
+    mockGetPullRequestByNumber.mock.calls.filter((c) => c[3] === pr).length;
   const readsFor = (taskId: number) =>
     mockReadFindings.mock.calls.filter((c) => c[0] === taskId).length;
 
@@ -473,6 +475,11 @@ describe("late review findings after an inconclusive ingest", () => {
       })
       .returning()
       .get();
+    await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectB}`,
+      payload: { autoApprove: true },
+    });
     writeFindings(app, a.id, APPROVED);
     writeFindings(app, b.id, JSON.stringify({ verdict: "approved", summary: "B OK." }));
     // Resolving task A's repo ref throws on every attempt; B's works.
@@ -490,10 +497,14 @@ describe("late review findings after an inconclusive ingest", () => {
     // Bounded: the file is read MAX attempts times, not once per tick.
     expect(readsFor(a.id)).toBe(3);
     const aErrors = errors.mock.calls.filter((c) => (c[0] as { taskId?: number })?.taskId === a.id);
-    expect(aErrors.length).toBeLessThanOrEqual(3);
+    expect(aErrors.length).toBe(2); // the first failure, then the cap-reaching one
     // The sweeps after the late-findings pass still ran in the same tick: B's
     // approving review was posted and its auto-approve gates were evaluated.
     expect(mockCreatePullRequestReview).toHaveBeenCalled();
+    // processAutoApprovals ran after the failing late-findings pass: B (an
+    // auto-approve project) is polled once by the review sweep and once more by
+    // attemptAutoApprove, so a skipped sweep leaves exactly one.
+    expect(autoApprovePolls(10)).toBeGreaterThanOrEqual(2);
     await app.close();
   });
 
@@ -554,6 +565,28 @@ describe("late review findings after an inconclusive ingest", () => {
         now += 15 * 60_000 + 1; // always past any ceiling-bounded wait
       }
       expect(ingest).toHaveBeenCalledTimes(12);
+      // The last attempt ran one step back; the wait after it is the ceiling.
+      const lastAttemptAt = now - (15 * 60_000 + 1);
+      at(lastAttemptAt + 14 * 60_000);
+      await run();
+      expect(ingest).toHaveBeenCalledTimes(12); // a lower ceiling would retry here
+      at(lastAttemptAt + 15 * 60_000);
+      await run();
+      expect(ingest).toHaveBeenCalledTimes(13);
+      await app.close();
+    });
+
+    it("a re-armed key restarts its failure count: the next attempts are per-tick again", async () => {
+      const { app, run, ingest } = await harness();
+      at(Date.now());
+      for (let i = 0; i < 3; i++) await run();
+      await run(); // waiting out the 1 min
+      expect(ingest).toHaveBeenCalledTimes(3);
+      const newTurn = { ...finishedInfo(), lastTurnEndedAt: TURN_ENDED_AT + 10_000 };
+      await run(undefined, newTurn);
+      expect(ingest).toHaveBeenCalledTimes(4); // count 1 of the new key
+      await run(undefined, newTurn);
+      expect(ingest).toHaveBeenCalledTimes(5); // count 2: still no wait
       await app.close();
     });
 
