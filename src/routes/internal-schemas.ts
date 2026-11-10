@@ -1,3 +1,5 @@
+import { paletteSchema } from "./terminal-palette.js";
+import type { TerminalPalette } from "../services/terminal-query-reply.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import type { SessionGithubAuth } from "../services/session-github-token.js";
 import type { PromoteDecision } from "../shared/promote-decision.js";
@@ -70,6 +72,7 @@ import {
 export { MAX_SESSION_ENV_ENTRIES, MAX_SESSION_ENV_VALUE_LENGTH };
 
 export interface SpawnSessionBody {
+  palette?: TerminalPalette;
   id: string;
   cwd: string;
   command: string;
@@ -243,6 +246,8 @@ export const spawnSessionSchema = {
       // field.
       taskId: { type: "integer" },
       githubAuth: SESSION_GITHUB_AUTH_SCHEMA,
+      // #2528 — the creating dashboard's palette; an older agent strips it.
+      palette: paletteSchema,
       browserTarget: BROWSER_TARGET_SCHEMA,
       gitIdentity: {
         type: "object",

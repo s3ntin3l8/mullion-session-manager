@@ -1359,6 +1359,7 @@ async function createSessionRecordInner(
     created.id,
     placementHost,
   );
+  spawnOpts.palette = params.palette;
   const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb, placementHost);
   if (!spawned.ok) return spawned.result;
 

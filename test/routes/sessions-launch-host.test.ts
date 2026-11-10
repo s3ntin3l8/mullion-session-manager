@@ -158,6 +158,30 @@ describe("launcher host target: placement:auto and targetHostId (issue #2237)", 
     if (!res.ok) expect(res.reason).toBe("invalid-options");
   });
 
+  // #2857 — a session placed on a remote host is answered by that agent, so the
+  // creating dashboard's palette has to ride the spawn the primary sends it.
+  it("forwards the creating dashboard's palette in a remote-placed session's spawn (#2857)", async () => {
+    const { projectId, hostId, backend } = await setup();
+    const palette = { foreground: "#1d1d1d", background: "#f2f2f2", cursor: "#1d1d1d" };
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", targetHostId: hostId, palette },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(backend.spawn).toHaveBeenCalledWith(expect.objectContaining({ palette }));
+  });
+
+  it("sends no palette in the spawn when the request carried none (#2857)", async () => {
+    const { projectId, hostId, backend } = await setup();
+    await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", targetHostId: hostId },
+    });
+    expect(backend.spawn.mock.calls[0]![0]).toHaveProperty("palette", undefined);
+  });
+
   it("POST targetHostId for a host with no path for the project is a 409 (issue #2237)", async () => {
     const { projectId, hostId } = await setup({ mapped: false });
     const res = await app.inject({

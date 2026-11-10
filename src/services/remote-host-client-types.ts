@@ -1,3 +1,4 @@
+import type { TerminalPalette } from "./terminal-query-reply.js";
 import type { GitIdentity } from "./git-env.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
 import type { SshAuthSockSource } from "./ssh-agent-socket.js";
@@ -76,6 +77,9 @@ export interface SessionTarget {
   gitIdentity?: GitIdentity;
   // #2246 — for spawn() only; see CreateSessionOptions.githubAuth.
   githubAuth?: SessionGithubAuth;
+  // #2528 — for spawn() only; see SpawnOpts.palette (session-backend.ts). An
+  // older agent strips it and answers from its global palette, as before.
+  palette?: TerminalPalette;
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES

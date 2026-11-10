@@ -7,6 +7,7 @@ import {
   readSessionTranscript,
 } from "../services/session-transcript.js";
 import { expandHome } from "../services/project-config.js";
+import { setSessionPalette } from "../services/terminal-query-reply.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
 import { deliverPrompt, REMOTE_WAIT_CHUNK_MS } from "../services/session-prompt.js";
 import {
@@ -107,6 +108,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         // #2246 — the session's GitHub credential; getOrCreate stores it in
         // this agent's memory (session-github-token.ts) and never persists it.
         githubAuth,
+        // #2528 — the creating dashboard's palette: this agent answers the
+        // session's startup color query, so it needs it before the spawn.
+        palette,
         // Issue #1337 — opencode model overrides forwarded from spawn_child_session
         // MCP tool. When omitted, the parent session's model/smallModel are inherited
         // by the POST /api/sessions route handler (server-side fallback).
@@ -125,6 +129,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         const err = explicitModelError(command, "smallModel", smallModel);
         if (err) return reply.badRequest(err);
       }
+      if (palette) setSessionPalette(id, palette);
       const session = app.pty.getOrCreate({
         id,
         cwd: expandHome(cwd),
