@@ -71,13 +71,23 @@ function readInitial(): Initial {
  * `visibleTasks` is what the columns render; `tasks` itself must stay the store's
  * full list (see taskFilters.ts on reorder safety).
  */
-export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
+export function useTaskFilters(
+  tasks: Task[],
+  projects: Array<{ id: number }>,
+  // The project the right sidebar follows (store.followedProjectId), or null.
+  followedProjectId: number | null = null,
+) {
   // Read once; the migration's writes happen in the effect below, not in render.
   const [initial] = useState(readInitial);
   const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>(() => {
     const raw = readJSON<unknown>(STORAGE_KEYS.taskProjectFilter, []);
     return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
   });
+  // #2858 — while on, the project filter is exactly the followed project and the saved
+  // selection above is left alone, so turning it off brings that selection back.
+  const [followSidebar, setFollowSidebarState] = useState(() =>
+    readBool(STORAGE_KEYS.taskFollowSidebar, false),
+  );
   const [recentProjectIds, setRecentProjectIds] = useState<number[]>(() => {
     const raw = readJSON<unknown>(STORAGE_KEYS.taskRecentProjects, []);
     return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
@@ -129,9 +139,18 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
   // with no visible way back. Derived, never written back: a project that reappears
   // keeps its saved selection.
   const knownProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
+  // Following only counts while there is a followed project that still exists (none on
+  // phone, none before a project loads); otherwise the saved selection applies as if the
+  // option were off, so there is never a "following nothing" state.
+  const followedId =
+    followedProjectId !== null && knownProjectIds.has(followedProjectId) ? followedProjectId : null;
+  const followActive = followSidebar && followedId !== null;
   const activeProjectIds = useMemo(
-    () => selectedProjectIds.filter((id) => knownProjectIds.has(id)),
-    [selectedProjectIds, knownProjectIds],
+    () =>
+      followActive && followedId !== null
+        ? [followedId]
+        : selectedProjectIds.filter((id) => knownProjectIds.has(id)),
+    [followActive, followedId, selectedProjectIds, knownProjectIds],
   );
   const epicOpts = useMemo(() => epicOptions(tasks), [tasks]);
   const noEpic = useMemo(() => noEpicCount(tasks), [tasks]);
@@ -191,10 +210,19 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
     setViewState(next);
     writeString(STORAGE_KEYS.taskQuickView, next);
   }, []);
-  const setProjectIds = useCallback((ids: number[]) => {
-    setSelectedProjectIds(ids);
-    writeJSON(STORAGE_KEYS.taskProjectFilter, ids);
+  const setFollowSidebar = useCallback((next: boolean) => {
+    setFollowSidebarState(next);
+    writeBool(STORAGE_KEYS.taskFollowSidebar, next);
   }, []);
+  // Any explicit project choice ends following and keeps what the picker was showing.
+  const setProjectIds = useCallback(
+    (ids: number[]) => {
+      setSelectedProjectIds(ids);
+      writeJSON(STORAGE_KEYS.taskProjectFilter, ids);
+      setFollowSidebar(false);
+    },
+    [setFollowSidebar],
+  );
   const toggleProject = useCallback(
     (id: number) => {
       const next = activeProjectIds.includes(id)
@@ -266,6 +294,13 @@ export function useTaskFilters(tasks: Task[], projects: Array<{ id: number }>) {
     counts,
     projectCounts,
     awaitingMergeCount,
+    /** The "follow the sidebar's project" option: its setting, and the project it would
+     * follow (null when there is none, so the option has nothing to offer). */
+    followSidebar,
+    /** The option is on AND there is a project to follow, so it is narrowing the board. */
+    followActive,
+    followedProjectId: followedId,
+    setFollowSidebar,
     epicOpts,
     noEpic,
     agentOpts,

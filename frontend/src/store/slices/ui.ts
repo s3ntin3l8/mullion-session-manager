@@ -229,6 +229,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     selectedTaskId: null,
     taskSelectionSeq: 0,
     pendingOpenTaskId: null,
+    followedProjectId: null,
     highlightedPanelId: null,
     activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
@@ -505,6 +506,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     setPendingOpenTaskId: (taskId) => {
       set({ pendingOpenTaskId: taskId });
+    },
+    setFollowedProjectId: (projectId) => {
+      set({ followedProjectId: projectId });
     },
 
     requestOpenTask: (taskId) => {

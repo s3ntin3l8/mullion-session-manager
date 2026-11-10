@@ -213,3 +213,22 @@ export function activeFilterCount(f: TaskFilters, hideDone: boolean): number {
     (hideDone ? 1 : 0)
   );
 }
+
+/** The picker's "follow the sidebar's project" row, or undefined when there is no project
+ * to follow (phone, or before one loads). While there is nothing to follow the option is
+ * inert whatever its saved setting, and picking any project switches it off. */
+export function followOption(
+  api: {
+    followSidebar: boolean;
+    followedProjectId: number | null;
+    setFollowSidebar: (next: boolean) => void;
+  },
+  projects: Array<{ id: number; name: string }>,
+) {
+  if (api.followedProjectId === null) return undefined;
+  return {
+    checked: api.followSidebar,
+    projectName: projects.find((p) => p.id === api.followedProjectId)?.name ?? null,
+    onChange: api.setFollowSidebar,
+  };
+}

@@ -43,6 +43,7 @@ let gitDiffStats: Record<number, GitDiffStats | null>;
 let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 let hideEndedSessions: boolean;
+let followedProjectId: number | null = null;
 
 const setKanbanColumnOrder = vi.fn((columnId: string, order: number[]) => {
   kanbanOrder = { ...kanbanOrder, [columnId]: order };
@@ -63,6 +64,7 @@ function storeState() {
   return {
     pendingOpenTaskId: null,
     setPendingOpenTaskId: vi.fn(),
+    followedProjectId,
     sessions,
     projects,
     tasks,
@@ -133,6 +135,7 @@ beforeEach(() => {
   gitBranchesByProject = {};
   prsByProject = {};
   hideEndedSessions = false;
+  followedProjectId = null;
   setKanbanColumnOrder.mockClear();
   setViewMode.mockClear();
   deleteSession.mockClear();
@@ -561,6 +564,129 @@ describe("project picker", () => {
     const user = userEvent.setup();
     renderBoard();
     await pickProject(user, "demo");
+    expect(readyColumn().querySelectorAll(".task-card")).toHaveLength(2);
+
+    dragFirstOntoSecond();
+
+    expect(updateTask).toHaveBeenCalledWith(3, { boardOrder: 0 });
+    expect(updateTask).toHaveBeenCalledWith(2, { boardOrder: 1 });
+    expect(updateTask).toHaveBeenCalledWith(1, { boardOrder: 2 });
+    expect(updateTask).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("follow the sidebar's project (#2858)", () => {
+  const followRow = (name = "demo") =>
+    screen.getByRole("checkbox", {
+      name: new RegExp(`^Follow the sidebar's project \\(${name}\\)`),
+    });
+  const twoProjectTasks = () => [
+    makeTask({ id: 1, projectId: 1, status: "ready", title: "demo task" }),
+    makeTask({ id: 2, projectId: 2, status: "ready", title: "other task" }),
+  ];
+
+  it("offers nothing to follow while no sidebar project is known", async () => {
+    tasks = twoProjectTasks();
+    const user = userEvent.setup();
+    renderBoard();
+    await openMenu(user, "Projects");
+    expect(screen.queryByRole("checkbox", { name: /Follow the sidebar/ })).toBeNull();
+  });
+
+  it("narrows the board to the followed project, names it on the button, and tracks changes", async () => {
+    tasks = twoProjectTasks();
+    followedProjectId = 1;
+    const user = userEvent.setup();
+    const view = renderBoard();
+    await openMenu(user, "Projects");
+    await user.click(followRow());
+    expect(localStorage.getItem("crs.taskFollowSidebar")).toBe("1");
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.queryByText("other task")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Projects/ })).toHaveTextContent("demo");
+
+    // The sidebar moves to another project: the board follows it.
+    followedProjectId = 2;
+    view.rerender(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("other task")).toBeInTheDocument();
+    expect(screen.queryByText("demo task")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Projects/ })).toHaveTextContent("other");
+  });
+
+  it("ignores the saved selection while on and restores it when switched off", async () => {
+    tasks = twoProjectTasks();
+    localStorage.setItem("crs.taskProjectFilter", JSON.stringify([2]));
+    followedProjectId = 1;
+    const user = userEvent.setup();
+    renderBoard();
+    expect(screen.getByText("other task")).toBeInTheDocument();
+    await openMenu(user, "Projects");
+    await user.click(followRow());
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.queryByText("other task")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("crs.taskProjectFilter")!)).toEqual([2]);
+
+    await user.click(followRow());
+    expect(localStorage.getItem("crs.taskFollowSidebar")).toBe("0");
+    expect(screen.getByText("other task")).toBeInTheDocument();
+    expect(screen.queryByText("demo task")).toBeNull();
+  });
+
+  it("ends following when any project is picked, keeping the resulting selection", async () => {
+    tasks = twoProjectTasks();
+    followedProjectId = 1;
+    localStorage.setItem("crs.taskFollowSidebar", "1");
+    const user = userEvent.setup();
+    renderBoard();
+    expect(screen.queryByText("other task")).toBeNull();
+    await openMenu(user, "Projects");
+    await user.click(screen.getByRole("checkbox", { name: /^other\b/ }));
+    expect(localStorage.getItem("crs.taskFollowSidebar")).toBe("0");
+    expect(JSON.parse(localStorage.getItem("crs.taskProjectFilter")!)).toEqual([1, 2]);
+    expect(screen.getByText("demo task")).toBeInTheDocument();
+    expect(screen.getByText("other task")).toBeInTheDocument();
+  });
+
+  it("persists across a remount", () => {
+    tasks = twoProjectTasks();
+    followedProjectId = 2;
+    localStorage.setItem("crs.taskFollowSidebar", "1");
+    const first = renderBoard();
+    expect(screen.getByText("other task")).toBeInTheDocument();
+    first.unmount();
+    renderBoard();
+    expect(screen.getByText("other task")).toBeInTheDocument();
+    expect(screen.queryByText("demo task")).toBeNull();
+  });
+
+  it("falls back to the saved selection while there is nothing to follow (unknown id or none)", async () => {
+    tasks = twoProjectTasks();
+    localStorage.setItem("crs.taskProjectFilter", JSON.stringify([2]));
+    localStorage.setItem("crs.taskFollowSidebar", "1");
+    const user = userEvent.setup();
+    for (const id of [999, null]) {
+      followedProjectId = id;
+      const view = renderBoard();
+      expect(screen.getByText("other task")).toBeInTheDocument();
+      expect(screen.queryByText("demo task")).toBeNull();
+      // Nothing is being followed, so the button is not marked as following and the row is not offered.
+      expect(screen.getByRole("button", { name: /^Projects/ })).not.toHaveTextContent("◎");
+      await openMenu(user, "Projects");
+      expect(screen.queryByRole("checkbox", { name: /Follow the sidebar/ })).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it("reorders identically under Follow — boardOrder must stay correct (#610)", async () => {
+    // A hidden other-project task sits between the two visible ones in boardOrder.
+    tasks = [
+      makeTask({ id: 1, projectId: 1, status: "ready", boardOrder: 0, title: "first" }),
+      makeTask({ id: 3, projectId: 2, status: "ready", boardOrder: 1, title: "hidden" }),
+      makeTask({ id: 2, projectId: 1, status: "ready", boardOrder: 2, title: "second" }),
+    ];
+    followedProjectId = 1;
+    localStorage.setItem("crs.taskFollowSidebar", "1");
+    renderBoard();
     expect(readyColumn().querySelectorAll(".task-card")).toHaveLength(2);
 
     dragFirstOntoSecond();

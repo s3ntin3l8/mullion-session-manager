@@ -40,6 +40,7 @@ export function ProjectPickerPanel({
   recent,
   onToggle,
   onClear,
+  follow,
 }: {
   projects: Array<{ id: number; name: string }>;
   selected: number[];
@@ -48,6 +49,9 @@ export function ProjectPickerPanel({
   recent: number[];
   onToggle: (id: number) => void;
   onClear: () => void;
+  /** The "follow the sidebar's project" option (#2858); omitted when there is no
+   * followed project to offer. */
+  follow?: { checked: boolean; projectName: string | null; onChange: (next: boolean) => void };
 }) {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();
@@ -93,6 +97,13 @@ export function ProjectPickerPanel({
         <button type="button" className="tasks-panel-filter-clear" onClick={onClear}>
           Show every project
         </button>
+      )}
+      {follow && (
+        <CheckItem checked={follow.checked} onChange={() => follow.onChange(!follow.checked)}>
+          {follow.projectName
+            ? `Follow the sidebar's project (${follow.projectName})`
+            : "Follow the sidebar's project"}
+        </CheckItem>
       )}
     </>
   );
