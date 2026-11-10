@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import type { Project, Session } from "../api/index.js";
 import { adhocSummary, LANE_COLUMN_ORDER, laneColumnTitle } from "../boardLanes.js";
 import { computeKanbanReorder, orderSessionsForColumn } from "../kanban.js";
@@ -27,6 +27,9 @@ export function AdhocLane({
   onSessionEnded: (session: Session) => void;
 }) {
   const [collapsed, setCollapsed] = useState(true);
+  // The body only exists while expanded, so the toggle points at it only then,
+  // and the id is per instance: desktop and phone both render this component.
+  const bodyId = useId();
   // Hermes review — dragover can only see dataTransfer.types, not the
   // dragged id itself (getData is drop-only), so a card can't tell on its
   // own whether an incoming x-mullion-session drag belongs to its own
@@ -54,7 +57,7 @@ export function AdhocLane({
           className="kanban-lane-collapse"
           onClick={() => setCollapsed((v) => !v)}
           aria-expanded={!collapsed}
-          aria-controls="kanban-lane-body"
+          aria-controls={collapsed ? undefined : bodyId}
         >
           {collapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
           Ad-hoc sessions (no task)
@@ -77,7 +80,7 @@ export function AdhocLane({
         )}
       </div>
       {!collapsed && (
-        <div className="kanban-lane-body" id="kanban-lane-body">
+        <div className="kanban-lane-body" id={bodyId}>
           {summary.total === 0 ? (
             <div className="kanban-lane-empty">No sessions without a task.</div>
           ) : (

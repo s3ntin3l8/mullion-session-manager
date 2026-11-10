@@ -817,17 +817,17 @@ describe("UnifiedBoard ad-hoc strip summary", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(document.querySelector(".kanban-lane-count")?.textContent).toBe("4");
     expect(document.querySelector(".kanban-lane-summary")?.textContent).toBe(
-      "2 running · 1 need you · 1 idle",
+      "2 running · 1 needs you · 1 idle",
     );
     expect(dotTones()).toEqual(["attention", "running", "running", "idle"]);
-    expect(document.getElementById("kanban-lane-body")).toBeNull();
+    expect(document.querySelector(".kanban-lane-body")).toBeNull();
   });
 
   it("keeps the summary while expanded", async () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /Ad-hoc sessions/ }));
     expect(document.querySelector(".kanban-lane-summary")?.textContent).toBe(
-      "2 running · 1 need you · 1 idle",
+      "2 running · 1 needs you · 1 idle",
     );
     expect(document.querySelectorAll(".kanban-card")).toHaveLength(4);
   });
@@ -835,11 +835,22 @@ describe("UnifiedBoard ad-hoc strip summary", () => {
   it("is the same strip on the phone, where it is new, and expands to the sessions", async () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
     expect(document.querySelector(".kanban-lane-summary")?.textContent).toBe(
-      "2 running · 1 need you · 1 idle",
+      "2 running · 1 needs you · 1 idle",
     );
     expect(document.querySelectorAll(".kanban-card")).toHaveLength(0);
     await userEvent.click(screen.getByRole("button", { name: /Ad-hoc sessions/ }));
     expect(document.querySelectorAll(".kanban-card")).toHaveLength(4);
+  });
+
+  it("points the toggle at the lane body only while it exists", async () => {
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const toggle = screen.getByRole("button", { name: /Ad-hoc sessions/ });
+    expect(toggle).not.toHaveAttribute("aria-controls");
+    await userEvent.click(toggle);
+    const body = document.querySelector(".kanban-lane-body");
+    expect(body).not.toBeNull();
+    expect(body!.id).not.toBe("");
+    expect(toggle).toHaveAttribute("aria-controls", body!.id);
   });
 
   it("shows no dots or summary when there are no ad-hoc sessions", () => {
@@ -1017,12 +1028,12 @@ describe("UnifiedBoard phone layout", () => {
     const toggle = screen.getByRole("button", { name: /Ad-hoc sessions/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(document.querySelector(".kanban-lane-count")?.textContent).toBe("2");
-    expect(document.getElementById("kanban-lane-body")).toBeNull();
+    expect(document.querySelector(".kanban-lane-body")).toBeNull();
     expect(document.querySelectorAll(".kanban-card")).toHaveLength(0);
 
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(document.getElementById("kanban-lane-body")).not.toBeNull();
+    expect(document.querySelector(".kanban-lane-body")).not.toBeNull();
     expect(document.querySelectorAll(".kanban-card")).toHaveLength(2);
 
     await user.click(toggle);

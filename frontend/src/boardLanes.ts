@@ -113,7 +113,9 @@ export function adhocSummary(
   }
   const text = [
     counts.running > 0 ? `${counts.running} running` : null,
-    counts.attention > 0 ? `${counts.attention} need you` : null,
+    counts.attention > 0
+      ? `${counts.attention} ${counts.attention === 1 ? "needs" : "need"} you`
+      : null,
     counts.idle > 0 ? `${counts.idle} idle` : null,
     counts.ended > 0 ? `${counts.ended} ended` : null,
   ]

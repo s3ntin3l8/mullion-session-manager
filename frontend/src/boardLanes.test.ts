@@ -110,7 +110,23 @@ describe("adhocSummary", () => {
     ]);
     const summary = adhocSummary(columns, shown);
     expect(summary.dots).toEqual(["attention", "running"]);
-    expect(summary.text).toBe("1 running · 1 need you");
+    expect(summary.text).toBe("1 running · 1 needs you");
+  });
+
+  it('says "needs you" for one session and "need you" for several', () => {
+    const one = adhocSummary(
+      group([makeSession({ id: 1, sessionStatusSeverity: "blocked" })]),
+      shown,
+    );
+    expect(one.text).toBe("1 needs you");
+    const two = adhocSummary(
+      group([
+        makeSession({ id: 1, sessionStatusSeverity: "blocked" }),
+        makeSession({ id: 2, sessionStatusSeverity: "failed" }),
+      ]),
+      shown,
+    );
+    expect(two.text).toBe("2 need you");
   });
 
   it("does not count a session the caller says is not shown", () => {
