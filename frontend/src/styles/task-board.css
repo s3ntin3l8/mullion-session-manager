@@ -89,9 +89,15 @@
 .task-card {
   border-left: 3px solid var(--task-epic-colour, var(--border-soft));
 }
+/* empty-states.css sets `border-color` (a shorthand) on :hover and the selected ring does
+   too, which would turn the epic's left edge grey; both re-assert it. */
+.task-card:hover {
+  border-left-color: var(--task-epic-colour, var(--border));
+}
 .task-card-selected,
 .task-card-selected:hover {
   border-color: var(--ring);
+  border-left-color: var(--task-epic-colour, var(--ring));
   box-shadow: 0 0 0 1px var(--ring);
 }
 .task-card-meta-links {

@@ -21,8 +21,9 @@ export const TASK_COLUMNS: { id: TaskStatus; title: string }[] = [
 // #2841 — Claimed is a transient state ("queued, waiting for a free slot"), not a
 // place a task lives, so the board shows it inside In progress with a Queued badge.
 // This is a display fold only: the status itself, the drag rules and every server
-// transition are unchanged, and TASK_COLUMNS (every status) is still what counts and
-// the phone strip are built from.
+// transition are unchanged. BOARD_COLUMNS is what the board and the phone strip render;
+// TASK_COLUMNS (every status) is still the shape of the per-status counts, which
+// foldClaimedCounts then folds, so do not add a Claimed chip back to the strip.
 export const BOARD_COLUMNS: { id: TaskStatus; title: string }[] = TASK_COLUMNS.filter(
   (c) => c.id !== "claimed",
 );

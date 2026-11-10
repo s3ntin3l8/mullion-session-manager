@@ -414,7 +414,10 @@ the original session board used.
   zero count) and opens again while a card that can land there is dragged. Cards
   that are blocked by the same task(s) collapse into one "N blocked by #B"
   summary once there are three of them; the summary links to the blocker, expands
-  in place, and a card dropped on it lands before the stack's first card.
+  in place, and a card dropped on it lands before the stack's first card. A stack
+  sits where its first member was, so blocked cards that were not adjacent are
+  gathered together and the on-screen order can differ slightly from the saved
+  order around a stack; dragging still reorders the saved order correctly.
 - **Group by** (Display menu, `crs.taskGroupBy`): None, **Epic** or **Project**.
   Grouped, the board becomes swimlanes, each with its own columns. An epic lane
   is titled `#N title` with a link to the issue and a progress bar — the epic

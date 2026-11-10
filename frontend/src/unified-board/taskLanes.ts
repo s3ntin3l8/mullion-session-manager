@@ -152,9 +152,11 @@ function stackKey(task: Task): string | null {
 
 /**
  * The column's render list: three or more cards blocked by the same tasks become one
- * stack, placed where its first member was. `index` is always the card's position in
- * `tasks`, never in the grouped list, so a drop onto a card still names the same slot
- * `absoluteDropIndex` expects.
+ * stack, placed where its first member was. Members that were not adjacent are therefore
+ * hoisted together, so the rendered order can differ from boardOrder around a stack
+ * (docs/tasks.md says so). Drops stay correct because `index` is always the card's
+ * position in `tasks`, never in the grouped list, so a drop onto a card still names the
+ * same slot `absoluteDropIndex` expects.
  */
 export function columnItems(tasks: Task[]): ColumnItem[] {
   const groups = new Map<string, Array<{ task: Task; index: number }>>();

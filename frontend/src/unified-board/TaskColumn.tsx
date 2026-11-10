@@ -105,7 +105,7 @@ export function TaskColumn({
 
   if (rail && tasks.length === 0 && !pending && !acceptsDrop) {
     return (
-      <div className="kanban-column kanban-column-rail" aria-label={`${title}, no tasks`}>
+      <div className="kanban-column kanban-column-rail">
         <span className="kanban-column-title">{title}</span>
         <span className="kanban-column-count">0</span>
       </div>
