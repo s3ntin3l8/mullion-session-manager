@@ -3581,7 +3581,7 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("clears the merge flag idempotently when the PR was closed (not merged) out of band", async () => {
+    it("clears the merge flag and flags a human when the PR was closed (not merged) out of band (#2865)", async () => {
       const app = await buildApp();
       const { taskId } = await createDoneTaskWithPendingMerge(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr({ merged: false, state: "closed" }));
@@ -3591,7 +3591,7 @@ describe("reconcileTasks", () => {
       expect(mockMergePullRequest).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.mergeRequestedAt).toBeNull();
-      expect(row.mergeError).toBeNull();
+      expect(row.mergeError).toContain("closed without merging");
 
       await app.close();
     });

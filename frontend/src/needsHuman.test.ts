@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { needsHumanText, reviewPhaseText } from "./needsHuman.js";
+import { isMergeNeedsHumanReason, needsHumanText, reviewPhaseText } from "./needsHuman.js";
 
 describe("needsHumanText", () => {
   it("names each reason the automatic loop stopped", () => {
@@ -9,6 +9,15 @@ describe("needsHumanText", () => {
     expect(needsHumanText("review-post-failed")).toBe(
       "approving review could not be posted to GitHub",
     );
+    expect(needsHumanText("pr-closed")).toBe(
+      "the PR was closed without merging, so nothing landed",
+    );
+  });
+
+  it("treats pr-closed as a merge-tied reason, standing on its own", () => {
+    expect(isMergeNeedsHumanReason("pr-closed")).toBe(true);
+    expect(isMergeNeedsHumanReason("cap")).toBe(false);
+    expect(isMergeNeedsHumanReason(null)).toBe(false);
   });
 
   it("reads a missing reason as the round cap — the original, still most common, case", () => {

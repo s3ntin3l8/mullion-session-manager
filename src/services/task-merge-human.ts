@@ -23,7 +23,7 @@ export const clearMergeNeedsHumanReason = sql<
  * a `review-post-failed` hold (nothing left to hold) is released too. */
 export const clearNeedsHumanOnMerge = sql<
   string | null
->`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'review-post-failed') THEN NULL ELSE needs_human_reason END`;
+>`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'review-post-failed', 'pr-closed') THEN NULL ELSE needs_human_reason END`;
 
 /**
  * `tasks.reviewPostPending` value once an approving review's post failed for

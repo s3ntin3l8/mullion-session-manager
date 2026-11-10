@@ -1520,6 +1520,32 @@ untracked process). Sessions created before the column existed have no
 `warn` with its reason: a recurring `unlinked` line means a spawn path is
 still leaking, and the fix belongs there, not in the sweep.
 
+### Approved tasks whose PR ends without Mullion's merge (#2865)
+
+The `→ done` sync leaves the issue open until the PR merges, so a PR that ends
+some other way must be noticed:
+
+- **Closed without merging.** The merge sweep's `already-done` arm (and the
+  re-poll below) calls `flagClosedUnmergedDoneTask` (`task-pr-closed.ts`): a
+  compare-and-set on `needsHumanReason != 'pr-closed'` writes `pr-closed` and a
+  `mergeError`, then removes `mullion-done` and comments on the issue. The
+  compare-and-set makes it announce once even when a human re-arms the merge and
+  the PR is still closed; `pr-closed` is not in `clearMergeNeedsHumanReason`,
+  so clearing `mergeError` does not reset it, and only `clearNeedsHumanOnMerge`
+  (a recorded merge) does.
+- **Merged by hand, no webhook.** A hand-merge never sets `mergeRequestedAt`, so
+  `processMergeRequests` never sees it. `repollUnmergedDoneTasks`
+  (`task-merge-repoll.ts`, right after that sweep) reads the PR of every `done`
+  task with a `prNumber`, no `mergedAt` and no `mergeRequestedAt`; a merged PR
+  goes through `finishMergedDoneTask` (which closes the issue), a closed one
+  through the flag above. Bounded: a task is polled only after 30 minutes in
+  `done`, oldest first, at most once per hour (in memory; once every six hours
+  after it is flagged `pr-closed`, where the only thing left to find is a human
+  reopening and hand-merging the PR), 10 per tick, never while rate-limited, and
+  never once archived. An issue a human already closed is not commented on. The
+  flag re-asserts its `mergeError` when "Merge now" on a still-closed PR blanked
+  it, without announcing again.
+
 ### Merge on approve
 
 By default, approving a task does everything above and stops — the PR is

@@ -9,14 +9,15 @@ export type NeedsHumanReason =
   | "finding-persisted"
   | "rebase-exhausted"
   | "blocked-threads"
-  | "review-post-failed";
+  | "review-post-failed"
+  | "pr-closed";
 
 /** The reasons tied to a merge that cannot proceed. Unlike the review-loop
  * reasons they do not depend on the round cap or its announce stamp. */
 export function isMergeNeedsHumanReason(
   reason: NeedsHumanReason | null | undefined,
-): reason is "rebase-exhausted" | "blocked-threads" {
-  return reason === "rebase-exhausted" || reason === "blocked-threads";
+): reason is "rebase-exhausted" | "blocked-threads" | "pr-closed" {
+  return reason === "rebase-exhausted" || reason === "blocked-threads" || reason === "pr-closed";
 }
 
 export function needsHumanText(reason: NeedsHumanReason | null | undefined): string {
@@ -29,6 +30,8 @@ export function needsHumanText(reason: NeedsHumanReason | null | undefined): str
       return "auto-rebase gave up, the PR still conflicts with main";
     case "blocked-threads":
       return "merge blocked on unresolved review conversations";
+    case "pr-closed":
+      return "the PR was closed without merging, so nothing landed";
     case "review-post-failed":
       return "approving review could not be posted to GitHub";
     default:
