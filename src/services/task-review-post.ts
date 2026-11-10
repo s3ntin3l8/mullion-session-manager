@@ -228,7 +228,7 @@ export async function retryPendingReviewPosts(
       // A terminal hold, never retried: kept while a human can still act on it
       // (in review, or approved and awaiting the merge), dropped otherwise.
       const held =
-        task.status === "reviewing" || (task.status === "done" && task.mergedAt === null);
+        task.mergedAt === null && (task.status === "reviewing" || task.status === "done");
       if (!held) writeReviewPostPending(app, task.id, raw, null);
       continue;
     }

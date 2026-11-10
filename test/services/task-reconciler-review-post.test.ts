@@ -663,7 +663,7 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     await app.close();
   });
 
-  it.each(["claimed", "in_progress"] as const)(
+  it.each(["reviewing", "claimed", "in_progress"] as const)(
     "drops an aged unposted marker on a %s task whose PR already merged, holding nothing",
     async (status) => {
       const { app, task, read } = await setup(`p-post-merged-${status}`);
@@ -683,6 +683,29 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
       expect(row.needsHumanReason).not.toBe("review-post-failed");
       expect(holdsForReviewPost(row)).toBe(false);
       expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it.each(["reviewing", "done"] as const)(
+    "drops the terminal failed marker on a %s task whose PR already merged",
+    async (status) => {
+      const { app, task, read } = await setup(`p-post-merged-terminal-${status}`);
+      app.db
+        .update(tasks)
+        .set({
+          status,
+          mergedAt: new Date(),
+          needsHumanReason: null,
+          reviewPostPending: "review-post-failed",
+          reviewSessionId: null,
+        })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await reconcileTasks(app);
+
+      expect(read().reviewPostPending).toBeNull();
       await app.close();
     },
   );
