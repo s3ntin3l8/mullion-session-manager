@@ -153,6 +153,8 @@ import {
   GitHubApiError,
 } from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
+import { flagClosedUnmergedDoneTask } from "./task-pr-closed.js";
+import { repollUnmergedDoneTasks } from "./task-merge-repoll.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
 import { resolveReleaseMerge } from "./release-merge.js";
 import {
@@ -1707,6 +1709,9 @@ async function attemptMerge(
         // should archive.
         const won = pr.merged && markTaskMerged(app, task, project);
         clearMergeState(app, task, project, won);
+        // Closed WITHOUT merging: nothing landed, so flag it for a human
+        // (after clearMergeState, which clears the merge error it sets).
+        if (!pr.merged) await flagClosedUnmergedDoneTask(app, task, project);
         return;
       }
       case "clean": {
@@ -4793,6 +4798,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // outstanding needs to keep being retried regardless of what's currently
   // claimed/in_progress.
   await processMergeRequests(app);
+  // A hand-merge never sets mergeRequestedAt, so the sweep above never sees it
+  // and only the (best-effort) webhook would close the issue: poll for it.
+  await repollUnmergedDoneTasks(app, finishMergedDoneTask);
   // #744 — runs right after processMergeRequests, same tick and same
   // independence reasoning: a project with tasks awaiting autorelease needs
   // to keep being retried regardless of what's currently claimed/in_progress.

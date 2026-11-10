@@ -62,6 +62,7 @@ const taskFixtureProps = {
       "rebase-exhausted",
       "blocked-threads",
       "review-post-failed",
+      "pr-closed",
       null,
     ],
   },

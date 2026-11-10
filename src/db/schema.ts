@@ -1227,6 +1227,9 @@ export const tasks = sqliteTable(
     // next review ingest.
     // Those are set with the merge error, cleared wherever it is cleared and
     // when the task merges (task-merge-human.ts).
+    // `pr-closed` — an approved (`done`) task's PR was closed WITHOUT merging
+    // (task-pr-closed.ts). Set with a mergeError; only a merge clears it (a
+    // re-armed merge sweep that finds the PR still closed must not re-announce).
     needsHumanReason: text("needs_human_reason", {
       enum: [
         "cap",
@@ -1235,6 +1238,7 @@ export const tasks = sqliteTable(
         "rebase-exhausted",
         "blocked-threads",
         "review-post-failed",
+        "pr-closed",
       ],
     }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
