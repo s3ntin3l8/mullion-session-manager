@@ -5,6 +5,7 @@
 // read it. HTML in thread comments is flattened, not trusted.
 
 import type { PrDetail } from "./github-pr-detail.js";
+import { hasMergeConflict } from "./github-pr-phase.js";
 
 const MAX_COMMENT_CHARS = 600;
 
@@ -41,15 +42,21 @@ function clip(text: string): string {
 /** A latest review in one of these states lifted the reviewer's earlier request. */
 const SUPERSEDING = new Set(["APPROVED", "DISMISSED"]);
 
-/** The PR cannot merge as it stands: GitHub reports a conflict with its base. */
-function hasMergeConflict(pr: Partial<Pick<PrDetail, "mergeable" | "mergeStateStatus">>): boolean {
-  // `UNKNOWN` / null is GitHub still computing after a push, not a conflict.
-  return pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY";
-}
-
 export function buildHandoffPrompt(
-  pr: Pick<PrDetail, "number" | "title" | "htmlUrl" | "headBranch" | "threads" | "reviews"> &
-    Partial<Pick<PrDetail, "baseBranch" | "mergeable" | "mergeStateStatus">>,
+  // `baseBranch` and `mergeable` are required on purpose: they drive the
+  // conflict section, and a caller that forgot them would silently get
+  // "nothing outstanding" on a PR that cannot merge.
+  pr: Pick<
+    PrDetail,
+    | "number"
+    | "title"
+    | "htmlUrl"
+    | "headBranch"
+    | "baseBranch"
+    | "mergeable"
+    | "threads"
+    | "reviews"
+  >,
   failingChecks: string[],
 ): string {
   const lines = [`Address the open feedback on PR #${pr.number}: ${pr.title}`, pr.htmlUrl, ""];
@@ -87,10 +94,10 @@ export function buildHandoffPrompt(
   }
   const conflicting = hasMergeConflict(pr);
   if (conflicting) {
-    const base = pr.baseBranch ? `\`${pr.baseBranch}\`` : "its base branch";
+    const base = `\`${pr.baseBranch}\``;
     lines.push(
       `This PR has a merge conflict with ${base} and cannot merge as it stands.`,
-      `Bring ${pr.baseBranch ? `\`origin/${pr.baseBranch}\`` : "the base branch"} into the branch (fetch first, then rebase onto it or merge it — follow this repo's convention), resolve the conflicts keeping the intent of both sides, re-run the repo's verification gate, and push. If you rebase, push with \`--force-with-lease\`.`,
+      `Bring \`origin/${pr.baseBranch}\` into the branch (fetch first, then rebase onto it or merge it — follow this repo's convention), resolve the conflicts keeping the intent of both sides, re-run the repo's verification gate, and push. If you rebase, push with \`--force-with-lease\`.`,
       ...(failingChecks.length === 0
         ? [
             "GitHub does not run a PR's workflows while it conflicts with its base, so missing or stale CI results are expected until this is resolved — do not read them as green.",

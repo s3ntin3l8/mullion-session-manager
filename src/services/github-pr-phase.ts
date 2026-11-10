@@ -79,6 +79,17 @@ export interface PrPhaseInput {
   behindBy?: number | null;
 }
 
+/**
+ * GitHub says the PR cannot merge as it stands because it conflicts with its
+ * base. The one definition of "conflict": the phase badge, the merge action bar
+ * and the "Fix in session" prompt all read it, so they cannot disagree. `UNKNOWN`
+ * / null (GitHub still computing after a push) is not a conflict, and neither is
+ * `BEHIND` (the head merely lags its base).
+ */
+export function hasMergeConflict(pr: { mergeable: PrMergeable }): boolean {
+  return pr.mergeable === "CONFLICTING";
+}
+
 export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // Only a COMMENTED review and no approval: a landed review that did not clear the PR.
   const waiting = (): PrPhase =>
@@ -91,7 +102,7 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
     if (pr.ciStatus === "in_progress") return "ci_pending";
     return "unknown";
   }
-  if (pr.mergeable === "CONFLICTING") return "conflicts";
+  if (hasMergeConflict(pr)) return "conflicts";
   if (pr.ciStatus === "failure") return "ci_failing";
   if (
     pr.reviewDecision === "CHANGES_REQUESTED" ||

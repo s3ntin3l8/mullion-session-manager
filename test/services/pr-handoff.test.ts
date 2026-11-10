@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { buildHandoffPrompt } from "../../src/services/pr-handoff.js";
+import type { PrMergeable } from "../../src/services/github-pr-phase.js";
 
 const pr = {
   number: 9,
   title: "Add thing",
   htmlUrl: "https://github.com/o/r/pull/9",
   headBranch: "feat-thing",
+  baseBranch: "main",
+  mergeable: "MERGEABLE" as PrMergeable,
   threads: [
     {
       id: "T1",
@@ -172,12 +175,10 @@ describe("buildHandoffPrompt", () => {
 
   describe("a merge conflict with the base branch", () => {
     const clean = { ...pr, threads: [], reviews: [] };
+    const conflicting = { ...clean, mergeable: "CONFLICTING" as PrMergeable };
 
     it("tells the session to resolve it, instead of saying nothing is outstanding", () => {
-      const text = buildHandoffPrompt(
-        { ...clean, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
-        [],
-      );
+      const text = buildHandoffPrompt(conflicting, []);
       expect(text).toContain("merge conflict with `main`");
       expect(text).toContain("`origin/main`");
       expect(text).toContain("--force-with-lease");
@@ -185,53 +186,39 @@ describe("buildHandoffPrompt", () => {
     });
 
     it("explains the missing CI when there are no failing checks, since GitHub skips workflows on a conflict", () => {
-      const text = buildHandoffPrompt(
-        { ...clean, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
-        [],
+      expect(buildHandoffPrompt(conflicting, [])).toContain(
+        "does not run a PR's workflows while it conflicts",
       );
-      expect(text).toContain("does not run a PR's workflows while it conflicts");
     });
 
     it("does not add the missing-CI note when checks did fail", () => {
-      const text = buildHandoffPrompt(
-        { ...clean, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
-        ["CI"],
-      );
+      const text = buildHandoffPrompt(conflicting, ["CI"]);
       expect(text).toContain("Failing checks: CI");
       expect(text).not.toContain("does not run a PR's workflows");
     });
 
-    it("recognises either signal alone", () => {
-      expect(
-        buildHandoffPrompt({ ...clean, baseBranch: "main", mergeable: "CONFLICTING" }, []),
-      ).toContain("merge conflict");
-      expect(
-        buildHandoffPrompt({ ...clean, baseBranch: "main", mergeStateStatus: "DIRTY" }, []),
-      ).toContain("merge conflict");
-    });
-
-    it("names the base generically when it is not known", () => {
-      const text = buildHandoffPrompt({ ...clean, mergeable: "CONFLICTING" }, []);
-      expect(text).toContain("merge conflict with its base branch");
-      expect(text).toContain("Bring the base branch into the branch");
-    });
-
     it("does not claim a conflict while GitHub is still computing, or when the PR is mergeable", () => {
       for (const mergeable of ["UNKNOWN", null, "MERGEABLE"] as const) {
-        const text = buildHandoffPrompt(
-          { ...clean, baseBranch: "main", mergeable, mergeStateStatus: "CLEAN" },
-          [],
-        );
+        const text = buildHandoffPrompt({ ...clean, mergeable }, []);
         expect(text).not.toContain("merge conflict");
         expect(text).toContain("nothing outstanding");
       }
     });
 
+    it("does not call a PR that merely lags its base conflicting (BEHIND is its own state)", () => {
+      // A full PrDetail carries mergeStateStatus; it must not change the answer.
+      const behind = {
+        ...clean,
+        mergeable: "MERGEABLE" as PrMergeable,
+        mergeStateStatus: "BEHIND",
+      };
+      const text = buildHandoffPrompt(behind, []);
+      expect(text).not.toContain("merge conflict");
+      expect(text).toContain("nothing outstanding");
+    });
+
     it("lists the conflict alongside review feedback and failing checks", () => {
-      const text = buildHandoffPrompt(
-        { ...pr, baseBranch: "main", mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" },
-        ["CI"],
-      );
+      const text = buildHandoffPrompt({ ...pr, mergeable: "CONFLICTING" as PrMergeable }, ["CI"]);
       expect(text).toContain("Unresolved review threads (1):");
       expect(text).toContain("merge conflict with `main`");
       expect(text).toContain("Failing checks: CI");
