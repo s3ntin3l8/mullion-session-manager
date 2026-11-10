@@ -168,6 +168,15 @@ describe("host checkout detection routes", () => {
       });
       expect(attach.statusCode).toBe(200);
 
+      for (const bad of ["/a/../b", "D:\\a\\..\\b"]) {
+        const patched = await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { hostCwds: { [macId]: bad } },
+        });
+        expect(patched.statusCode, bad).toBe(400);
+      }
+
       const traversal = await app.inject({
         method: "POST",
         url: `/api/projects/${projectId}/host-checkouts`,

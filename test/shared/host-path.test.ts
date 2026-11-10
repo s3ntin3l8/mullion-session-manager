@@ -1,0 +1,31 @@
+import { describe, it, expect } from "vitest";
+import {
+  ABSOLUTE_HOST_PATH_PATTERN,
+  isAbsoluteHostPath,
+  isStorablePath,
+} from "../../src/shared/host-path.js";
+
+describe("host-path", () => {
+  it("isAbsoluteHostPath: POSIX and drive paths yes; relative, drive-relative and UNC no", () => {
+    for (const ok of ["/srv/app", "D:\\Projects\\app", "d:/Projects/app"]) {
+      expect(isAbsoluteHostPath(ok), ok).toBe(true);
+    }
+    for (const bad of ["code/app", "D:app", "\\\\srv\\share\\app", ""]) {
+      expect(isAbsoluteHostPath(bad), bad).toBe(false);
+    }
+  });
+
+  it("isStorablePath additionally refuses traversal, control characters and overlong paths", () => {
+    expect(isStorablePath("D:\\Projects\\app")).toBe(true);
+    for (const bad of ["/a/../b", "D:\\a\\..\\b", "D:/a/../b", "/a\nb", `/${"a".repeat(5000)}`]) {
+      expect(isStorablePath(bad), bad.slice(0, 20)).toBe(false);
+    }
+  });
+
+  it("the schema pattern agrees with isAbsoluteHostPath", () => {
+    const re = new RegExp(ABSOLUTE_HOST_PATH_PATTERN);
+    for (const p of ["/x", "D:\\x", "D:/x", "x", "D:x", "\\\\s\\x"]) {
+      expect(re.test(p), p).toBe(isAbsoluteHostPath(p));
+    }
+  });
+});

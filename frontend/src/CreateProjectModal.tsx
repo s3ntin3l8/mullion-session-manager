@@ -23,6 +23,7 @@ import {
   type PlacementCapability,
   type PlacementPlatform,
 } from "../../src/shared/constants.js";
+import { isAbsoluteHostPath } from "../../src/shared/host-path.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
@@ -557,10 +558,10 @@ export function CreateProjectModal({
       ),
     );
     if (isEdit) {
-      const relative = Object.entries(editedHostPaths).find(([, v]) => !v.startsWith("/"));
+      const relative = Object.entries(editedHostPaths).find(([, v]) => !isAbsoluteHostPath(v));
       if (relative) {
         setError({
-          message: `The path on ${previewHostName(relative[0])} must be absolute (start with "/").`,
+          message: `The path on ${previewHostName(relative[0])} must be absolute (start with "/" or a drive letter like "D:\\").`,
         });
         return;
       }

@@ -1176,6 +1176,12 @@ export async function projectsRoute(app: FastifyInstance) {
         gitIdentity,
         allowDuplicate,
       } = request.body;
+      const badCwd = Object.entries(hostCwds ?? {}).find(([, c]) => !isStorablePath(c));
+      if (badCwd) {
+        return reply.badRequest(
+          `hostCwds path for ${badCwd[0]} must be an absolute path without '..' segments`,
+        );
+      }
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
         return reply.badRequest(unknownHostMessage(app, unknownHost));
@@ -1569,6 +1575,12 @@ export async function projectsRoute(app: FastifyInstance) {
           : acceptsMessagesFromList;
       if (effectiveMessages === "listed" && (effectiveMessagesList ?? []).length === 0) {
         return reply.badRequest("'listed' needs at least one project in acceptsMessagesFromList");
+      }
+      const badCwd = Object.entries(hostCwds ?? {}).find(([, c]) => !isStorablePath(c));
+      if (badCwd) {
+        return reply.badRequest(
+          `hostCwds path for ${badCwd[0]} must be an absolute path without '..' segments`,
+        );
       }
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {

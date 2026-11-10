@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID, MAX_HOST_CWDS } from "../shared/constants.js";
+import { ABSOLUTE_HOST_PATH_PATTERN, isStorablePath } from "../shared/host-path.js";
 import { normalizeGitRemote, readOriginUrl } from "./git-remote.js";
 import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 import { listHosts, type HostSummary } from "./host-registry.js";
@@ -90,19 +91,7 @@ function sanitizeCandidates(raw: unknown): DiscoveredCandidate[] | null {
   return out;
 }
 
-/** Pattern for the API schemas: an absolute POSIX path or a Windows drive path
- * (`D:\\x` or `D:/x`). `isStorablePath` stays the real validator. */
-export const ABSOLUTE_HOST_PATH_PATTERN = "^(/|[A-Za-z]:[\\\\/])";
-
-/** A path that is safe to store in `hostCwds`: absolute (POSIX, or a Windows
- * drive path such as `D:\\Projects\\x`), bounded, no control characters and
- * no `..` segment. A UNC path stays refused. */
-export function isStorablePath(cwd: string): boolean {
-  if (cwd.length > MAX_FIELD_LENGTH || /[\0\r\n]/.test(cwd)) return false;
-  if (cwd.startsWith("/")) return !cwd.split("/").includes("..");
-  if (/^[A-Za-z]:[\\/]/.test(cwd)) return !cwd.split(/[\\/]/).includes("..");
-  return false;
-}
+export { ABSOLUTE_HOST_PATH_PATTERN, isStorablePath };
 
 function discoverOnHost(
   app: FastifyInstance,
