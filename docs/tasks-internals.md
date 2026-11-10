@@ -824,8 +824,8 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   the task (`holdsForReviewPost`, which also honours a legacy row whose reason
   alone is `review-post-failed`) whatever other reason it carries, and the card
   and task detail show the `githubSyncError` text. The retry sweep never posts the
-  terminal marker; it keeps it while a human can still act (`reviewing`, or
-  `done` and unmerged) and drops it otherwise. A human exit clears it: approve
+  terminal marker; it keeps it while a human can still act (unmerged, and
+  `reviewing` or `done`) and drops it otherwise, including on a merged task. A human exit clears it: approve
   or `POST /api/tasks/:id/merge` (`clearedFor`), or the next review ingest
   overwriting the column; **every path that records a merge** clears it too
   (the webhook, `markTaskMerged`, the reviewing-task ending, archive-merged, the

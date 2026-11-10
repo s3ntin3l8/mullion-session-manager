@@ -226,7 +226,8 @@ export async function retryPendingReviewPosts(
     const raw = task.reviewPostPending!;
     if (raw === REVIEW_POST_FAILED_MARKER) {
       // A terminal hold, never retried: kept while a human can still act on it
-      // (in review, or approved and awaiting the merge), dropped otherwise.
+      // (unmerged, and in review or approved and awaiting the merge), dropped
+      // otherwise, including on any task whose PR already merged.
       const held =
         task.mergedAt === null && (task.status === "reviewing" || task.status === "done");
       if (!held) writeReviewPostPending(app, task.id, raw, null);
