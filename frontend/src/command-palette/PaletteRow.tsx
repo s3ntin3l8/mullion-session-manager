@@ -41,9 +41,11 @@ export function PaletteRow({
 }: PaletteRowProps) {
   return (
     <button
-      // Omit `type` when the caller omits it. Session, workspace and
-      // launcher rows never set it; command rows and the project picker do.
-      {...(type !== undefined ? { type } : {})}
+      // React omits an attribute whose value is `undefined`, so a caller
+      // that leaves `type` unset still renders no attribute. Command rows
+      // and the project picker pass "button"; session, workspace and
+      // launcher rows do not.
+      type={type}
       {...buttonProps}
       className={`cmd-row${selected ? " selected" : ""}`}
       title={rowTitle}
