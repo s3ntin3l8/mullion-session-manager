@@ -865,6 +865,9 @@ export interface UiSlice {
   // persisted. selectTask only sets it; openRightSidebarTask also opens the
   // drawer on the Tasks view, for callers outside it (the board, notifications).
   selectedTaskId: number | null;
+  // Bumped on every selection call, even for the same id, so a consumer can tell "the
+  // same task selected again" from "the selection that was already there".
+  taskSelectionSeq: number;
   selectTask: (taskId: number | null) => void;
   openRightSidebarTask: (taskId: number) => void;
   pendingOpenTaskId: number | null;

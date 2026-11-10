@@ -1,4 +1,3 @@
-import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
@@ -34,8 +33,6 @@ export function RightSidebarPanel({
 }: RightSidebarPanelProps) {
   const View = view.Component;
   const projectId = followed.effectiveProjectId;
-  // Mounted here, not in the Tasks view: it must run whichever view is showing.
-  useClearTaskSelectionOnProjectChange(projectId);
   const { checkoutSessionId, choice } = useCheckoutTarget(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [stripSlot, setStripSlot] = useState<HTMLElement | null>(null);

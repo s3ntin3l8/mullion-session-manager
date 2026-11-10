@@ -4,7 +4,7 @@ import { act, renderHook } from "@testing-library/react";
 import { useDashboardStore } from "../store/index.js";
 import { useClearTaskSelectionOnProjectChange } from "./useClearTaskSelectionOnProjectChange.js";
 
-beforeEach(() => useDashboardStore.setState({ selectedTaskId: null }));
+beforeEach(() => useDashboardStore.setState({ selectedTaskId: null, taskSelectionSeq: 0 }));
 
 const selected = () => useDashboardStore.getState().selectedTaskId;
 
@@ -34,6 +34,18 @@ describe("useClearTaskSelectionOnProjectChange", () => {
       rerender({ p: 9 });
     });
     expect(selected()).toBe(42);
+  });
+
+  it("keeps the same task selected again together with the project change", () => {
+    const { rerender } = renderHook(({ p }) => useClearTaskSelectionOnProjectChange(p), {
+      initialProps: { p: 4 },
+    });
+    act(() => useDashboardStore.getState().selectTask(7));
+    act(() => {
+      useDashboardStore.getState().openRightSidebarTask(7);
+      rerender({ p: 9 });
+    });
+    expect(selected()).toBe(7);
   });
 
   it("leaves an empty selection alone and ignores re-renders on the same project", () => {
