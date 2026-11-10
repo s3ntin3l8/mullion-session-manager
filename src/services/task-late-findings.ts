@@ -12,6 +12,8 @@ import type { SessionBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { CLOCK_SKEW_TOLERANCE_MS } from "./task-auto-rebase.js";
 import {
+  LATE_INGEST_RETRY_BASE_MS,
+  LATE_INGEST_RETRY_MAX_MS,
   MAX_LATE_INGEST_ATTEMPTS,
   ignoredUnstructured,
   lastLateReadKey,
@@ -93,6 +95,10 @@ export async function ingestLateFindings(
     task.lastReviewVerdictAt.getTime(),
   ].join(":");
   if (lastLateReadKey.get(task.id) === readKey) return;
+  // A persistently failing ingest for this very key waits out its backoff; a
+  // moved key (a new turn end or verdict) is a different file and re-arms.
+  const failing = lateIngestFailures.get(task.id);
+  if (failing?.key === readKey && Date.now() < failing.nextAttemptAt) return;
 
   let findings: string | null;
   try {
@@ -121,27 +127,31 @@ export async function ingestLateFindings(
   }
   ignoredUnstructured.delete(task.id);
   // Recorded once ingest succeeded: a throw (a transient post failure) leaves
-  // the key unset so the next tick retries the same file. The throw is
+  // the key unset so a later tick retries the same file. The throw is
   // contained here, so one task's failing ingest cannot abort the other rows
-  // or the sweeps after this one; after MAX_LATE_INGEST_ATTEMPTS failures for
-  // the same key it is recorded and the file is not re-read every tick.
+  // or the sweeps after this one. The first MAX_LATE_INGEST_ATTEMPTS failures
+  // retry on the next tick; after that the retry waits a doubling interval
+  // (1 min up to 15 min) and is logged per attempt. The file is never dropped:
+  // an ingest outage of any length still ends in an ingest once it recovers.
   try {
     await input.ingest(parsed, derived.status === "finished");
   } catch (err) {
     const prev = lateIngestFailures.get(task.id);
     const count = prev?.key === readKey ? prev.count + 1 : 1;
-    lateIngestFailures.set(task.id, { key: readKey, count });
-    if (count >= MAX_LATE_INGEST_ATTEMPTS) {
-      lastLateReadKey.set(task.id, readKey);
-      lateIngestFailures.delete(task.id);
+    const backoffMs =
+      count < MAX_LATE_INGEST_ATTEMPTS
+        ? 0
+        : Math.min(
+            LATE_INGEST_RETRY_BASE_MS * 2 ** (count - MAX_LATE_INGEST_ATTEMPTS),
+            LATE_INGEST_RETRY_MAX_MS,
+          );
+    lateIngestFailures.set(task.id, { key: readKey, count, nextAttemptAt: Date.now() + backoffMs });
+    if (count === 1 || count >= MAX_LATE_INGEST_ATTEMPTS) {
       app.log.error(
-        { err, taskId: task.id, attempts: count },
-        "task reconcile: late review findings ingest kept failing — giving up on this file until the reviewer writes again",
-      );
-    } else if (count === 1) {
-      app.log.error(
-        { err, taskId: task.id },
-        "task reconcile: late review findings ingest failed — retrying next tick",
+        { err, taskId: task.id, attempts: count, retryInMs: backoffMs },
+        count === 1
+          ? "task reconcile: late review findings ingest failed — retrying next tick"
+          : `task reconcile: late review findings ingest keeps failing — next retry in ${Math.round(backoffMs / 1000)}s (the file is kept; a new turn or verdict also re-arms it)`,
       );
     }
     return;

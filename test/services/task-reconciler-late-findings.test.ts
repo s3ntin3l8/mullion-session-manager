@@ -490,8 +490,95 @@ describe("late review findings after an inconclusive ingest", () => {
     // Bounded: the file is read MAX attempts times, not once per tick.
     expect(readsFor(a.id)).toBe(3);
     const aErrors = errors.mock.calls.filter((c) => (c[0] as { taskId?: number })?.taskId === a.id);
-    expect(aErrors.length).toBeLessThanOrEqual(2);
+    expect(aErrors.length).toBeLessThanOrEqual(3);
+    // The sweeps after the late-findings pass still ran in the same tick: B's
+    // approving review was posted and its auto-approve gates were evaluated.
+    expect(mockCreatePullRequestReview).toHaveBeenCalled();
     await app.close();
+  });
+
+  describe("a persistently failing ingest is retried on an interval, never dropped", () => {
+    async function harness(opts: Parameters<typeof setup>[0] = {}) {
+      const { app, task } = await setup(opts);
+      const session = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, task.reviewSessionId!))
+        .get()!;
+      const readTaskReviewFindings = vi.fn().mockResolvedValue(APPROVED);
+      const ingest = vi.fn().mockRejectedValue(new Error("outage"));
+      const run = (t = task, info: unknown = finishedInfo()) =>
+        ingestLateFindings(app, {
+          task: t,
+          session,
+          info: info as never,
+          backend: { readTaskReviewFindings } as never,
+          ingest,
+        });
+      return { app, task, run, ingest, readTaskReviewFindings };
+    }
+    const at = (t: number) => vi.spyOn(Date, "now").mockReturnValue(t);
+    afterEach(() => vi.restoreAllMocks());
+
+    it("waits the interval after the attempt cap, then retries and ingests exactly once", async () => {
+      const { app, run, ingest } = await harness({ sessionStatus: "exited" });
+      const t0 = Date.now();
+      at(t0);
+      for (let i = 0; i < 3; i++) await run(); // the per-tick attempts
+      expect(ingest).toHaveBeenCalledTimes(3);
+      at(t0 + 30_000);
+      await run();
+      expect(ingest).toHaveBeenCalledTimes(3); // still inside the 1 min wait
+      at(t0 + 61_000);
+      await run(); // 4th failure: wait doubles to 2 min
+      expect(ingest).toHaveBeenCalledTimes(4);
+      at(t0 + 61_000 + 90_000);
+      await run();
+      expect(ingest).toHaveBeenCalledTimes(4);
+      ingest.mockResolvedValue(undefined); // outage over
+      at(t0 + 61_000 + 121_000);
+      await run();
+      expect(ingest).toHaveBeenCalledTimes(5);
+      at(t0 + 3_600_000);
+      await run(); // recorded after the success: never ingested again
+      expect(ingest).toHaveBeenCalledTimes(5);
+      await app.close();
+    });
+
+    it("caps the wait at 15 minutes", async () => {
+      const { app, run, ingest } = await harness({ sessionStatus: "exited" });
+      let now = Date.now();
+      for (let i = 0; i < 12; i++) {
+        at(now);
+        await run();
+        now += 15 * 60_000 + 1; // always past any ceiling-bounded wait
+      }
+      expect(ingest).toHaveBeenCalledTimes(12);
+      await app.close();
+    });
+
+    it("a new turn end re-arms the key after the give-up point", async () => {
+      const { app, run, ingest } = await harness();
+      const t0 = Date.now();
+      at(t0);
+      for (let i = 0; i < 3; i++) await run();
+      await run(); // waiting
+      expect(ingest).toHaveBeenCalledTimes(3);
+      await run(undefined, { ...finishedInfo(), lastTurnEndedAt: TURN_ENDED_AT + 10_000 });
+      expect(ingest).toHaveBeenCalledTimes(4); // new key: no wait
+      await app.close();
+    });
+
+    it("a new verdict timestamp re-arms the key after the give-up point", async () => {
+      const { app, task, run, ingest } = await harness();
+      at(Date.now());
+      for (let i = 0; i < 3; i++) await run();
+      await run();
+      expect(ingest).toHaveBeenCalledTimes(3);
+      await run({ ...task, lastReviewVerdictAt: new Date(Date.now() - 4 * 60_000) });
+      expect(ingest).toHaveBeenCalledTimes(4);
+      await app.close();
+    });
   });
 
   it("the sweep prunes a task's read caches when it leaves reviewing", async () => {
