@@ -83,6 +83,10 @@ export const AGENT_LAUNCH_OPTIONS = [
   // Issue #2639: the session's browser target, resolved on the primary. An
   // agent without it cannot know which target its hook-socket browser serves.
   "browserTarget",
+  // #2857: the creating dashboard's terminal palette. Cosmetic and best-effort:
+  // deliberately NOT a required launch option (launch-requirements.ts), so an
+  // agent without it still spawns and answers from its own global palette.
+  "palette",
 ] as const;
 export type AgentLaunchOption = (typeof AGENT_LAUNCH_OPTIONS)[number];
 
