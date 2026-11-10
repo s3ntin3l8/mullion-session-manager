@@ -55,6 +55,14 @@ import type { KanbanColumnId } from "../kanban.js";
 // vs hierarchical child-session nesting).
 export type ViewMode = "list" | "kanban";
 
+/** Where the right sidebar's Back goes after a cross-link between the Tasks
+ * view and the GitHub view (epic #2847): a task's PR link and a PR's "Open
+ * task" both land on a detail whose own Back would otherwise be the list. */
+export type SidebarBack =
+  | { kind: "task"; taskId: number }
+  | { kind: "pr"; projectId: number; number: number }
+  | { kind: "issue"; projectId: number; number: number };
+
 // The *resolved* theme — what's actually painted (dockview class, root
 // `.light` class, xterm palette). Distinct from `AppSettings["theme"]`
 // (imported as `ThemePreference` in store/helpers.ts, where resolveTheme()
@@ -798,8 +806,8 @@ export interface UiSlice {
   openRightSidebarView: (view: string, projectId?: number) => void;
   setGithubOpenPr: (projectId: number, number: number | null) => void;
   /** Shows a PR's drill-in in the right sidebar's GitHub view. */
-  openRightSidebarPr: (projectId: number, number: number) => void;
-  openRightSidebarIssue: (projectId: number, number: number) => void;
+  openRightSidebarPr: (projectId: number, number: number, back?: SidebarBack) => void;
+  openRightSidebarIssue: (projectId: number, number: number, back?: SidebarBack) => void;
   /** Opens the History rail view scoped to `scope` (`branch:<name>`, `all`, `head`). */
   openRightSidebarHistory: (projectId: number, scope: string) => void;
   clearRightSidebarHistoryRequest: () => void;
@@ -869,7 +877,12 @@ export interface UiSlice {
   // same task selected again" from "the selection that was already there".
   taskSelectionSeq: number;
   selectTask: (taskId: number | null) => void;
-  openRightSidebarTask: (taskId: number) => void;
+  openRightSidebarTask: (taskId: number, back?: SidebarBack) => void;
+  // The destination a cross-link opened and where its Back returns; every
+  // other navigation clears it, so a stale entry never reroutes a Back.
+  sidebarBack: { to: SidebarBack; back: SidebarBack } | null;
+  // Consumes the Back target recorded for `to`, or null when none applies.
+  takeSidebarBack: (to: SidebarBack) => SidebarBack | null;
   pendingOpenTaskId: number | null;
   setPendingOpenTaskId: (taskId: number | null) => void;
   // The project the right sidebar currently follows (useFollowedProject's

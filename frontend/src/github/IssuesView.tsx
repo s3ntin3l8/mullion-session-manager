@@ -36,9 +36,12 @@ import {
 import { SearchInput } from "../ui/primitives.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
+import { TaskStatusBlock } from "../ui/sidebar/TaskStatusBlock.js";
+import { goSidebarBack } from "../sidebarBack.js";
 import { CommentCard } from "./CommentCard.js";
 import { OriginFilter } from "../ui/sidebar/OriginFilter.js";
 import { TaskActions } from "../TaskActions.js";
+import { hasStripActions } from "../taskStatusModel.js";
 import { issueOrigin, matchesOrigin, originClass, type OriginFilterValue } from "./rowOrigin.js";
 
 // The Issues half of the GitHub sidebar: a filterable list (label chips,
@@ -558,7 +561,7 @@ export function IssueDetailView({
     <div className="gh-detail">
       <DetailHeader
         sticky
-        onBack={onBack}
+        onBack={() => goSidebarBack({ kind: "issue", projectId, number }, onBack)}
         title={issue ? `#${issue.number} · ${issue.title}` : `#${number}`}
         subtitle={
           issue
@@ -617,26 +620,26 @@ export function IssueDetailView({
               </Button>
             )}
           </div>
-          {link && (detailPills.length > 0 || link.task) && (
+          {link?.task && (
+            <div className="gh-issue-card" role="region" aria-label="Task">
+              <TaskStatusBlock
+                task={link.task}
+                actions={
+                  hasStripActions(link.task) ? <TaskActions task={link.task} overflow /> : undefined
+                }
+                onOpenTask={() =>
+                  useDashboardStore
+                    .getState()
+                    .openRightSidebarTask(link.task!.id, { kind: "issue", projectId, number })
+                }
+              />
+            </div>
+          )}
+          {detailPills.length > 0 && (
             <div className="gh-issue-card">
-              {link.task && (
-                <TaskChip
-                  task={link.task}
-                  sessions={link.sessions}
-                  reviewInFlight={link.reviewRun?.state === "requested"}
-                />
-              )}
               <SessionPills links={detailPills} />
             </div>
           )}
-          {link?.task &&
-            (link.task.status === "reviewing" ||
-              link.task.status === "failed" ||
-              (link.task.status === "done" && link.task.prNumber !== null)) && (
-              <div className="gh-issue-card">
-                <TaskActions task={link.task} />
-              </div>
-            )}
           {notice && (
             <div className="gh-detail-notice">
               {notice}

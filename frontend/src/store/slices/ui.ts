@@ -228,6 +228,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     openTaskRequest: null,
     selectedTaskId: null,
     taskSelectionSeq: 0,
+    sidebarBack: null,
     pendingOpenTaskId: null,
     followedProjectId: null,
     highlightedPanelId: null,
@@ -350,7 +351,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       }
       writeString(STORAGE_KEYS.rightSidebarView, view);
       writeBool(STORAGE_KEYS.rightSidebarOpen, true);
-      set({ rightSidebarView: view, rightSidebarOpen: true, ...githubEntryReset(get(), view) });
+      set({
+        rightSidebarView: view,
+        rightSidebarOpen: true,
+        sidebarBack: null,
+        ...githubEntryReset(get(), view),
+      });
     },
 
     // Opens (never toggles closed) the drawer on `view` — for callers that
@@ -361,6 +367,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set((s) => ({
         rightSidebarView: view,
         rightSidebarOpen: true,
+        sidebarBack: null,
         ...githubEntryReset(s, view),
         ...(projectId !== undefined && {
           rightSidebarProjectRequest: {
@@ -404,18 +411,20 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     clearRightSidebarPruneRequest: () => set({ rightSidebarPruneRequest: null }),
 
-    openRightSidebarPr: (projectId, number) => {
+    openRightSidebarPr: (projectId, number, back) => {
       // View switch first: entering GitHub resets the drill-in, so the PR is
       // set after it.
       get().openRightSidebarView("github", projectId);
       get().setGithubOpenPr(projectId, number);
+      set({ sidebarBack: back ? { to: { kind: "pr", projectId, number }, back } : null });
     },
 
-    openRightSidebarIssue: (projectId, number) => {
+    openRightSidebarIssue: (projectId, number, back) => {
       // Same ordering as openRightSidebarPr: entering GitHub resets the
       // drill-in, so the issue is set after the view switch.
       get().openRightSidebarView("github", projectId);
       get().setGithubOpenIssue(projectId, number);
+      set({ sidebarBack: back ? { to: { kind: "issue", projectId, number }, back } : null });
     },
 
     toggleRightSidebar: () => {
@@ -489,15 +498,27 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
 
     selectTask: (taskId) => {
-      set((s) => ({ selectedTaskId: taskId, taskSelectionSeq: s.taskSelectionSeq + 1 }));
+      set((s) => ({
+        selectedTaskId: taskId,
+        taskSelectionSeq: s.taskSelectionSeq + 1,
+        sidebarBack: null,
+      }));
     },
 
-    openRightSidebarTask: (taskId) => {
+    takeSidebarBack: (to) => {
+      const entry = get().sidebarBack;
+      if (!entry || JSON.stringify(entry.to) !== JSON.stringify(to)) return null;
+      set({ sidebarBack: null });
+      return entry.back;
+    },
+
+    openRightSidebarTask: (taskId, back) => {
       writeString(STORAGE_KEYS.rightSidebarView, "tasks");
       writeBool(STORAGE_KEYS.rightSidebarOpen, true);
       set((s) => ({
         selectedTaskId: taskId,
         taskSelectionSeq: s.taskSelectionSeq + 1,
+        sidebarBack: back ? { to: { kind: "task", taskId }, back } : null,
         rightSidebarView: "tasks",
         rightSidebarOpen: true,
         ...githubEntryReset(s, "tasks"),

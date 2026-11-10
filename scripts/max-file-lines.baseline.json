@@ -17,7 +17,7 @@
     "frontend/src/CreateProjectModal.test.tsx": 1363,
     "frontend/src/dock/DockMonitor.test.tsx": 2875,
     "frontend/src/FileEditorPanel.test.tsx": 1461,
-    "frontend/src/github/PrDetailView.test.tsx": 1507,
+    "frontend/src/github/PrDetailView.test.tsx": 1338,
     "frontend/src/panelUtils.test.ts": 2531,
     "frontend/src/settings/sections/Settings.devices.test.tsx": 1448,
     "frontend/src/settings/sections/StorageSection.test.tsx": 1296,

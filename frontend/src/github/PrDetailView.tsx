@@ -26,7 +26,7 @@ import {
   splitTaskSessions,
   SidebarSection,
   StatusChip,
-  TaskChip,
+  TaskStatusBlock,
   decideSessionAction,
   gatedSessions,
   readPersistedSection,
@@ -47,6 +47,8 @@ import { ReviewGateActions } from "./ReviewGateActions.js";
 import { usePrThreadWrites } from "./usePrThreadWrites.js";
 import { parseWorkflowChange } from "../workflowChange.js";
 import { TaskActions } from "../TaskActions.js";
+import { hasStripActions } from "../taskStatusModel.js";
+import { goSidebarBack } from "../sidebarBack.js";
 
 // The PR drill-in: status first (Checks / Reviews / Merge, each an expandable
 // row), then the pinned latest review, the Mullion links, the change summary
@@ -432,7 +434,8 @@ export function PrDetailView({
       return `Task #${taskId} sent back to its worker`;
     });
 
-  const backHeader = (title: string) => <DetailHeader onBack={onBack} title={title} />;
+  const goBack = () => goSidebarBack({ kind: "pr", projectId, number }, onBack);
+  const backHeader = (title: string) => <DetailHeader onBack={goBack} title={title} />;
 
   if (error && !pr) {
     return (
@@ -651,7 +654,7 @@ export function PrDetailView({
       <div ref={topSentinelRef} className="pr-top-sentinel" aria-hidden="true" />
       <div className="pr-detail-top">
         <DetailHeader
-          onBack={onBack}
+          onBack={goBack}
           title={
             <>
               <span className="mono">#{pr.number}</span> · {pr.title}
@@ -719,6 +722,21 @@ export function PrDetailView({
         {notice && (
           <div className="pr-detail-pad">
             <div className="gh-detail-notice">{notice}</div>
+          </div>
+        )}
+        {entry?.task && (
+          <div className="pr-card pr-task-strip" role="region" aria-label="Task">
+            <TaskStatusBlock
+              task={entry.task}
+              actions={
+                hasStripActions(entry.task) ? <TaskActions task={entry.task} overflow /> : undefined
+              }
+              onOpenTask={() =>
+                useDashboardStore
+                  .getState()
+                  .openRightSidebarTask(entry.task!.id, { kind: "pr", projectId, number })
+              }
+            />
           </div>
         )}
         <div className="pr-detail-pad gh-detail-meta">
@@ -805,21 +823,9 @@ export function PrDetailView({
           <div className="pr-card-b">
             {detailPills.length > 0 && <SessionPills links={detailPills} />}
             <ReviewGateActions sessions={gatedSessions(entry?.sessions)} />
-            {entry?.task && (
+            {entry?.task && taskStatus === "reviewing" && workflowHold && (
               <div className="pr-pin-foot">
-                <TaskChip
-                  task={entry.task}
-                  sessions={entry.sessions}
-                  reviewInFlight={entry.reviewRun?.state === "requested"}
-                />
-                {taskStatus === "reviewing" && workflowHold && (
-                  <span className="gh-detail-meta">Needs workflow approval — open task</span>
-                )}
-                {(taskStatus === "reviewing" ||
-                  taskStatus === "failed" ||
-                  (taskStatus === "done" && entry.task.prNumber !== null)) && (
-                  <TaskActions task={entry.task} />
-                )}
+                <span className="gh-detail-meta">Needs workflow approval — open task</span>
               </div>
             )}
             {reviewRun && (

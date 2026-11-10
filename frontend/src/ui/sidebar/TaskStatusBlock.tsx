@@ -16,6 +16,13 @@ export interface TaskStatusBlockProps {
   /** How a blocker reads inside the "Next:" sentence: a link that selects the
    * blocking task, say. Defaults to the plain "#N". */
   renderBlocker?: (blocker: TaskBlocker) => ReactNode;
+  /** The task's actions (the primary one and its `⋯` menu): the GitHub
+   * sidebar's PR and issue views put them in the strip; the Tasks sidebar's
+   * detail keeps them in their own section below. */
+  actions?: ReactNode;
+  /** Shows "Open task →" (selects the task in the Tasks view). Omitted where
+   * the task is already the thing on screen. */
+  onOpenTask?: () => void;
 }
 
 /**
@@ -25,7 +32,12 @@ export interface TaskStatusBlockProps {
  * state, so the Tasks sidebar's detail and the GitHub sidebar's PR view can
  * both render it.
  */
-export function TaskStatusBlock({ task, renderBlocker }: TaskStatusBlockProps) {
+export function TaskStatusBlock({
+  task,
+  renderBlocker,
+  actions,
+  onOpenTask,
+}: TaskStatusBlockProps) {
   const badge = taskStatusBadge(task);
   const since = statusSince(task);
   const sinceMs = since ? Date.parse(since) : NaN;
@@ -74,6 +86,16 @@ export function TaskStatusBlock({ task, renderBlocker }: TaskStatusBlockProps) {
             </>
           )}
         </p>
+      )}
+      {(actions || onOpenTask) && (
+        <div className="sb-taskstatus-actions">
+          {actions}
+          {onOpenTask && (
+            <button type="button" className="sb-link sb-taskstatus-open" onClick={onOpenTask}>
+              Open task →
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
