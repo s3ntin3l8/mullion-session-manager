@@ -79,3 +79,11 @@ describe("screenshot-image", () => {
     expect(got).toEqual(pixels.flat());
   });
 });
+
+describe("pngDimensions signature check", () => {
+  it("rejects bytes with IHDR at offset 12 but no PNG signature", () => {
+    const fake = Buffer.from(makePng(8, 4));
+    fake[0] = 0;
+    expect(pngDimensions(fake)).toBeNull();
+  });
+});

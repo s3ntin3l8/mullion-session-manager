@@ -480,7 +480,7 @@ back, with `mimeType`, `width`, `height`, `nativeWidth`, `nativeHeight` next to
 the base64 `screenshot`. A PNG the decoder does not handle (16-bit, palette,
 interlaced) falls back to native.
 
-Without `maxWidth`, `screenshot` returns a bare base64 PNG: anything `screencap` printed
+Without `maxWidth` the `screenshot` field is the native PNG (base64): anything `screencap` printed
 before the PNG signature (the multi-display warning) is stripped, and output
 with no complete PNG is a 502 carrying the head of that output. It is always
 the device's _default_ display (`screencap` without `-d`), which on a
@@ -519,7 +519,8 @@ scrcpy session attached (issue #1476).
 ## 2. `mullion mcp` tools
 
 `list_devices`, `start_device`, `stop_device` and `use_device`/`device_action`
-mirror the CLI 1:1 — see `src/mcp/tools.mjs`. Unlike most control-socket-backed
+mirror the CLI 1:1 — see `src/mcp/tools.mjs` (and `src/mcp/device-use.mjs` for
+`use_device`/`device_action`). Unlike most control-socket-backed
 tools (`list_sessions`, `list_projects`, ...), these are reachable at **session
 scope**, not just full scope: a device has no "belongs to this session"
 relationship to pin a session-scoped connection to the way a browser pane's

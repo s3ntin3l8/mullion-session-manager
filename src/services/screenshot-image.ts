@@ -28,6 +28,7 @@ interface Pixels {
 export function pngDimensions(png: Uint8Array): { width: number; height: number } | null {
   if (png.length < 24) return null;
   const buf = Buffer.from(png.buffer, png.byteOffset, png.byteLength);
+  if (buf.toString("latin1", 0, 8) !== "\x89PNG\r\n\x1a\n") return null;
   if (buf.toString("latin1", 12, 16) !== "IHDR") return null;
   const width = buf.readUInt32BE(16);
   const height = buf.readUInt32BE(20);
