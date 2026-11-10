@@ -25,7 +25,7 @@
     "frontend/src/Sidebar.tsx": 1693,
     "frontend/src/TaskDetail.test.tsx": 1975,
     "frontend/src/TerminalPane.test.tsx": 3769,
-    "frontend/src/TerminalPane.tsx": 1227,
+    "frontend/src/TerminalPane.tsx": 996,
     "frontend/src/UnifiedBoard.test.tsx": 1226,
     "src/cli/core.mjs": 1599,
     "src/mcp/tools.mjs": 1333,
