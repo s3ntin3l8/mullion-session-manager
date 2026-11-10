@@ -108,7 +108,16 @@
   },
   "overrides": {
     "esbuild": "^0.28.1",
-    "shell-quote": "^1.9.0"
+    "shell-quote": "^1.9.0",
+    "eslint": {
+      "minimatch": "^11.0.1"
+    },
+    "@eslint/config-array": {
+      "minimatch": "^11.0.1"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   },
   "allowScripts": {
     "better-sqlite3": false,
