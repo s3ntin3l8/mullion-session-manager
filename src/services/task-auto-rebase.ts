@@ -80,7 +80,8 @@ async function findRebaseBlocker(
   task: typeof tasks.$inferSelect,
   backend: ReturnType<typeof resolveBackend>,
 ): Promise<string | null> {
-  // The terminal failed marker is a hold, not an in-flight post: nothing may change.
+  // The terminal failed marker is a hold, not an in-flight post: no verdict is
+  // pending to change, so it does not block a rebase (every other marker does).
   if (task.reviewPostPending !== null && task.reviewPostPending !== REVIEW_POST_FAILED_MARKER) {
     return "a review post is pending";
   }
