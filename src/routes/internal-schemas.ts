@@ -817,6 +817,18 @@ export const gitCommitWipSchema = schemaFor({
   optional: ["message", "gitIdentity"],
 });
 
+export interface GitResyncStaleBody {
+  cwd: string;
+  branch: string;
+}
+
+// The agent-side counterpart of resyncStaleWorktree (git-worktree.ts), for a
+// task worktree on a remote host that an outside rebase left stale.
+export const gitResyncStaleSchema = schemaFor({
+  required: ["cwd", "branch"],
+  optional: [],
+});
+
 export interface RunGenerationTurnBody {
   cwd: string;
   slug: string;

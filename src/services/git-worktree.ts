@@ -769,6 +769,73 @@ export async function commitWipChanges(
   };
 }
 
+/** Outcome of {@link resyncStaleWorktree}. `not-stale` means nothing was
+ * touched (the tree is not provably a stale checkout of an earlier branch tip). */
+export type ResyncStaleWorktreeResult =
+  | { outcome: "not-stale" }
+  | { outcome: "resynced"; tree: string; matchedCommit: string; head: string }
+  | { outcome: "failed"; error: string };
+
+/**
+ * Resyncs a task worktree whose index and files were left behind when its
+ * branch ref was moved from outside it (a rebase done in another checkout):
+ * HEAD follows the ref, the index and files stay at the old tip, so `git
+ * status` lists the reversed delta as staged changes while `git diff` is empty.
+ *
+ * `git reset --hard HEAD` is destructive, so it runs ONLY when the state
+ * provably equals an earlier tip of the branch: no unmerged paths, no unstaged
+ * modifications, no untracked files, and the index tree equals the tree of a
+ * commit in `git reflog <branch>` other than the current tip. Anything else is
+ * `not-stale` and untouched. Never throws.
+ */
+export async function resyncStaleWorktree(
+  worktreePath: string,
+  branch: string,
+): Promise<ResyncStaleWorktreeResult> {
+  if (!isSafeAbsolutePath(worktreePath)) return { outcome: "not-stale" };
+  const out = async (args: string[]): Promise<string | null> => {
+    const r = await runGit(worktreePath, args);
+    return r.code === 0 ? r.stdout : null;
+  };
+
+  // HEAD must be the task branch itself (not detached / another branch).
+  const headRef = (await out(["symbolic-ref", "-q", "HEAD"]))?.trim();
+  if (headRef !== `refs/heads/${branch}`) return { outcome: "not-stale" };
+  const head = (await out(["rev-parse", "HEAD"]))?.trim();
+  if (!head) return { outcome: "not-stale" };
+
+  // Unmerged paths, unstaged modifications and untracked files each veto.
+  const unmerged = await out(["ls-files", "-u"]);
+  if (unmerged === null || unmerged.trim() !== "") return { outcome: "not-stale" };
+  const diff = await runGit(worktreePath, ["diff", "--quiet"]);
+  if (diff.code !== 0) return { outcome: "not-stale" };
+  const untracked = await out(["ls-files", "--others", "--exclude-standard"]);
+  if (untracked === null || untracked.trim() !== "") return { outcome: "not-stale" };
+
+  const indexTree = (await out(["write-tree"]))?.trim();
+  if (!indexTree) return { outcome: "not-stale" };
+  const reflog = await out(["reflog", "show", "--format=%H %T", `refs/heads/${branch}`]);
+  if (reflog === null) return { outcome: "not-stale" };
+  let matchedCommit: string | null = null;
+  for (const line of reflog.split("\n")) {
+    const [commit, tree] = line.trim().split(" ");
+    if (commit && commit !== head && tree === indexTree) {
+      matchedCommit = commit;
+      break;
+    }
+  }
+  if (!matchedCommit) return { outcome: "not-stale" };
+
+  const reset = await runGit(worktreePath, ["reset", "--hard", "HEAD"]);
+  if (reset.code !== 0) {
+    return {
+      outcome: "failed",
+      error: reset.stderr.trim() || `git reset --hard exited ${reset.code}`,
+    };
+  }
+  return { outcome: "resynced", tree: indexTree, matchedCommit, head };
+}
+
 // ── User-facing worktree removal (issue #442) ─────────────────────────────
 // The Source Control's manual counterpart to 6.8's task-scoped removal above:
 // membership in `listWorktrees(cwd)` is the validity gate, not a path

@@ -1422,9 +1422,26 @@ resulting PR is the real gate, and an arbitrary repo's pre-push suite (which
 can run a full test suite, install tooling, etc.) is not something this
 synchronous push can afford to wait on.
 
+**Stale-worktree resync.** A branch moved from outside its worktree (a rebase
+done in another checkout) leaves HEAD following the ref while the index and
+files stay at the old tip, so `git status` shows the reversed rebase delta as
+staged changes, `git diff` is empty and every agent reports "clean". When the
+dirty-tree check trips, `promoteTaskToPR` first asks the worktree's host
+(`resyncHostStaleWorktree` → `resyncStaleWorktree`, or the agent's
+`/internal/git-resync-stale` for a remote host) to resync it with `git reset
+--hard HEAD`, then re-reads the status and carries on if it is clean. The reset
+runs only when the state provably equals an earlier tip of the branch: HEAD is
+on the task branch, there are no unmerged paths, no unstaged modifications and
+no untracked files, and the index tree equals the tree of a commit in
+`git reflog <branch>` other than the current tip. Otherwise nothing is touched
+and the ordinary "uncommitted changes" refusal stands. The old tree and matched
+commit are logged at info level. If the reset itself fails, approve refuses with
+"Worktree is out of date with its branch and could not be resynced: <git
+error>". A host whose agent predates the route keeps the plain refusal.
+
 On approve (`reviewing → done`): the worktree's tree must be clean (a dirty
 tree 409s the approve request rather than silently excluding uncommitted
-work from the PR), the branch is pushed if it has unpushed commits or no
+work from the PR; exception: a stale worktree, below), the branch is pushed if it has unpushed commits or no
 upstream yet (idempotent either way — a plain `git push`, not `--force`),
 and then: if a draft PR is already open (`tasks.prNumber` set — the common
 case now), it's marked ready for review; otherwise a PR is opened directly,

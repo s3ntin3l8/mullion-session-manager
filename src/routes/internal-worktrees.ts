@@ -9,6 +9,7 @@ import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
   commitWipChanges,
+  resyncStaleWorktree,
   createWorktree,
   listTaskWorktreeDirs,
   pruneWorktrees,
@@ -47,6 +48,7 @@ import {
   gitWorktreePruneMetadataSchema,
   gitWorktreeResumeSchema,
   gitCommitWipSchema,
+  gitResyncStaleSchema,
   runGenerationTurnSchema,
   runSetupSchema,
   setupLogQuerySchema,
@@ -65,6 +67,7 @@ import type {
   GitWorktreePruneMetadataBody,
   GitWorktreeResumeBody,
   GitCommitWipBody,
+  GitResyncStaleBody,
   RunGenerationTurnBody,
   RunSetupBody,
   BundleSyncRemoveBody,
@@ -92,6 +95,20 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       return await commitWipChanges(resolvedCwd, message, gitIdentity);
+    },
+  );
+
+  // The agent-side counterpart of resyncHostStaleWorktree (host-git.ts): wraps
+  // the SAME resyncStaleWorktree the local caller uses, so the safety check
+  // and the `reset --hard` both run on this host's own filesystem.
+  app.post<{ Body: GitResyncStaleBody }>(
+    "/internal/git-resync-stale",
+    { ...INTERNAL_RATE_LIMIT, schema: gitResyncStaleSchema },
+    async (request, reply) => {
+      const { cwd, branch } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await resyncStaleWorktree(resolvedCwd, branch);
     },
   );
 

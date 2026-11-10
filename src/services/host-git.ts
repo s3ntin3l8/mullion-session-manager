@@ -23,7 +23,12 @@ import { cloneCheckout, type CloneResult } from "./git-clone.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { getFileDiff } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
-import { commitWipChanges, type CommitWipChangesResult } from "./git-worktree.js";
+import {
+  commitWipChanges,
+  resyncStaleWorktree,
+  type CommitWipChangesResult,
+  type ResyncStaleWorktreeResult,
+} from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
@@ -362,6 +367,26 @@ export async function commitHostWipChanges(
     return { ok: true, value: await commitWipChanges(cwd, message, identity) };
   }
   return viaGit(app, hostId, (client) => client.resolveCommitWipChanges(cwd, message, identity));
+}
+
+/**
+ * Resyncs a task worktree left stale by an outside rebase (`git reset --hard
+ * HEAD`), on whichever host owns it — `resyncStaleWorktree` locally, the
+ * agent's `/internal/git-resync-stale` remotely. The check and the reset run
+ * together on the owning host, and only when the state provably equals an
+ * earlier tip of `branch` (see `resyncStaleWorktree`). Only task-promote.ts's
+ * dirty-tree path calls this.
+ */
+export async function resyncHostStaleWorktree(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  branch: string,
+): Promise<HostGitResult<ResyncStaleWorktreeResult>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await resyncStaleWorktree(cwd, branch) };
+  }
+  return viaGit(app, hostId, (client) => client.resolveResyncStaleWorktree(cwd, branch));
 }
 
 /**
