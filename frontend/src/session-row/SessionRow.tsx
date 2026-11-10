@@ -45,20 +45,21 @@ import { expandedSessionRows, setSessionRowExpanded } from "./expandedSessionRow
 
 // Row 5 (subagents)/row 6 (background tasks) chips, and row 4's file-change
 // chips + expanded diff (SessionFileDiff), all extracted to
-// ./session-row/Chips.tsx and ./session-row/FileChanges.tsx respectively
+// ./Chips.tsx and ./FileChanges.tsx respectively
 // (PR 27 phase 2, Wave 5 of .claude/plans/can-we-do-a-warm-cocke.md) — see
 // each file's own header comment. That includes the subagent-row
 // expand/collapse localStorage persistence helpers (mirrors
-// readExpandedSessionRows/setSessionRowExpanded above, but keyed by
+// readExpandedSessionRows/setSessionRowExpanded in ./expandedSessionRows.ts, but keyed by
 // `${sessionId}:${agentId}` — see Chips.tsx) and isSubagentLive/
 // subagentDotClass/backgroundTaskLetter/fileChangeDotClass/fileChangeLetter
 // (all pure, moved to lib/sidebarStatus.ts in PR 27 phase 1).
 //
 // sessionGitDotClass/sessionPrDotClass/summarizeFileChanges (also
-// lib/sidebarStatus.ts) power row 3 (git details, ./session-row/GitLine.tsx)
+// lib/sidebarStatus.ts) power row 3 (git details, ./GitLine.tsx)
 // — summarizeFileChanges itself stays called from SessionRow below (its
 // input, sessionEvents, is also row 2's eventLine source, so it isn't a
-// FileChanges-only concern). ProjectHeader's own gitStatus handling above
+// FileChanges-only concern). ProjectHeader's own gitStatus handling in
+// ../sidebar/ProjectHeader.tsx
 // stays inlined rather than routed through sessionGitDotClass (matches
 // git-refs.ts's own "small guards get duplicated, not shared" precedent
 // elsewhere in this codebase).
@@ -92,7 +93,7 @@ export function SessionRow({
   // existing tests that don't exercise promote need no change.
   onPromoted?: (newSession: Session) => void;
   // P9 — every caller (ProjectSection's plain rendering path and
-  // VirtualizedProjectTree's above-threshold path, both in this file, plus
+  // VirtualizedProjectTree's above-threshold path, both in Sidebar.tsx, plus
   // UnifiedBoard.tsx's ad-hoc session lane) builds this from
   // `deleteSession(...).then(...)`; a failure used to vanish into an
   // unhandled rejection with the session still sitting right there in the
@@ -128,7 +129,7 @@ export function SessionRow({
   // today: nesting is capped at one level server-side, see
   // createSessionRecord's "parent-is-child" rejection). An explicit prop
   // rather than recursion: SessionRow (now this orchestrator plus its
-  // Header/GitLine/FileChanges/Chips sub-components under ./session-row/,
+  // Header/GitLine/FileChanges/Chips sub-components beside this file,
   // split in PR 27 phase 2) is shared verbatim by UnifiedBoard.tsx's ad-hoc
   // lane (which never passes this, so its cards stay flat for free) —
   // recursing here would force that lane to opt out of a second thing
@@ -182,7 +183,7 @@ export function SessionRow({
 
   // Row 4 (issue #177) — recent file changes, derived from the same
   // sessionEvents slice the now-line (below) also reads. Passed down to
-  // ./session-row/Details.tsx as a prop rather than computed there — it
+  // ./Details.tsx as a prop rather than computed there — it
   // stays here because sessionEvents (its input) is ALSO the now-line's own
   // fallback-context source, so this can't become a Details-only concern
   // without either re-subscribing to the same store slice twice or

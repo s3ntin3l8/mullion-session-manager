@@ -14,7 +14,7 @@ import { ChevronDownIcon, FolderIcon, SearchAlertIcon } from "../ui/icons.js";
 
 // Vision item #1 — suggests candidates from PROJECTS_ROOTS, never
 // auto-inserts. Read-only until the user clicks Add, which is just the
-// existing POST /api/projects the manual form above already uses.
+// existing POST /api/projects the manual add-project form in Sidebar.tsx already uses.
 //
 // `candidates` distinguishes "not yet fetched" (null) from "fetched, zero
 // results" ([]) — the design's empty state 1C ("discovery ran · nothing
@@ -33,7 +33,7 @@ export function DiscoverProjects({
   hosts: Host[];
 }) {
   // P1 perf fix — both fields here are pure actions (never read reactively),
-  // same reasoning as ProjectSection's own header comment above.
+  // same reasoning as ProjectSection's header comment in Sidebar.tsx.
   const [candidates, setCandidates] = useState<DiscoveredProject[] | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
   // Keyed by cwd — a discovered candidate's own create can fail (e.g. it

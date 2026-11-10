@@ -59,7 +59,7 @@ function formatPullReasonMessage(reason: string | undefined, detail?: string): s
 // Extracted out of ProjectSection so both the plain (below-threshold) and
 // virtualized (above-threshold) rendering paths share the exact same header
 // markup/behavior instead of two copies drifting apart. Collapse is now
-// owned by the CALLER (ProjectSection below, or Sidebar's own flatten step
+// owned by the CALLER (ProjectSection in Sidebar.tsx, or Sidebar's own flatten step
 // reading `projectCollapsedState` directly in the virtualized path) — this
 // component is a pure function of `collapsed`/`onToggleCollapsed`, with no
 // state of its own for it, so it doesn't matter which path is driving.
@@ -70,7 +70,7 @@ function formatPullReasonMessage(reason: string | undefined, detail?: string): s
 // (`gitStatuses[project.id]` below), and every write goes through
 // `useDashboardStore.getState()` at its own call site rather than a
 // destructured store hook — the same "selector or getState(), never a bare
-// `useDashboardStore()`" rule this file's other components follow.
+// `useDashboardStore()`" rule Sidebar.tsx's other components follow.
 export function ProjectHeader({
   project,
   sessions,
@@ -179,7 +179,7 @@ export function ProjectHeader({
         className="project-row-header"
         onClick={onToggleCollapsed}
         // P10 — same role="button"/tabIndex/Enter-Space pattern as
-        // SessionRow above (see that row's own comment for the full
+        // SessionRow in ../session-row/SessionRow.tsx (see that row's own comment for the full
         // rationale), including the `e.target !== e.currentTarget` guard:
         // this header nests its own "+ session" button and a KebabMenu
         // (both already wrapped in `onClick={(e) => e.stopPropagation()}`
