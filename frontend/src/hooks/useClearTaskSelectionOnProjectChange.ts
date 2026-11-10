@@ -9,9 +9,10 @@ import { useDashboardStore } from "../store/index.js";
  * task detail. Only a selection that predates the switch is cleared: one that
  * arrives with it (a notification click that selects a task and moves the
  * sidebar in the same step, even the task that was already selected) is kept.
- * "Arrives" is read from the store's selection sequence number, not the id. Mounted by RightSidebarPanel, so it runs
- * whichever view is showing. Mounted by RightSidebar, which stays mounted while
- * the drawer is collapsed (when the followed project usually changes).
+ * "Arrives" is read from the store's selection sequence number, not the id.
+ * A first project resolving (from null) is not a change. Mounted by
+ * RightSidebar, which stays mounted while the drawer is collapsed (when the
+ * followed project usually changes), so it runs whichever view is showing.
  */
 export function useClearTaskSelectionOnProjectChange(projectId: number | null): void {
   const selectedTaskId = useDashboardStore((s) => s.selectedTaskId);
@@ -20,8 +21,9 @@ export function useClearTaskSelectionOnProjectChange(projectId: number | null): 
   const lastSeq = useRef(seq);
   useEffect(() => {
     if (lastProject.current !== projectId) {
+      const hadProject = lastProject.current !== null;
       lastProject.current = projectId;
-      if (selectedTaskId !== null && seq === lastSeq.current) {
+      if (hadProject && selectedTaskId !== null && seq === lastSeq.current) {
         useDashboardStore.getState().selectTask(null);
       }
     }
