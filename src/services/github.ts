@@ -1081,13 +1081,23 @@ export function isRedCheckConclusion(conclusion: string | null): boolean {
 /**
  * The Actions workflow run a check run belongs to, read from its `details_url`
  * (`https://github.com/o/r/actions/runs/<run>/job/<job>`). `undefined` for a
- * check from another app (codecov, ...) whose URL names no workflow run: there
- * is nothing to re-run for it. Used to re-run the run that OWNS a red check
+ * check from another app (codecov, ...) or another repository, whose URL names
+ * no workflow run of THIS repo: there is nothing to re-run for it. Used to re-run the run that OWNS a red check
  * rather than the latest run of the same workflow name, which can be a newer
  * green one.
  */
-export function actionsRunIdFromCheckUrl(url: string | undefined): number | undefined {
-  const m = url?.match(/\/actions\/runs\/(\d+)(?:\/|$|\?)/);
+export function actionsRunIdFromCheckUrl(
+  url: string | undefined,
+  repo: { owner: string; repo: string },
+): number | undefined {
+  if (!url) return undefined;
+  // Anchored to THIS repo: a check that links another repository's run would
+  // otherwise yield an id that is POSTed against this one, 404s, and reads as a
+  // refusal. Also matches the post-rerun shape `/runs/<id>/attempts/<n>/job/<job>`.
+  const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = url.match(
+    new RegExp(`/${esc(repo.owner)}/${esc(repo.repo)}/actions/runs/(\\d+)(?:/|$|\\?)`, "i"),
+  );
   return m ? Number(m[1]) : undefined;
 }
 

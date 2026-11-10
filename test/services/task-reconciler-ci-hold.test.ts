@@ -359,15 +359,16 @@ describe("red CI on a head the worker was already returned for", () => {
   it("re-runs the run that owns the red check, not a newer green run of the same workflow name", async () => {
     const app = await buildApp();
     const taskId = await createCandidate(app, { ciReturnHeadSha: "sha-head" });
-    // The workflow-run list keeps only the latest run per name, and here that is
-    // a green run (id 5000). The red check belongs to the older run 4242.
+    // The workflow-run list keeps only the latest run per name, so it holds just
+    // the green run (id 5000) and the red run 4242 is NOT in it. The red check
+    // still points at 4242. Deriving ids from the run list would find nothing here.
     mockFetchRunsForHeadChecked.mockResolvedValue({
       ok: true,
-      runs: [
-        { ...workflowRun("success", 5000)[0] },
-        { ...workflowRun("failure", 4242)[0], name: "CI/CD (push)" },
-      ],
+      runs: [{ ...workflowRun("success", 5000)[0] }],
     });
+    // GitHub reports the PR `unstable` (a check is red) although the aggregate of
+    // the listed runs is green: that is how the gate reaches the check runs.
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
 
     await reconcileTasks(app);
 

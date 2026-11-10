@@ -2634,7 +2634,7 @@ async function attemptReturnRedCiToWorker(
     const failedRunIds = [
       ...new Set(
         redChecks.flatMap((c) => {
-          const id = actionsRunIdFromCheckUrl(c.url);
+          const id = actionsRunIdFromCheckUrl(c.url, current.repoRef);
           return id === undefined ? [] : [id];
         }),
       ),
