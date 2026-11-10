@@ -26,7 +26,7 @@ import {
   type AttentionSignal,
 } from "./attention-detect.js";
 import { ProtocolTrace } from "./terminal-protocol-trace.js";
-import { splitStartupQueries } from "./terminal-query-reply.js";
+import { getSessionPalette, splitStartupQueries } from "./terminal-query-reply.js";
 import { AttentionTracker } from "./attention-tracker.js";
 import { GateRegistry } from "./gate-registry.js";
 import {
@@ -1718,7 +1718,7 @@ export class Session {
       // does not answer them again, live or on replay.
       let data = rawData;
       if (Date.now() - this.createdAt < STARTUP_QUERY_REPLY_WINDOW_MS) {
-        const { reply, rest } = splitStartupQueries(rawData);
+        const { reply, rest } = splitStartupQueries(rawData, getSessionPalette(this.id));
         if (reply) this.writeToPty(reply, Date.now());
         data = rest;
       }

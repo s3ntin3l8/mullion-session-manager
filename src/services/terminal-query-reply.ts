@@ -20,12 +20,15 @@
 // session. The answered queries are stripped from what is forwarded, so a
 // pane never answers them a second time (live or on replay).
 //
-// One palette is held for the whole process (last reporter wins), so two
-// dashboards on different schemes (`theme: "system"` resolves per browser)
-// can have a session answered with the other one's colors, and the stripped
-// query leaves the program no way to correct it. Accepted: a single-user
-// install is the norm, and the late-browser alternative loses Codex's palette
-// outright. Per-pane palettes would need to ride the WS attach handshake.
+// Two layers decide the answer. The dashboard that creates a session sends its
+// own resolved palette on POST /api/sessions, and the session answers from that
+// for its life (#2528): `theme: "system"` resolves per browser, so two
+// dashboards can disagree, and the creating one is the one the user is looking
+// at. A session created without a palette (a Task Master worker, the control
+// socket, a remote host's own sessions) falls back to the one process-wide
+// palette (last reporter wins), which can still be the other dashboard's. A
+// running session is never re-answered when another pane attaches later: the
+// program asked once, at startup.
 //
 // A chunk split across two PTY reads is not reassembled; a split query is
 // simply left for the browser, as before.
@@ -46,9 +49,61 @@ export function getTerminalPalette(): TerminalPalette | null {
   return palette;
 }
 
+// Per-session palettes (#2528). The startup-query window runs from the spawn,
+// which can trail the set by a slow create (a GitHub App token mint), so the
+// entry is not timed from the set: a long cap bounds one that never spawns, and
+// the first lookup (the session's first output, inside its window) re-arms a
+// short expiry. The map cannot outgrow the sessions still starting.
+interface SessionPaletteEntry {
+  palette: TerminalPalette;
+  timer: ReturnType<typeof setTimeout>;
+  armed: boolean;
+}
+const sessionPalettes = new Map<string, SessionPaletteEntry>();
+const SESSION_PALETTE_SPAWN_CAP_MS = 10 * 60_000;
+const SESSION_PALETTE_TTL_MS = 35_000;
+/** `#rrggbb`. The one definition: routes/terminal-palette.ts builds its schema pattern from it. */
+export const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+function expireSessionPalette(sessionId: string, afterMs: number): ReturnType<typeof setTimeout> {
+  return setTimeout(() => sessionPalettes.delete(sessionId), afterMs).unref();
+}
+
+/**
+ * Answer `sessionId`'s startup queries from `next` instead of the process-wide
+ * palette. Anything that is not three `#rrggbb` colors is ignored: these
+ * strings are written into the PTY inside an OSC reply, so a non-route caller
+ * (Task Master, the control socket) must not be able to inject escape bytes.
+ */
+export function setSessionPalette(sessionId: string, next: TerminalPalette): void {
+  if (![next.foreground, next.background, next.cursor].every((c) => HEX_COLOR.test(c))) return;
+  clearTimeout(sessionPalettes.get(sessionId)?.timer);
+  const timer = expireSessionPalette(sessionId, SESSION_PALETTE_SPAWN_CAP_MS);
+  sessionPalettes.set(sessionId, { palette: { ...next }, timer, armed: false });
+}
+
+/**
+ * The palette its spawning pane gave `sessionId`, or undefined to use the
+ * process-wide one. Not a pure lookup: the first call re-arms the entry's expiry
+ * to 35 s, on the assumption that it is the startup-query path (the session's
+ * first output); any other caller would start that clock early.
+ */
+export function getSessionPalette(sessionId: string): TerminalPalette | undefined {
+  const entry = sessionPalettes.get(sessionId);
+  if (!entry) return undefined;
+  if (!entry.armed) {
+    entry.armed = true;
+    clearTimeout(entry.timer);
+    entry.timer = expireSessionPalette(sessionId, SESSION_PALETTE_TTL_MS);
+  }
+  return entry.palette;
+}
+
 /** Test seam: forget the cached palette. */
 export function resetTerminalPalette(): void {
   palette = null;
+  for (const entry of sessionPalettes.values()) clearTimeout(entry.timer);
+  sessionPalettes.clear();
 }
 
 /* eslint-disable no-control-regex */

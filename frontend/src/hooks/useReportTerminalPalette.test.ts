@@ -4,6 +4,8 @@ import { renderHook } from "@testing-library/react";
 import { useReportTerminalPalette } from "./useReportTerminalPalette.js";
 import { settingsApi } from "../api/settings.js";
 import { buildXtermTheme } from "../terminalTheme.js";
+import { getReportedPalette, setReportedPalette } from "../lib/reportedPalette.js";
+import * as terminalTheme from "../terminalTheme.js";
 
 vi.mock("../api/settings.js", () => ({
   settingsApi: { putTerminalPalette: vi.fn(() => Promise.resolve()) },
@@ -11,7 +13,10 @@ vi.mock("../api/settings.js", () => ({
 
 describe("useReportTerminalPalette", () => {
   beforeEach(() => vi.mocked(settingsApi.putTerminalPalette).mockReset().mockResolvedValue());
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("does nothing before settings have loaded", () => {
     renderHook(() =>
@@ -77,5 +82,46 @@ describe("useReportTerminalPalette", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(settingsApi.putTerminalPalette).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the palette for POST /api/sessions to send (#2528)", () => {
+    renderHook(() =>
+      useReportTerminalPalette({ settingsLoaded: true, colorScheme: "mullion", theme: "light" }),
+    );
+    const t = buildXtermTheme("mullion", "light");
+    expect(getReportedPalette()).toEqual({
+      foreground: t.foreground,
+      background: t.background,
+      cursor: t.cursor,
+    });
+  });
+
+  it("re-reports when the tab becomes visible again, throttled to once per 5 s", () => {
+    vi.useFakeTimers();
+    renderHook(() =>
+      useReportTerminalPalette({ settingsLoaded: true, colorScheme: "mullion", theme: "light" }),
+    );
+    const put = vi.mocked(settingsApi.putTerminalPalette);
+    expect(put).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event("focus"));
+    expect(put).toHaveBeenCalledTimes(1); // inside the throttle window
+
+    vi.advanceTimersByTime(5_000);
+    window.dispatchEvent(new Event("focus"));
+    expect(put).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets the recorded palette when the new theme resolves to a non-hex color", () => {
+    vi.spyOn(terminalTheme, "buildXtermTheme").mockReturnValue({
+      foreground: "rgb(1,2,3)",
+      background: "#ffffff",
+      cursor: "#000000",
+    });
+    setReportedPalette({ foreground: "#111111", background: "#222222", cursor: "#333333" });
+    renderHook(() =>
+      useReportTerminalPalette({ settingsLoaded: true, colorScheme: "mullion", theme: "light" }),
+    );
+    expect(getReportedPalette()).toBeUndefined();
   });
 });

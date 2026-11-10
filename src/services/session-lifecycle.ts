@@ -1,3 +1,4 @@
+import { setSessionPalette, type TerminalPalette } from "./terminal-query-reply.js";
 import { describePreparing, startMaterialize } from "./checkout-materialize.js";
 import type { FastifyInstance } from "fastify";
 import { resolveGitIdentity } from "./git-identity.js";
@@ -128,6 +129,8 @@ export interface WorktreeIntent {
 export interface CreateSessionBody {
   projectId: number;
   command: string;
+  // #2528 — see createSessionSchema's `palette` (routes/sessions.ts).
+  palette?: TerminalPalette;
   name?: string;
   // #9 — settable at creation, not just via a later PATCH. Without this, a
   // caller that wants a name to survive a live OSC title update (issue #69)
@@ -1332,6 +1335,9 @@ async function createSessionRecordInner(
   // created on — the same value the spawn uses (issue #1722).
   rb.hostId = placementHost;
   rb.sessionId = created.id;
+  // Before the spawn below: the program's startup color query is answered
+  // within a second of it (terminal-query-reply.ts).
+  if (params.palette) setSessionPalette(String(created.id), params.palette);
 
   await stashSeedBestEffort(app, placementHost, created.id, params.seedPrompt);
 

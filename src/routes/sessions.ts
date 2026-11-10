@@ -1,3 +1,5 @@
+import { paletteSchema } from "./terminal-palette.js";
+import type { TerminalPalette } from "../services/terminal-query-reply.js";
 import path from "node:path";
 import {
   DEFAULT_LIMIT as DEFAULT_TRANSCRIPT_LIMIT,
@@ -185,6 +187,9 @@ const createSessionSchema = {
       // default 1 MB request body limit already bounds a genuinely
       // pathological payload.
       seedPrompt: { type: "string" },
+      // #2528 — the creating dashboard's resolved terminal palette; answers
+      // this session's startup color query instead of the process-wide cache.
+      palette: paletteSchema,
     },
   },
 };
@@ -262,6 +267,7 @@ interface PromoteSessionBody {
   baseRef: string;
   branchName?: string;
   seedPrompt?: string;
+  palette?: TerminalPalette;
 }
 
 interface DeclinePromoteBody {
@@ -283,6 +289,7 @@ const promoteSessionSchema = {
       baseRef: { type: "string", minLength: 1 },
       branchName: { type: "string" },
       seedPrompt: { type: "string" },
+      palette: paletteSchema,
     },
   },
 };
@@ -1012,7 +1019,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         projectRoot !== null &&
         (sourceCwd === projectRoot || sourceCwd.startsWith(projectRoot + path.sep));
       const repoCwd = sourceWithinProject ? projectRoot : sourceCwd;
-      const { baseRef, branchName, seedPrompt } = request.body;
+      const { baseRef, branchName, seedPrompt, palette } = request.body;
       const resolvedWorktree = await resolveWorktreeCwd(
         app,
         srcHostId,
@@ -1159,6 +1166,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         // "a transfer succeeded, so --prompt would be silently dropped".
         seedPrompt: contextOnlySeedPrompt,
         resumeAgentSessionId,
+        palette,
       });
       if (!created.ok) {
         // createSessionRecord's own spawn-failure rollback only fires for a

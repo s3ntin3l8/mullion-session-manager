@@ -1,8 +1,10 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   buildStartupQueryReplies,
+  getSessionPalette,
   getTerminalPalette,
   resetTerminalPalette,
+  setSessionPalette,
   setTerminalPalette,
   splitStartupQueries,
 } from "../../src/services/terminal-query-reply.js";
@@ -56,5 +58,45 @@ describe("splitStartupQueries", () => {
 
   it("leaves the data untouched when no palette is known", () => {
     expect(splitStartupQueries("\x1b]11;?\x07")).toEqual({ reply: "", rest: "\x1b]11;?\x07" });
+  });
+});
+
+describe("session palette", () => {
+  afterEach(() => {
+    resetTerminalPalette();
+    vi.useRealTimers();
+  });
+
+  it("is undefined until set, then returned for that session only", () => {
+    expect(getSessionPalette("7")).toBeUndefined();
+    setSessionPalette("7", LIGHT);
+    expect(getSessionPalette("7")).toEqual(LIGHT);
+    expect(getSessionPalette("8")).toBeUndefined();
+  });
+
+  it("ignores a palette that is not three #rrggbb colors, so no escape bytes reach the PTY", () => {
+    setSessionPalette("7", { ...LIGHT, background: "#f2f2f2\x1b]0;x\x07" });
+    setSessionPalette("8", { ...LIGHT, cursor: "red" });
+    expect(getSessionPalette("7")).toBeUndefined();
+    expect(getSessionPalette("8")).toBeUndefined();
+  });
+
+  it("survives a slow create: the short expiry runs from the first lookup, not from the set", () => {
+    vi.useFakeTimers();
+    setSessionPalette("7", LIGHT);
+    vi.advanceTimersByTime(60_000); // e.g. a long GitHub App token mint before the spawn
+    expect(getSessionPalette("7")).toEqual(LIGHT); // first output, inside the window
+
+    vi.advanceTimersByTime(34_000);
+    expect(getSessionPalette("7")).toEqual(LIGHT);
+    vi.advanceTimersByTime(2_000);
+    expect(getSessionPalette("7")).toBeUndefined(); // window closed: back to the global palette
+  });
+
+  it("drops an entry whose session never produced output", () => {
+    vi.useFakeTimers();
+    setSessionPalette("7", LIGHT);
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+    expect(getSessionPalette("7")).toBeUndefined();
   });
 });
