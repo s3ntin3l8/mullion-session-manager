@@ -49,6 +49,9 @@ beforeEach(() => {
     activePanelId: null,
     gitStatuses: { 1: status() },
     rightSidebarView: "git",
+    // A request left by an earlier test would make a repeated nonce look already handled.
+    rightSidebarProjectRequest: null,
+    followedProjectId: null,
     rightSidebarOpen: false,
     rightSidebarPinned: false,
     rightSidebarWidth: 340,
