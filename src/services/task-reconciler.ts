@@ -148,6 +148,7 @@ import {
   computeCiStatus,
   fetchRunsForHeadChecked,
   isRedCheckConclusion,
+  actionsRunIdFromCheckUrl,
   getPRsStatus,
   GitHubApiError,
 } from "./github.js";
@@ -319,9 +320,6 @@ async function fetchCurrentCiStatus(
   // error): `status` is then `null`, which reads the same as "no Actions runs".
   // Only the red-CI gate's `unstable` arm needs to tell the two apart.
   runsAnswered: boolean;
-  // Ids of the head's latest workflow runs that finished red — what a rerun of
-  // the failed jobs targets (the same-head no-progress arm of the red-CI gate).
-  failedRunIds: number[];
   // #2103 — the PR's own lifecycle state, already in the payload: a closed or
   // merged PR is the end of a reviewing task, not something to keep polling.
   prState: "open" | "closed";
@@ -357,11 +355,6 @@ async function fetchCurrentCiStatus(
     mergeable: pr.mergeable,
     mergeableState: pr.mergeableState,
     runsAnswered,
-    failedRunIds: runs.flatMap((r) =>
-      r.id !== undefined && r.status === "completed" && isRedCheckConclusion(r.conclusion)
-        ? [r.id]
-        : [],
-    ),
     prState: pr.state,
     merged: pr.merged,
     mergedAt: pr.mergedAt,
@@ -2635,7 +2628,24 @@ async function attemptReturnRedCiToWorker(
   // The worker was already returned for THIS head and the check is still red:
   // it pushed nothing, so another identical return cannot help.
   if (task.ciReturnHeadSha !== null && task.ciReturnHeadSha === current.headSha) {
-    return holdRedCiWithoutProgress(app, task, project, current, redChecks);
+    // The runs that OWN the red checks (from each check's own URL), not the latest
+    // run per workflow name: a newer green run of the same name would hide an
+    // older red one and the task would be parked without a rerun attempt.
+    const failedRunIds = [
+      ...new Set(
+        redChecks.flatMap((c) => {
+          const id = actionsRunIdFromCheckUrl(c.url, current.repoRef);
+          return id === undefined ? [] : [id];
+        }),
+      ),
+    ];
+    return holdRedCiWithoutProgress(
+      app,
+      task,
+      project,
+      { headSha: current.headSha, repoRef: current.repoRef, failedRunIds },
+      redChecks,
+    );
   }
 
   const maxRounds = resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds);
