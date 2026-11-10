@@ -11,7 +11,6 @@ import { ImageIcon, KillIcon, RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { useDashboardStore } from "./store/index.js";
 import { buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
-import { api, ApiError } from "./api/index.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -37,7 +36,7 @@ import { resolveVoiceChord } from "./lib/shortcutCatalog.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { clampTerminalGridSize } from "./lib/terminalGridSize.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
-import { computeLinksForRow, isSafeLinkUrl, type LinkBufferSource } from "./lib/terminalLinks.js";
+import { computeLinksForRow, type LinkBufferSource } from "./lib/terminalLinks.js";
 import { computePathLinksForRow } from "./lib/terminalPathLinks.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
@@ -48,6 +47,12 @@ import { VoiceMicButton } from "./terminal-pane/VoiceMicButton.js";
 import { droppedFiles } from "./lib/dropped-files.js";
 import { hasFileDrag, readFileDrag } from "./lib/fileDrag.js";
 import { resolveDroppedPath } from "./terminal-pane/resolve-dropped-path.js";
+import { attachMountClipboard } from "./terminal-pane/mountClipboard.js";
+import { attachMountConnection } from "./terminal-pane/mountConnection.js";
+import { attachMountLinks } from "./terminal-pane/mountLinks.js";
+import { attachMountUploads } from "./terminal-pane/mountUploads.js";
+import { attachMountVoiceHotkey } from "./terminal-pane/mountVoiceHotkey.js";
+import type { MountBag } from "./terminal-pane/mountBag.js";
 import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // ResizeMessage/GeometryMessage physically live in src/shared/ws-protocol.ts
 // (repo root, NOT this frontend workspace — see src/routes/terminal.ts's own
@@ -55,18 +60,6 @@ import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // isn't imported here since its single field is checked structurally below
 // rather than through the named type.
 import type { ResizeMessage, GeometryMessage } from "../../src/shared/ws-protocol.js";
-import { MAX_UPLOAD_BYTES } from "../../src/shared/constants.js";
-
-// The backend buffers each upload body in memory, so a multi-file drop is
-// uploaded a few at a time rather than all at once.
-const MAX_CONCURRENT_UPLOADS = 3;
-// Per drop/selection. Concurrency alone doesn't bound the request count or the
-// bytes written to the session cwd, and a huge burst can exhaust the app-wide
-// rate-limit bucket (tripping the client's global 429 breaker for every other
-// dashboard call). The remainder is reported in a toast, not silently dropped.
-const MAX_FILES_PER_UPLOAD = 20;
-// ...and in total bytes (each file is also capped server-side at 25 MiB).
-const MAX_BYTES_PER_UPLOAD = 100 * 1024 * 1024;
 
 // Independent code review, PR #708 — mirrors routes/terminal.ts's own
 // isResizeMessage() runtime guard for the opposite direction of the same
@@ -653,6 +646,32 @@ export function TerminalPane(props: {
   // declarations were swapped for the equivalent imported/hook-returned
   // reference (e.g. `attachKeyConflictHandler(...)`, `searchAddonRef`,
   // `openFind`) where an extracted piece now owns that declaration.
+  //
+  // Issue #2406 extracted the separable closure bodies, and nothing the
+  // rejection above was about. Still inline, in this function, in the
+  // original order:
+  //   - construction of the xterm `Terminal` and the FitAddon / WebGL /
+  //     SearchAddon / Unicode11 addons;
+  //   - atlas clear / rebuild / repaint, including the sibling-pane rAF
+  //     (the shared WebGL glyph atlas stays ordered against that
+  //     construction here — #107, #124, #129);
+  //   - OSC 10/11/12 handler registration, still before xterm's own
+  //     handlers (last-registered-first) and still before `connect`;
+  //   - the cleanup list at the bottom of this effect, same statements,
+  //     same order, on unmount and on sessionId re-run.
+  // The moved modules — terminal-pane/mountLinks.ts, mountClipboard.ts,
+  // mountVoiceHotkey.ts, mountUploads.ts, and mountConnection.ts — are
+  // those closure bodies. This effect calls them in the same order the
+  // functions were declared and binds the results to the same local names.
+  // Mutable locals they share with the rest of this body (`ws`, `destroyed`,
+  // `reconnectAttempt`, `sessionExited`, the replay generations, the fit
+  // cols/rows, the copy timers) are one plain object, `bag`
+  // (terminal-pane/mountBag.ts), created where those locals were declared.
+  // That is not a ref, and it is not hidden registration: every read and
+  // write in this function is `bag.*`, and `connect` still runs only after
+  // OSC registration, against that same `bag.ws` / `bag.sessionExited`.
+  // Do not move construction, the atlas sequence, OSC 10/11/12
+  // registration, or the cleanup list out of this effect.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -666,52 +685,14 @@ export function TerminalPane(props: {
     const prefs = prefsRef.current;
     const fontFamily = `'${prefs.fontFamily}', 'Geist Mono', monospace`;
 
-    // Shared by both link surfaces below — the wrap-aware `ILinkProvider`
-    // (regex-matched http(s) URLs, including ones lib/terminalLinks.ts
-    // reconstructs across hard-wrapped rows) and the `linkHandler` option
-    // (OSC 8 hyperlinks, which xterm core handles entirely on its own). One
-    // pair of hover/leave closures and one tooltip for both — but NOT one
-    // shared `activate`. See `activateOscLink` below for why OSC 8 keeps its
-    // own gate: unlike our own provider, where the visible text and the
-    // navigated-to URL are the same string by construction (the match comes
-    // straight from what's printed in the buffer), an OSC 8 hyperlink lets
-    // the emitting process set the DISPLAYED text completely independently
-    // of the real href (`ESC]8;;https://evil.example\ESC\Read the docs
-    // ESC]8;;\ESC\`) — a known terminal phishing vector, which is exactly
-    // why xterm's own default OSC 8 handler (which setting any
-    // `linkHandler` at all replaces) gates activation behind
-    // `confirm("Do you want to navigate to …? WARNING: this link could
-    // potentially be dangerous")`. Losing that confirmation here, silently,
-    // was a real regression caught in review — restored below, scoped to
-    // just the OSC 8 path; our own provider's links don't need it, since
-    // there is nothing to spoof.
-    const hoverLink = (event: MouseEvent, text: string, rowCount: number) => {
-      // No hover on touch — nothing to preview against, and the tooltip
-      // would just get stuck showing after a tap. Clicking still opens.
-      if (isCoarsePointer) return;
-      // Relative to the outer `position: relative` wrapper the tooltip is
-      // positioned in — not `container`, which is inset by the padding.
-      const rect = (container.parentElement ?? container).getBoundingClientRect();
-      setLinkTooltip({
-        text,
-        rowCount,
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      });
-    };
-    const leaveLink = () => setLinkTooltip(null);
-    // For our own provider (lib/terminalLinks.ts): the hover tooltip is
-    // already the disclosure — what it shows IS what a click opens, so no
-    // extra confirmation step.
-    const activateLink = (_event: MouseEvent, text: string) => {
-      if (!isSafeLinkUrl(text)) return;
-      window.open(text, "_blank", "noopener,noreferrer");
-    };
-    const activateOscLink = (_event: MouseEvent, text: string) => {
-      if (!isSafeLinkUrl(text)) return;
-      if (!window.confirm(`Open this link?\n\n${text}`)) return;
-      window.open(text, "_blank", "noopener,noreferrer");
-    };
+    // hoverLink / leaveLink / activateLink / activateOscLink — bodies in
+    // mountLinks.ts, created here (before Terminal construction) under the
+    // same names the linkHandler option and the link providers close over.
+    const { hoverLink, leaveLink, activateLink, activateOscLink } = attachMountLinks({
+      container,
+      isCoarsePointer,
+      setLinkTooltip,
+    });
 
     const term = new Terminal({
       cursorBlink: prefs.cursorBlink,
@@ -949,15 +930,31 @@ export function TerminalPane(props: {
     // genuine no-op in the installed @xterm/xterm, not a CSS bug).
     const detachTouchScroll = attachTerminalTouchScroll({ term, element: container });
 
-    let destroyed = false;
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let reconnectAttempt = 0;
     // P13 — set the instant an `{type:"exited"}` control message arrives on
     // an already-open connection (see the "message" listener inside connect()
     // below); survives across reconnect attempts within this same mount,
     // unlike anything scoped inside connect() itself.
-    let sessionExited = false;
+    //
+    // The locals the extracted modules share with the rest of this effect.
+    // One plain object, created where those `let`s were declared — not refs.
+    // Every read and write below is `bag.*`, in the same order as before.
+    const bag: MountBag = {
+      destroyed: false,
+      ws: null,
+      reconnectTimer: null,
+      reconnectAttempt: 0,
+      sessionExited: false,
+      connectionGeneration: 0,
+      replayCompleteGeneration: 0,
+      // After applyClampedFit() above, same moment the old `let lastCols` /
+      // `let lastRows` captured them (nothing resizes the grid between here
+      // and refit()).
+      lastCols: term.cols,
+      lastRows: term.rows,
+      cappedBelowFloor: false,
+      copyToastTimer: null,
+      copyFailedToastTimer: null,
+    };
 
     // Guards the OSC 52 clipboard-write handler (registered below) against
     // scrollback replay. attachSocketToSession (routes/terminal.ts) sends, in
@@ -999,9 +996,7 @@ export function TerminalPane(props: {
     // gets shortly after launch, so a reply on replay is often the only one it
     // ever gets; the carve-out itself is not Codex-specific). That is `main`'s
     // pre-existing behavior for colors, unchanged.
-    let connectionGeneration = 0;
-    let replayCompleteGeneration = 0;
-    const isReplaying = () => replayCompleteGeneration !== connectionGeneration;
+    const isReplaying = () => bag.replayCompleteGeneration !== bag.connectionGeneration;
 
     // Set around programmatic input (paste, dictation, key-bar keys — all of
     // which xterm reports through onData synchronously) so the key bar's
@@ -1033,8 +1028,8 @@ export function TerminalPane(props: {
           }
         }
       }
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(out));
+      if (bag.ws?.readyState === WebSocket.OPEN) {
+        bag.ws.send(new TextEncoder().encode(out));
       }
     });
 
@@ -1068,7 +1063,7 @@ export function TerminalPane(props: {
     const oscColorSubs = OSC_COLOR_IDENTS.map(([ident, key]) =>
       term.parser.registerOscHandler(ident, (data) => {
         if (data !== "?") return false;
-        if (ws?.readyState !== WebSocket.OPEN) return true;
+        if (bag.ws?.readyState !== WebSocket.OPEN) return true;
         const hex = term.options.theme?.[key];
         if (typeof hex !== "string") return true;
         const clean = hex.replace("#", "");
@@ -1076,7 +1071,7 @@ export function TerminalPane(props: {
         // hex byte doubled), the convention real terminal emulators use —
         // distinct from the plain `#rrggbb` form used for the SET push below.
         const [r, g, b] = [clean.slice(0, 2), clean.slice(2, 4), clean.slice(4, 6)];
-        ws.send(new TextEncoder().encode(`\x1b]${ident};rgb:${r}${r}/${g}${g}/${b}${b}\x07`));
+        bag.ws.send(new TextEncoder().encode(`\x1b]${ident};rgb:${r}${r}/${g}${g}/${b}${b}\x07`));
         return true;
       }),
     );
@@ -1107,8 +1102,6 @@ export function TerminalPane(props: {
       term.parser.registerDcsHandler({ intermediates: "$", final: "q" }, () => isReplaying()),
     );
 
-    let lastCols = term.cols;
-    let lastRows = term.rows;
     // Hermes review, PR #708 — mirrors the `paneTooSmall` state's own
     // condition (see the geometry handler below) without needing a React-
     // state read inside this mount effect's closure. Set alongside
@@ -1116,11 +1109,10 @@ export function TerminalPane(props: {
     // sync with setPaneTooSmall) inside refit() below too — see that
     // function's own comment for why it can't just rely on the geometry
     // handler alone.
-    let cappedBelowFloor = false;
     const sendResizeIfOpen = () => {
-      if (ws?.readyState === WebSocket.OPEN) {
+      if (bag.ws?.readyState === WebSocket.OPEN) {
         const message: ResizeMessage = { type: "resize", cols: term.cols, rows: term.rows };
-        ws.send(JSON.stringify(message));
+        bag.ws.send(JSON.stringify(message));
       }
     };
     const refit = () => {
@@ -1135,10 +1127,10 @@ export function TerminalPane(props: {
       // enough to hold the known floor — proposeDimensions() is read-only
       // (unlike fit()), so checking it first doesn't itself perturb the
       // terminal.
-      if (cappedBelowFloor) {
+      if (bag.cappedBelowFloor) {
         const proposed = fitAddon.proposeDimensions();
-        const floorCols = fitFloorRef.current?.cols ?? lastCols;
-        const floorRows = fitFloorRef.current?.rows ?? lastRows;
+        const floorCols = fitFloorRef.current?.cols ?? bag.lastCols;
+        const floorRows = fitFloorRef.current?.rows ?? bag.lastRows;
         const stillCapped =
           proposed === undefined || proposed.cols < floorCols || proposed.rows < floorRows;
         // Independent code review, PR #708 — re-evaluate (and clear) the
@@ -1150,8 +1142,8 @@ export function TerminalPane(props: {
         // lastRows post-fit) — no round trip, no fresh geometry echo, and
         // without this the hint would stay stuck up even though the pane
         // is no longer actually too small.
-        if (stillCapped !== cappedBelowFloor) {
-          cappedBelowFloor = stillCapped;
+        if (stillCapped !== bag.cappedBelowFloor) {
+          bag.cappedBelowFloor = stillCapped;
           setPaneTooSmall(stillCapped);
         }
         // Code review — `return`ing here means a pane simultaneously below
@@ -1167,9 +1159,9 @@ export function TerminalPane(props: {
         if (stillCapped) return;
       }
       applyClampedFit();
-      if (term.cols === lastCols && term.rows === lastRows) return;
-      lastCols = term.cols;
-      lastRows = term.rows;
+      if (term.cols === bag.lastCols && term.rows === bag.lastRows) return;
+      bag.lastCols = term.cols;
+      bag.lastRows = term.rows;
       sendResizeIfOpen();
       // Narrow-pane font auto-fit — a genuine grid-size change (this line is
       // only reached once the two checks above have ruled out a no-op) is
@@ -1318,66 +1310,18 @@ export function TerminalPane(props: {
     // A plain `resize` listener catches those misses.
     window.addEventListener("resize", refit);
 
-    let copyToastTimer: ReturnType<typeof setTimeout> | null = null;
-    let copyFailedToastTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // The failure half of copyToClipboard below — previously a console.warn
-    // only, which made a clobbered/rejected copy invisible from the UI (see
-    // copyFailedMessage's own comment). Same transient-toast shape as the
-    // success path (1.5s, remount key so back-to-back failures each restart
-    // the fade), kept as its own function since it has two call sites. Takes
-    // the message itself (Hermes review) rather than a fixed string, so a
-    // non-secure-context deploy ("Clipboard unavailable") and an actually
-    // rejected write ("Copy failed") read as the two distinct situations
-    // they are, instead of one undifferentiated failure toast.
-    function showCopyFailed(message: string): void {
-      if (destroyed) return;
-      setCopyFailedMessage(message);
-      setCopyFailedToastKey((k) => k + 1);
-      if (copyFailedToastTimer) clearTimeout(copyFailedToastTimer);
-      copyFailedToastTimer = setTimeout(() => {
-        if (destroyed) return;
-        setCopyFailedMessage(null);
-      }, 1500);
-    }
-
-    // Shared by "copy on select", the OSC 52 handler, and the Ctrl+Insert/
-    // Ctrl+C handlers below. Returns whether the write actually landed — the
-    // opt-in Ctrl+C path (attachKeyConflictHandler) needs that to decide
-    // whether it's safe to clear the selection; the other callers ignore it.
-    //
-    // `notifyOnFailure` (Hermes review) defaults to true for the three
-    // explicit-copy callers (OSC 52 live output, Ctrl+Insert, the opt-in
-    // Ctrl+C chord) — each is a deliberate "copy this" action, so a failure
-    // is worth surfacing. "Copy on select" below passes false: it fires on
-    // every selection change, including an accidental drag, so in a
-    // non-secure-context deploy it would otherwise flash a failure toast on
-    // every incidental selection rather than a real, intentional copy.
-    function copyToClipboard(text: string, notifyOnFailure = true): Promise<boolean> {
-      if (!hasClipboardApi()) {
-        console.warn("[terminal] clipboard API not available (not a secure context)");
-        if (notifyOnFailure) showCopyFailed("Clipboard unavailable");
-        return Promise.resolve(false);
-      }
-      return navigator.clipboard
-        .writeText(text)
-        .then(() => {
-          if (destroyed) return true;
-          setCopied(true);
-          setCopyToastKey((k) => k + 1);
-          if (copyToastTimer) clearTimeout(copyToastTimer);
-          copyToastTimer = setTimeout(() => {
-            if (destroyed) return;
-            setCopied(false);
-          }, 1500);
-          return true;
-        })
-        .catch((err: unknown) => {
-          console.warn("[terminal] clipboard write failed:", err);
-          if (notifyOnFailure) showCopyFailed("Copy failed");
-          return false;
-        });
-    }
+    // showCopyFailed / copyToClipboard / pasteToTerminal — bodies in
+    // mountClipboard.ts. Called here, where the first two were declared, so
+    // the selection and OSC 52 handlers below close over the same functions.
+    // pasteToTerminal is that same function for the voice and upload paths.
+    const { copyToClipboard, pasteToTerminal } = attachMountClipboard(bag, {
+      term,
+      withoutCtrl,
+      setCopyFailedMessage,
+      setCopyFailedToastKey,
+      setCopied,
+      setCopyToastKey,
+    });
 
     // "Copy on select" (Settings -> Terminal behavior) — xterm doesn't copy
     // to the system clipboard on its own; onSelectionChange only fires when
@@ -1448,23 +1392,6 @@ export function TerminalPane(props: {
       return Promise.resolve(false);
     };
 
-    // Strips a trailing newline from clipboard text before it reaches the
-    // PTY. Clipboard content copied from a terminal commonly ends in `\n`;
-    // sent as-is, that lands on the shell as Enter and the pasted command
-    // executes immediately instead of sitting at the prompt for review
-    // (see issue #66). Routing through term.paste() below (rather than a
-    // raw ws.send) additionally wraps the text in bracketed-paste escapes
-    // (`\x1b[200~`/`\x1b[201~`) whenever the foreground app has enabled
-    // bracketed paste mode (DECSET 2004 — bash/zsh/most TUIs) — the backend
-    // PTY is a raw passthrough (routes/terminal.ts, pty-manager.ts) with no
-    // filtering, so it needs no special support for this; xterm generates
-    // and the shell interprets the escapes entirely client/foreground-app
-    // side.
-    function pasteToTerminal(text: string): void {
-      const trimmed = text.replace(/[\r\n]+$/, "");
-      if (trimmed) withoutCtrl(() => term.paste(trimmed));
-    }
-
     // Voice dictation (push-to-talk) — useVoiceDictation.ts's onInsert
     // hands back the already-joined, trailing-spaced transcript (see
     // voice/transcript.ts's formatForPaste); this routes it through the
@@ -1484,189 +1411,29 @@ export function TerminalPane(props: {
       pasteToTerminal(text);
     };
 
-    // Voice dictation hotkey hold-tracking. Keydown is handled by
-    // attachKeyConflictHandler above (all three call sites route
-    // onVoicePress through voiceHotkeyPressRef, assigned here) — release is
-    // deliberately NOT handled there. attachCustomKeyEventHandler only ever
-    // sees the FOCUSED terminal's own keydown/keyup, but a physical hold can
-    // outlast that focus (the user alt-tabs away, or a browser dialog steals
-    // it mid-hold), which would otherwise leave the mic listening with no
-    // way to stop it via the keyboard. A `window` listener, installed only
-    // for the duration of an actual hold, catches the keyup regardless of
-    // which element currently has focus. (A hold that outlasts focus loss
-    // ENTIRELY — no keyup ever arrives at all, e.g. the tab itself is
-    // backgrounded — is covered separately by the phase-driven blur/
-    // visibility/pagehide effect further below, which applies uniformly to
-    // a hotkey hold AND a tap-latched mic-button dictation alike; this
-    // handler only needs to cover the ordinary "keyup arrives somewhere
-    // other than the terminal" case.)
-    //
-    // Tracks the held key's *code*, not a boolean, and captures it at press
-    // time (#1119 — the chord is now user-configurable). The keyup listener
-    // deliberately can't re-test the full chord — see pushToTalk.ts's own
-    // comment: a user can lift Ctrl before the key, at which point this
-    // keyup event reports ctrlKey: false, and re-testing the chord here
-    // would miss the release entirely. Capturing the code at press (rather
-    // than re-reading voiceChordRef.current on every keyup) means a settings
-    // edit mid-hold can't strand a listening session waiting for a keyup
-    // that will now never match.
-    let voiceHotkeyHeldCode: string | null = null;
-    function stopVoiceHotkeyHold(): void {
-      if (voiceHotkeyHeldCode === null) return;
-      voiceHotkeyHeldCode = null;
-      window.removeEventListener("keyup", onVoiceHotkeyKeyup);
-    }
-    function onVoiceHotkeyKeyup(event: KeyboardEvent): void {
-      if (event.code !== voiceHotkeyHeldCode) return;
-      stopVoiceHotkeyHold();
-      voiceControllerRef.current.release();
-    }
-    voiceHotkeyPressRef.current = () => {
-      // Idempotent: terminalKeys.ts already filters event.repeat, but a
-      // guard here too means a duplicate press (e.g. two attach sites
-      // somehow both firing for one physical keydown) can never register a
-      // second press() on top of an already-listening dictation.
-      if (voiceHotkeyHeldCode !== null) return;
-      voiceHotkeyHeldCode = voiceChordRef.current.code;
-      voiceControllerRef.current.press();
-      window.addEventListener("keyup", onVoiceHotkeyKeyup);
-    };
+    // stopVoiceHotkeyHold / onVoiceHotkeyKeyup, and the keyup listener
+    // voiceHotkeyPressRef attaches — bodies in mountVoiceHotkey.ts. The
+    // press ref is assigned inside that call, at this point, as before.
+    const { stopVoiceHotkeyHold } = attachMountVoiceHotkey({
+      voiceControllerRef,
+      voiceChordRef,
+      voiceHotkeyPressRef,
+    });
 
-    // Issue #68: the CLI running in this PTY is a host process — it can't
-    // read the browser's clipboard, and even if raw image bytes reached it
-    // over the WS/PTY byte stream there's no terminal image protocol (Sixel/
-    // Kitty/iTerm2) or renderer in this stack to make sense of them anyway.
-    // The only thing that actually works is a file the CLI can open by path:
-    // upload the image, write it under the session's own cwd (backend), then
-    // inject that path into the terminal exactly like a text paste. A
-    // trailing space keeps it from running straight into whatever the user
-    // types next.
-    //
-    // Handles several files (a multi-file drop or picker selection): uploaded
-    // a few at a time (the backend buffers each body in memory) and the paths
-    // that made it are pasted together, in the order the files were given, as
-    // one paste. One failed upload flags the error state but doesn't discard
-    // the others' paths. A bare Blob (clipboard image) has no name, so it gets
-    // one from its mime subtype to keep a usable extension.
-    //
-    // Batches can overlap (a second drop while the first is still going): the
-    // indicator stays "uploading" until the last one settles, and a failure in
-    // any of them is reported once they all have.
-    let batchesInFlight = 0;
-    let sawUploadFailure = false;
-    //
-    // `skippedEntries` is how many dropped folders/empty entries the caller
-    // already filtered out; it is folded into the same single notice as the
-    // limits applied here, since only one notice can render.
-    function uploadAndInjectFiles(allFiles: Blob[], skippedEntries = 0): void {
-      const files: Blob[] = [];
-      let totalBytes = 0;
-      let tooBig = 0;
-      let overLimit = 0;
-      for (const f of allFiles) {
-        if (f.size > MAX_UPLOAD_BYTES) tooBig++;
-        else if (files.length >= MAX_FILES_PER_UPLOAD || totalBytes + f.size > MAX_BYTES_PER_UPLOAD)
-          overLimit++;
-        else {
-          files.push(f);
-          totalBytes += f.size;
-        }
-      }
-      const notes: string[] = [];
-      if (skippedEntries > 0) notes.push(`${skippedEntries} folder(s)/empty file(s) skipped`);
-      if (tooBig > 0) {
-        notes.push(`${tooBig} file(s) over ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB skipped`);
-      }
-      if (overLimit > 0) notes.push(`${overLimit} file(s) over the per-drop limit skipped`);
-      if (notes.length > 0) setUploadNotice(notes.join(", "));
-      if (files.length === 0) return;
-      batchesInFlight++;
-      setUploadState("uploading");
-      // async: a synchronous throw (e.g. encodeURIComponent on an unpaired
-      // surrogate in a file name) must reject, not escape Promise.all's setup.
-      const uploadOne = async (file: Blob) => {
-        const name =
-          file instanceof File
-            ? file.name
-            : `pasted.${file.type.split("/")[1]?.split("+")[0] || "bin"}`;
-        try {
-          return await api.uploadSessionFile(props.params.sessionId, file, name);
-        } catch (err) {
-          // The bytes didn't match the image type the browser claimed —
-          // keep the file anyway, as a plain upload (once, no further retry).
-          if (err instanceof ApiError && err.code === "UPLOAD_IMAGE_MISMATCH") {
-            return api.uploadSessionFile(props.params.sessionId, file, name, { asGeneric: true });
-          }
-          throw err;
-        }
-      };
-      const results: PromiseSettledResult<{ path: string }>[] = new Array(files.length);
-      let next = 0;
-      const worker = async () => {
-        while (next < files.length) {
-          const i = next++;
-          results[i] = await uploadOne(files[i]!).then(
-            (value): PromiseFulfilledResult<{ path: string }> => ({ status: "fulfilled", value }),
-            (reason: unknown): PromiseRejectedResult => ({ status: "rejected", reason }),
-          );
-        }
-      };
-      Promise.all(
-        Array.from({ length: Math.min(MAX_CONCURRENT_UPLOADS, files.length) }, worker),
-      ).then(() => {
-        if (destroyed) return;
-        const paths: string[] = [];
-        let failed = false;
-        for (const result of results) {
-          if (result.status === "fulfilled") paths.push(result.value.path);
-          else {
-            failed = true;
-            console.warn("[terminal] file upload failed:", result.reason);
-            if (
-              result.reason instanceof ApiError &&
-              result.reason.code === "UPLOAD_AGENT_OUTDATED"
-            ) {
-              setUploadNotice(result.reason.message);
-            }
-          }
-        }
-        if (paths.length > 0) pasteToTerminal(`${paths.map(quotePastedPath).join(" ")} `);
-        sawUploadFailure ||= failed;
-        if (--batchesInFlight === 0) {
-          setUploadState(sawUploadFailure ? "error" : "idle");
-          sawUploadFailure = false;
-        }
-      });
-    }
+    // uploadAndInjectFiles / tryImagePaste — bodies in mountUploads.ts.
+    // Called here, where uploadAndInjectFiles was declared; tryImagePaste
+    // comes back with it so the paste handler below can call it by name.
+    const { uploadAndInjectFiles, tryImagePaste } = attachMountUploads(bag, {
+      setUploadNotice,
+      setUploadState,
+      pasteToTerminal,
+      props,
+    });
     uploadFilesRef.current = uploadAndInjectFiles;
     pastePathRef.current = (text: string) => {
       term.focus();
       pasteToTerminal(text);
     };
-
-    // Checks the clipboard for an image entry (a screenshot or copied photo,
-    // as opposed to copied text) and, if found, routes it through the upload
-    // path above instead of a text paste. navigator.clipboard.read() needs a
-    // secure context/permission and is less broadly supported than
-    // readText() — any failure here (denied, unavailable, no image type
-    // present) resolves false so the caller falls through to the ordinary
-    // text-paste path rather than surfacing an error for what is, from the
-    // user's perspective, just a normal paste.
-    async function tryImagePaste(): Promise<boolean> {
-      if (!navigator.clipboard?.read) return false;
-      try {
-        const items = await navigator.clipboard.read();
-        for (const item of items) {
-          const imageType = item.types.find((t) => t.startsWith("image/"));
-          if (!imageType) continue;
-          uploadAndInjectFiles([await item.getType(imageType)]);
-          return true;
-        }
-      } catch (err) {
-        console.warn("[terminal] clipboard image read unavailable, falling back to text:", err);
-      }
-      return false;
-    }
 
     // Cmd+V / Shift+Insert paste handler — reads from the system clipboard
     // and writes to the PTY, regardless of the pasteOnRightClick setting.
@@ -1721,252 +1488,32 @@ export function TerminalPane(props: {
     container.addEventListener("contextmenu", onContextMenu, true);
     container.addEventListener("mousedown", onRightMouseDown, true);
 
-    // Reconnects on any drop (network blip, backend redeploy, laptop sleep)
-    // with capped exponential backoff — up to prefs.reconnect.maxAttempts,
-    // unless auto-reconnect is disabled entirely — then gives up and shows a
-    // "failed" state rather than retrying forever against a session that may
-    // genuinely be gone. A successful reconnect needs no special handling to
-    // restore output: the server always replays its scrollback buffer to a
-    // newly-attaching client (see terminal.ts), so the same catch-up path
-    // used for "reopen a detached panel" also covers "the WS silently
-    // dropped and came back."
-    const RECONNECT_BASE_DELAY_MS = 500;
-    const RECONNECT_MAX_DELAY_MS = 8000;
-    function connect(): void {
-      if (destroyed) return;
-      setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
-      setReconnectAttempt(reconnectAttempt);
-      setAttachIncompatible(false);
-      // This connection's own identity for the replay guard above — see
-      // connectionGeneration's own comment for why generation comparison
-      // (rather than a shared boolean reset at some point in time) is what
-      // makes the guard correct regardless of xterm's write-queue timing.
-      // `sawGeometry` is deliberately a plain local here, not hoisted to
-      // effect scope: closing over one fresh copy per connect() call is
-      // exactly "has THIS connection seen its own first geometry frame yet",
-      // with no manual reset needed.
-      connectionGeneration += 1;
-      const myGeneration = connectionGeneration;
-      let sawGeometry = false;
-
-      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${location.host}/ws/terminal?sessionId=${props.params.sessionId}&cols=${term.cols}&rows=${term.rows}`;
-      const socket = new WebSocket(wsUrl);
-      socket.binaryType = "arraybuffer";
-      ws = socket;
-      wsRef.current = socket;
-
-      socket.addEventListener("open", () => {
-        reconnectAttempt = 0;
-        setStatus("open");
-        // The URL's cols/rows were captured when this connect() call was
-        // made, which can be stale if a deferred refit (below) corrected
-        // the terminal's size in the meantime — send whatever the terminal's
-        // current size actually is now that the socket is open, rather than
-        // waiting for the next real resize to reach the backend PTY.
-        sendResizeIfOpen();
-        // Drain any OSC color push that was queued while the socket was
-        // not OPEN (theme toggle during a reconnect).  The running program
-        // always sees the latest theme once the connection is restored.
-        const pending = pendingOscRef.current;
-        if (pending) {
-          socket.send(new TextEncoder().encode(pending));
-          pendingOscRef.current = null;
-        }
-      });
-
-      socket.addEventListener("message", (event) => {
-        if (typeof event.data !== "string") {
-          term.write(new Uint8Array(event.data as ArrayBuffer));
-          return;
-        }
-        // Two JSON control frames can arrive here — see TerminalWSMessage
-        // (ws-protocol.ts) for the full union. "exited": P13 —
-        // terminal.ts's onExit handler sends this the instant the PTY
-        // process exits, independent of whether the underlying WS connection
-        // itself ever closes (killing a session doesn't force-close an
-        // already-open browser socket — see that route's own "kept alive"
-        // comment). This is the earliest, most direct "this session is
-        // genuinely gone" signal available — well before any close event
-        // might eventually follow, possibly never for an already-open
-        // connection. "geometry": see its own comment below. Previously
-        // dropped outright (a bare `return` for any string message); now
-        // both string frames this protocol actually sends are read.
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(event.data);
-        } catch {
-          return;
-        }
-        if ((parsed as { type?: unknown } | null)?.type === "exited") {
-          // Issue #2168: a live session this build cannot attach to (started
-          // by a release with an incompatible pty-host protocol) - say so,
-          // rather than letting it read as the program having exited.
-          setAttachIncompatible((parsed as { reason?: unknown }).reason === "incompatible");
-          sessionExited = true;
-          if (reconnectTimer) clearTimeout(reconnectTimer);
-          setStatus("ended");
-          return;
-        }
-        // Issue: small panes/floating windows ignoring input — the server
-        // floors a too-small resize (pty-manager.ts's MIN_TERMINAL_COLS/
-        // ROWS) and echoes back whatever it actually applied (see
-        // GeometryMessage's own doc comment). If that differs from this
-        // terminal's current grid, resize xterm to match — otherwise the
-        // program keeps drawing to columns/rows this viewport never shows,
-        // and typed input appears to do nothing even though it's reaching
-        // the pty. Also mirrored into lastCols/lastRows so the next refit()
-        // (ResizeObserver-driven) computes its own delta against reality
-        // instead of immediately trying to fight this back down.
-        // Issue #1520 — the server dropped output for this connection under
-        // backpressure; what's on screen may be garbled. Reset xterm and
-        // re-arm the replay guards: the next binary frame is a fresh full
-        // replay followed by a geometry frame, same as the initial attach.
-        if ((parsed as { type?: unknown } | null)?.type === "resync") {
-          term.reset();
-          sawGeometry = false;
-          replayCompleteGeneration = 0;
-          return;
-        }
-        if (isGeometryMessage(parsed)) {
-          const geo = parsed;
-          // The first "geometry" frame on this connection is sent
-          // unconditionally right after the (optional) scrollback backlog —
-          // see connectionGeneration's own comment above — so it's a
-          // reliable end-of-replay sentinel even for a fresh spawn with no
-          // backlog at all. term.write() queues in FIFO order and only
-          // invokes its callback once that write is fully parsed, so queuing
-          // a no-op write here guarantees this fires only once any OSC 52
-          // earlier in the backlog has already been (harmlessly) swallowed
-          // by the handler below — advancing replayCompleteGeneration
-          // synchronously here instead would race an unparsed backlog still
-          // sitting in xterm's write queue. The `myGeneration ===
-          // connectionGeneration` check discards this callback if a later
-          // connect() has since superseded it (see connectionGeneration's
-          // own comment for why that can happen even though this callback
-          // was queued first).
-          if (!sawGeometry) {
-            sawGeometry = true;
-            term.write(new Uint8Array(0), () => {
-              if (myGeneration === connectionGeneration) replayCompleteGeneration = myGeneration;
-            });
-          }
-          // Narrow-pane font auto-fit — fitFloorRef holds the server's
-          // constant MIN_TERMINAL_COLS/ROWS floor (see that ref's own
-          // comment for why this must be the floor, not `geo.cols`/
-          // `geo.rows` themselves — those are this session's CURRENT
-          // applied geometry, which the client's own resizes below keep
-          // changing, and targeting a moving value like that is what fed
-          // the pre-fix feedback loop). `typeof` guards degrade a stale
-          // browser tab talking to a pre-floor-echo server safely: the
-          // fields are simply absent, fitFloorRef stays null, and the
-          // narrow-pane fit is inert rather than throwing.
-          if (typeof geo.minCols === "number" && typeof geo.minRows === "number") {
-            fitFloorRef.current = { cols: geo.minCols, rows: geo.minRows };
-          }
-          if (geo.cols !== term.cols || geo.rows !== term.rows) {
-            // Hermes review — geo.cols/rows come straight off the wire (an
-            // untyped GeometryMessage routes/terminal.ts forwards verbatim)
-            // and are trusted as already within MAX_TERMINAL_COLS/ROWS
-            // because the SAME-version backend's own clampTerminalSize()
-            // bounds session.size before ever echoing it. A remote-hosted
-            // session (this frame's own comment above) could be talking to a
-            // different-version host whose echo predates that ceiling —
-            // clamp here too so this path can't reintroduce the exact
-            // runaway the rest of this file guards against. A no-op in the
-            // aligned case (geo is already within bounds by construction).
-            const clampedGeo = clampTerminalGridSize(geo.cols, geo.rows);
-            term.resize(clampedGeo.cols, clampedGeo.rows);
-            lastCols = clampedGeo.cols;
-            lastRows = clampedGeo.rows;
-            // A genuine floor override (as opposed to an echo merely
-            // confirming a resize this client initiated) is the signal that
-            // the settings-sync effect's font-fit check should (re-)run —
-            // this is the trigger for ENTERING a shrunk state; `refit()`
-            // above handles the trigger for LEAVING one.
-            setFitRetryTick((tick) => tick + 1);
-          }
-          // Hermes review, PR #708 — proposeDimensions() returns undefined
-          // when the container can't fit even one full character cell (a
-          // near-collapsed pane, or the brief zero-height layout state
-          // during a drag). Treating that as "not too small" hid the hint
-          // exactly when the pane was most unusable; undefined now counts
-          // as too small, same as a proposed size that's genuinely smaller
-          // than the floor.
-          const proposed = fitAddon.proposeDimensions();
-          const floorCols =
-            fitFloorRef.current?.cols ?? (typeof geo.minCols === "number" ? geo.minCols : geo.cols);
-          const floorRows =
-            fitFloorRef.current?.rows ?? (typeof geo.minRows === "number" ? geo.minRows : geo.rows);
-          const tooSmall =
-            proposed === undefined || proposed.cols < floorCols || proposed.rows < floorRows;
-          cappedBelowFloor = tooSmall;
-          setPaneTooSmall(tooSmall);
-        }
-      });
-
-      socket.addEventListener("close", () => {
-        if (destroyed) return;
-        // P13 — distinguishes "this session is genuinely gone" (no retry;
-        // show "Session ended") from an ordinary network blip (keep the
-        // existing backoff-and-retry behavior). The close event's own
-        // code/reason carry no usable signal for the specific case this
-        // exists to catch: a reconnect attempt against an already-killed
-        // session fails at the WS opening handshake itself
-        // (routes/terminal.ts's preValidation returns 400 for a killed/
-        // exited row before the upgrade ever completes), and per the
-        // WebSocket spec every browser reports a failed opening handshake as
-        // code 1006 with an empty reason — indistinguishable from a genuine
-        // abnormal closure (verified by reading terminal.ts; there is no
-        // custom close code anywhere in this backend). The two signals that
-        // DO work: (a) `sessionExited`, set above the moment an "exited"
-        // control message arrives on a connection that was already open,
-        // and (b) cross-checking `store.sessions` — a reconnect attempt only
-        // lands here because a PRIOR attempt already failed, so by the time
-        // this fires, whatever kill/exit caused that has normally long since
-        // reached the store (an explicit kill's own store.deleteSession
-        // awaits refreshSessions() before resolving; a session killed from
-        // elsewhere reaches this store within one 4s live-refresh tick).
-        //
-        // `!stored` is only trustworthy as "gone" once the store has loaded
-        // at least once (`sessionsLoaded`) — the "prior attempt" premise
-        // above assumes this is a RECONNECT, but a pane can also hit its
-        // very first close before `refreshSessions()`'s first response ever
-        // lands (e.g. restored by dockview racing a backend restart), where
-        // `sessions` is still `[]` for every live session, not just dead
-        // ones. Gating on `sessionsLoaded` keeps that initial-load race from
-        // being misread as "ended" for a session that's actually still
-        // live (Hermes review, PR #592).
-        const { sessions: liveSessions, sessionsLoaded } = useDashboardStore.getState();
-        const stored = liveSessions.find((s) => s.id === props.params.sessionId);
-        const sessionGone =
-          sessionExited ||
-          (sessionsLoaded && !stored) ||
-          stored?.status === "killed" ||
-          stored?.status === "exited";
-        if (sessionGone) {
-          setStatus("ended");
-          return;
-        }
-        const reconnectPrefs = prefsRef.current.reconnect;
-        if (!reconnectPrefs.enabled || reconnectAttempt >= reconnectPrefs.maxAttempts) {
-          setStatus("failed");
-          return;
-        }
-        const delay = Math.min(
-          RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt,
-          RECONNECT_MAX_DELAY_MS,
-        );
-        reconnectAttempt += 1;
-        reconnectTimer = setTimeout(connect, delay);
-      });
-    }
+    // connect — body in mountConnection.ts. Created here, after the OSC
+    // 10/11/12 handlers above have been registered, and called from
+    // retryRef / connectOnce below. It reads and writes bag.ws and
+    // bag.sessionExited; it does not register those OSC handlers.
+    const { connect } = attachMountConnection(bag, {
+      term,
+      fitAddon,
+      sendResizeIfOpen,
+      setStatus,
+      setReconnectAttempt,
+      setAttachIncompatible,
+      setPaneTooSmall,
+      setFitRetryTick,
+      wsRef,
+      pendingOscRef,
+      fitFloorRef,
+      prefsRef,
+      props,
+      isGeometryMessage,
+    });
 
     // "Retry now" (design's Disconnected state) — reset backoff to attempt
     // 0 and reconnect immediately, without remounting the terminal itself.
     retryRef.current = () => {
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectAttempt = 0;
+      if (bag.reconnectTimer) clearTimeout(bag.reconnectTimer);
+      bag.reconnectAttempt = 0;
       connect();
     };
 
@@ -2002,14 +1549,14 @@ export function TerminalPane(props: {
     };
     let connectedOnce = false;
     const connectOnce = () => {
-      if (connectedOnce || destroyed) return;
+      if (connectedOnce || bag.destroyed) return;
       connectedOnce = true;
       if (connectBackstopHolder.timer) clearTimeout(connectBackstopHolder.timer);
       // Re-measure now that layout has actually run — the fit() up in the
       // mount path above ran before the container was necessarily sized.
       applyClampedFit();
-      lastCols = term.cols;
-      lastRows = term.rows;
+      bag.lastCols = term.cols;
+      bag.lastRows = term.rows;
       connect();
     };
     // ResizeObserver delivers after layout (including one initial delivery
@@ -2024,7 +1571,7 @@ export function TerminalPane(props: {
       // `destroyed`, but a delivery already queued when cleanup runs could
       // otherwise reach `refit()` (hence `fitAddon.fit()`) on an already-
       // disposed terminal. Guarding here keeps both branches consistent.
-      if (destroyed) return;
+      if (bag.destroyed) return;
       if (connectedOnce) refit();
       else connectOnce();
     });
@@ -2039,11 +1586,11 @@ export function TerminalPane(props: {
     connectBackstopHolder.timer = setTimeout(connectOnce, CONNECT_LAYOUT_BACKSTOP_MS);
 
     return () => {
-      destroyed = true;
+      bag.destroyed = true;
       cancelAnimationFrame(repaintSiblingsRaf);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (copyToastTimer) clearTimeout(copyToastTimer);
-      if (copyFailedToastTimer) clearTimeout(copyFailedToastTimer);
+      if (bag.reconnectTimer) clearTimeout(bag.reconnectTimer);
+      if (bag.copyToastTimer) clearTimeout(bag.copyToastTimer);
+      if (bag.copyFailedToastTimer) clearTimeout(bag.copyFailedToastTimer);
       if (connectBackstopHolder.timer) clearTimeout(connectBackstopHolder.timer);
       resizeObserver.disconnect();
       window.removeEventListener("resize", refit);
@@ -2073,7 +1620,7 @@ export function TerminalPane(props: {
       searchAddon.dispose();
       linkProviderSub.dispose();
       pathProviderSub?.dispose();
-      ws?.close();
+      bag.ws?.close();
       term.dispose();
       termRef.current = null;
       webglAddonRef.current = null;
