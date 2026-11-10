@@ -4,6 +4,8 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Session, Task } from "../api/types.js";
 import { useDashboardStore } from "../store/index.js";
+import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
+import { RightSidebar } from "./RightSidebar.js";
 import { TaskDetailView } from "./TaskDetailView.js";
 
 vi.mock("../SessionTimeline.js", () => ({ SessionTimeline: () => <div data-testid="timeline" /> }));
@@ -117,6 +119,65 @@ describe("TaskDetailView keyboard access", () => {
     setTasks([]);
     renderDetail(999);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back" }));
+  });
+});
+
+describe("TaskDetailView keyboard access in the real right sidebar", () => {
+  // DetailHeader portals the header (Back included) into the drawer's detail
+  // slot, a sibling of the view body, so a lookup inside the view's own root
+  // finds nothing there. These tests use the DOM shape the app really has.
+  const actions = {
+    onOpenGit: vi.fn(),
+    onOpenGitHub: vi.fn(),
+    onOpenFileEditor: vi.fn(),
+    onOpenFile: vi.fn(),
+    onOpenAgentRules: vi.fn(),
+    onOpenProjectBriefing: vi.fn(),
+    onOpenProjectSetup: vi.fn(),
+    onOpenDockConfig: vi.fn(),
+    onOpenSkills: vi.fn(),
+    onOpenTasks: vi.fn(),
+  };
+
+  it("focuses the portalled Back button when a card selects a task, so Enter does not land on <body>", () => {
+    const t = task({ title: "Reach me from the board" });
+    localStorage.clear();
+    setTasks([t], {
+      projects: [{ id: 4, name: "proj", cwd: "/x/proj", hostId: "local" }] as never,
+      gitStatuses: {},
+      sessions: [],
+      rightSidebarView: "tasks",
+      rightSidebarOpen: true,
+      rightSidebarPinned: false,
+      rightSidebarWidth: 340,
+      rightSidebarProjectRequest: null,
+      followedProjectId: null,
+      selectedTaskId: t.id,
+    });
+    render(<RightSidebar tier="desktop" actions={actions as never} />);
+    const slot = document.querySelector(".right-sidebar-detail-slot") as HTMLElement;
+    expect(slot).toBeTruthy();
+    const back = within(slot).getByRole("button", { name: "Back" });
+    // Back lives outside the view root, in the slot...
+    expect(screen.getByTestId("task-detail-view").contains(back)).toBe(false);
+    // ...and still has focus.
+    expect(document.activeElement).toBe(back);
+  });
+
+  it("finds Back in an injected detail slot, and still focuses it after the slot arrives late", () => {
+    const t = task({ title: "Slot task" });
+    setTasks([t]);
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    const ui = (s: HTMLElement | null) => (
+      <SidebarDetailSlotContext.Provider value={s}>
+        <TaskDetailView taskId={t.id} onBack={vi.fn()} />
+      </SidebarDetailSlotContext.Provider>
+    );
+    const { rerender } = render(ui(null));
+    rerender(ui(slot));
+    expect(document.activeElement).toBe(within(slot).getByRole("button", { name: "Back" }));
+    slot.remove();
   });
 });
 

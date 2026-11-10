@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
 import { goSidebarBack } from "../sidebarBack.js";
@@ -27,6 +27,7 @@ import {
   StatusTriad,
   TaskStatusBlock,
 } from "../ui/sidebar/index.js";
+import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 
 // The Tasks sidebar's detail mode (epic #2847): one task, status first. It
 // reads its own task by id from the store, so it does not depend on what the
@@ -134,12 +135,19 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   // pressed Enter on a card lands nowhere: nothing in the sidebar is focused
   // and nothing is announced (the board's old drawer focused its close button,
   // trapped Tab and closed on Escape for exactly that reason). Focus the Back
-  // button when a task's detail appears or another task replaces it; it sits
-  // inside a labelled region, so a screen reader announces which task opened.
+  // button when a task's detail appears or another task replaces it; the view
+  // sits inside a labelled region, so a screen reader announces which task
+  // opened. In the right sidebar DetailHeader portals the header (Back
+  // included) into the drawer's detail slot, outside this view's own root, so
+  // Back is looked up in the slot when there is one and in the root otherwise.
+  // `detailSlot` is a dependency because the slot element arrives one render
+  // after the panel mounts: the first run finds the inline header, the next
+  // finds the portalled one.
+  const detailSlot = useContext(SidebarDetailSlotContext);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    rootRef.current?.querySelector<HTMLElement>('[aria-label="Back"]')?.focus();
-  }, [taskId]);
+    (detailSlot ?? rootRef.current)?.querySelector<HTMLElement>('[aria-label="Back"]')?.focus();
+  }, [taskId, detailSlot]);
 
   if (!task) {
     return (
