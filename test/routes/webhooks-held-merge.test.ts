@@ -68,6 +68,7 @@ describe("webhook merge of a held task", () => {
         status: "done",
         prNumber: 91,
         needsHumanReason: "review-post-failed",
+        reviewPostPending: "review-post-failed",
       })
       .returning()
       .all();
@@ -92,6 +93,7 @@ describe("webhook merge of a held task", () => {
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.mergedAt).not.toBeNull();
     expect(updated.needsHumanReason).toBeNull();
+    expect(updated.reviewPostPending).toBeNull();
 
     await app.close();
     fs.rmSync(cwd, { recursive: true, force: true });

@@ -21,7 +21,7 @@ export const clearMergeNeedsHumanReason = sql<
 
 /** Like clearMergeNeedsHumanReason, for a recorded merge: the PR is merged, so
  * a `review-post-failed` hold (nothing left to hold) is released too. */
-export const clearNeedsHumanOnMerge = sql<
+const clearNeedsHumanOnMerge = sql<
   string | null
 >`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'review-post-failed', 'pr-closed') THEN NULL ELSE needs_human_reason END`;
 
@@ -48,6 +48,23 @@ export function reviewPostFlags(raw: string | null) {
 export const clearReviewPostFailedMarker = sql<
   string | null
 >`CASE WHEN review_post_pending = 'review-post-failed' THEN NULL ELSE review_post_pending END`;
+
+/**
+ * The one `.set()` value for every site that records a merge (`mergedAt`): it
+ * pairs the date with the reason clear (`clearNeedsHumanOnMerge`) and the
+ * review-post marker clear, because a merged PR has nothing left to hold.
+ * `extra` carries the site's own columns (`archivedAt`, `status`, ...).
+ * `test/services/task-merge-set-sites.test.ts` fails a site that assigns
+ * `mergedAt` without it.
+ */
+export function mergeRecordedSet<T extends object>(mergedAt: Date, extra?: T) {
+  return {
+    ...extra,
+    mergedAt,
+    needsHumanReason: clearNeedsHumanOnMerge,
+    reviewPostPending: clearReviewPostFailedMarker,
+  };
+}
 
 /** The `.set()` fields that clear a merge error and its merge-tied reason. */
 export const CLEARED_MERGE_ERROR = {

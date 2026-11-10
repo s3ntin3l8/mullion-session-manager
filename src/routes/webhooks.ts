@@ -13,7 +13,7 @@ import {
   listProjectRefsOldestFirst,
   recordMergeIfUnmerged,
 } from "../services/task-store.js";
-import { clearNeedsHumanOnMerge } from "../services/task-merge-human.js";
+import { mergeRecordedSet } from "../services/task-merge-human.js";
 import { cleanupMergedTaskBranch } from "../services/task-approve.js";
 import { closeIssueOnMerge } from "../services/task-github-sync.js";
 import { endReviewingOnPrState } from "../services/task-review-end.js";
@@ -291,12 +291,8 @@ export async function webhookRoutes(app: FastifyInstance) {
                   app,
                   matchedTask.id,
                   matchedTask.status === "done"
-                    ? {
-                        mergedAt: now,
-                        archivedAt: now,
-                        needsHumanReason: clearNeedsHumanOnMerge,
-                      }
-                    : { mergedAt: now, needsHumanReason: clearNeedsHumanOnMerge },
+                    ? mergeRecordedSet(now, { archivedAt: now })
+                    : mergeRecordedSet(now),
                 );
                 // Clears the board's "PR open — needs merge" badge live.
                 broadcastTaskEvent({

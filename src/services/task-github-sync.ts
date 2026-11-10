@@ -26,7 +26,7 @@ import { trimDiagnosticsForComment } from "./task-failure-diagnostics.js";
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
-import { clearNeedsHumanOnMerge } from "./task-merge-human.js";
+import { mergeRecordedSet } from "./task-merge-human.js";
 import {
   getIntegration,
   hasTransientMintFailure,
@@ -652,14 +652,14 @@ export async function syncUnlabeledIssueToLocal(
         // mergedAt + archivedAt: the PR's merge webhook fired before prNumber
         // existed on this row, so nothing else will ever record the merge —
         // without it the board shows "PR open — needs merge" indefinitely.
-        .set({
-          status: "done",
-          completedAt: now,
-          prNumber: closingPr.number,
-          mergedAt: closingPr.mergedAt ? new Date(closingPr.mergedAt) : now,
-          archivedAt: now,
-          needsHumanReason: clearNeedsHumanOnMerge,
-        })
+        .set(
+          mergeRecordedSet(closingPr.mergedAt ? new Date(closingPr.mergedAt) : now, {
+            status: "done" as const,
+            completedAt: now,
+            prNumber: closingPr.number,
+            archivedAt: now,
+          }),
+        )
         .where(and(eq(tasks.id, task.id), eq(tasks.status, task.status)))
         .run();
       if (doneUpdate.changes > 0) {

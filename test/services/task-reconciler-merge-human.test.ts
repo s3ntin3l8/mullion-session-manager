@@ -316,13 +316,17 @@ describe("#2750 — merges that need a human", () => {
 
   it("clears a review-post-failed hold when the task merges", async () => {
     const app = await buildApp();
-    const id = await createTask(app, { needsHumanReason: "review-post-failed" });
+    const id = await createTask(app, {
+      needsHumanReason: "review-post-failed",
+      reviewPostPending: "review-post-failed",
+    });
     const task = getTask(app, id);
     const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
 
     expect(markTaskMerged(app, task, project)).toBe(true);
 
     expect(getTask(app, id).needsHumanReason).toBeNull();
+    expect(getTask(app, id).reviewPostPending).toBeNull();
     await app.close();
   });
 
@@ -332,6 +336,7 @@ describe("#2750 — merges that need a human", () => {
       status: "reviewing",
       mergeRequestedAt: null,
       needsHumanReason: "review-post-failed",
+      reviewPostPending: "review-post-failed",
     });
     const task = getTask(app, id);
     app.db
@@ -350,12 +355,16 @@ describe("#2750 — merges that need a human", () => {
     expect(row.mergedAt).not.toBeNull();
     expect(row.archivedAt).not.toBeNull();
     expect(row.needsHumanReason).toBeNull();
+    expect(row.reviewPostPending).toBeNull();
     await app.close();
   });
 
   it("archive-merged clears review-post-failed after confirming the PR merged", async () => {
     const app = await buildApp();
-    const id = await createTask(app, { needsHumanReason: "review-post-failed" });
+    const id = await createTask(app, {
+      needsHumanReason: "review-post-failed",
+      reviewPostPending: "review-post-failed",
+    });
     const task = getTask(app, id);
     mockGetPullRequestByNumber.mockResolvedValue({
       merged: true,
@@ -371,6 +380,7 @@ describe("#2750 — merges that need a human", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ archived: [id], failed: [], remaining: 0 });
     expect(getTask(app, id).needsHumanReason).toBeNull();
+    expect(getTask(app, id).reviewPostPending).toBeNull();
     await app.close();
   });
 
@@ -381,6 +391,7 @@ describe("#2750 — merges that need a human", () => {
       issueNumber: 701,
       prNumber: null,
       needsHumanReason: "review-post-failed",
+      reviewPostPending: "review-post-failed",
     });
     const task = getTask(app, id);
     const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
@@ -392,7 +403,12 @@ describe("#2750 — merges that need a human", () => {
     await syncUnlabeledIssueToLocal(app, task, project, "GitHub issue was closed");
 
     const row = getTask(app, id);
-    expect(row).toMatchObject({ status: "done", prNumber: 77, needsHumanReason: null });
+    expect(row).toMatchObject({
+      status: "done",
+      prNumber: 77,
+      needsHumanReason: null,
+      reviewPostPending: null,
+    });
     expect(row.mergedAt).toEqual(new Date("2026-10-31T09:00:00Z"));
     expect(row.archivedAt).not.toBeNull();
     await app.close();
