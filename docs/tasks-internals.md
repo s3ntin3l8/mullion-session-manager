@@ -851,8 +851,9 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
     failing) is just cleared, with the unresolved thread work recorded in
     `githubSyncError` — nothing is held.
 
-  A non-approving verdict just clears the marker in each case. A marker on a task that is merged or no longer
-  claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
+  A non-approving verdict just clears the marker in each case. A marker on a task that is merged (`mergedAt` set, whatever its
+  status) or no longer claimed/in-progress/reviewing/done is dropped, so a
+  late 24 h give-up can never re-set the hold on a merged task. A thread-resolution failure
   (rate limit) keeps the marker with `posted: true`, so only the resolution is
   retried; a project on another host whose repo ref can't be resolved
   (`busy`/`unreachable`/`outcome-unknown`) counts as transient too — it is read

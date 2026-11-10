@@ -663,6 +663,30 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     await app.close();
   });
 
+  it.each(["claimed", "in_progress"] as const)(
+    "drops an aged unposted marker on a %s task whose PR already merged, holding nothing",
+    async (status) => {
+      const { app, task, read } = await setup(`p-post-merged-${status}`);
+      seedMarker(
+        app,
+        task.id,
+        { status, mergedAt: new Date(), lastReviewVerdict: "approved" },
+        "sha-reviewed",
+      );
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 25 * 3_600_000);
+
+      await reconcileTasks(app);
+
+      const row = read();
+      expect(row.reviewPostPending).toBeNull();
+      expect(row.needsHumanReason).not.toBe("review-post-failed");
+      expect(holdsForReviewPost(row)).toBe(false);
+      expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
   it("posts a retried review with the stored reviewed head, even though the PR head moved", async () => {
     const { app, task, read } = await setup("p-post-stored-sha");
     seedMarker(app, task.id, { lastReviewVerdict: "approved" }, "sha-reviewed");
