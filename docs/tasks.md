@@ -406,8 +406,12 @@ The strip is on every layout, phone included.
   "Needs me", "Running" and "Awaiting merge" use the same definitions as the
   Tasks sidebar (`needsYouReason` / `taskBucket` in `github/taskMasterSummary.ts`,
   `isAwaitingMerge`), so the board and the sidebar agree. The **epic** filter
-  was the "Phase" select (`#701`): the parent issue, shown as `#N title` with
-  sub-issue progress, plus "No epic"; it is multi-select. An optional **facets
+  was the "Phase" select (`#701`): the parent issue, shown as `#N title` with the
+  epic's own sub-issue progress (`closed/total`, read from the epic issue itself —
+  Task Master refreshes each distinct parent's state and `sub_issues_summary`
+  about every 10 minutes; until the first fetch it shows done tasks / tasks),
+  plus "No epic"; it is multi-select. Closed epics are left out of the list
+  unless one is currently selected. An optional **facets
   panel** (the left-rail toggle, or Display → Facets panel: Off / On / Auto —
   Auto opens it from a 1440px window or with more than 8 projects) shows the
   same state, project and epic choices with counts; it edits the same filter
@@ -437,9 +441,10 @@ The strip is on every layout, phone included.
   order around a stack; dragging still reorders the saved order correctly.
 - **Group by** (Display menu, `crs.taskGroupBy`): None, **Epic** or **Project**.
   Grouped, the board becomes swimlanes, each with its own columns. An epic lane
-  is titled `#N title` with a link to the issue and a progress bar — the epic
-  task's own `n/m closed` sub-issue counts when that task is on the board,
-  otherwise the done share of its child tasks — and a final "No epic" lane. A
+  is titled `#N title` with a link to the issue and a progress bar — the epic's
+  fetched `n/m closed` sub-issue counts (the same figure as the epic filter),
+  else the epic task's own counts when that task is on the board, else the done
+  share of its child tasks — and a final "No epic" lane. A
   card can be dragged between Backlog and Ready inside its lane, never into
   another lane (that would change its parent or project). The phone board stays
   flat. **Card density** (`crs.taskDensity`): Compact (default) or Comfortable.

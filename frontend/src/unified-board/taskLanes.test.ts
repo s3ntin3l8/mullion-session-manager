@@ -144,6 +144,20 @@ describe("epicProgress", () => {
     expect(epicProgress(tasks, "acme/widgets#10")).toEqual({ done: 1, total: 3, basis: "done" });
   });
 
+  it("prefers the epic's fetched progress carried on its children (#2919)", () => {
+    const tasks = [
+      makeTask({
+        id: 1,
+        status: "ready",
+        ...epic(10),
+        parentIssueState: "open",
+        parentSubIssueTotal: 8,
+        parentSubIssueCompleted: 5,
+      }),
+    ];
+    expect(epicProgress(tasks, "acme/widgets#10")).toEqual({ done: 5, total: 8, basis: "closed" });
+  });
+
   it("prefers the epic task's own sub-issue counts", () => {
     const tasks = [
       makeTask({

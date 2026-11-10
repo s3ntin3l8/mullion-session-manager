@@ -1623,6 +1623,15 @@ export const tasks = sqliteTable(
     // not a bug).
     subIssueTotal: integer("sub_issue_total"),
     subIssueCompleted: integer("sub_issue_completed"),
+    // The PARENT (epic) issue's own state and sub-issue summary, denormalised
+    // onto every child like parentIssueTitle. Filled and refreshed by
+    // task-watcher's refreshParentIssueMeta, one GitHub call per distinct
+    // parent per throttle window. Null = not fetched yet. This is what the
+    // board's epic filter reads for "closed / total" and for hiding closed
+    // epics; the child's own subIssueTotal above says nothing about its parent.
+    parentIssueState: text("parent_issue_state"),
+    parentSubIssueTotal: integer("parent_sub_issue_total"),
+    parentSubIssueCompleted: integer("parent_sub_issue_completed"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),

@@ -1685,3 +1685,36 @@ export async function listClosedPullRequests(
     updatedAt: pr.updated_at,
   }));
 }
+
+export interface IssueSummary {
+  title: string;
+  /** "open" | "closed" as GitHub reports it. */
+  state: string;
+  /** GitHub's `sub_issues_summary`, when the issue has one. */
+  subIssues: { total: number; completed: number } | null;
+}
+
+/** An issue's title, state and sub-issue summary in one call (#2919: the
+ * board's epic filter needs the PARENT's own progress and open/closed state;
+ * getIssueTitle only carried the title). */
+export async function getIssueSummary(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): Promise<IssueSummary> {
+  const result = await githubRequest<{
+    title: string;
+    state: string;
+    sub_issues_summary?: { total?: number; completed?: number } | null;
+  }>(token, owner, repo, "GET", `/issues/${issueNumber}`);
+  const s = result.sub_issues_summary;
+  return {
+    title: result.title,
+    state: result.state,
+    subIssues:
+      s && typeof s.total === "number"
+        ? { total: s.total, completed: typeof s.completed === "number" ? s.completed : 0 }
+        : null,
+  };
+}

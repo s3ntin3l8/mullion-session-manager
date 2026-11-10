@@ -140,32 +140,62 @@ describe("scopeTasks and quickViewCounts", () => {
 });
 
 describe("epicOptions", () => {
-  it("builds '#N title' options with progress, sorted, and counts tasks per epic", () => {
+  const withEpic = (
+    n: number,
+    title: string | null,
+    total: number | null,
+    done = 0,
+    state: string | null = "open",
+  ) => ({
+    parentIssueNumber: n,
+    parentIssueRepo: "acme/widgets",
+    parentIssueTitle: title,
+    parentIssueState: state,
+    parentSubIssueTotal: total,
+    parentSubIssueCompleted: total === null ? null : done,
+  });
+
+  it("uses the EPIC's own sub-issue progress, never the child's", () => {
     const tasks = [
-      makeTask({ id: 1, ...epic(20, "Beta", 5, 2) }),
-      makeTask({ id: 2, ...epic(10, "Alpha", 4, 1) }),
-      makeTask({ id: 3, ...epic(10, "Alpha", 4, 1) }),
+      // The child's own summary (3/3) must be ignored.
+      makeTask({ id: 1, ...withEpic(20, "Beta", 5, 2), subIssueTotal: 3, subIssueCompleted: 3 }),
+      makeTask({ id: 2, ...withEpic(10, "Alpha", 4, 1) }),
+      makeTask({ id: 3, ...withEpic(10, "Alpha", 4, 1) }),
       makeTask({ id: 4 }),
     ];
     expect(epicOptions(tasks)).toEqual([
-      { key: "acme/widgets#10", label: "#10 Alpha", count: 2, done: 1, total: 4 },
-      { key: "acme/widgets#20", label: "#20 Beta", count: 1, done: 2, total: 5 },
+      { key: "acme/widgets#10", label: "#10 Alpha", count: 2, done: 1, total: 4, closed: false },
+      { key: "acme/widgets#20", label: "#20 Beta", count: 1, done: 2, total: 5, closed: false },
     ]);
     expect(noEpicCount(tasks)).toBe(1);
   });
 
-  it("upgrades a '#N' placeholder once any task of that epic reports a title or progress", () => {
+  it("falls back to done tasks / tasks before the epic is fetched, never 0/0", () => {
     const tasks = [
-      makeTask({ id: 1, ...epic(10, null) }),
-      makeTask({ id: 2, ...epic(10, "Alpha", 4, 1) }),
+      makeTask({ id: 1, ...withEpic(10, null, null, 0, null), status: "done" }),
+      makeTask({ id: 2, ...withEpic(10, null, null, 0, null), status: "backlog" }),
+      makeTask({ id: 3, ...withEpic(10, null, null, 0, null), status: "backlog" }),
     ];
-    expect(epicOptions(tasks)).toEqual([
-      { key: "acme/widgets#10", label: "#10 Alpha", count: 2, done: 1, total: 4 },
-    ]);
+    const [o] = epicOptions(tasks);
+    expect([o.done, o.total]).toEqual([1, 3]);
+  });
+
+  it("upgrades a '#N' placeholder once any task of that epic reports a title", () => {
+    const tasks = [
+      makeTask({ id: 1, ...withEpic(10, null, null, 0, null) }),
+      makeTask({ id: 2, ...withEpic(10, "Alpha", 4, 1) }),
+    ];
+    const [o] = epicOptions(tasks);
+    expect([o.label, o.done, o.total]).toEqual(["#10 Alpha", 1, 4]);
   });
 
   it("keeps the '#N' label while no title has landed", () => {
-    expect(epicOptions([makeTask({ id: 1, ...epic(10, null) })])[0].label).toBe("#10");
+    expect(epicOptions([makeTask({ id: 1, ...withEpic(10, null, null) })])[0].label).toBe("#10");
+  });
+
+  it("flags a closed epic", () => {
+    const [o] = epicOptions([makeTask({ id: 1, ...withEpic(10, "Old", 2, 2, "closed") })]);
+    expect(o.closed).toBe(true);
   });
 });
 

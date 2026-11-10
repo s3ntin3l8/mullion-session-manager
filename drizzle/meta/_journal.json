@@ -820,6 +820,13 @@
       "when": 1794345610171,
       "tag": "0116_special_random",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "6",
+      "when": 1794356992186,
+      "tag": "0117_cold_rockslide",
+      "breakpoints": true
     }
   ]
 }
