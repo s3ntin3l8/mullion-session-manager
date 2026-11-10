@@ -27,6 +27,8 @@ export interface ScaffoldConflict {
   excerpt: string;
   kind: string;
   note: string;
+  /** A passage the agent dropped on purpose (#2934). Still shown before Apply. */
+  disposition?: "dropped-obsolete" | "not-carried";
 }
 
 /** The phases a background generation job moves through — mirrors

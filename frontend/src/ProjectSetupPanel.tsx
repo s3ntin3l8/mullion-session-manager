@@ -134,7 +134,8 @@ function ConflictList({
       <ul>
         {conflicts.map((c, i) => (
           <li key={i}>
-            <code>{c.file}</code> — {c.kind}: “{c.excerpt}” — {c.note}
+            <code>{c.file}</code>
+            {c.disposition ? ` (${c.disposition})` : ""} — {c.kind}: “{c.excerpt}” — {c.note}
           </li>
         ))}
       </ul>

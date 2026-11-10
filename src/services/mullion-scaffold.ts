@@ -335,11 +335,10 @@ export interface ScaffoldOptions {
      * inside its own `mullion:moved` region; nothing already there is
      * touched. */
     contributingAppend?: string;
-    /** Issue #2646 — the restructure turn's report of passages it left
-     * unchanged, and its lossy-rewrite signal. A conflict about `CLAUDE.md`, or
-     * `possiblyLossy`, keeps CLAUDE.md's body instead of reducing it to the
-     * import. */
-    conflicts?: { file: string }[];
+    /** Issue #2646 / #2934 — a conflict about `CLAUDE.md` keeps the body,
+     * unless its disposition is a deliberate drop (`dropped-obsolete` or
+     * `not-carried`). `possiblyLossy` keeps the body regardless. */
+    conflicts?: { file: string; disposition?: "dropped-obsolete" | "not-carried" }[];
     possiblyLossy?: boolean;
   };
   /** Issue #2473 — whether this scaffold writes the project's own skill
@@ -743,15 +742,18 @@ function spliceRegionIntoRewrite(body: string, region: string, existingAgentsMd:
   return out;
 }
 
-/** True when the restructure turn reported a passage of `CLAUDE.md` it did not
- * carry over (a conflict whose `file` is CLAUDE.md), or flagged the rewrite as
- * lossy. Either way the body of CLAUDE.md must stay: dropping it would lose text
- * the human has not been told about. */
+/** True when the restructure turn reported a passage of `CLAUDE.md` it neither
+ * carried over nor deliberately dropped, or flagged the rewrite as lossy.
+ * `dropped-obsolete` and `not-carried` are shown in the panel and do not keep
+ * the body. No disposition, or one this build does not know, still blocks. */
 function claudeMdHasUncoveredPassages(
   generated: NonNullable<ScaffoldOptions["generated"]>,
 ): boolean {
   if (generated.possiblyLossy) return true;
-  return (generated.conflicts ?? []).some((c) => /(^|\/)CLAUDE\.md$/i.test(c.file.trim()));
+  return (generated.conflicts ?? []).some((c) => {
+    if (!/(^|\/)CLAUDE\.md$/i.test(c.file.trim())) return false;
+    return c.disposition !== "dropped-obsolete" && c.disposition !== "not-carried";
+  });
 }
 
 /** Issue #2646 — after a restructure moved CLAUDE.md's instructions into
