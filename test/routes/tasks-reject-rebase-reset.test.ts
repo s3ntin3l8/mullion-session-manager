@@ -36,6 +36,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks } = await import("../../src/db/schema.js");
+const { retryPendingReviewPosts } = await import("../../src/services/task-review-post.js");
+const { eq } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `tasks-reject-rebase-reset-${process.pid}.db`);
 
@@ -85,6 +87,42 @@ describe("POST /api/tasks/:id/reject — rebase budget", () => {
       rebaseAttempts: 0,
       needsHumanReason: null,
     });
+    await app.close();
+  });
+
+  it("leaves a failed review-post marker for the sweep, which drops it once the task is in_progress", async () => {
+    const app = await buildApp();
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { allowDuplicate: true, createDir: true, name: "reject-marker-p", cwd: "/tmp" },
+    });
+    const [row] = app.db
+      .insert(tasks)
+      .values({
+        projectId: project.json().id,
+        title: "post failed",
+        status: "reviewing",
+        reviewPostPending: "review-post-failed",
+        needsHumanReason: "review-post-failed",
+      })
+      .returning()
+      .all();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/tasks/${row.id}/reject`,
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const read = () => app.db.select().from(tasks).where(eq(tasks.id, row.id)).get()!;
+    // The route owns the status and the reason; the marker is the sweep's to drop.
+    expect(read().status).toBe("in_progress");
+    expect(read().needsHumanReason).toBeNull();
+    expect(read().reviewPostPending).toBe("review-post-failed");
+    await retryPendingReviewPosts(app, () => {});
+    expect(read().reviewPostPending).toBeNull();
     await app.close();
   });
 });

@@ -1063,6 +1063,41 @@ describe("a worker that exits within seconds", () => {
       await expectRetryAtBackoff(ctx);
     });
 
+    it("keeps the old worker and retries on a later tick while the terminate keeps throwing", async () => {
+      const ctx = await abortedThenRetried("p-abort-terminate-always", { sessionStatus: "active" });
+      const { app, task, create, now, t0 } = ctx;
+      const terminate = vi.spyOn(app.pty, "terminate").mockRejectedValue(new Error("scope busy"));
+      const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
+      await settleRapidRebaseExit(app, getTask(app, task.id), project);
+      expect(getTask(app, task.id).rebaseAbortedAttempts).toBe(1);
+
+      const [respawned] = app.db
+        .insert(sessions)
+        .values({ projectId: task.projectId, command: "claude", cwd: "/tmp", status: "active" })
+        .returning()
+        .all();
+      create.mockResolvedValue({
+        ok: true,
+        row: { id: respawned.id },
+        initialPromptApplied: true,
+      } as never);
+      now.mockReturnValue(t0 + RAPID_EXIT_BACKOFF_MS + 1000);
+      // Past the backoff the retry still cannot stop the old worker: it spawns
+      // nothing and holds nothing, leaving the stop for a later tick.
+      await attemptAutoRebase(app, getTask(app, task.id), project, "main");
+      expect(create).not.toHaveBeenCalled();
+      expect(getTask(app, task.id).mergeError ?? "").not.toContain(
+        "suggestions round is in flight",
+      );
+      expect(getTask(app, task.id).rebaseAttempts).toBe(0);
+
+      // The scope recovers: the next tick stops the old worker and respawns.
+      terminate.mockResolvedValue(undefined as never);
+      await attemptAutoRebase(app, getTask(app, task.id), project, "main");
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(getTask(app, task.id).sessionId).toBe(respawned.id);
+    });
+
     it("retries at the backoff when the session was not active, so the terminate was skipped", async () => {
       const ctx = await abortedThenRetried("p-abort-not-active", { sessionStatus: "exited" });
       const terminate = vi.spyOn(ctx.app.pty, "terminate");
