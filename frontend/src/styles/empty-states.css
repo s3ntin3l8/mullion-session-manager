@@ -2512,9 +2512,17 @@ button.github-panel-row.gh-issue-row {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
 }
-.session-timeline-search {
-  flex: 1;
+/* Doubled class: .ui-input (modals.css, imported later) sets min-width: 0 at
+   the same specificity and would otherwise crush the box beside the chips. */
+.session-timeline-controls .session-timeline-search {
+  flex: 1 1 140px;
   min-width: 140px;
+}
+@container sidebar-frame (max-width: 340px) {
+  /* Narrow rail: the search gets a row of its own above the chips. */
+  .session-timeline-controls .session-timeline-search {
+    flex-basis: 100%;
+  }
 }
 /* Timeline kind filter (TimelineKindFilter.tsx): the Important / All / Custom
    switch sits in the controls row; Custom opens a popover grouping every kind
@@ -2633,7 +2641,8 @@ button.github-panel-row.gh-issue-row {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  padding: 5px 2px;
+  /* Left padding clears the 2px inset severity bar so it never touches the time. */
+  padding: 5px 2px 5px 8px;
   font-size: 0.78125rem;
   border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
 }
