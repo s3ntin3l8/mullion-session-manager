@@ -288,7 +288,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
             <dt>Sessions</dt>
             <dd className="sb-pills">
               <SessionPill role="worker" session={worker} />
-              {reviewer === undefined && runState !== null ? (
+              {task.reviewSessionId === null && runState !== null ? (
                 <StatusChip
                   tone={runState === "unsent" ? "warn" : "info"}
                   onClick={task.prNumber !== null ? openPr : undefined}

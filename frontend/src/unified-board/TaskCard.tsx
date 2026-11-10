@@ -199,12 +199,11 @@ export function TaskCard({
   // gave up) never ran, so it is never in flight.
   const runState = reviewRunState(task);
   const hasReviewRun = runState !== null;
-  const reviewRunFinished = runState === "finished";
   const reviewInFlight =
     task.status === "reviewing" &&
     ((task.reviewSessionId !== null &&
       task.reviewFindingsIngestedSessionId !== task.reviewSessionId) ||
-      (hasReviewRun && !task.reviewRunUnsent && !reviewRunFinished));
+      runState === "running");
 
   // Issue #1038 — autoReturnCapped alone answers "has the round budget been
   // spent," not "has the machine actually stopped." autoReturnRounds hits
@@ -587,7 +586,7 @@ export function TaskCard({
       )}
       {hasReviewRun && task.reviewSessionId === null && (
         <span
-          className={`task-card-session-strip${task.reviewRunUnsent ? " is-gone" : ""}`}
+          className={`task-card-session-strip${runState === "unsent" ? " is-gone" : ""}`}
           data-testid="task-card-hermes-review"
         >
           {runState === "unsent"

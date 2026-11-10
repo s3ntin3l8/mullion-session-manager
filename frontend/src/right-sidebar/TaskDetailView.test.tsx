@@ -215,6 +215,21 @@ describe("TaskDetailView review reviewer", () => {
     await userEvent.click(screen.getByRole("button", { name: /Hermes · finished/ }));
     expect(open).toHaveBeenCalledWith(4, 7, { kind: "task", taskId: t.id });
   });
+  it("keeps the reviewer session, and shows no Hermes chip, when both a session and a run exist", () => {
+    const t = task({
+      status: "reviewing",
+      reviewSessionId: 55,
+      reviewRunId: "r",
+      reviewRunIngestedId: null,
+    } as never);
+    setTasks([t], {
+      sessions: [{ id: 55, sessionStatus: "idle", sessionStatusDetail: null }] as never,
+    });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("reviewer");
+    expect(row.textContent).not.toContain("Hermes");
+  });
   it("keeps 'reviewer: none' with neither a session nor a run", () => {
     const t = task({ status: "reviewing" });
     setTasks([t]);
