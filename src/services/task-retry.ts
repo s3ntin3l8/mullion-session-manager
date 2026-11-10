@@ -7,7 +7,7 @@ import { syncTaskTransition } from "./task-github-sync.js";
 import { agentChangeModelClears, SUPERSEDED_RETRY_DETAIL } from "./task-claim.js";
 
 export type EnqueueRetryOutcome =
-  | { ok: true; task: typeof tasks.$inferSelect }
+  | { ok: true }
   | {
       ok: false;
       reason: "not-found" | "not-failed" | "superseded" | "no-worktree";
@@ -150,7 +150,6 @@ export async function enqueueRetry(
     via: "retry-queue",
   });
 
-  const [queued] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
   void syncTaskTransition(app, { ...task, status: "claimed" }, project, "claimed");
-  return { ok: true, task: queued };
+  return { ok: true };
 }

@@ -25,6 +25,7 @@ const LEGAL: [TaskStatus, TaskStatus][] = [
   ["reviewing", "failed"],
   ["failed", "backlog"],
   ["failed", "ready"],
+  ["failed", "claimed"],
 ];
 
 describe("task-state canTransition", () => {

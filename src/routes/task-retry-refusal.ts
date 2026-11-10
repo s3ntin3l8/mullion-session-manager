@@ -2,7 +2,7 @@ import type { FastifyReply } from "fastify";
 import type { EnqueueRetryOutcome } from "../services/task-retry.js";
 import { SUPERSEDED_RETRY_DETAIL } from "../services/task-claim.js";
 
-// The HTTP response for a REFUSED Retry — the mapping from `retryTask`'s
+// The HTTP response for a REFUSED Retry — the mapping from `enqueueRetry`'s
 // outcome reason to what the caller sees. A retry is queued rather than
 // refused when the concurrency cap is full, so there is no cap case.
 //
