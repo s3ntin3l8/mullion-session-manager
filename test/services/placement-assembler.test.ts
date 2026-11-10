@@ -437,6 +437,11 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
     try {
       const hostId = await registerHost("mac-offline");
       app.db.update(hosts).set({ platform: "darwin" }).where(eq(hosts.id, hostId)).run();
+      // Pending is not offline: a host that was never pinged stays "pending",
+      // and ensureRemoteHostProtocols only skips a heartbeat-offline host.
+      // markOffline is that failed heartbeat.
+      app.hostHeartbeatTracker?.markOffline(hostId);
+      expect(app.hostHeartbeatTracker?.getHealth(hostId).status).toBe("offline");
       const project = {
         hostId: "local",
         placement: "auto" as const,

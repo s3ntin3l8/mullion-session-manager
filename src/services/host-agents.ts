@@ -363,8 +363,10 @@ export function requireLaunchOptions(
   };
 }
 
-/** The negotiated protocol for a remote host; null until first read. */
-function hostProtocol(app: FastifyInstance, hostId: string): HostProtocol | null {
+/** The negotiated protocol for a remote host; null until first read.
+ * Placement uses this directly (issue #2931): an unread protocol is unknown,
+ * not the legacy baseline. The gates use `effectiveProtocol` instead. */
+export function hostProtocol(app: FastifyInstance, hostId: string): HostProtocol | null {
   return app.hostAgentTracker?.get(hostId)?.protocol ?? null;
 }
 

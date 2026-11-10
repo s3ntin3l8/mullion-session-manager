@@ -8,7 +8,7 @@ import {
 } from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
-import { isOlderVersion, refreshLocalAgents } from "./host-agents.js";
+import { hostProtocol, isOlderVersion, refreshLocalAgents } from "./host-agents.js";
 import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protocol.js";
 import { appVersion } from "./app-version.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
@@ -500,6 +500,16 @@ export function chooseHost(
     if ((context.requiredCapabilities?.length ?? 0) > 0 && !chosen.capabilities) {
       notes.push("capabilities unknown");
     }
+    // Issue #2931 — preview does not pre-read protocols, so an unread one
+    // must not look like a checked "supports everything".
+    if (
+      !chosen.isLocal &&
+      chosen.protocol === null &&
+      ((context.requiredOperations?.length ?? 0) > 0 ||
+        (context.requiredLaunchOptions?.length ?? 0) > 0)
+    ) {
+      notes.push("agent protocol unknown");
+    }
   }
   if (
     chosen?.mullionVersion &&
@@ -836,9 +846,7 @@ function collectCandidates(
       // The interactive gates (requireLaunchOptions / requireOperation) keep
       // using effectiveProtocol's legacy fallback; this is the placement
       // candidate only.
-      protocol: isLocal
-        ? { ...localProtocolInfo(), legacy: false }
-        : (app.hostAgentTracker?.get(host.id)?.protocol ?? null),
+      protocol: isLocal ? { ...localProtocolInfo(), legacy: false } : hostProtocol(app, host.id),
       // Issue #2306 — likewise the host's capabilities (null while unknown).
       capabilities: app.hostAgentTracker?.get(host.id)?.capabilities ?? null,
       mullionVersion: isLocal
