@@ -828,8 +828,11 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   `done` and unmerged) and drops it otherwise. A human exit clears it: approve
   or `POST /api/tasks/:id/merge` (`clearedFor`), or the next review ingest
   overwriting the column; **every path that records a merge** clears it too
-  (`clearNeedsHumanOnMerge`, which also releases the reason), since a merged PR
-  has nothing left to hold. `deriveApprovalState` reports `awaiting-human` for
+  (the webhook, `markTaskMerged`, the reviewing-task ending, archive-merged, the
+  closing-PR backfill and the claimed/in_progress branch). They all build their
+  `.set()` through `mergeRecordedSet` (`task-merge-human.ts`), which pairs
+  `mergedAt` with the reason release and the marker clear, since a merged PR has
+  nothing left to hold; a test fails a site that assigns `mergedAt` without it. `deriveApprovalState` reports `awaiting-human` for
   such a task even on an auto-approving project. The same hold is set by two
   other ways an approving post can be lost for good:
   - **Stale-head drop (#2774).** The payload carries `reviewedHeadSha`, and a
@@ -1583,8 +1586,8 @@ some other way must be noticed:
   `mergeError`, then removes `mullion-done` and comments on the issue. The
   compare-and-set makes it announce once even when a human re-arms the merge and
   the PR is still closed; `pr-closed` is not in `clearMergeNeedsHumanReason`,
-  so clearing `mergeError` does not reset it, and only `clearNeedsHumanOnMerge`
-  (a recorded merge) does.
+  so clearing `mergeError` does not reset it, and only a recorded merge (`mergeRecordedSet`)
+  does.
 - **Merged by hand, no webhook.** A hand-merge never sets `mergeRequestedAt`, so
   `processMergeRequests` never sees it. `repollUnmergedDoneTasks`
   (`task-merge-repoll.ts`, right after that sweep) reads the PR of every `done`

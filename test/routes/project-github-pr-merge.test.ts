@@ -200,6 +200,7 @@ describe("projects route", () => {
               status: "in_progress",
               prNumber: 84,
               needsHumanReason: "review-post-failed",
+              reviewPostPending: "review-post-failed",
             })
             .returning()
             .all();
@@ -208,6 +209,7 @@ describe("projects route", () => {
           expect(after.mergedAt).toBeTruthy();
           expect(after.status).toBe("in_progress");
           expect(after.needsHumanReason).toBeNull();
+          expect(after.reviewPostPending).toBeNull();
           expect(cleanupMergedTaskBranch).not.toHaveBeenCalled();
           fs.rmSync(projectCwd, { recursive: true, force: true });
         });

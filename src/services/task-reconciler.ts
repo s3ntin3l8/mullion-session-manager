@@ -107,7 +107,7 @@ import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-ap
 import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
 import {
   CLEARED_MERGE_ERROR,
-  clearNeedsHumanOnMerge,
+  mergeRecordedSet,
   hasForeignOpenThread,
   recordMergeError,
 } from "./task-merge-human.js";
@@ -1653,10 +1653,7 @@ export async function finishTaskForMergedPr(
     // "Prune merged branches" / Clear done.
     const { changes } = app.db
       .update(tasks)
-      .set({
-        mergedAt: mergedAt ? new Date(mergedAt) : new Date(),
-        needsHumanReason: clearNeedsHumanOnMerge,
-      })
+      .set(mergeRecordedSet(mergedAt ? new Date(mergedAt) : new Date()))
       .where(and(eq(tasks.id, task.id), isNull(tasks.mergedAt)))
       .run();
     if (changes > 0) notifyTaskMerged(app, task.id);

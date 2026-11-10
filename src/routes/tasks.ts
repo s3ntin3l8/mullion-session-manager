@@ -987,11 +987,9 @@ export async function tasksRoute(app: FastifyInstance) {
           // Falls back to `now` only when GitHub genuinely doesn't have one
           // (shouldn't happen once pr.merged is confirmed true, but the type
           // is nullable) or a prior run already set one.
-          {
-            mergedAt: task.mergedAt ?? (mergedAt ? new Date(mergedAt) : now),
+          mergeHuman.mergeRecordedSet(task.mergedAt ?? (mergedAt ? new Date(mergedAt) : now), {
             archivedAt: now,
-            needsHumanReason: mergeHuman.clearNeedsHumanOnMerge,
-          },
+          }),
         );
         archived.push(task.id);
       }
