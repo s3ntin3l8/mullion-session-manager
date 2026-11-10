@@ -492,7 +492,10 @@ export function KanbanBoardOverlay(props: {
   const [resetKey, resetPanel] = useResetKey();
   const LazyUnifiedBoard = useRetriableLazy(loadUnifiedBoard, resetKey);
   return (
-    <div
+    // A named region, so the board's content is inside a landmark (axe
+    // `region`); a <section> with an accessible name is the implicit region role.
+    <section
+      aria-label="Tasks"
       className={props.inline ? "kanban-board-inline" : "kanban-board-overlay"}
       style={props.inline ? undefined : { position: "absolute", inset: 0 }}
     >
@@ -510,7 +513,7 @@ export function KanbanBoardOverlay(props: {
           />
         </Suspense>
       </ErrorBoundary>
-    </div>
+    </section>
   );
 }
 

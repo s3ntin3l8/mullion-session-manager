@@ -243,15 +243,22 @@ export function TaskCard({
       onDrop={onDrop}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
     >
+      {/* The card root is a plain container (a role="button" root would nest
+          the issue/PR/epic links and the session buttons inside a button,
+          axe's nested-interactive). Pointer users still open the task by
+          clicking anywhere on the card (handleClick); keyboard and
+          assistive-technology users get this one real button. It carries no
+          onClick of its own: Enter/Space on a button fires a click that
+          bubbles to handleClick, so the open runs exactly once, through the
+          same suppressClickRef guard as a pointer click. aria-label rather
+          than text content: nothing visible to mismatch, and queries by the
+          card's text keep finding the title once. */}
+      <button
+        type="button"
+        className="visually-hidden task-card-open"
+        aria-label={`Open task: ${task.title}`}
+      />
       {/* D1 — the title is 2-line-clamped (styles.css), so a truncated one
           was previously unreadable even on hover: nothing carried the full
           text. */}

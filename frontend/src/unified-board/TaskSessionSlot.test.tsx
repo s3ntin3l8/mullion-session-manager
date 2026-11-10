@@ -171,13 +171,15 @@ describe("UnifiedBoard nested task session strip", () => {
 
     const strips = Array.from(document.querySelectorAll(".task-card-session-strip"));
     expect(strips).toHaveLength(2);
-    // Each strip's title attribute carries its own role ("worker"/"review")
-    // and its own live status — this is what actually makes them distinct
-    // rather than two copies of the same content.
-    expect(strips.map((s) => s.getAttribute("title"))).toEqual(["worker: Working", "review: Idle"]);
-    // Hermes review — the role also needs to be in the VISIBLE text, not
-    // just title/aria-label on a non-focusable, roleless span that screen
-    // readers may not reliably expose.
+    // Each strip's open button carries its own role ("worker"/"review") and
+    // its own live status in its title — this is what actually makes them
+    // distinct rather than two copies of the same content.
+    expect(strips.map((s) => s.querySelector("button")!.getAttribute("title"))).toEqual([
+      "worker: Working",
+      "review: Idle",
+    ]);
+    // Hermes review — the role also needs to be in the VISIBLE text (which is
+    // also the button's accessible name), not just in a title.
     expect(strips.map((s) => s.textContent)).toEqual(["worker · Working", "review · Idle"]);
   });
 
@@ -229,18 +231,30 @@ describe("UnifiedBoard nested task session strip", () => {
     expect(strip.getAttribute("draggable")).not.toBe("true");
   });
 
-  // The strip previously nested a role="button"/tabIndex={0} element inside
-  // the task card's own role="button" — two independently-focusable
-  // interactive elements with unrelated actions. It's mouse-only now (the
-  // card's own keyboard activation opens the drawer instead), so it must
-  // not be a separate tab stop.
-  it("is not its own tab stop (avoids nesting inside the card's own button role)", () => {
-    sessions = [makeSession({ id: 7, projectId: 1, command: "claude" })];
+  // The strip used to be a mouse-only span, because it sat inside the task
+  // card's own role="button". The card root is a plain container now (#2873),
+  // so the strip holds one real <button> (a tab stop that keyboard users can use
+  // to open the session). The strip itself is not the button: the setup badge
+  // is a button too and must not nest inside one.
+  it("holds a real open button, reachable by keyboard, that opens the session without opening the task", async () => {
+    sessions = [makeSession({ id: 7, projectId: 1, command: "claude", setupStatus: "failed" })];
     tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const onOpenSession = vi.fn();
+    render(<UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={vi.fn()} />);
 
-    const strip = document.querySelector(".task-card-session-strip")!;
-    expect(strip.getAttribute("role")).not.toBe("button");
-    expect(strip.getAttribute("tabindex")).toBeNull();
+    const strip = document.querySelector<HTMLElement>(".task-card-session-strip")!;
+    expect(strip.tagName).not.toBe("BUTTON");
+    const open = strip.querySelector<HTMLElement>("button.task-card-session-strip-open")!;
+    expect(open.getAttribute("type")).toBe("button");
+    expect(open.getAttribute("tabindex")).toBeNull();
+    open.focus();
+    expect(open).toHaveFocus();
+    // Enter on a focused button fires a click, which reaches the strip's handler.
+    await userEvent.setup().keyboard("{Enter}");
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+    // The setup badge is a sibling button, not nested in the open button.
+    expect(strip.querySelectorAll("button button")).toHaveLength(0);
+    expect(open.querySelector("button")).toBeNull();
+    expect(strip.querySelector("button.setup-badge")).not.toBeNull();
   });
 });
