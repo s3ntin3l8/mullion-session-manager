@@ -8,7 +8,7 @@ import {
 } from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
-import { effectiveProtocol, isOlderVersion, refreshLocalAgents } from "./host-agents.js";
+import { isOlderVersion, refreshLocalAgents } from "./host-agents.js";
 import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protocol.js";
 import { appVersion } from "./app-version.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
@@ -661,7 +661,9 @@ function unsupportedBy(
   candidate: PlacementCandidate,
   context: Pick<PlacementContext, "requiredLaunchOptions" | "requiredOperations">,
 ): string | null {
-  // An unread protocol is the legacy baseline (issue #2596), set by the collector.
+  // Null means the protocol was never read (issue #2931): not a known lack,
+  // so the host may still match once it is online and answers the handshake.
+  // A recorded legacy baseline is a real protocol and is judged below.
   const protocol = candidate.protocol;
   if (!protocol) return null;
   if (!protocol.legacy && !isProtocolCompatible(protocol.protocolVersion)) {
@@ -825,10 +827,18 @@ function collectCandidates(
       role: host.role,
       // Issue #2240 — the CLIs this host has (null while unknown) and its version.
       agents: app.hostAgentTracker?.get(host.id)?.agents ?? null,
-      // Issue #2569 — what the host negotiated (null while unknown).
+      // Issue #2569 — what the host negotiated. Issue #2931 — null while
+      // never read. Do NOT substitute the legacy baseline here: an offline
+      // host whose handshake never happened would then look permanently
+      // unable to take a taskId launch, and dispatch would refuse the task
+      // instead of holding it. A protocol that WAS read, including a recorded
+      // legacy baseline, is still passed through for unsupportedBy to judge.
+      // The interactive gates (requireLaunchOptions / requireOperation) keep
+      // using effectiveProtocol's legacy fallback; this is the placement
+      // candidate only.
       protocol: isLocal
         ? { ...localProtocolInfo(), legacy: false }
-        : effectiveProtocol(app, host.id),
+        : (app.hostAgentTracker?.get(host.id)?.protocol ?? null),
       // Issue #2306 — likewise the host's capabilities (null while unknown).
       capabilities: app.hostAgentTracker?.get(host.id)?.capabilities ?? null,
       mullionVersion: isLocal
