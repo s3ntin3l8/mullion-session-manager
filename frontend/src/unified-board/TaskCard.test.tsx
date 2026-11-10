@@ -401,10 +401,12 @@ describe("UnifiedBoard task columns", () => {
       // Links and the session button exist (so the next check is not vacuous)...
       expect(card.querySelectorAll("a[href]").length).toBeGreaterThanOrEqual(2);
       expect(card.querySelector("button.task-card-session-strip-open")).not.toBeNull();
-      // ...and none of them sits inside a button or a role="button" element.
-      expect(
-        card.querySelectorAll('button a, button button, [role="button"] a, [role="button"] button'),
-      ).toHaveLength(0);
+      // ...and no focusable or widget descendant sits inside a button or a
+      // role="button" element (axe's nested-interactive keys off any of these).
+      const interactive = 'a[href], button, input, select, textarea, [role="button"], [tabindex]';
+      for (const outer of card.querySelectorAll('button, [role="button"]')) {
+        expect(outer.querySelectorAll(interactive)).toHaveLength(0);
+      }
     });
 
     it("gives the card one real button that Tab reaches, and Enter and Space open the task", async () => {

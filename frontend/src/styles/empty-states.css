@@ -572,14 +572,17 @@
   padding: 3px 7px;
   cursor: pointer;
 }
-/* The strip's one keyboard control: a real <button> that fills the strip (the
-   setup badge, itself a button, sits beside it, not inside it), reset so it
-   renders as the strip always did. */
+/* The strip's one keyboard control: a real <button> (the setup badge, itself a
+   button, sits beside it, not inside it), reset so it renders as the strip
+   always did. */
 .task-card-session-strip-open {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex: 1;
+  /* Shrinks but does not grow: the setup badge sits right after the label, as
+     it did when the strip was one element. The strip's own click handler keeps
+     the empty part of the strip a pointer target. */
+  flex: 0 1 auto;
   min-width: 0;
   appearance: none;
   background: transparent;
