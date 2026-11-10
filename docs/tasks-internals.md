@@ -842,8 +842,11 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
     survives the drop — that is the point of #2799.
   - **24 h give-up.** A pending marker older than `REVIEW_POST_MAX_AGE_MS` (24 h
     from `createdAt`) stops being retried: `githubSyncError` records "Gave up
-    posting … after 24h of transient failures", and an approving verdict takes
-    the same hold.
+    posting … after 24h of transient failures", and an approving verdict that
+    never posted (`posted: false`) takes the same hold. A marker with
+    `posted: true` (the review landed; only own-thread resolution kept
+    failing) is just cleared, with the unresolved thread work recorded in
+    `githubSyncError` — nothing is held.
 
   A non-approving verdict just clears the marker in each case. A marker on a task that is merged or no longer
   claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
