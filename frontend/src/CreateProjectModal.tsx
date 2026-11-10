@@ -220,6 +220,16 @@ function sameIds(a: number[], b: number[] | null | undefined): boolean {
   return a.length === other.length && a.every((id) => other.includes(id));
 }
 
+// Issue #2901 — the Display name becomes the last segment of the path the
+// modal fills in: the trimmed name with every whitespace run collapsed into a
+// single dash, and the path separators dropped so a name can never escape the
+// base folder it is appended to ("my project" → "my-project", "a/b" → "ab").
+// An empty result (a blank name, or one made only of separators) means "no
+// segment" — the path falls back to the base folder alone.
+function slugifyProjectName(raw: string): string {
+  return raw.trim().replace(/\s+/g, "-").replace(/[/\\]/g, "");
+}
+
 export function CreateProjectModal({
   onClose,
   onCreate,
@@ -249,6 +259,10 @@ export function CreateProjectModal({
   initialHostCwdsMeta,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
+  // Issue #2901 — has the user taken the path into their own hands? Until
+  // they do, the Display name drives it (see `handleNameInput`). The autofill
+  // itself never sets this: it is the NAME that moved the path, not the user.
+  const [pathEdited, setPathEdited] = useState(false);
   const [name, setName] = useState(initialName);
   const [namePlaceholder, setNamePlaceholder] = useState("my-project");
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
@@ -475,7 +489,11 @@ export function CreateProjectModal({
 
   const trailingSegment = (p: string) => p.replace(/\/+$/, "").split("/").pop() || "my-project";
 
-  const handlePathInput = (value: string) => {
+  // Writes a path into the field, with the same bookkeeping a typed path
+  // gets: the Display name's placeholder follows the path's trailing segment,
+  // and a stale error / "Create folder" confirmation never survives a new
+  // path.
+  const applyPath = (value: string) => {
     setPath(value);
     setNamePlaceholder(trailingSegment(value));
     // A stale "Create folder" affordance (or git-init-failed notice) must
@@ -483,6 +501,33 @@ export function CreateProjectModal({
     setError(null);
     setGitInitFailed(false);
     setGitInit(false);
+  };
+
+  // A path the USER typed (or picked with Browse…): from here on the path is
+  // theirs, and the Display name never touches it again (issue #2901).
+  const handlePathInput = (value: string) => {
+    setPathEdited(true);
+    applyPath(value);
+  };
+
+  // Issue #2901 — the Display name fills the path in: with the base project
+  // folder prefilled, typing a name makes the path "<base>/<name>", so the
+  // user does not retype the folder they already picked. The result is shown
+  // in the path field itself, and can be overwritten there at any time.
+  const handleNameInput = (value: string) => {
+    setName(value);
+    // Editing a project renames it; it never moves its checkout.
+    if (isEdit) return;
+    // The user took the path over — it is theirs now.
+    if (pathEdited) return;
+    // `initialPath` is this machine's base project folder (the user's
+    // `projectRoots`); it says nothing about where a checkout lives on
+    // another host.
+    if (hostId !== LOCAL_HOST_ID) return;
+    const base = initialPath.replace(/\/+$/, "");
+    if (!base) return;
+    const slug = slugifyProjectName(value);
+    applyPath(slug ? `${base}/${slug}` : base);
   };
 
   const browse = () => {
@@ -1160,7 +1205,7 @@ export function CreateProjectModal({
         <span className="create-modal-input-row">
           <input
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => handleNameInput(e.target.value)}
             placeholder={namePlaceholder}
             onKeyDown={(e) => {
               if (e.key === "Enter") void confirm();
