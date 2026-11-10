@@ -126,6 +126,7 @@
     {
       "name": "tasks-tab",
       "path": "/",
+      "baseline": true,
       "tags": ["presentation", "check", "audit"],
       "viewports": ["desktop"],
       "steps": [
@@ -152,6 +153,7 @@
     {
       "name": "tasks-detail",
       "path": "/",
+      "baseline": true,
       "tags": ["presentation", "check", "audit"],
       "viewports": ["desktop"],
       "steps": [

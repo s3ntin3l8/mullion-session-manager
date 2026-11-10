@@ -1244,6 +1244,8 @@ button.sb-chip--label[aria-pressed="true"] {
 }
 .sb-kv dd.sb-pills {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 .sb-pr-line {
   display: flex;
