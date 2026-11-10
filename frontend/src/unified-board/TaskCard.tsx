@@ -22,6 +22,7 @@ import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { epicColourVar, epicUrl } from "./taskLanes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
+import { reviewRunState } from "../taskStatusModel.js";
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
 // (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
@@ -196,8 +197,9 @@ export function TaskCard({
   // An external (Hermes) review is a run, not a session: same "verdict is in"
   // pairing (reviewRunIngestedId === reviewRunId). An unsent run (dispatch
   // gave up) never ran, so it is never in flight.
-  const hasReviewRun = task.reviewRunId !== null;
-  const reviewRunFinished = hasReviewRun && task.reviewRunIngestedId === task.reviewRunId;
+  const runState = reviewRunState(task);
+  const hasReviewRun = runState !== null;
+  const reviewRunFinished = runState === "finished";
   const reviewInFlight =
     task.status === "reviewing" &&
     ((task.reviewSessionId !== null &&
@@ -588,9 +590,9 @@ export function TaskCard({
           className={`task-card-session-strip${task.reviewRunUnsent ? " is-gone" : ""}`}
           data-testid="task-card-hermes-review"
         >
-          {task.reviewRunUnsent
+          {runState === "unsent"
             ? "Hermes review · could not be sent"
-            : `Hermes review · ${reviewRunFinished ? "finished" : "running"}`}
+            : `Hermes review · ${runState}`}
         </span>
       )}
       {task.status === "ready" && !taskMasterEnabled && (

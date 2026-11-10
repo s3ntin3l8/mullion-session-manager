@@ -12,6 +12,7 @@ import { STATUS_PRESENTATION, formatStatusLabel } from "../sessionStatus.js";
 import { useDashboardStore } from "../store/index.js";
 import {
   taskStatusBadge,
+  reviewRunState,
   taskRelations,
   taskRowLabel,
   findTaskForIssue,
@@ -36,6 +37,8 @@ import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 // actions, details, hierarchy, timeline.
 
 const BODY_COLLAPSED_CHARS = 280;
+
+const HERMES_LABEL = { running: "running", finished: "finished", unsent: "not sent" } as const;
 
 function SessionPill({ role, session }: { role: string; session: Session | undefined }) {
   const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
@@ -164,6 +167,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
   const reviewer =
     task.reviewSessionId !== null ? sessions.find((s) => s.id === task.reviewSessionId) : undefined;
+  const runState = reviewRunState(task);
   const rounds = parseReviewRounds(task.reviewFindings);
   const phaseText = reviewPhaseText(
     task.reviewPhase,
@@ -284,7 +288,21 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
             <dt>Sessions</dt>
             <dd className="sb-pills">
               <SessionPill role="worker" session={worker} />
-              <SessionPill role="reviewer" session={reviewer} />
+              {reviewer === undefined && runState !== null ? (
+                <StatusChip
+                  tone={runState === "unsent" ? "warn" : "info"}
+                  onClick={task.prNumber !== null ? openPr : undefined}
+                  title={
+                    task.prNumber !== null
+                      ? "Open the PR's review in the GitHub tab"
+                      : "External review (Hermes)"
+                  }
+                >
+                  Hermes · {HERMES_LABEL[runState]}
+                </StatusChip>
+              ) : (
+                <SessionPill role="reviewer" session={reviewer} />
+              )}
             </dd>
           </dl>
         </SidebarSection>
