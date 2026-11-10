@@ -53,13 +53,29 @@ function currentSidebarLocation(s: DashboardState): SidebarBack | null {
     return s.selectedTaskId !== null ? { kind: "task", taskId: s.selectedTaskId } : null;
   }
   if (s.rightSidebarView !== "github") return null;
+  // The drill-in maps are keyed per project and shared with dock-panel GitHub hosts, but the
+  // sidebar shows one project: the one it follows (every project when none is published yet).
+  const shown = (id: string) => s.followedProjectId === null || Number(id) === s.followedProjectId;
   for (const [id, number] of Object.entries(s.githubOpenPrByProject)) {
-    if (number != null) return { kind: "pr", projectId: Number(id), number };
+    if (number != null && shown(id)) return { kind: "pr", projectId: Number(id), number };
   }
   for (const [id, number] of Object.entries(s.githubOpenIssueByProject)) {
-    if (number != null) return { kind: "issue", projectId: Number(id), number };
+    if (number != null && shown(id)) return { kind: "issue", projectId: Number(id), number };
   }
   return null;
+}
+
+// (A Back passes `null` and skips this: it is popping, not navigating onward.)
+// Drop trailing entries that were not recorded for the detail being left: an entry says how to
+// go Back from its `to`, so when the sidebar is showing something else (a panel list → detail
+// click, a dock-panel navigation) the entry is stale and must not reroute a later Back.
+function pruneSidebarHistory(
+  history: SidebarHistoryEntry[],
+  current: SidebarBack | null,
+): SidebarHistoryEntry[] {
+  let end = history.length;
+  while (end > 0 && !(current && sameSidebarTarget(history[end - 1].to, current))) end -= 1;
+  return end === history.length ? history : history.slice(0, end);
 }
 
 function pushSidebarHistory(
@@ -449,9 +465,14 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     openRightSidebarPr: (projectId, number, back) => {
       // View switch first: entering GitHub resets the drill-in, so the PR is
       // set after it.
-      const origin = back === undefined ? currentSidebarLocation(get()) : back;
-      const history = get().sidebarHistory;
+      const current = currentSidebarLocation(get());
+      const origin = back === undefined ? current : back;
+      const history =
+        back === null ? get().sidebarHistory : pruneSidebarHistory(get().sidebarHistory, current);
       get().openRightSidebarView("github", projectId);
+      // The panel renders an open PR before an open issue, so a leftover issue drill-in would
+      // hide this PR's sibling (and vice versa below): only one is ever open.
+      get().setGithubOpenIssue(projectId, null);
       get().setGithubOpenPr(projectId, number);
       set({
         sidebarHistory: pushSidebarHistory(history, { kind: "pr", projectId, number }, origin),
@@ -461,9 +482,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     openRightSidebarIssue: (projectId, number, back) => {
       // Same ordering as openRightSidebarPr: entering GitHub resets the
       // drill-in, so the issue is set after the view switch.
-      const origin = back === undefined ? currentSidebarLocation(get()) : back;
-      const history = get().sidebarHistory;
+      const current = currentSidebarLocation(get());
+      const origin = back === undefined ? current : back;
+      const history =
+        back === null ? get().sidebarHistory : pruneSidebarHistory(get().sidebarHistory, current);
       get().openRightSidebarView("github", projectId);
+      get().setGithubOpenPr(projectId, null);
       get().setGithubOpenIssue(projectId, number);
       set({
         sidebarHistory: pushSidebarHistory(history, { kind: "issue", projectId, number }, origin),
@@ -564,7 +588,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         selectedTaskId: taskId,
         taskSelectionSeq: s.taskSelectionSeq + 1,
         sidebarHistory: pushSidebarHistory(
-          s.sidebarHistory,
+          back === null
+            ? s.sidebarHistory
+            : pruneSidebarHistory(s.sidebarHistory, currentSidebarLocation(s)),
           { kind: "task", taskId },
           back === undefined ? currentSidebarLocation(s) : back,
         ),

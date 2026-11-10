@@ -2,7 +2,7 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
 import { goSidebarBack } from "../sidebarBack.js";
-import { epicProjectId } from "../lib/sidebarLinks.js";
+import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
 import { commandToBinary } from "../cliLogos.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
@@ -387,26 +387,23 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
                 <TaskRef label={`#${task.parentIssueNumber}`} task={relations.parent} />
               ) : (
                 <div className="sb-hier-row">
-                  {epicProject !== null ? (
-                    <button
-                      type="button"
-                      className="sb-link"
-                      title="Open the epic in the GitHub tab"
-                      onClick={() => openEpicIssue(epicProject, task.parentIssueNumber as number)}
-                    >
-                      #{task.parentIssueNumber}
-                    </button>
-                  ) : (
-                    <a
-                      className="sb-link"
-                      href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      #{task.parentIssueNumber}
-                      <ExternalLinkIcon size={10} aria-hidden="true" />
-                    </a>
-                  )}
+                  <a
+                    className="sb-link"
+                    href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    // A plain click opens the epic in the GitHub tab (when a project tracks its
+                    // repo); Ctrl/⌘/middle-click keep the real link.
+                    onClick={(e) => {
+                      if (epicProject !== null && isPlainClick(e)) {
+                        e.preventDefault();
+                        openEpicIssue(epicProject, task.parentIssueNumber as number);
+                      }
+                    }}
+                  >
+                    #{task.parentIssueNumber}
+                    <ExternalLinkIcon size={10} aria-hidden="true" />
+                  </a>
                   <span className="sb-hier-title">{task.parentIssueTitle ?? ""}</span>
                 </div>
               )}

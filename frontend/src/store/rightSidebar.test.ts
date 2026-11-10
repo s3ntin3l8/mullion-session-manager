@@ -105,6 +105,37 @@ describe("right sidebar actions", () => {
       for (let n = 0; n < 30; n++) s().openRightSidebarPr(3, 100 + n, task5);
       expect(s().sidebarHistory).toHaveLength(20);
     });
+    it("takes the origin from the project the sidebar follows, not another host's drill-in", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarView("github", 3);
+      useDashboardStore.setState({
+        followedProjectId: 3,
+        githubOpenPrByProject: { 1: 30, 3: 12 },
+      });
+      s().openRightSidebarIssue(3, 7);
+      expect(s().takeSidebarBack({ kind: "issue", projectId: 3, number: 7 })).toEqual(pr12);
+      useDashboardStore.setState({ followedProjectId: null });
+    });
+    it("leaves only one of PR / issue open for a project", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, null);
+      s().openRightSidebarIssue(3, 7, null);
+      expect(s().githubOpenPrByProject[3]).toBeNull();
+      expect(s().githubOpenIssueByProject[3]).toBe(7);
+      s().openRightSidebarPr(3, 12, null);
+      expect(s().githubOpenIssueByProject[3]).toBeNull();
+    });
+    it("drops a stale entry when the sidebar was navigated elsewhere in the meantime", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, task5);
+      // The panel's own list → detail click: no history call.
+      s().setGithubOpenPr(3, null);
+      s().setGithubOpenPr(3, 99);
+      s().openRightSidebarPr(3, 12);
+      // Back returns to the PR it was actually reached from, not the stale task entry.
+      expect(s().sidebarHistory).toHaveLength(1);
+      expect(s().takeSidebarBack(pr12)).toEqual({ kind: "pr", projectId: 3, number: 99 });
+    });
     it("is cleared by any other navigation", () => {
       const nav = [
         () => useDashboardStore.getState().selectTask(null),

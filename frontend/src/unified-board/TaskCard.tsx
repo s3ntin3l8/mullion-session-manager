@@ -126,7 +126,6 @@ export function TaskCard({
   // #2918 — a plain click on a linked #issue / PR / epic opens it in the right sidebar's GitHub
   // tab; Ctrl/⌘/middle-click keep the real href (a new tab). `open` returns false when it can't
   // (an epic in a repo no project tracks), and the link then behaves as the external link it is.
-  const allTasks = useDashboardStore((s) => s.tasks);
   const linkClick = (open: () => boolean) => (e: MouseEvent<HTMLAnchorElement>) => {
     e.stopPropagation();
     if (suppressClickRef.current) {
@@ -146,7 +145,7 @@ export function TaskCard({
       useDashboardStore.getState().openRightSidebarPr(project.id, n);
       return true;
     });
-  const openEpicLink = linkClick(() => openEpicInSidebar(allTasks, task));
+  const openEpicLink = linkClick(() => openEpicInSidebar(useDashboardStore.getState().tasks, task));
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
     if (!acceptsDrop || !e.dataTransfer.types.includes(TASK_DRAG_MIME)) return;

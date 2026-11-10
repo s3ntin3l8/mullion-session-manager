@@ -320,7 +320,7 @@ describe("TaskDetailView", () => {
     });
     setTasks([child], { openRightSidebarIssue });
     renderDetail(child.id);
-    await user.click(screen.getByRole("button", { name: "#77" }));
+    await user.click(screen.getByRole("link", { name: /#77/ }));
     expect(openRightSidebarIssue).toHaveBeenCalledWith(child.projectId, 77, {
       kind: "task",
       taskId: child.id,
