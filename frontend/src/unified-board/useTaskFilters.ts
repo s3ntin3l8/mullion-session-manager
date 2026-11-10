@@ -139,18 +139,18 @@ export function useTaskFilters(
   // with no visible way back. Derived, never written back: a project that reappears
   // keeps its saved selection.
   const knownProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
-  // Following only counts while there is a followed project that still exists; a null or
-  // deleted one is ignored like a deleted saved project, i.e. no project filter at all.
+  // Following only counts while there is a followed project that still exists (none on
+  // phone, none before a project loads); otherwise the saved selection applies as if the
+  // option were off, so there is never a "following nothing" state.
   const followedId =
     followedProjectId !== null && knownProjectIds.has(followedProjectId) ? followedProjectId : null;
+  const followActive = followSidebar && followedId !== null;
   const activeProjectIds = useMemo(
     () =>
-      followSidebar
-        ? followedId !== null
-          ? [followedId]
-          : []
+      followActive && followedId !== null
+        ? [followedId]
         : selectedProjectIds.filter((id) => knownProjectIds.has(id)),
-    [followSidebar, followedId, selectedProjectIds, knownProjectIds],
+    [followActive, followedId, selectedProjectIds, knownProjectIds],
   );
   const epicOpts = useMemo(() => epicOptions(tasks), [tasks]);
   const noEpic = useMemo(() => noEpicCount(tasks), [tasks]);
@@ -297,6 +297,8 @@ export function useTaskFilters(
     /** The "follow the sidebar's project" option: its setting, and the project it would
      * follow (null when there is none, so the option has nothing to offer). */
     followSidebar,
+    /** The option is on AND there is a project to follow, so it is narrowing the board. */
+    followActive,
     followedProjectId: followedId,
     setFollowSidebar,
     epicOpts,

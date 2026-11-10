@@ -158,7 +158,7 @@ export function TaskFilterBar({
     .filter((p) => filters.projectIds.includes(p.id))
     .map((p) => p.name)
     .join(", ");
-  const projectSummary = api.followSidebar
+  const projectSummary = api.followActive
     ? `◎ ${projectNames || "All projects"}`
     : filters.projectIds.length === 0
       ? "All projects"
@@ -188,7 +188,7 @@ export function TaskFilterBar({
         {showProjects && (
           <FilterPopover
             ariaLabel="Projects"
-            buttonLabel={`Projects: ${projectSummary}${api.followSidebar ? " (following the sidebar)" : ""}`}
+            buttonLabel={`Projects: ${projectSummary}${api.followActive ? " (following the sidebar)" : ""}`}
             label={projectSummary}
             active={filters.projectIds.length > 0}
           >

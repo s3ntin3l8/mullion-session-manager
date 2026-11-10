@@ -43,13 +43,15 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   useClearTaskSelectionOnProjectChange(followedProjectId);
   // Publish the followed project for the Task Master board's "follow the sidebar"
   // option (#2858). This is the only place useFollowedProject is resolved for the
-  // sidebar, so the board reads this instead of deriving it a second time; the cleanup
-  // clears it when the sidebar unmounts (phone has none), so a stale id never lingers.
+  // sidebar, so the board reads this instead of deriving it a second time. Phone mounts
+  // this component but renders nothing, so there is no visible sidebar project to follow
+  // there: publish null (#2864 tracks giving phone its own producer).
   const setFollowedProjectId = useDashboardStore((s) => s.setFollowedProjectId);
   useEffect(() => {
-    setFollowedProjectId(followedProjectId);
-    return () => setFollowedProjectId(null);
-  }, [followedProjectId, setFollowedProjectId]);
+    setFollowedProjectId(tier === "phone" ? null : followedProjectId);
+  }, [tier, followedProjectId, setFollowedProjectId]);
+  // Clear it on unmount only, so a project switch is one store write, not null then id.
+  useEffect(() => () => setFollowedProjectId(null), [setFollowedProjectId]);
   useEffect(() => {
     if (followedProjectId != null) prefetchGithubProject(followedProjectId);
   }, [followedProjectId, prefetchGithubProject]);

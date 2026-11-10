@@ -659,18 +659,22 @@ describe("follow the sidebar's project (#2858)", () => {
     expect(screen.queryByText("demo task")).toBeNull();
   });
 
-  it("ignores a followed id that is not a known project, like a deleted saved project", async () => {
+  it("falls back to the saved selection while there is nothing to follow (unknown id or none)", async () => {
     tasks = twoProjectTasks();
-    followedProjectId = 999;
+    localStorage.setItem("crs.taskProjectFilter", JSON.stringify([2]));
     localStorage.setItem("crs.taskFollowSidebar", "1");
     const user = userEvent.setup();
-    renderBoard();
-    expect(screen.getByText("demo task")).toBeInTheDocument();
-    expect(screen.getByText("other task")).toBeInTheDocument();
-    // Still on, so it must stay switchable off even though nothing is being followed.
-    await openMenu(user, "Projects");
-    await user.click(screen.getByRole("checkbox", { name: /^Follow the sidebar's project$/ }));
-    expect(localStorage.getItem("crs.taskFollowSidebar")).toBe("0");
+    for (const id of [999, null]) {
+      followedProjectId = id;
+      const view = renderBoard();
+      expect(screen.getByText("other task")).toBeInTheDocument();
+      expect(screen.queryByText("demo task")).toBeNull();
+      // Nothing is being followed, so the button is not marked as following and the row is not offered.
+      expect(screen.getByRole("button", { name: /^Projects/ })).not.toHaveTextContent("◎");
+      await openMenu(user, "Projects");
+      expect(screen.queryByRole("checkbox", { name: /Follow the sidebar/ })).toBeNull();
+      view.unmount();
+    }
   });
 
   it("reorders identically under Follow — boardOrder must stay correct (#610)", async () => {

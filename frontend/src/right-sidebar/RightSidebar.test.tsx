@@ -71,6 +71,28 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().followedProjectId).toBeNull();
   });
 
+  it("publishes no followed project on phone, where the sidebar renders nothing (#2864)", () => {
+    const view = renderSidebar("phone");
+    expect(view.container).toBeEmptyDOMElement();
+    expect(useDashboardStore.getState().followedProjectId).toBeNull();
+  });
+
+  it("writes the store once per project switch, not null in between", () => {
+    const writes: Array<number | null> = [];
+    const unsub = useDashboardStore.subscribe((s, prev) => {
+      if (s.followedProjectId !== prev.followedProjectId) writes.push(s.followedProjectId);
+    });
+    renderSidebar();
+    useDashboardStore.setState({
+      projects: [PROJECT, { ...PROJECT, id: 2, name: "two" } as Project],
+    });
+    act(() =>
+      useDashboardStore.setState({ rightSidebarProjectRequest: { projectId: 2, nonce: 1 } }),
+    );
+    unsub();
+    expect(writes).not.toContain(null);
+  });
+
   it("renders nothing on phone", () => {
     const { container } = renderSidebar("phone");
     expect(container.firstChild).toBeNull();
