@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { CSSProperties, DragEvent } from "react";
+import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import { useDashboardStore } from "../store/index.js";
 import type { Theme } from "../store/index.js";
 import type { Session, Task } from "../api/index.js";
@@ -17,6 +17,7 @@ import {
   reviewPhaseText,
 } from "../needsHuman.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
+import { isPlainClick, openEpicInSidebar } from "../lib/sidebarLinks.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
@@ -121,6 +122,31 @@ export function TaskCard({
     if (suppressClickRef.current) return;
     onOpen();
   };
+
+  // #2918 — a plain click on a linked #issue / PR / epic opens it in the right sidebar's GitHub
+  // tab; Ctrl/⌘/middle-click keep the real href (a new tab). `open` returns false when it can't
+  // (an epic in a repo no project tracks), and the link then behaves as the external link it is.
+  const allTasks = useDashboardStore((s) => s.tasks);
+  const linkClick = (open: () => boolean) => (e: MouseEvent<HTMLAnchorElement>) => {
+    e.stopPropagation();
+    if (suppressClickRef.current) {
+      e.preventDefault();
+      return;
+    }
+    if (isPlainClick(e) && open()) e.preventDefault();
+  };
+  const openIssueLink = linkClick(() => {
+    if (!project || task.issueNumber === null) return false;
+    useDashboardStore.getState().openRightSidebarIssue(project.id, task.issueNumber);
+    return true;
+  });
+  const openPrLink = (n: number) =>
+    linkClick(() => {
+      if (!project) return false;
+      useDashboardStore.getState().openRightSidebarPr(project.id, n);
+      return true;
+    });
+  const openEpicLink = linkClick(() => openEpicInSidebar(allTasks, task));
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
     if (!acceptsDrop || !e.dataTransfer.types.includes(TASK_DRAG_MIME)) return;
@@ -279,10 +305,7 @@ export function TaskCard({
               href={task.htmlUrl}
               target="_blank"
               rel="noreferrer"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (suppressClickRef.current) e.preventDefault();
-              }}
+              onClick={openIssueLink}
             >
               <GitHubIcon size={11} />#{task.issueNumber}
             </a>
@@ -306,10 +329,7 @@ export function TaskCard({
             // anchor's own default navigation, so the PR would still open
             // in a new tab as an unwanted side effect of the drag. Same
             // suppressClickRef guard the card's own handleClick uses above.
-            onClick={(e) => {
-              e.stopPropagation();
-              if (suppressClickRef.current) e.preventDefault();
-            }}
+            onClick={openPrLink(matchedPr.number)}
           >
             <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />
             PR #{matchedPr.number}
@@ -321,10 +341,7 @@ export function TaskCard({
             href={task.prUrl}
             target="_blank"
             rel="noreferrer"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (suppressClickRef.current) e.preventDefault();
-            }}
+            onClick={openPrLink(task.prNumber)}
           >
             PR #{task.prNumber}
           </a>
@@ -356,10 +373,7 @@ export function TaskCard({
             target="_blank"
             rel="noreferrer"
             title={`Epic: ${task.parentIssueTitle ?? `#${task.parentIssueNumber}`}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (suppressClickRef.current) e.preventDefault();
-            }}
+            onClick={openEpicLink}
           >
             <span className="task-card-epic-dot" aria-hidden="true" />
             epic #{task.parentIssueNumber}

@@ -297,7 +297,7 @@ describe("TaskDetailView", () => {
     });
     const orphan = task({
       parentIssueNumber: 77,
-      parentIssueRepo: "o/r",
+      parentIssueRepo: "elsewhere/repo",
       parentIssueTitle: "Elsewhere epic",
     });
     setTasks([epic, child, orphan]);
@@ -306,8 +306,25 @@ describe("TaskDetailView", () => {
     unmount();
     renderDetail(orphan.id);
     const link = screen.getByRole("link", { name: /#77/ });
-    expect(link.getAttribute("href")).toBe("https://github.com/o/r/issues/77");
+    expect(link.getAttribute("href")).toBe("https://github.com/elsewhere/repo/issues/77");
     expect(screen.getByText("Elsewhere epic")).toBeTruthy();
+  });
+
+  it("opens an epic issue of a tracked repo in the GitHub tab, with Back returning to the task", async () => {
+    const user = userEvent.setup();
+    const openRightSidebarIssue = vi.fn();
+    const child = task({
+      parentIssueNumber: 77,
+      parentIssueRepo: "o/r",
+      parentIssueTitle: "Epic title",
+    });
+    setTasks([child], { openRightSidebarIssue });
+    renderDetail(child.id);
+    await user.click(screen.getByRole("button", { name: "#77" }));
+    expect(openRightSidebarIssue).toHaveBeenCalledWith(child.projectId, 77, {
+      kind: "task",
+      taskId: child.id,
+    });
   });
 
   it("shows sub-issue progress for an epic and its child tasks", () => {
@@ -359,14 +376,13 @@ describe("TaskDetailView", () => {
     const openRightSidebarPr = vi.fn();
     setTasks([t], { openRightSidebarPr });
     useDashboardStore.setState({
-      sidebarBack: {
-        to: { kind: "task", taskId: t.id },
-        back: { kind: "pr", projectId: 4, number: 33 },
-      },
+      sidebarHistory: [
+        { to: { kind: "task", taskId: t.id }, back: { kind: "pr", projectId: 4, number: 33 } },
+      ],
     });
     renderDetail(t.id, onBack);
     await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33);
+    expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33, null);
     expect(onBack).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalledTimes(1);

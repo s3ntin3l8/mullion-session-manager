@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
 import { goSidebarBack } from "../sidebarBack.js";
+import { epicProjectId } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
 import { commandToBinary } from "../cliLogos.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
@@ -68,7 +69,7 @@ function TaskRef({
   blocker?: TaskBlocker;
   trailing?: ReactNode;
 }) {
-  const selectTask = useDashboardStore((s) => s.selectTask);
+  const openTaskInSidebar = useDashboardStore((s) => s.openRightSidebarTask);
   return (
     <div className="sb-hier-row">
       {task ? (
@@ -76,7 +77,7 @@ function TaskRef({
           type="button"
           className="sb-link"
           title={`Open task: ${task.title}`}
-          onClick={() => selectTask(task.id)}
+          onClick={() => openTaskInSidebar(task.id)}
         >
           {label}
         </button>
@@ -129,7 +130,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
   const prsByProject = useDashboardStore((s) => s.prsByProject);
-  const selectTask = useDashboardStore((s) => s.selectTask);
+  const openTaskInSidebar = useDashboardStore((s) => s.openRightSidebarTask);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
   const [bodyOpen, setBodyOpen] = useState(false);
   // A task is shown from outside the rail (a board card, a notification, a
@@ -198,6 +199,12 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       kind: "task",
       taskId: task.id,
     });
+  const epicProject = epicProjectId(allTasks, task);
+  const openEpicIssue = (projectId: number, number: number) =>
+    useDashboardStore.getState().openRightSidebarIssue(projectId, number, {
+      kind: "task",
+      taskId: task.id,
+    });
   const relations = taskRelations(task, allTasks);
   const hasHierarchy =
     task.parentIssueNumber !== null ||
@@ -233,7 +240,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         renderBlocker={(b) => {
           const t = findTaskForIssue(allTasks, b);
           return t ? (
-            <button type="button" className="sb-link" onClick={() => selectTask(t.id)}>
+            <button type="button" className="sb-link" onClick={() => openTaskInSidebar(t.id)}>
               #{b.number}
             </button>
           ) : b.htmlUrl ? (
@@ -380,15 +387,26 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
                 <TaskRef label={`#${task.parentIssueNumber}`} task={relations.parent} />
               ) : (
                 <div className="sb-hier-row">
-                  <a
-                    className="sb-link"
-                    href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    #{task.parentIssueNumber}
-                    <ExternalLinkIcon size={10} aria-hidden="true" />
-                  </a>
+                  {epicProject !== null ? (
+                    <button
+                      type="button"
+                      className="sb-link"
+                      title="Open the epic in the GitHub tab"
+                      onClick={() => openEpicIssue(epicProject, task.parentIssueNumber as number)}
+                    >
+                      #{task.parentIssueNumber}
+                    </button>
+                  ) : (
+                    <a
+                      className="sb-link"
+                      href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      #{task.parentIssueNumber}
+                      <ExternalLinkIcon size={10} aria-hidden="true" />
+                    </a>
+                  )}
                   <span className="sb-hier-title">{task.parentIssueTitle ?? ""}</span>
                 </div>
               )}

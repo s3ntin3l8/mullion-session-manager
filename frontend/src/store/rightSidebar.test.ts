@@ -82,12 +82,35 @@ describe("right sidebar actions", () => {
         useDashboardStore.getState().takeSidebarBack({ kind: "issue", projectId: 3, number: 7 }),
       ).toEqual(task5);
     });
+    it("records the detail the sidebar is showing as the origin when none is named", () => {
+      useDashboardStore.getState().openRightSidebarTask(5, null);
+      useDashboardStore.getState().openRightSidebarPr(3, 12);
+      expect(useDashboardStore.getState().takeSidebarBack(pr12)).toEqual(task5);
+    });
+    it("records nothing for an explicit null origin, or when no detail is showing", () => {
+      useDashboardStore.getState().selectTask(null);
+      useDashboardStore.getState().openRightSidebarPr(3, 12);
+      expect(useDashboardStore.getState().sidebarHistory).toEqual([]);
+      useDashboardStore.getState().openRightSidebarTask(5, null);
+      useDashboardStore.getState().openRightSidebarPr(3, 13, null);
+      expect(useDashboardStore.getState().sidebarHistory).toEqual([]);
+    });
+    it("keeps a stack, pops the latest first and caps its length", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, task5);
+      s().openRightSidebarTask(6, pr12);
+      expect(s().sidebarHistory).toHaveLength(2);
+      expect(s().takeSidebarBack({ kind: "task", taskId: 6 })).toEqual(pr12);
+      expect(s().takeSidebarBack(pr12)).toEqual(task5);
+      for (let n = 0; n < 30; n++) s().openRightSidebarPr(3, 100 + n, task5);
+      expect(s().sidebarHistory).toHaveLength(20);
+    });
     it("is cleared by any other navigation", () => {
       const nav = [
         () => useDashboardStore.getState().selectTask(null),
         () => useDashboardStore.getState().openRightSidebarView("files"),
-        () => useDashboardStore.getState().openRightSidebarTask(5),
-        () => useDashboardStore.getState().openRightSidebarPr(3, 12),
+        () => useDashboardStore.getState().toggleRightSidebarView("git"),
+        () => useDashboardStore.getState().closeRightSidebar(),
       ];
       for (const go of nav) {
         useDashboardStore.getState().openRightSidebarPr(3, 12, task5);
