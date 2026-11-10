@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNotNull, isNull, or, type SQL } from "drizzle-orm";
 import { TASK_MODEL_COLUMNS } from "./task-model-patch.js";
 import { getProjectById, listProjects } from "./project-store.js";
+import type { MergeRecordedPatch } from "./task-merge-human.js";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 
 // The DB access of the task, task-push, review-relay and webhook routes lives
@@ -378,7 +379,7 @@ export function findReviewingTaskByPr(
 export function recordMergeIfUnmerged(
   app: FastifyInstance,
   taskId: number,
-  patch: TaskPatch,
+  patch: MergeRecordedPatch,
 ): number {
   return app.db
     .update(tasks)

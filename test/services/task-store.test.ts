@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { mergeRecordedSet } from "../../src/services/task-merge-human.js";
 
 // Direct tests for the DB access the task, task-push, review-relay and webhook
 // routes used to run inline (issue #2817).
@@ -134,8 +135,8 @@ describe("task-store", () => {
       dependencyCount: 2,
     });
     expect(store.findTaskBlockerStateByIssue(app, projectId, 78)).toBeUndefined();
-    expect(store.recordMergeIfUnmerged(app, t.id, { mergedAt: new Date() })).toBe(1);
-    expect(store.recordMergeIfUnmerged(app, t.id, { mergedAt: new Date() })).toBe(0);
+    expect(store.recordMergeIfUnmerged(app, t.id, mergeRecordedSet(new Date()))).toBe(1);
+    expect(store.recordMergeIfUnmerged(app, t.id, mergeRecordedSet(new Date()))).toBe(0);
     expect(store.findUnmergedTaskByPr(app, projectId, 21)).toBeUndefined();
   });
 
