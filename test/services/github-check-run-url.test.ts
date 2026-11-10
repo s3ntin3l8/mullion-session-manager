@@ -38,8 +38,13 @@ describe("actionsRunIdFromCheckUrl", () => {
 
   it("matches owner and repo case-insensitively and treats them literally", () => {
     expect(actionsRunIdFromCheckUrl("https://github.com/O/R/actions/runs/8/job/1", repo)).toBe(8);
+    // Owner "o." must not match "oX": unescaped, the dot is a wildcard and this
+    // path would match and return 9.
     expect(
-      actionsRunIdFromCheckUrl("https://github.com/oXr/actions/runs/9", { owner: "o.", repo: "r" }),
+      actionsRunIdFromCheckUrl("https://github.com/oX/r/actions/runs/9", {
+        owner: "o.",
+        repo: "r",
+      }),
     ).toBeUndefined();
   });
 });
