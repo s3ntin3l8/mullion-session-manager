@@ -18,9 +18,13 @@ export const GENERATED_REGION_END = "<<<MULLION_SCAFFOLD_REGION_END>>>";
 /** Paths Mullion's scaffold writes: absent from the worktree until applied. */
 const SCAFFOLD_OUTPUT_PATH = /^\.claude\/(?:skills|agents)\//;
 
-/** Cited-path existence counts (issue #2532). */
+/** Cited-path existence counts (issue #2532, #2932). `cited` is how many
+ * checkable paths were assessed: every one, when there is no snapshot, or
+ * only the keys a remote snapshot listed. An unlisted key is unknown and
+ * is not part of this count. */
 export interface MissingCitedPaths {
   missing: number;
+  /** Assessed paths, not every path the text mentioned. */
   cited: number;
 }
 

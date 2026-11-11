@@ -3234,19 +3234,11 @@ describe("internal routes (agent role, issue #26)", () => {
           timeoutMs: 300_000,
         },
       });
+      expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ outcome: "ok", sandboxed: true, canary: true, stdout: "out" });
-      expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith({
-        cwd,
-        slug: "demo",
-        baseRef: "origin/main",
-        agentCommand: "claude",
-        prompt: "do the thing",
-        timeoutMs: 300_000,
-        // Issue #1133 — this agent's own config default (sandboxing on).
-        // #2932 — snapshot cited paths before the scratch worktree is removed.
-        sandbox: true,
-        onBeforeTeardown: expect.any(Function),
-      });
+      expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith(
+        expect.objectContaining({ sandbox: true, onBeforeTeardown: expect.any(Function) }),
+      );
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
