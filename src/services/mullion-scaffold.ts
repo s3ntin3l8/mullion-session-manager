@@ -16,6 +16,7 @@ import type { DockControl } from "./project-config.js";
 // node:fs) — this module's own header comment on computeScaffold's "no
 // filesystem access of its own" purity still holds.
 import { buildWorkflowConventionsText } from "./workflow-conventions.js";
+import { isDropDisposition, type DropDisposition } from "../shared/constants.js";
 
 // Issue #1215 — the marker VALUE is a wire format, not just an identifier:
 // it's already committed into every repo this scaffold has ever run
@@ -338,7 +339,7 @@ export interface ScaffoldOptions {
     /** Issue #2646 / #2934 — a conflict about `CLAUDE.md` keeps the body,
      * unless its disposition is a deliberate drop (`dropped-obsolete` or
      * `not-carried`). `possiblyLossy` keeps the body regardless. */
-    conflicts?: { file: string; disposition?: "dropped-obsolete" | "not-carried" }[];
+    conflicts?: { file: string; disposition?: DropDisposition }[];
     possiblyLossy?: boolean;
   };
   /** Issue #2473 — whether this scaffold writes the project's own skill
@@ -752,7 +753,7 @@ function claudeMdHasUncoveredPassages(
   if (generated.possiblyLossy) return true;
   return (generated.conflicts ?? []).some((c) => {
     if (!/(^|\/)CLAUDE\.md$/i.test(c.file.trim())) return false;
-    return c.disposition !== "dropped-obsolete" && c.disposition !== "not-carried";
+    return !isDropDisposition(c.disposition);
   });
 }
 

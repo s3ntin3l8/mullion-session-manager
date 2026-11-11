@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DROP_DISPOSITIONS, type DropDisposition } from "../../src/shared/constants.js";
 import { computeScaffold } from "../../src/services/mullion-scaffold.js";
 
 // Issue #2934. Kept out of mullion-scaffold.test.ts, which sits under the
@@ -10,7 +11,7 @@ const longClaude =
   "\n";
 
 function claude(generated: {
-  conflicts?: { file: string; disposition?: "dropped-obsolete" | "not-carried" }[];
+  conflicts?: { file: string; disposition?: DropDisposition }[];
   possiblyLossy?: boolean;
 }) {
   const entries = computeScaffold(
@@ -22,12 +23,10 @@ function claude(generated: {
 
 describe("CLAUDE.md reduction and deliberate drops (issue #2934)", () => {
   it("reduces when the uncovered passage was dropped on purpose", () => {
-    for (const disposition of ["dropped-obsolete", "not-carried"] as const) {
+    for (const disposition of DROP_DISPOSITIONS) {
       expect(
         claude({
-          conflicts: [
-            { file: "CLAUDE.md", disposition, excerpt: "Rename the placeholders", note: "done" },
-          ],
+          conflicts: [{ file: "CLAUDE.md", disposition }],
         }),
       ).not.toContain("Rule number");
     }

@@ -228,7 +228,13 @@ import {
 } from "./mullion-scaffold.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import { stripMarkedRegion, topLevelLines } from "./marked-region.js";
-import type { ExistingInstructionsMode } from "../shared/constants.js";
+import {
+  DROP_DISPOSITIONS,
+  isDropDisposition,
+  type DropDisposition,
+  type ExistingInstructionsMode,
+} from "../shared/constants.js";
+export { DROP_DISPOSITIONS, isDropDisposition, type DropDisposition };
 
 export class UnsupportedGenerationAgentError extends Error {
   constructor(agentCommand: string) {
@@ -281,7 +287,7 @@ export interface ScaffoldConflict {
   note: string;
   /** Set only for a passage the agent dropped on purpose (#2934). Any other
    * value, including none, still blocks reducing CLAUDE.md. */
-  disposition?: "dropped-obsolete" | "not-carried";
+  disposition?: DropDisposition;
 }
 
 export interface GeneratedScaffoldContent {
@@ -795,10 +801,7 @@ export function parseConflicts(
           : (CONFLICT_KINDS as readonly string[]).includes(v.kind))
       ) {
         if (conflicts.length < MAX_CONFLICTS) {
-          const disposition =
-            v.disposition === "dropped-obsolete" || v.disposition === "not-carried"
-              ? v.disposition
-              : undefined;
+          const disposition = isDropDisposition(v.disposition) ? v.disposition : undefined;
           conflicts.push({
             file: v.file.slice(0, 200),
             excerpt: v.excerpt.slice(0, MAX_CONFLICT_EXCERPT),

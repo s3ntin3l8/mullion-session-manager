@@ -229,6 +229,16 @@ export const FILE_STREAM_CONTENT_TYPE = "application/vnd.mullion.file-stream";
 export const EXISTING_INSTRUCTIONS_MODES = ["keep", "report", "restructure"] as const;
 export type ExistingInstructionsMode = (typeof EXISTING_INSTRUCTIONS_MODES)[number];
 
+/** A conflict the generation agent dropped on purpose (#2934). One list: the
+ * parser, the CLAUDE.md reduction guard and the panel's type all derive from
+ * it, so a new value cannot be accepted in one and ignored by another. */
+export const DROP_DISPOSITIONS = ["dropped-obsolete", "not-carried"] as const;
+export type DropDisposition = (typeof DROP_DISPOSITIONS)[number];
+
+export function isDropDisposition(value: unknown): value is DropDisposition {
+  return typeof value === "string" && (DROP_DISPOSITIONS as readonly string[]).includes(value);
+}
+
 /** How long the server keeps a template scaffold preview. Shared with the
  * Scaffold panel so the two cannot drift (a panel that outlives the server
  * offers Apply on a 400; one that expires early discards a live preview). */

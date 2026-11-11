@@ -18,7 +18,11 @@ import type {
   AgentRuleTarget,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
-import type { ExistingInstructionsMode, PlacementMode } from "../../../src/shared/constants.js";
+import type {
+  DropDisposition,
+  ExistingInstructionsMode,
+  PlacementMode,
+} from "../../../src/shared/constants.js";
 
 export type { ExistingInstructionsMode };
 
@@ -28,7 +32,7 @@ export interface ScaffoldConflict {
   kind: string;
   note: string;
   /** A passage the agent dropped on purpose (#2934). Still shown before Apply. */
-  disposition?: "dropped-obsolete" | "not-carried";
+  disposition?: DropDisposition;
 }
 
 /** The phases a background generation job moves through — mirrors
