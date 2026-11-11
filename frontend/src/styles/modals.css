@@ -1761,3 +1761,42 @@ summary.space-row {
 .ui-input-wrap > .ui-input.small {
   padding-left: 28px;
 }
+
+.folder-picker {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.folder-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.folder-picker-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.folder-picker-list button {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  background: transparent;
+  border: 0;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.folder-picker-list button:hover,
+.folder-picker-list button:focus-visible {
+  background: var(--surface-hover);
+}

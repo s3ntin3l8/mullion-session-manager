@@ -27,18 +27,17 @@ import { isAbsoluteHostPath } from "../../src/shared/host-path.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
+import {
+  PLATFORM_LABELS,
+  CAPABILITY_LABELS,
+  sameIds,
+  normalizeHostPaths,
+  sameHostPaths,
+  slugifyProjectName,
+  trailingSegment,
+} from "./createProjectModalUtils.js";
+import { BrowseButton, FolderPicker } from "./FolderPicker.js";
 import { Modal } from "./ui/Modal.js";
-
-const PLATFORM_LABELS: Record<PlacementPlatform, string> = {
-  darwin: "macOS",
-  linux: "Linux",
-  win32: "Windows",
-};
-
-const CAPABILITY_LABELS: Record<PlacementCapability, string> = {
-  xcode: "Needs Xcode (iOS Simulator)",
-  "android-emulator": "Needs an Android emulator",
-};
 
 // Empty string represents "unset" (fall through to the next precedence
 // tier) in the Dropdown below, which is string-only — converted to/from
@@ -189,48 +188,6 @@ interface CreateProjectModalProps {
   initialHostCwdsMeta?: HostCwdsMeta;
 }
 
-/** The non-empty, trimmed entries of an editable per-host path map. */
-function normalizeHostPaths(paths: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [hostKey, value] of Object.entries(paths)) {
-    const trimmed = value.trim();
-    if (trimmed !== "") out[hostKey] = trimmed;
-  }
-  return out;
-}
-
-function sameHostPaths(a: Record<string, string>, b: Record<string, string>): boolean {
-  const ak = Object.keys(a);
-  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k]);
-}
-
-// Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
-// a top-anchored centered overlay (not the Settings modal's vertically-
-// centered one), triggered by the "+" inline with the sidebar's "Projects"
-// section title — replaces the old NewProjectForm inline form. Field
-// semantics match the design's DCLogic exactly: `apPathInput` keeps the
-// Display-name field's *placeholder* in sync with the path's trailing
-// segment (never overwrites a real typed value); "Browse…" is the design's
-// own stub (seeds the sidebar's default project root and focuses) since a
-// web app can't invoke a real OS folder picker without the user-gesture-
-// gated File System Access API — this is a platform limitation, not an
-// unported interaction.
-/** Whether two project-id selections hold the same ids (order and null/empty aside). */
-function sameIds(a: number[], b: number[] | null | undefined): boolean {
-  const other = b ?? [];
-  return a.length === other.length && a.every((id) => other.includes(id));
-}
-
-// Issue #2901 — the Display name becomes the last segment of the path the
-// modal fills in: the trimmed name with every whitespace run collapsed into a
-// single dash, and the path separators dropped so a name can never escape the
-// base folder it is appended to ("my project" → "my-project", "a/b" → "ab").
-// An empty result (a blank name, or one made only of separators) means "no
-// segment" — the path falls back to the base folder alone.
-function slugifyProjectName(raw: string): string {
-  return raw.trim().replace(/\s+/g, "-").replace(/[/\\]/g, "");
-}
-
 export function CreateProjectModal({
   onClose,
   onCreate,
@@ -260,6 +217,8 @@ export function CreateProjectModal({
   initialHostCwdsMeta,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
+  const [pickerPath, setPickerPath] = useState<string | null>(null);
+  const projectRoot = useDashboardStore((s) => s.settings?.projectRoots[0]);
   // Issue #2901 — has the user taken the path into their own hands? Until
   // they do, the Display name drives it (see `handleNameInput`). The autofill
   // itself never sets this: it is the NAME that moved the path, not the user.
@@ -488,8 +447,6 @@ export function CreateProjectModal({
     return withCurrentReviewAgent(options, current);
   }
 
-  const trailingSegment = (p: string) => p.replace(/\/+$/, "").split("/").pop() || "my-project";
-
   // Writes a path into the field, with the same bookkeeping a typed path
   // gets: the Display name's placeholder follows the path's trailing segment,
   // and a stale error / "Create folder" confirmation never survives a new
@@ -531,11 +488,11 @@ export function CreateProjectModal({
     applyPath(slug ? `${base}/${slug}` : base);
   };
 
-  const browse = () => {
-    if (!path) {
-      handlePathInput(initialPath || "~/code/");
-      pathInputRef.current?.focus();
-    }
+  const canBrowse = (isEdit ? projectHostId : hostId) === LOCAL_HOST_ID;
+  const browse = () => setPickerPath(path.trim() || projectRoot?.trim() || "~");
+  const closePicker = () => {
+    setPickerPath(null);
+    pathInputRef.current?.focus();
   };
 
   const confirm = async (opts?: { createDir?: boolean; allowDuplicate?: boolean }) => {
@@ -1105,7 +1062,10 @@ export function CreateProjectModal({
             <HostsIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
             <Dropdown
               value={hostId}
-              onChange={setHostId}
+              onChange={(value) => {
+                setHostId(value);
+                setPickerPath(null);
+              }}
               options={[
                 { value: LOCAL_HOST_ID, label: "This machine" },
                 ...remoteHosts.map((h) => ({
@@ -1138,11 +1098,21 @@ export function CreateProjectModal({
               if (e.key === "Enter") void confirm();
             }}
           />
-          <button type="button" className="create-modal-browse-btn" onClick={browse}>
-            Browse…
-          </button>
+          <BrowseButton canBrowse={canBrowse} onClick={browse} />
         </span>
       </label>
+
+      {pickerPath !== null && canBrowse && (
+        <FolderPicker
+          key={pickerPath}
+          initialPath={pickerPath}
+          onClose={closePicker}
+          onSelect={(selected) => {
+            handlePathInput(selected);
+            closePicker();
+          }}
+        />
+      )}
 
       {error && (
         <div className="create-modal-dir-confirm" ref={errorRef} role="alert">

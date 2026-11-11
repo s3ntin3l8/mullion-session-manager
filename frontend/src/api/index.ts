@@ -272,6 +272,7 @@ import { sessionsApi } from "./sessions.js";
 import { tasksApi } from "./tasks.js";
 import { githubApi } from "./github.js";
 import { gitApi } from "./git.js";
+import { fsApi } from "./fs.js";
 import { hostsApi } from "./hosts.js";
 import { bridgesApi } from "./bridges.js";
 import { hostPairingsApi } from "./hostPairings.js";
@@ -300,6 +301,7 @@ export const api = {
   ...githubApi,
   ...gitApi,
   ...hostsApi,
+  ...fsApi,
   ...bridgesApi,
   ...hostPairingsApi,
   ...workspacesApi,

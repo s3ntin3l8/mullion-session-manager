@@ -180,6 +180,18 @@ describe("CreateProjectModal — the Display name fills the path (issue #2901)",
     expect(path).toHaveValue("/mine");
   });
 
+  it("uses the last Windows path segment for the placeholder and default name", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<CreateProjectModal mode="create" onClose={vi.fn()} onCreate={onCreate} />);
+
+    await user.type(pathField(), "D:\\code\\my-app\\");
+    expect(fieldInput("Display name")).toHaveAttribute("placeholder", "my-app");
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: "my-app" }));
+  });
+
   it("clears a stale error and its 'Create folder' offer, exactly as a typed path does", async () => {
     const onCreate = vi
       .fn()
