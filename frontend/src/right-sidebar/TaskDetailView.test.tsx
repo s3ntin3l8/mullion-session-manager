@@ -244,6 +244,14 @@ describe("TaskDetailView review reviewer", () => {
     expect(row.textContent).toContain("reviewer: ended");
     expect(row.textContent).not.toContain("Hermes");
   });
+  it("reads 'worker: ended' when the worker session is no longer in the store", () => {
+    const t = task({ status: "reviewing", sessionId: 41 } as never);
+    setTasks([t], { sessions: [] });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("worker: ended");
+    expect(row.textContent).not.toContain("worker: none");
+  });
   it("keeps 'reviewer: none' with neither a session nor a run", () => {
     const t = task({ status: "reviewing" });
     setTasks([t]);

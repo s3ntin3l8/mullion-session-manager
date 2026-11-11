@@ -301,7 +301,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
             </dd>
             <dt>Sessions</dt>
             <dd className="sb-pills">
-              <SessionPill role="worker" session={worker} />
+              <SessionPill role="worker" session={worker} ended={task.sessionId !== null} />
               {task.reviewSessionId === null && runState !== null ? (
                 <StatusChip
                   tone={runState === "unsent" ? "warn" : "info"}
