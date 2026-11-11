@@ -410,8 +410,9 @@ The strip is on every layout, phone included.
   epic's own sub-issue progress (`closed/total`, read from the epic issue itself —
   Task Master refreshes each distinct parent's state and `sub_issues_summary`
   about every 10 minutes; until the first fetch it shows done tasks / tasks),
-  plus "No epic"; it is multi-select. Closed epics are left out of the list
-  unless one is currently selected. An optional **facets
+  plus "No epic"; it is multi-select. A closed epic whose tasks are all done
+  is left out of the list unless it is currently selected; one that still has
+  open tasks stays. An optional **facets
   panel** (the left-rail toggle, or Display → Facets panel: Off / On / Auto —
   Auto opens it from a 1440px window or with more than 8 projects) shows the
   same state, project and epic choices with counts; it edits the same filter

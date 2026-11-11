@@ -150,7 +150,8 @@ export interface EpicOption {
    * has fetched it, the done share of the child tasks (done / tasks). */
   done: number;
   total: number;
-  /** The epic issue is closed on GitHub. */
+  /** The epic issue is closed on GitHub AND none of its tasks is still open:
+   * nothing left to filter down to, so the Filter menu hides it. */
   closed: boolean;
 }
 
@@ -190,7 +191,9 @@ export function epicOptions(tasks: Task[]): EpicOption[] {
       count: children.length,
       done,
       total,
-      closed: children.some((t) => t.parentIssueState === "closed"),
+      closed: children.every(
+        (t) => t.parentIssueState === "closed" && (t.status === "done" || t.status === "failed"),
+      ),
     });
   }
   return out.sort((a, b) => a.label.localeCompare(b.label));

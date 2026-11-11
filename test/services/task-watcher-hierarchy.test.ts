@@ -489,7 +489,7 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
       expect(row.parentSubIssueTotal).toBeNull();
     });
 
-    it("refreshes a parent only after the TTL, and a done child of a closed epic is left alone", async () => {
+    it("refreshes a parent only after the TTL, terminal children included, and writes only changes", async () => {
       const projectId = await createProject();
       mockGetIssueTitle.mockResolvedValue("Epic");
       mockGetIssueSummary.mockResolvedValue({
@@ -498,24 +498,36 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
         subIssues: { total: 2, completed: 1 },
       });
       const open = insertChildTask(projectId, { parentIssueNumber: 32 });
-      insertChildTask(projectId, {
+      // A done child of an epic recorded as closed is still re-checked after
+      // the TTL, so a reopened epic is not stranded as closed.
+      const doneChild = insertChildTask(projectId, {
         parentIssueNumber: 33,
         status: "done",
         parentIssueState: "closed",
       });
       await runOneSweep();
-      expect(mockGetIssueSummary).toHaveBeenCalledTimes(1);
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(2);
+      expect(getTask(doneChild).parentIssueState).toBe("open");
+      const stamped = getTask(open).updatedAt;
+      mockBroadcastTaskEvent.mockClear();
       await vi.advanceTimersByTimeAsync(5 * 60_000);
-      expect(mockGetIssueSummary).toHaveBeenCalledTimes(1);
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(2);
+      // Same values on the refresh: no row rewritten, no hierarchy event.
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      expect(mockGetIssueSummary.mock.calls.length).toBeGreaterThanOrEqual(4);
+      expect(getTask(open).updatedAt).toEqual(stamped);
+      expect(
+        mockBroadcastTaskEvent.mock.calls.filter((c) => c[0].kind === "hierarchy"),
+      ).toHaveLength(0);
+      // A real change is written and announced.
       mockGetIssueSummary.mockResolvedValue({
         title: "Epic",
         state: "open",
         subIssues: { total: 2, completed: 2 },
       });
-      await vi.advanceTimersByTimeAsync(6 * 60_000);
-      expect(mockGetIssueSummary.mock.calls.length).toBeGreaterThanOrEqual(2);
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
       expect(getTask(open).parentSubIssueCompleted).toBe(2);
-      expect(mockGetIssueSummary.mock.calls.every((c) => c[3] === 32)).toBe(true);
+      expect(mockBroadcastTaskEvent.mock.calls.some((c) => c[0].kind === "hierarchy")).toBe(true);
     });
 
     it("tolerates a failing fetch and leaves the columns null", async () => {

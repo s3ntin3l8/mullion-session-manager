@@ -1350,10 +1350,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   }
 
   // #2919 — the parent (epic) refresh: state and sub-issue progress, plus the
-  // title as a side effect. Candidates are children of an epic that is still
-  // open or never fetched (a terminal child keeps its epic's numbers fresh
-  // only while the epic is open), deduped per distinct parent, fetched at
-  // most once per PARENT_META_TTL_MS. A failed attempt also waits out the TTL.
+  // title as a side effect. Candidates are the children of every parent,
+  // terminal or not (a closed epic can be reopened, and its terminal children
+  // must not strand it as "closed"), deduped per distinct parent, fetched at
+  // most once per PARENT_META_TTL_MS, never-fetched first and then least
+  // recently fetched, so the per-sweep cap rotates fairly through a long
+  // tail of parents. A failed attempt also waits out the TTL.
   async function refreshParentIssueMeta(
     githubContext: Map<number, { owner: string; repo: string; token: string }>,
   ): Promise<void> {
@@ -1366,17 +1368,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         parentIssueState: tasks.parentIssueState,
       })
       .from(tasks)
-      .where(
-        and(
-          isNotNull(tasks.parentIssueNumber),
-          isNotNull(tasks.parentIssueRepo),
-          or(
-            notInArray(tasks.status, ["done", "failed"]),
-            isNull(tasks.parentIssueState),
-            eq(tasks.parentIssueState, "open"),
-          ),
-        ),
-      )
+      .where(and(isNotNull(tasks.parentIssueNumber), isNotNull(tasks.parentIssueRepo)))
       .orderBy(tasks.id)
       .all();
     if (candidates.length === 0) return;
@@ -1400,8 +1392,13 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       g.projectIds.add(row.projectId);
       if (row.parentIssueState === null) g.never = true;
     }
-    // Never-fetched parents first, so a fresh install converges before refreshes.
-    const groups = [...byParent.entries()].sort((a, b) => Number(b[1].never) - Number(a[1].never));
+    // Never-fetched parents first (a fresh install converges before refreshes),
+    // then the least recently fetched.
+    const groups = [...byParent.entries()].sort(
+      (a, b) =>
+        Number(b[1].never) - Number(a[1].never) ||
+        (parentMetaFetchedAt.get(a[0]) ?? 0) - (parentMetaFetchedAt.get(b[0]) ?? 0),
+    );
 
     let fetches = 0;
     const now = Date.now();
@@ -1424,8 +1421,10 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       if (ctxs.length === 0) continue;
       let summary: Awaited<ReturnType<typeof getIssueSummary>> | undefined;
       let lastErr: unknown;
+      // The cap bounds distinct parents, not token attempts: a parent that
+      // needs a fallback token must not eat two slots.
+      fetches++;
       for (const ctx of ctxs) {
-        fetches++;
         try {
           summary = await getIssueSummary(ctx.token, owner, repo, g.number);
           break;
@@ -1450,7 +1449,19 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
           parentSubIssueTotal: summary.subIssues?.total ?? null,
           parentSubIssueCompleted: summary.subIssues?.completed ?? null,
         })
-        .where(and(eq(tasks.parentIssueRepo, g.repo), eq(tasks.parentIssueNumber, g.number)))
+        .where(
+          and(
+            eq(tasks.parentIssueRepo, g.repo),
+            eq(tasks.parentIssueNumber, g.number),
+            // Only rows whose values actually differ: an unchanged refresh
+            // must neither bump updatedAt nor emit a hierarchy event per child
+            // every 10 minutes.
+            sql`(${tasks.parentIssueTitle} IS NOT ${summary.title}
+              OR ${tasks.parentIssueState} IS NOT ${summary.state}
+              OR ${tasks.parentSubIssueTotal} IS NOT ${summary.subIssues?.total ?? null}
+              OR ${tasks.parentSubIssueCompleted} IS NOT ${summary.subIssues?.completed ?? null})`,
+          ),
+        )
         .returning({ id: tasks.id, projectId: tasks.projectId })
         .all();
       for (const row of changed) {

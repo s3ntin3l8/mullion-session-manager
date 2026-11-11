@@ -193,9 +193,23 @@ describe("epicOptions", () => {
     expect(epicOptions([makeTask({ id: 1, ...withEpic(10, null, null) })])[0].label).toBe("#10");
   });
 
-  it("flags a closed epic", () => {
-    const [o] = epicOptions([makeTask({ id: 1, ...withEpic(10, "Old", 2, 2, "closed") })]);
-    expect(o.closed).toBe(true);
+  it("flags a closed epic only once every task under it is finished", () => {
+    const closed = withEpic(10, "Old", 2, 2, "closed");
+    expect(epicOptions([makeTask({ id: 1, ...closed, status: "done" })])[0].closed).toBe(true);
+    // Still has open work: nothing to hide, it stays selectable.
+    expect(
+      epicOptions([
+        makeTask({ id: 1, ...closed, status: "done" }),
+        makeTask({ id: 2, ...closed, status: "ready" }),
+      ])[0].closed,
+    ).toBe(false);
+    // One stale row that has not seen the close keeps the epic visible.
+    expect(
+      epicOptions([
+        makeTask({ id: 1, ...closed, status: "done" }),
+        makeTask({ id: 2, ...closed, status: "done", parentIssueState: "open" }),
+      ])[0].closed,
+    ).toBe(false);
   });
 });
 

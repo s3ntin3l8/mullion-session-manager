@@ -217,10 +217,14 @@ which assumed no such field existed on the plain issues-list response and
 planned a `GET .../issues/{n}/sub_issues` call per parent to derive it; that
 call is never made.
 
-Five columns on `tasks`, all nullable — `parentIssueNumber` /
+Eight columns on `tasks`, all nullable — `parentIssueNumber` /
 `parentIssueRepo` (the parent's own `"owner/repo"`, which can differ from
 the child's project repo: cross-repo sub-issues are first-class in GitHub's
-model) / `parentIssueTitle` / `subIssueTotal` / `subIssueCompleted`. Unlike
+model) / `parentIssueTitle` / `subIssueTotal` / `subIssueCompleted`, plus
+the **parent's own** `parentIssueState` / `parentSubIssueTotal` /
+`parentSubIssueCompleted` (`#2919`; `subIssueTotal`/`Completed` above are the
+_child's_ own summary, 0/0 for any ordinary issue, and must not be read as its
+epic's progress). Unlike
 `dependencyCount`, nullability here carries no fail-closed meaning for the
 four parent-identity columns — they stay **display-only**, so "not yet
 observed" and "known to have no parent" don't need to be distinguishable the
@@ -251,9 +255,14 @@ declining to update it.
 
 **The title is the one piece that isn't free**, and gets a deliberately
 different shape from the dependency-badge display pass above. Resolving it
-is `fillParentIssueTitles` (`task-watcher.ts`), a **one-shot cache-fill, not
-a TTL-guarded refresh**: an issue's title doesn't go stale in a way that
-matters to a chip, so there's no TTL and no periodic re-check. The
+is `fillParentIssueTitles` (`task-watcher.ts`), a **one-shot cache-fill**: an
+issue's title doesn't go stale in a way that matters to a chip, so this pass
+has no TTL and no periodic re-check. (The parent's _state and progress_ are
+different: `refreshParentIssueMeta` re-fetches each distinct parent through
+`getIssueSummary` at most every 10 minutes, in-memory, never-fetched first
+then least recently fetched, capped at 20 parents per sweep, and writes only
+rows whose values changed; it also refreshes the title, so a renamed epic
+catches up.) The
 candidate query is simply `parentIssueTitle IS NULL`, deduped to one
 GitHub call per **distinct parent** (not per child — the reference install's
 32 children of 10 parents is 10 calls, not 32), converges to zero rows once
@@ -279,14 +288,17 @@ actively looking at.
 **The `sub_issues` webhook is deliberately not subscribed.** For
 dependencies, the `issue_dependencies` webhook was the cheap path to
 correctness because a blocker refresh was an extra, TTL-gated API call.
-Parentage already re-syncs on every 60s poll at zero marginal cost, so a
+Parentage already re-syncs on every 60s poll at zero marginal cost (the
+parent's own state and progress cost one REST call per distinct parent per 10
+minutes, `refreshParentIssueMeta`), so a
 `sub_issues` subscription would only buy latency: `upsertIssueTask`'s
 `/ws/tasks` push (`kind: "ingested"`) fires only on a task's first sighting,
 not a re-sighting, so a re-parenting written by a later poll produces no
 live broadcast at all — it surfaces whenever the frontend's own periodic
 `refreshTasks()` next runs, not instantly. (The `kind: "hierarchy"` event is
 separate and narrower: it's `fillParentIssueTitles` announcing a newly
-_filled title_, not a changed parent identity.) Subscribing to the webhook
+_filled title_, or `refreshParentIssueMeta` announcing a changed parent state,
+progress or title — not a changed parent identity.) Subscribing to the webhook
 would also force `WEBHOOK_EVENTS_VERSION` (`github-webhook.ts`) up, which
 re-registers the hook on every connected project — accepted deferred cost,
 filed as a follow-up rather than bundled in.
