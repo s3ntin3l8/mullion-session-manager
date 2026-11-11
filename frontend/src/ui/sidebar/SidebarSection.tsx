@@ -14,6 +14,8 @@ export interface SidebarSectionProps {
   /** Controlled mode: when `open` is given the section does not manage itself. */
   open?: boolean;
   onToggle?: (open: boolean) => void;
+  /** `card` boxes the section like a `.pr-card`; `rule` (default) is a rule-separated block. */
+  variant?: "rule" | "card";
   children: ReactNode;
 }
 
@@ -25,6 +27,7 @@ export function SidebarSection({
   defaultOpen = true,
   open: controlled,
   onToggle,
+  variant = "rule",
   children,
 }: SidebarSectionProps) {
   const [own, setOwn] = useState(() => readPersistedSection(persistKey, defaultOpen));
@@ -38,7 +41,7 @@ export function SidebarSection({
     onToggle?.(next);
   };
   return (
-    <section className="sb-sec">
+    <section className={variant === "card" ? "sb-sec sb-sec--card" : "sb-sec"}>
       <div className="sb-sec-h">
         <button type="button" className="sb-sec-toggle" aria-expanded={open} onClick={toggle}>
           <ChevronDownIcon size={12} className={open ? "sb-chev" : "sb-chev sb-chev--closed"} />

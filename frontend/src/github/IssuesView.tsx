@@ -558,7 +558,7 @@ export function IssueDetailView({
   };
 
   return (
-    <div className="gh-detail">
+    <div className="gh-detail sb-detail">
       <DetailHeader
         sticky
         onBack={() => goSidebarBack({ kind: "issue", projectId, number }, onBack)}
@@ -582,11 +582,13 @@ export function IssueDetailView({
               : ""}
           </div>
           {issue.labels.length > 0 && (
-            <div className="gh-issue-card">
-              {issue.labels.map((l) => (
-                <LabelChip key={l.name} label={l} />
-              ))}
-            </div>
+            <SidebarSection title="Labels" persistKey="github-issue-labels" variant="card">
+              <div className="gh-issue-card">
+                {issue.labels.map((l) => (
+                  <LabelChip key={l.name} label={l} />
+                ))}
+              </div>
+            </SidebarSection>
           )}
           <div className="gh-detail-actions">
             {action.kind === "task" ? (
@@ -621,7 +623,7 @@ export function IssueDetailView({
             )}
           </div>
           {link?.task && (
-            <div className="gh-issue-card" role="region" aria-label="Task">
+            <div className="pr-card pr-task-strip" role="region" aria-label="Task">
               <TaskStatusBlock
                 task={link.task}
                 actions={
@@ -636,9 +638,9 @@ export function IssueDetailView({
             </div>
           )}
           {detailPills.length > 0 && (
-            <div className="gh-issue-card">
+            <SidebarSection title="Sessions" persistKey="github-issue-sessions" variant="card">
               <SessionPills links={detailPills} />
-            </div>
+            </SidebarSection>
           )}
           {notice && (
             <div className="gh-detail-notice">
@@ -653,17 +655,18 @@ export function IssueDetailView({
               )}
             </div>
           )}
-          {issue.bodyHtml ? (
-            <SafeHtml className="gh-html" html={issue.bodyHtml} />
-          ) : (
-            <div className="github-panel-empty-row">No description provided</div>
-          )}
+          <SidebarSection title="Description" persistKey="github-issue-description" variant="card">
+            {issue.bodyHtml ? (
+              <SafeHtml className="gh-html" html={issue.bodyHtml} />
+            ) : (
+              <div className="github-panel-empty-row">No description provided</div>
+            )}
+          </SidebarSection>
           {issue.comments.length > 0 && (
-            <div className="github-panel-section">
-              <div className="github-panel-section-title">
-                Comments ({issue.comments.length}
-                {issue.commentCount > issue.comments.length ? ` of ${issue.commentCount}` : ""})
-              </div>
+            <SidebarSection
+              title={`Comments (${issue.comments.length}${issue.commentCount > issue.comments.length ? ` of ${issue.commentCount}` : ""})`}
+              persistKey="github-issue-comments"
+            >
               {issue.commentCount > issue.comments.length && (
                 <div className="github-panel-empty-row">
                   Showing the latest {issue.comments.length} — open on GitHub for the rest
@@ -679,7 +682,7 @@ export function IssueDetailView({
                   defaultOpen={i === 0}
                 />
               ))}
-            </div>
+            </SidebarSection>
           )}
           <CommentComposer
             label="Comment on this issue"

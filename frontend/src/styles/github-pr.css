@@ -113,7 +113,7 @@ a.pr-dr-row:hover {
 
 /* Detail cards */
 .pr-card {
-  margin: 0 10px;
+  margin: 0 var(--sb-inset, 10px);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--sidebar-2);
@@ -390,16 +390,13 @@ a.pr-dr-row:hover {
   padding-bottom: 8px;
 }
 .pr-detail-pad {
-  padding: 0 10px;
+  padding: 0 var(--sb-inset, 10px);
 }
 @container sidebar-frame (max-width: 300px) {
   .pr-card {
     margin: 0;
     border-width: 1px 0;
     border-radius: 0;
-  }
-  .pr-detail-pad {
-    padding: 0 8px;
   }
   .pr-actionbar,
   .pr-detail-composer {

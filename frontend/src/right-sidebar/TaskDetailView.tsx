@@ -232,7 +232,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
 
   return (
     <div
-      className="tasks-sidebar-view tasks-detail"
+      className="tasks-sidebar-view tasks-detail sb-detail"
       data-testid="task-detail-view"
       ref={rootRef}
       role="region"
@@ -268,7 +268,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       />
 
       {showReview && (
-        <SidebarSection title="Review" persistKey="task-detail-review">
+        <SidebarSection title="Review" persistKey="task-detail-review" variant="card">
           <dl className="sb-kv">
             <dt>Verdict</dt>
             <dd>
@@ -334,7 +334,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       )}
 
       {task.prNumber !== null && (
-        <SidebarSection title="Pull request" persistKey="task-detail-pr">
+        <SidebarSection title="Pull request" persistKey="task-detail-pr" variant="card">
           <div className="sb-pr-line">
             <button
               type="button"
@@ -360,7 +360,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         <TaskActions task={task} />
       </div>
 
-      <SidebarSection title="Details" persistKey="task-detail-details">
+      <SidebarSection title="Details" persistKey="task-detail-details" variant="card">
         <dl className="sb-kv">
           <dt>Project</dt>
           <dd>{projectName}</dd>
