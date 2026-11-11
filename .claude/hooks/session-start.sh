@@ -8,6 +8,17 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-.}"
 
-# Install dependencies so linters and tests are ready.
-# npm install (not ci) plays nicer with the cached container state.
-npm install
+# Install dependencies so linters and tests are ready: the repo root and
+# frontend/, which has its own lockfile (AGENTS.md, "Repo specifics").
+# npm ci, like CI: it installs exactly what package-lock.json
+# pins and never rewrites it, so a session doesn't start with a dirty lockfile.
+# npm ci removes node_modules first, so retry transient registry errors. If
+# package.json and the lockfile disagree, npm ci fails on purpose; run
+# `npm install` by hand to repair the lockfile.
+export NPM_CONFIG_FETCH_RETRIES=5
+export NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000
+export NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000
+if ! { npm ci && (cd frontend && npm ci); }; then
+  echo "session-start: npm ci failed; run npm install to repair the lockfile" >&2
+  exit 1
+fi
