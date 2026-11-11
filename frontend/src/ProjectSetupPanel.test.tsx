@@ -314,11 +314,13 @@ describe("ProjectSetupPanel", () => {
               excerpt: "comment @bot Review",
               kind: "contradicts",
               note: "re-review by @mention is forbidden",
+              disposition: "dropped-obsolete",
             },
           ],
           droppedConflictLines: 2,
         });
         expect(screen.getByText(/1 passage outside Mullion/)).toBeInTheDocument();
+        expect(screen.getByText(/dropped-obsolete/)).toBeInTheDocument();
         expect(screen.getByText(/comment @bot Review/)).toBeInTheDocument();
         expect(
           screen.getByText(/2 more lines from the agent could not be read/),

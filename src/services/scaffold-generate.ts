@@ -228,7 +228,13 @@ import {
 } from "./mullion-scaffold.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import { stripMarkedRegion, topLevelLines } from "./marked-region.js";
-import type { ExistingInstructionsMode } from "../shared/constants.js";
+import {
+  DROP_DISPOSITIONS,
+  isDropDisposition,
+  type DropDisposition,
+  type ExistingInstructionsMode,
+} from "../shared/constants.js";
+export { DROP_DISPOSITIONS, isDropDisposition, type DropDisposition };
 
 export class UnsupportedGenerationAgentError extends Error {
   constructor(agentCommand: string) {
@@ -279,6 +285,9 @@ export interface ScaffoldConflict {
    * whatever kind the agent used ("stale-reference", "other", ...). */
   kind: string;
   note: string;
+  /** Set only for a passage the agent dropped on purpose (#2934). Any other
+   * value, including none, still blocks reducing CLAUDE.md. */
+  disposition?: DropDisposition;
 }
 
 export interface GeneratedScaffoldContent {
@@ -562,8 +571,8 @@ function instructionsItem(
     `(kind "contradicts"), restate them ("duplicates"), are workflow rules that belong in the ` +
     `conventions ("misplaced"), point at something the rewrite renamed or removed ` +
     `("stale-reference"), or are otherwise inconsistent ("other"). One JSON object per line, ` +
-    `with exactly the keys "file", "excerpt" (at most 200 characters), "kind", "note" (one ` +
-    `sentence). Mullion reduces CLAUDE.md to its title plus an \`@AGENTS.md\` import, deleting its body: report with file "CLAUDE.md" every passage your AGENTS.md or CONTRIBUTING append does not cover (workflow rules the conventions replace excepted), and Mullion keeps CLAUDE.md as is. Between the conflicts markers below; write the single word none if there are none.`
+    `with the keys "file", "excerpt" (at most 200 characters), "kind", "note" (one ` +
+    `sentence) and, when you dropped the passage on purpose, "disposition" ("dropped-obsolete" if the repo says it no longer applies, "not-carried" if you left it out and the note says why). Mullion reduces CLAUDE.md to its title plus an \`@AGENTS.md\` import. Report file "CLAUDE.md" for every passage the rewrite does not cover (workflow rules the conventions replace excepted). A CLAUDE.md conflict whose disposition is "dropped-obsolete" or "not-carried" still reduces CLAUDE.md; any other CLAUDE.md conflict keeps the body. Between the conflicts markers below; write the single word none if there are none.`
   );
 }
 
@@ -792,11 +801,13 @@ export function parseConflicts(
           : (CONFLICT_KINDS as readonly string[]).includes(v.kind))
       ) {
         if (conflicts.length < MAX_CONFLICTS) {
+          const disposition = isDropDisposition(v.disposition) ? v.disposition : undefined;
           conflicts.push({
             file: v.file.slice(0, 200),
             excerpt: v.excerpt.slice(0, MAX_CONFLICT_EXCERPT),
             kind: v.kind.slice(0, 40),
             note: v.note.slice(0, MAX_CONFLICT_NOTE),
+            ...(disposition ? { disposition } : {}),
           });
         } else {
           // Valid, but past the cap: counted so the UI can say some were left out.
