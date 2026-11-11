@@ -23,3 +23,26 @@ export function isStorablePath(cwd: string): boolean {
   if (/^[A-Za-z]:[\\/]/.test(cwd)) return !cwd.split(/[\\/]/).includes("..");
   return false;
 }
+
+/** The identity of a path on another host, for comparing two spellings of the
+ * same location. Doubled and trailing separators fold on every path. A Windows
+ * drive path is also case-insensitive and takes either separator, so
+ * `D:\\Projects\\x`, `d:/projects/x/` and `D:/Projects//x` are one key; a POSIX
+ * path stays case-sensitive, and its backslash is an ordinary name character.
+ * Chosen by the path's shape, not by the host's platform (which can be
+ * unknown). */
+export function hostPathKey(cwd: string): string {
+  const drive = /^[A-Za-z]:[\\/]/.test(cwd);
+  const folded = drive ? cwd.replace(/[\\/]+/g, "/") : cwd.replace(/\/{2,}/g, "/");
+  // A root (`/`, `d:/`) keeps its one separator; anything longer loses a trailing
+  // one. Doubled separators are already folded, so there is at most one, and no
+  // regex is needed (a `/+$` strip is quadratic on a long run of slashes).
+  const rootLength = drive ? "d:/".length : "/".length;
+  const trimmed = folded.length > rootLength && folded.endsWith("/") ? folded.slice(0, -1) : folded;
+  return drive ? trimmed.toLowerCase() : trimmed;
+}
+
+/** Whether two paths on the same host name the same location. */
+export function sameHostPath(a: string, b: string): boolean {
+  return hostPathKey(a) === hostPathKey(b);
+}
