@@ -34,9 +34,11 @@ export function isStorablePath(cwd: string): boolean {
 export function hostPathKey(cwd: string): string {
   const drive = /^[A-Za-z]:[\\/]/.test(cwd);
   const folded = drive ? cwd.replace(/[\\/]+/g, "/") : cwd.replace(/\/{2,}/g, "/");
-  // A root (`/`, `d:/`) keeps its one separator; anything longer loses a trailing one.
+  // A root (`/`, `d:/`) keeps its one separator; anything longer loses a trailing
+  // one. Doubled separators are already folded, so there is at most one, and no
+  // regex is needed (a `/+$` strip is quadratic on a long run of slashes).
   const rootLength = drive ? "d:/".length : "/".length;
-  const trimmed = folded.length > rootLength ? folded.replace(/\/+$/, "") : folded;
+  const trimmed = folded.length > rootLength && folded.endsWith("/") ? folded.slice(0, -1) : folded;
   return drive ? trimmed.toLowerCase() : trimmed;
 }
 

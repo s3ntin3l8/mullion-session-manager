@@ -40,6 +40,13 @@ describe("host-path", () => {
     expect(hostPathKey("C:\\")).toBe("c:/");
   });
 
+  it("hostPathKey stays fast on a long run of separators", () => {
+    const started = Date.now();
+    expect(hostPathKey(`/a${"/".repeat(200_000)}b`)).toBe("/a/b");
+    expect(hostPathKey(`D:\\a${"\\/".repeat(100_000)}`)).toBe("d:/a");
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("sameHostPath: a POSIX path folds doubled and trailing separators but stays case-sensitive", () => {
     expect(sameHostPath("/srv/app", "/srv/app/")).toBe(true);
     expect(sameHostPath("/srv/app", "/srv//app")).toBe(true);
