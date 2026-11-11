@@ -162,6 +162,10 @@ const TASK_ROW_COLUMNS = {
   parentIssueTitle: tasks.parentIssueTitle,
   subIssueTotal: tasks.subIssueTotal,
   subIssueCompleted: tasks.subIssueCompleted,
+  // #2919 — the parent epic's own state and sub-issue progress.
+  parentIssueState: tasks.parentIssueState,
+  parentSubIssueTotal: tasks.parentSubIssueTotal,
+  parentSubIssueCompleted: tasks.parentSubIssueCompleted,
   createdAt: tasks.createdAt,
   updatedAt: tasks.updatedAt,
   // Task-claim queueing (rate-limit-storm fix) — when the task JOINED the

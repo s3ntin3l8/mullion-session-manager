@@ -21,6 +21,7 @@ const mockListLabeledIssues = vi.hoisted(() => vi.fn());
 const mockGetIssueState = vi.hoisted(() => vi.fn());
 const mockListBlockedByIssues = vi.hoisted(() => vi.fn());
 const mockGetIssueTitle = vi.hoisted(() => vi.fn());
+const mockGetIssueSummary = vi.hoisted(() => vi.fn());
 const mockBroadcastTaskEvent = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/task-claim.js", () => ({
@@ -46,6 +47,7 @@ vi.mock("../../src/services/github-write.js", () => ({
   getIssueState: mockGetIssueState,
   listBlockedByIssues: mockListBlockedByIssues,
   getIssueTitle: mockGetIssueTitle,
+  getIssueSummary: mockGetIssueSummary,
 }));
 vi.mock("../../src/services/task-events.js", () => ({
   broadcastTaskEvent: mockBroadcastTaskEvent,
@@ -111,6 +113,7 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
     mockListBlockedByIssues.mockReset();
     mockListBlockedByIssues.mockResolvedValue([]);
     mockGetIssueTitle.mockReset();
+    mockGetIssueSummary.mockReset();
     mockBroadcastTaskEvent.mockReset();
   });
 
@@ -452,5 +455,119 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
     const attemptsOn404 = mockGetIssueTitle.mock.calls.filter((c) => c[3] === 404).length;
     expect(attemptsOn404).toBe(2); // sweeps 2 and 3 only — capped at MAX_PARENT_TITLE_ATTEMPTS total (1 + 2)
     expect(getTask(badTask).parentIssueTitle).toBeNull();
+  });
+
+  describe("refreshParentIssueMeta (#2919)", () => {
+    it("stores the epic's own state and progress on every sibling with one fetch", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Epic");
+      mockGetIssueSummary.mockResolvedValue({
+        title: "Epic",
+        state: "open",
+        subIssues: { total: 7, completed: 3 },
+      });
+      const a = insertChildTask(projectId, { parentIssueNumber: 30 });
+      const b = insertChildTask(projectId, { parentIssueNumber: 30 });
+      await runOneSweep();
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(1);
+      for (const id of [a, b]) {
+        const row = getTask(id);
+        expect(row.parentIssueState).toBe("open");
+        expect(row.parentSubIssueTotal).toBe(7);
+        expect(row.parentSubIssueCompleted).toBe(3);
+      }
+    });
+
+    it("records a closed epic and a parent with no sub-issue summary", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Gone");
+      mockGetIssueSummary.mockResolvedValue({ title: "Gone", state: "closed", subIssues: null });
+      const a = insertChildTask(projectId, { parentIssueNumber: 31 });
+      await runOneSweep();
+      const row = getTask(a);
+      expect(row.parentIssueState).toBe("closed");
+      expect(row.parentSubIssueTotal).toBeNull();
+    });
+
+    it("refreshes a parent only after the TTL, terminal children included, and writes only changes", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Epic");
+      mockGetIssueSummary.mockResolvedValue({
+        title: "Epic",
+        state: "open",
+        subIssues: { total: 2, completed: 1 },
+      });
+      const open = insertChildTask(projectId, { parentIssueNumber: 32 });
+      // A done child of an epic recorded as closed is still re-checked after
+      // the TTL, so a reopened epic is not stranded as closed.
+      const doneChild = insertChildTask(projectId, {
+        parentIssueNumber: 33,
+        status: "done",
+        parentIssueState: "closed",
+      });
+      await runOneSweep();
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(2);
+      expect(getTask(doneChild).parentIssueState).toBe("open");
+      const stamped = getTask(open).updatedAt;
+      mockBroadcastTaskEvent.mockClear();
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(2);
+      // Past the TTL only the parent with open work is re-fetched (same values:
+      // no row rewritten, no hierarchy event); the settled one waits 6 hours.
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      expect(mockGetIssueSummary.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(mockGetIssueSummary.mock.calls.slice(2).every((c) => c[3] === 32)).toBe(true);
+      expect(getTask(open).updatedAt).toEqual(stamped);
+      expect(
+        mockBroadcastTaskEvent.mock.calls.filter((c) => c[0].kind === "hierarchy"),
+      ).toHaveLength(0);
+      const before = mockGetIssueSummary.mock.calls.length;
+      vi.setSystemTime(Date.now() + 7 * 60 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockGetIssueSummary.mock.calls.slice(before).some((c) => c[3] === 33)).toBe(true);
+      // A real change is written and announced.
+      mockGetIssueSummary.mockResolvedValue({
+        title: "Epic",
+        state: "open",
+        subIssues: { total: 2, completed: 2 },
+      });
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      expect(getTask(open).parentSubIssueCompleted).toBe(2);
+      expect(mockBroadcastTaskEvent.mock.calls.some((c) => c[0].kind === "hierarchy")).toBe(true);
+    });
+
+    it("fetches at most 20 parents per sweep and the rest on the next one", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Epic");
+      mockGetIssueSummary.mockResolvedValue({ title: "Epic", state: "open", subIssues: null });
+      for (let n = 200; n < 221; n++) insertChildTask(projectId, { parentIssueNumber: n });
+      await runOneSweep();
+      const seen = new Set(mockGetIssueSummary.mock.calls.map((c) => c[3]));
+      // Every parent is covered once the following sweep has run; none twice.
+      expect(seen.size).toBe(mockGetIssueSummary.mock.calls.length);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(new Set(mockGetIssueSummary.mock.calls.map((c) => c[3])).size).toBe(21);
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(21);
+    });
+
+    it("backs a parent that keeps failing off to the long interval", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Epic");
+      mockGetIssueSummary.mockRejectedValue(new Error("404"));
+      insertChildTask(projectId, { parentIssueNumber: 90 });
+      await runOneSweep();
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(11 * 60_000);
+      // 3 attempts at the short interval, then nothing until the long one.
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(3);
+    });
+
+    it("tolerates a failing fetch and leaves the columns null", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Epic");
+      mockGetIssueSummary.mockRejectedValue(new Error("boom"));
+      const a = insertChildTask(projectId, { parentIssueNumber: 34 });
+      await runOneSweep();
+      expect(getTask(a).parentIssueState).toBeNull();
+    });
   });
 });

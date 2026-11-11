@@ -821,15 +821,17 @@ const epicA = {
   parentIssueNumber: 10,
   parentIssueRepo: "acme/widgets",
   parentIssueTitle: "Parent A",
-  subIssueTotal: 4,
-  subIssueCompleted: 1,
+  parentIssueState: "open",
+  parentSubIssueTotal: 4,
+  parentSubIssueCompleted: 1,
 };
 const epicB = {
   parentIssueNumber: 20,
   parentIssueRepo: "acme/widgets",
   parentIssueTitle: "Parent B",
-  subIssueTotal: null,
-  subIssueCompleted: null,
+  parentIssueState: null,
+  parentSubIssueTotal: null,
+  parentSubIssueCompleted: null,
 };
 
 describe("Filter menu", () => {
@@ -845,7 +847,8 @@ describe("Filter menu", () => {
     renderBoard();
     await openMenu(user, "Filter");
     const a = screen.getByRole("checkbox", { name: "#10 Parent A 1/4" });
-    expect(screen.getByRole("checkbox", { name: "#20 Parent B 1" })).toBeInTheDocument();
+    // Not fetched yet: done tasks / tasks (0/1), never 0/0.
+    expect(screen.getByRole("checkbox", { name: "#20 Parent B 0/1" })).toBeInTheDocument();
 
     await user.click(a);
     expect(screen.getByText("in A")).toBeInTheDocument();
@@ -879,6 +882,25 @@ describe("Filter menu", () => {
     expect(screen.queryByText("in B")).toBeNull();
     await user.click(screen.getByRole("button", { name: /Remove epic filter #10 Parent A/ }));
     expect(screen.getByText("in B")).toBeInTheDocument();
+  });
+
+  it("hides closed epics unless one is selected", async () => {
+    const closed = { ...epicB, parentIssueState: "closed", parentSubIssueTotal: 2 };
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "in A", ...epicA }),
+      makeTask({ id: 2, status: "done", title: "in B", ...closed }),
+    ];
+    const user = userEvent.setup();
+    const { unmount } = renderBoard();
+    await openMenu(user, "Filter");
+    expect(screen.getByRole("checkbox", { name: /#10 Parent A/ })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /#20 Parent B/ })).toBeNull();
+    unmount();
+
+    localStorage.setItem("crs.taskEpicFilter", JSON.stringify(["acme/widgets#20"]));
+    renderBoard();
+    await openMenu(user, "Filter");
+    expect(screen.getByRole("checkbox", { name: /#20 Parent B/ })).toBeInTheDocument();
   });
 
   it("ignores a saved epic that is no longer on the board instead of blanking it", () => {
@@ -968,7 +990,7 @@ describe("Filter menu", () => {
     await pickProject(user, "demo");
     await openMenu(user, "Filter");
     await user.click(screen.getByRole("checkbox", { name: "#10 Parent A 1/4" }));
-    await user.click(screen.getByRole("checkbox", { name: "#20 Parent B 1" }));
+    await user.click(screen.getByRole("checkbox", { name: "#20 Parent B 0/1" }));
     expect(
       screen.getByText("No tasks match the selected epics in the selected projects."),
     ).toBeInTheDocument();
