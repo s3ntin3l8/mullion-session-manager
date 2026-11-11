@@ -198,6 +198,42 @@ describe("use_browser and browser_action handlers (Feature 3.7)", () => {
     expect(browserActionSpy).toHaveBeenLastCalledWith(args);
     expect(JSON.parse(text2)).toEqual(mockResult);
   });
+
+  it("screenshot returns an image block and keeps the snapshot off the base64 channel (#2899)", async () => {
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const mockResult = {
+      ok: true,
+      url: "http://localhost:5173",
+      title: "App",
+      screenshot: png,
+      snapshot: [{ ref: "e1", role: "button", name: "Save" }],
+    };
+    const browserAction = vi.fn().mockResolvedValue(mockResult);
+    const result = (await useBrowserTool.handler(
+      { action: "screenshot" },
+      { browserAction },
+    )) as unknown as {
+      content: Array<{ type: string; mimeType?: string; data?: string; text?: string }>;
+    };
+    expect(result.content[0]).toEqual({ type: "image", mimeType: "image/png", data: png });
+    expect(result.content[1].text).toContain("1x1 CSS pixels");
+    expect(result.content[1].text).toContain("image coordinates equal CSS pixels");
+    expect(result.content[1].text).toContain("e1");
+    expect(result.content[1].text).not.toContain(png);
+    const alias = (await browserActionTool.handler(
+      { action: "screenshot" },
+      { browserAction },
+    )) as unknown as { content: Array<{ type: string }> };
+    expect(alias.content[0].type).toBe("image");
+  });
+
+  it("a screenshot error stays JSON text (#2899)", async () => {
+    const mockResult = { error: "Browser feature is disabled" };
+    const browserAction = vi.fn().mockResolvedValue(mockResult);
+    const text = await useBrowserTool.handler({ action: "screenshot" }, { browserAction });
+    expect(text).toBe(JSON.stringify(mockResult));
+  });
 });
 
 describe("session/project/preview tool handlers (issue #134 part 2)", () => {

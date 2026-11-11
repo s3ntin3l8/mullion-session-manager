@@ -193,7 +193,10 @@ mcp_servers.mullion.*` overrides for Codex, its own `mcp.<name>` config
   actually reachable at session scope. `use_device` `screenshot` comes back as
   an image block, downscaled to 720 px wide by default (`maxWidth`, 0 = native)
   with a text line giving the scale; `tap`/`swipe` take native pixels, so
-  multiply coordinates read off the image by that factor.
+  multiply coordinates read off the image by that factor. `use_browser` /
+  `browser_action` `screenshot` comes back as an image block of the viewport
+  PNG (CSS pixels, not downscaled) plus the usual snapshot without the base64;
+  `mullion browser screenshot --out` still writes that same PNG.
 - **`mullion` CLI** — better when you need to reason about `--json` output
   directly in a shell pipeline, run something interactively (`mullion
 session exec`), or for `device create`/`device pair`/`device
