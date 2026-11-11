@@ -17,6 +17,7 @@ export type { GenerationTurnResult };
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
+import { commandsTableConflict } from "./scaffold-commands.js";
 import {
   GENERATED_REGION_END,
   GENERATED_REGION_START,
@@ -556,11 +557,13 @@ function instructionsItem(
     `it exactly once, replace any existing Mullion region with it, and never write ` +
     `workflow conventions yourself); then \`## Repo specifics\` (how THIS repo applies those ` +
     `conventions: its real commands, gates, CI quirks and footguns, stated as facts, not ` +
-    `rules); then the repo's existing invariants and command sections. Drop passages that ` +
+    `rules); then the repo's existing invariants and command sections. Keep a commands ` +
+    `table or list (\`make\` targets, \`npm run\` scripts) in AGENTS.md; CI internals may ` +
+    `move to CONTRIBUTING.md. Drop passages that ` +
     `contradict or restate the conventions. Mind the context budget: AGENTS.md is read in every ` +
     `session, so every line costs every session. Keep what an agent needs and cannot get from ` +
     `the repo itself (Makefile, config, CI, tool output); drop what is standard or discoverable ` +
-    `(command lists a help target prints, CI check names, timing remarks, framework ` +
+    `(CI check names, timing remarks, framework ` +
     `boilerplate). Anything needed on every change stays in AGENTS.md. Procedure that is only ` +
     `needed rarely may move to a file that is not auto-loaded (return it verbatim as a ` +
     `CONTRIBUTING append) only with a one-line pointer left in AGENTS.md saying when to read ` +
@@ -2104,6 +2107,8 @@ export interface GenerateScaffoldContentOptions {
   conventionsText?: string;
   /** The repo's current AGENTS.md, for `assessRewrite`. */
   originalAgentsMd?: string;
+  /** Issue #2933 — CLAUDE.md, so a commands table that lives only there is seen. */
+  originalClaudeMd?: string;
   /** Issue #2320 — skill and reviewer already exist and are not being
    * refreshed: ask only for the region paragraph and the instructions output.
    * Ignored (treated as false) for `keep`. */
@@ -2269,6 +2274,10 @@ export async function generateScaffoldContent(
     instructionsOnly,
     noPointer,
   });
+  const commandConflict =
+    opts.existingInstructions === "restructure"
+      ? commandsTableConflict([opts.originalAgentsMd, opts.originalClaudeMd], parsed.agentsMdBody)
+      : undefined;
   // On an instructions-only pass only the region paragraph is agent-produced
   // (the skill and reviewer fields are absent), and it is still worth checking
   // for fabricated paths. Local already checked the live worktree; remote
@@ -2284,6 +2293,7 @@ export async function generateScaffoldContent(
     );
   return {
     ...parsed,
+    ...(commandConflict ? { conflicts: [...(parsed.conflicts ?? []), commandConflict] } : {}),
     sandboxed,
     canary,
     possiblyGeneric,

@@ -1011,6 +1011,7 @@ async function executeScaffoldGeneration(
       existingInstructions,
       conventionsText: options.workflowConventionsText,
       originalAgentsMd: existingFiles["AGENTS.md"],
+      originalClaudeMd: existingFiles["CLAUDE.md"],
       // Issue #2320 — nothing of the skill or reviewer would be written,
       // so the turn is not asked for them.
       instructionsOnly: nothingToRegenerate && existingInstructions !== "keep",

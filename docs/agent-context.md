@@ -388,7 +388,14 @@ forbids) keep being obeyed. Three modes:
   `file` is `CLAUDE.md` keeps that file's body, unless its `disposition` is
   `dropped-obsolete` or `not-carried` (a passage the agent dropped on
   purpose; the panel shows the tag). No disposition, or one this build does
-  not know, keeps the body. `possiblyLossy` keeps it regardless.
+  not know, keeps the body. `possiblyLossy` keeps it regardless. A commands
+  table or list (`make` targets, `npm run` scripts) in the original
+  `AGENTS.md` or `CLAUDE.md` must survive in the rewritten `AGENTS.md`; if
+  fewer than half of those commands do, the panel lists an `AGENTS.md`
+  conflict with kind `commands` and no disposition. A table cell counts
+  bare or backticked; a list item counts only when the command is
+  backticked, so a prose bullet does not. CI internals may still
+  move to `CONTRIBUTING.md`.
 
 A `report`/`restructure` turn always starts from a clean checkout of the base
 ref, and so does the next request after one, so switching the choice back to
