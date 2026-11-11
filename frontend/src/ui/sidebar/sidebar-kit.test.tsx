@@ -31,7 +31,8 @@ describe("IconButton", () => {
     expect(onClick).toHaveBeenCalled();
   });
 
-  /** Focus as a keyboard user would: jsdom does not model :focus-visible. */
+  /** Focus as a keyboard user would. jsdom does match :focus-visible after el.focus(),
+     but fireEvent.focus never moves document.activeElement, so stub the selector. */
   function keyboardFocus(el: HTMLElement) {
     const orig = el.matches.bind(el);
     vi.spyOn(el, "matches").mockImplementation((sel) => sel === ":focus-visible" || orig(sel));

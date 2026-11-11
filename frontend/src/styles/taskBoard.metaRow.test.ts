@@ -22,11 +22,13 @@ describe("task card meta row", () => {
     expect(rule(".task-card-meta-links")).toMatch(/flex-wrap:\s*wrap/);
     expect(rule(".task-card-meta-links")).toMatch(/min-width:\s*0/);
   });
-  it("lets each item shrink and truncate on its own", () => {
+  it("lets each item shrink and clip on its own", () => {
     const items = rule(
       ".task-card-meta-links .task-card-issue,\n.task-card-meta-links .task-card-pr,\n.task-card-meta-links .task-card-agent,\n.task-card-meta-links .task-card-age",
     );
     expect(items).toMatch(/min-width:\s*0/);
+    expect(items).toMatch(/overflow:\s*hidden/);
+    // The age item is the one that actually renders the ellipsis.
     expect(items).toMatch(/text-overflow:\s*ellipsis/);
   });
 });

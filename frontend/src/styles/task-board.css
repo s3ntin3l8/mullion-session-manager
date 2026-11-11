@@ -100,12 +100,10 @@
   border-left-color: var(--task-epic-colour, var(--ring));
   box-shadow: 0 0 0 1px var(--ring);
 }
-/* The links row wraps (agent and age drop to a second line) instead of spilling past the
-   card when the board is narrow, e.g. with the right sidebar open (#2917). Each item stays
-   on one line and truncates only if it alone is wider than the card. */
-.task-card {
-  min-width: 0;
-}
+/* The links row wraps (issue+PR, agent and age each fall onto their own line when the card
+   is very narrow) instead of spilling past the card, e.g. with the right sidebar open
+   (#2917). An item wider than the card on its own is clipped; the ellipsis only renders on
+   the age, because the link items are flex containers. */
 .task-card-meta-links {
   flex-wrap: wrap;
   row-gap: 2px;

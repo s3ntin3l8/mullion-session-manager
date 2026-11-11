@@ -308,7 +308,7 @@
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 13
+        "nodes": 12
       }
     ],
     "console": []
@@ -344,7 +344,7 @@
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 13
+        "nodes": 12
       }
     ],
     "console": []
