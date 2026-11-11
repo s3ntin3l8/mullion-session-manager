@@ -2272,18 +2272,6 @@ describe("existingInstructions (issue #2316)", () => {
       expect(r.droppedConflictLines).toBe(3);
     });
 
-    it("keeps a deliberate-drop disposition and ignores an unknown one (#2934)", () => {
-      const raw =
-        validOutput("demo") +
-        `<<<MULLION_CONFLICTS_START>>>\n${line({ ...good, disposition: "not-carried" })}\n${line({ ...good, file: "CLAUDE.md", disposition: "nope" })}\n<<<MULLION_CONFLICTS_END>>>\n`;
-      const r = parseGeneratedOutput(raw, "demo", { mode: "report" });
-      expect(r.conflicts).toEqual([
-        { ...good, disposition: "not-carried" },
-        { ...good, file: "CLAUDE.md" },
-      ]);
-      expect(r.droppedConflictLines).toBe(0);
-    });
-
     it("returns an empty list for 'none' (with or without a full stop)", () => {
       for (const word of ["none", "None.", "NONE"]) {
         const raw =

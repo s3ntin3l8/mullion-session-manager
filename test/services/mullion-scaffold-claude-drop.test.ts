@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DROP_DISPOSITIONS, type DropDisposition } from "../../src/shared/constants.js";
 import { computeScaffold } from "../../src/services/mullion-scaffold.js";
+import { parseConflicts } from "../../src/services/scaffold-generate.js";
 
 // Issue #2934. Kept out of mullion-scaffold.test.ts, which sits under the
 // 1200-line ceiling with no room for another case.
@@ -42,5 +43,22 @@ describe("CLAUDE.md reduction and deliberate drops (issue #2934)", () => {
         conflicts: [{ file: "CLAUDE.md", disposition: "dropped-obsolete" }],
       }),
     ).toContain("Rule number 199");
+  });
+
+  it("keeps a deliberate-drop disposition and strips an unknown one", () => {
+    const line = (disposition: string, file = "AGENTS.md") =>
+      JSON.stringify({ file, excerpt: "x", kind: "contradicts", note: "n", disposition });
+    const parsed = parseConflicts([line("not-carried"), line("nope", "CLAUDE.md")].join("\n"));
+    expect(parsed.conflicts).toEqual([
+      {
+        file: "AGENTS.md",
+        excerpt: "x",
+        kind: "contradicts",
+        note: "n",
+        disposition: "not-carried",
+      },
+      { file: "CLAUDE.md", excerpt: "x", kind: "contradicts", note: "n" },
+    ]);
+    expect(parsed.dropped).toBe(0);
   });
 });
