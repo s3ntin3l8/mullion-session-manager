@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
+import { eq, and, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
@@ -41,7 +41,9 @@ export interface HostSummary {
   // ("darwin" | "linux" | "win32" | …), free-form and informational, same
   // non-enforced posture as hosts.agentMetadata and bridges.platform. Null
   // for a host that never reported one (a manually-added host, or an agent
-  // build that predates the field) — a legitimate state, not a defect.
+  // build that predates the field) — a legitimate state, not a defect. A
+  // host added by hand never enrolls, so it is filled from its capacity
+  // report by the heartbeat sweep instead (fillHostPlatformIfUnset).
   platform: string | null;
   // Issue #1725 / roadmap 8.11 — whether this host is PARKED: it takes no
   // new work (the placement policy stops choosing it), but nothing about it
@@ -959,6 +961,36 @@ export function recordHostSelfReport(
   if (report.platform !== undefined && report.platform !== "") patch.platform = report.platform;
   if (Object.keys(patch).length === 0) return;
   app.db.update(hosts).set(patch).where(eq(hosts.id, hostId)).run();
+}
+
+/** What a reported platform must look like to be stored: `process.platform`
+ * values are short lowercase tokens ("linux", "darwin", "win32", "freebsd"). */
+const REPORTED_PLATFORM = /^[a-z0-9_-]{1,32}$/;
+
+/**
+ * Fills `hosts.platform` from a capacity report, for a host that never
+ * enrolled (a host added by hand has no session, so `recordHostSelfReport`
+ * never runs for it and its platform stayed NULL even though every heartbeat
+ * sweep receives it).
+ *
+ * Only an EMPTY platform (null, or the empty string the registry treats as
+ * "unreported") is filled: an enrolled agent's own self-report stays
+ * authoritative, and a later report never rewrites it. The value comes from a
+ * REMOTE host, so anything that is not a short lowercase token is ignored.
+ * Returns whether the row was changed.
+ */
+export function fillHostPlatformIfUnset(
+  app: FastifyInstance,
+  hostId: string,
+  platform: unknown,
+): boolean {
+  if (typeof platform !== "string" || !REPORTED_PLATFORM.test(platform)) return false;
+  const result = app.db
+    .update(hosts)
+    .set({ platform })
+    .where(and(eq(hosts.id, hostId), or(isNull(hosts.platform), eq(hosts.platform, ""))))
+    .run();
+  return result.changes > 0;
 }
 
 /**
