@@ -126,4 +126,31 @@ describe("GET /api/fs/dirs", () => {
     const res = await app.inject({ url: `/api/fs/dirs?path=${encodeURIComponent(root)}` });
     expect(res.statusCode).toBe(401);
   });
+
+  it("bounds scanning even when every entry is a file", async () => {
+    let scanned = 0;
+    let closed = false;
+    vi.mocked(opendir).mockResolvedValueOnce({
+      async *[Symbol.asyncIterator]() {
+        try {
+          for (let i = 0; i < 20000; i++) {
+            scanned++;
+            yield {
+              name: `file-${i}`,
+              isDirectory: () => false,
+              isSymbolicLink: () => false,
+            };
+          }
+        } finally {
+          closed = true;
+        }
+      },
+    } as Awaited<ReturnType<typeof opendir>>);
+    const res = await list(root);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().directories).toEqual([]);
+    expect(res.json().truncated).toBe(true);
+    expect(scanned).toBe(10001);
+    expect(closed).toBe(true);
+  });
 });

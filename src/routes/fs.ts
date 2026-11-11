@@ -31,8 +31,11 @@ export async function fsRoute(app: FastifyInstance): Promise<void> {
       }
 
       try {
-        // Resolve against the filesystem, including symlinks and .., before
-        // returning navigation paths. No arbitrary file data is read.
+        // This authenticated picker intentionally accepts any absolute directory:
+        // the same API boundary can already launch a session in an arbitrary cwd.
+        // Limiting it to project roots would prevent browsing for new projects.
+        // Resolve symlinks and .. before returning navigation paths, and read no
+        // file data.
         const path = await realpath(expanded);
         const directories: { name: string; path: string }[] = [];
         let scanned = 0;
