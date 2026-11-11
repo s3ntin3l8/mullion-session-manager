@@ -227,7 +227,21 @@ describe("TaskDetailView review reviewer", () => {
     });
     renderDetail(t.id);
     const row = sessionsRow(screen.getByTestId("task-detail-view"));
-    expect(row.textContent).toContain("reviewer");
+    expect(within(row as HTMLElement).getByRole("button", { name: /^reviewer · / })).toBeTruthy();
+    expect(row.textContent).not.toContain("Hermes");
+    expect(row.textContent).not.toContain("reviewer: none");
+  });
+  it("does not claim Hermes reviewed when the reviewer session is no longer in the store", () => {
+    const t = task({
+      status: "reviewing",
+      reviewSessionId: 55,
+      reviewRunId: "r",
+      reviewRunIngestedId: "r",
+    } as never);
+    setTasks([t], { sessions: [] });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("reviewer: ended");
     expect(row.textContent).not.toContain("Hermes");
   });
   it("keeps 'reviewer: none' with neither a session nor a run", () => {

@@ -40,9 +40,23 @@ const BODY_COLLAPSED_CHARS = 280;
 
 const HERMES_LABEL = { running: "running", finished: "finished", unsent: "not sent" } as const;
 
-function SessionPill({ role, session }: { role: string; session: Session | undefined }) {
+function SessionPill({
+  role,
+  session,
+  ended = false,
+}: {
+  role: string;
+  session: Session | undefined;
+  /** The task names a session that is no longer in the store (the card says "ended"). */
+  ended?: boolean;
+}) {
   const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
-  if (!session) return <span className="sb-dim">{role}: none</span>;
+  if (!session)
+    return (
+      <span className="sb-dim">
+        {role}: {ended ? "ended" : "none"}
+      </span>
+    );
   const presentation = STATUS_PRESENTATION[session.sessionStatus];
   return (
     <StatusChip
@@ -301,7 +315,11 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
                   Hermes · {HERMES_LABEL[runState]}
                 </StatusChip>
               ) : (
-                <SessionPill role="reviewer" session={reviewer} />
+                <SessionPill
+                  role="reviewer"
+                  session={reviewer}
+                  ended={task.reviewSessionId !== null}
+                />
               )}
             </dd>
           </dl>
