@@ -364,7 +364,7 @@ describe("reconcileTasks re-adopts a local null (issue #2929)", () => {
     expect(getOrCreate).not.toHaveBeenCalled();
   });
 
-  it("does not budget-fail a past-deadline task whose scope cannot be verified", async () => {
+  it("still budget-fails a past-deadline task whose scope cannot be verified", async () => {
     process.env.MULLION_TASK_BUDGET_MINUTES = "1";
     const app = await buildTestApp();
     app.db.delete(tasks).run();
@@ -384,8 +384,31 @@ describe("reconcileTasks re-adopts a local null (issue #2929)", () => {
       .from(tasks)
       .all()
       .find((row) => row.id === task.id);
-    expect(saved?.status).toBe("in_progress");
+    expect(saved?.status).toBe("failed");
+    expect(saved?.failureReason).toContain("budget exceeded");
     expect(getOrCreate).not.toHaveBeenCalled();
+  });
+
+  it("does not budget-fail a task still inside its budget when the scope cannot be verified", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "60";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("unknown");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("in_progress");
   });
 
   it("retries a reviewing session whose scope cannot be verified, without failing it", async () => {

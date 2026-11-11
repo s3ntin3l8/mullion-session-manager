@@ -9,7 +9,11 @@ import type { SessionStatus } from "../shared/types.js";
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
-import { healUntrackedLocalSession } from "./session-adopt.js";
+import {
+  healUntrackedLocalSession,
+  TASK_REVIEW_STATUS,
+  TASK_WORKER_STATUSES,
+} from "./session-adopt.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
 // attemptAutoRebase's stale-attempt-termination branch below for why this
@@ -3899,7 +3903,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
     .from(tasks)
     .innerJoin(sessions, eq(tasks.reviewSessionId, sessions.id))
     .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(eq(tasks.status, "reviewing"))
+    .where(eq(tasks.status, TASK_REVIEW_STATUS))
     .all();
   pruneLateFindingsCaches(
     new Set(
@@ -4835,7 +4839,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
     .from(tasks)
     .innerJoin(sessions, eq(tasks.sessionId, sessions.id))
     .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(inArray(tasks.status, ["claimed", "in_progress"]))
+    .where(inArray(tasks.status, [...TASK_WORKER_STATUSES]))
     .all();
   // `if (rows.length > 0) { ... }`, NOT an early `return` — processPendingReviewSpawns
   // below must run every tick regardless of whether anything is
@@ -4881,10 +4885,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           const { task, session, project } = row;
           const now = new Date();
 
-          // #2929 — same "null means not adopted yet" rule as the review
-          // pass. Adopt BEFORE the budget check: a worker that already
-          // finished is salvaged instead of budget-failed, and an
-          // unverifiable scope is retried next tick rather than failed.
+          // #2929 — null means not adopted yet. Adopt before the budget check
+          // so a finished worker is salvaged. An unverifiable scope retries
+          // next tick unless the budget has already expired.
           if (
             await healUntrackedLocalSession(
               app,
@@ -4893,6 +4896,8 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               liveMap,
               idleThresholdMs,
               backend,
+              budgetMinutes > 0 &&
+                now > new Date(task.claimedAt!.getTime() + budgetMinutes * 60_000),
             )
           ) {
             continue;
