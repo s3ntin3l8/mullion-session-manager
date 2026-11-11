@@ -136,6 +136,17 @@ describe("right sidebar actions", () => {
       expect(s().sidebarHistory).toHaveLength(1);
       expect(s().takeSidebarBack(pr12)).toEqual({ kind: "pr", projectId: 3, number: 99 });
     });
+    it("prunes when the panel's own drill-in moves without a history call", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, task5);
+      expect(s().sidebarHistory).toHaveLength(1);
+      s().setGithubOpenPr(3, null);
+      expect(s().sidebarHistory).toEqual([]);
+      s().openRightSidebarPr(3, 12, task5);
+      s().setGithubOpenPr(3, null);
+      s().setGithubOpenIssue(3, 7);
+      expect(s().sidebarHistory).toEqual([]);
+    });
     it("is cleared by any other navigation", () => {
       const nav = [
         () => useDashboardStore.getState().selectTask(null),

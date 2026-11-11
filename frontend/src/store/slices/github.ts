@@ -4,6 +4,7 @@ import type { StateCreator } from "zustand";
 // own re-export), the backend's /ws/github push-event shape. Used below to
 // narrow connectGitHubWS's incoming message instead of hand-inspecting an
 // `unknown`-typed parse.
+import { currentSidebarLocation, pruneSidebarHistory } from "../sidebarHistory.js";
 import type { GitHubWSEvent } from "../../../../src/shared/ws-protocol.js";
 import type { DashboardState, GithubCacheEntry, GithubSlice } from "../types.js";
 import { registerGithubCacheReset } from "../githubCacheReset.js";
@@ -128,9 +129,17 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
     },
 
     setGithubOpenIssue: (projectId, number) =>
-      set((s) => ({
-        githubOpenIssueByProject: { ...s.githubOpenIssueByProject, [projectId]: number },
-      })),
+      set((s) => {
+        const githubOpenIssueByProject = { ...s.githubOpenIssueByProject, [projectId]: number };
+        // Same as setGithubOpenPr: a moved drill-in leaves stale history entries behind.
+        return {
+          githubOpenIssueByProject,
+          sidebarHistory: pruneSidebarHistory(
+            s.sidebarHistory,
+            currentSidebarLocation({ ...s, githubOpenIssueByProject }),
+          ),
+        };
+      }),
 
     patchGithubIssueUi: (projectId, patch) =>
       set((s) => ({
