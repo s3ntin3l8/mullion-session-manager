@@ -8,7 +8,12 @@ import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { SidebarRepoTitleContext } from "./right-sidebar/sidebarToolbarSlot.js";
 import { api } from "./api/index.js";
-import type { ProjectReleaseStatus, ReleaseRunReason, ReleaseMergeReason } from "./api/index.js";
+import type {
+  ProjectReleaseStatus,
+  ReleaseRunReason,
+  ReleaseMergeReason,
+  ReleaseApproveRunsReason,
+} from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useGitHubStatus, usePrList } from "./hooks/useGitHubData.js";
 import { useMullionLinks } from "./hooks/useMullionLinks.js";
@@ -44,6 +49,22 @@ function runReasonMessage(
       return detail ? `Failed to start a release run: ${detail}` : "Failed to start a release run.";
     default:
       return "Failed to start a release run.";
+  }
+}
+
+function approveReasonMessage(
+  reason: ReleaseApproveRunsReason | undefined,
+  detail: string | undefined,
+): string {
+  switch (reason) {
+    case "no-release-pr":
+      return "There is no release PR open to approve runs for.";
+    case "no-held-runs":
+      return "No runs are waiting for approval.";
+    case "forbidden":
+      return "The connected token can't approve workflow runs — it needs Actions: write.";
+    default:
+      return detail ? `Failed to approve the runs: ${detail}` : "Failed to approve the runs.";
   }
 }
 
@@ -108,15 +129,47 @@ function ReleaseSection({
 }) {
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [runNotice, setRunNotice] = useState<string | null>(null);
+  const [isApproving, setIsApproving] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
+  const [approveNotice, setApproveNotice] = useState<string | null>(null);
   const [isMerging, setIsMerging] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
+
+  const handleApprove = useCallback(async () => {
+    setIsApproving(true);
+    setApproveError(null);
+    setApproveNotice(null);
+    try {
+      const result = await api.postProjectReleaseApproveRuns(projectId);
+      if (result.reason === undefined) {
+        setApproveNotice(
+          `Approved ${result.approved} workflow run${result.approved === 1 ? "" : "s"} — CI is starting.`,
+        );
+        onChanged();
+      } else {
+        const msg = approveReasonMessage(result.reason, result.detail);
+        setApproveError(result.approved > 0 ? `Approved ${result.approved}, but: ${msg}` : msg);
+        // A partial approval or a stale count: refetch so the button is honest.
+        onChanged();
+      }
+    } catch (err) {
+      setApproveError(err instanceof Error ? err.message : "Failed to approve the runs.");
+    } finally {
+      setIsApproving(false);
+    }
+  }, [projectId, onChanged]);
 
   const handleRun = useCallback(async () => {
     setIsRunning(true);
     setRunError(null);
+    setRunNotice(null);
     try {
       const result = await api.postProjectReleaseRun(projectId);
       if (result.dispatched) {
+        // A dispatched run takes a while to open or update the PR, so say
+        // that it started: the section itself rarely changes right away.
+        setRunNotice("Release-please started — the release PR updates when it finishes.");
         onChanged();
       } else {
         setRunError(runReasonMessage(result.reason, result.detail));
@@ -217,6 +270,17 @@ function ReleaseSection({
             >
               {isRunning ? "Running…" : "Run"}
             </Button>
+            {pr !== null && pr.heldRuns > 0 && (
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={handleApprove}
+                disabled={isApproving}
+                title="GitHub is holding this PR's workflow runs until someone approves them"
+              >
+                {isApproving ? "Approving…" : `Approve runs (${pr.heldRuns})`}
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={handleMerge}
@@ -238,6 +302,23 @@ function ReleaseSection({
         <div className="github-panel-empty-row">
           Run is unavailable: add <code>workflow_dispatch:</code> to <code>{workflowPath}</code>.
         </div>
+      )}
+      {pr !== null && pr.heldRuns > 0 && !approveNotice && (
+        <div className="github-panel-empty-row">
+          {pr.heldRuns} workflow run{pr.heldRuns === 1 ? " is" : "s are"} waiting for approval, so
+          CI has not started on this release PR.
+        </div>
+      )}
+      {pr !== null && pr.noRuns && (
+        <div className="github-panel-empty-row">
+          CI has not started on this release PR: GitHub opened it with the workflow token, which
+          cannot trigger workflows. Push to its branch, or close and reopen it, to start CI.
+        </div>
+      )}
+      {runNotice && <div className="github-panel-empty-row">{runNotice}</div>}
+      {approveNotice && <div className="github-panel-empty-row">{approveNotice}</div>}
+      {approveError && (
+        <div className="github-panel-empty-row github-panel-conflicts">{approveError}</div>
       )}
       {runError && <div className="github-panel-empty-row github-panel-conflicts">{runError}</div>}
       {mergeError && (

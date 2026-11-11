@@ -238,6 +238,8 @@ export type {
   ReleasePullRequestStatus,
   ReleaseRunReason,
   ReleaseRunResult,
+  ReleaseApproveRunsReason,
+  ReleaseApproveRunsResult,
   ReleaseMergeReason,
   ReleaseMergeResult,
   SyncStatus,

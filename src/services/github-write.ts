@@ -31,6 +31,8 @@ export {
   listWorkflows,
   findReleasePleaseWorkflow,
   dispatchWorkflow,
+  listHeldRuns,
+  approveRun,
   findReleasePullRequest,
   detectReleaseWorkflow,
   invalidateReleaseWorkflowCache,
