@@ -215,7 +215,7 @@ export function TaskActions({
             try {
               await retryTask(task.id);
             } catch (err) {
-              setError(err instanceof ApiError ? err.message : "Failed to retry task");
+              setError(err instanceof Error ? err.message : "Failed to retry task");
             } finally {
               setSubmitting(false);
             }

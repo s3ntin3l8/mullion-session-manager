@@ -46,7 +46,7 @@ vi.mock("../../src/services/task-prompt.js", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { retryTask } = await import("../../src/services/task-claim.js");
+const { retryTask } = await import("../helpers/retry-task.js");
 const { buildWorkerPrompt } = await import("../../src/services/task-prompt.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { createWorktree } = await import("../../src/services/git-worktree.js");

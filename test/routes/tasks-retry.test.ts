@@ -34,6 +34,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { retryPendingReviewPosts } = await import("../../src/services/task-review-post.js");
+const { waitForTaskRunning } = await import("../helpers/retry-task.js");
 
 const tmpDb = path.join(os.tmpdir(), `tasks-retry-route-test-${process.pid}.db`);
 
@@ -94,9 +95,10 @@ describe("POST /api/tasks/:id/retry — a superseded copy is refused (#2292)", (
 
     const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
 
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(202);
+    // Queued: the dispatch sweep starts the retry; the marker survives until then.
+    await waitForTaskRunning(app, task.id);
     const read = () => app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
-    expect(read().status).toBe("in_progress");
     expect(read().reviewPostPending).toBe("review-post-failed");
     await retryPendingReviewPosts(app, () => {});
     expect(read().reviewPostPending).toBeNull();

@@ -17,7 +17,8 @@ import {
   type TaskRow,
 } from "../services/task-store.js";
 import * as mergeHuman from "../services/task-merge-human.js";
-import { enqueueTask, retryTask } from "../services/task-claim.js";
+import { enqueueTask } from "../services/task-claim.js";
+import { enqueueRetry } from "../services/task-retry.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
@@ -1059,9 +1060,11 @@ export async function tasksRoute(app: FastifyInstance) {
     },
   );
 
-  // #483 — retries a "failed" task by resuming on its preserved branch
-  // (task-claim.ts's retryTask). Same gate as claim: this leads to
-  // spawning a session, genuinely new autonomous work the flag must cover.
+  // #483 — retries a "failed" task by queueing a resume on its preserved
+  // branch (task-retry.ts's enqueueRetry); the dispatch sweep starts it when a
+  // concurrency slot is free, so a full cap queues the retry instead of
+  // refusing it. Same gate as claim: this leads to spawning a session,
+  // genuinely new autonomous work the flag must cover.
   app.post<{ Params: { id: string }; Body: RetryTaskBody }>(
     "/api/tasks/:id/retry",
     { schema: retryTaskSchema },
@@ -1076,13 +1079,15 @@ export async function tasksRoute(app: FastifyInstance) {
 
       const hermesRefusal = hermesReviewAgentRefusal(app, request.body?.reviewAgent);
       if (hermesRefusal) return reply.badRequest(hermesRefusal);
-      const outcome = await retryTask(app, taskId, request.body || undefined);
+      const outcome = await enqueueRetry(app, taskId, request.body || undefined);
       if (!outcome.ok) {
         return retryRefusal(reply, outcome);
       }
 
-      reply.code(201);
-      return { ...outcome.session, seedDelivered: outcome.seedDelivered };
+      // Queued, not started: the dispatch sweep resumes the branch once a
+      // concurrency slot is free (same 202 as claim).
+      reply.code(202);
+      return selectTaskRow(taskId);
     },
   );
 

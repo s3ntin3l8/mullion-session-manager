@@ -34,7 +34,7 @@ const approveTask = vi.fn(async () => makeTask({}));
 const mergeTask = vi.fn(async () => makeTask({}));
 const approveWorkflowChange = vi.fn(async () => {});
 const rejectTask = vi.fn(async () => makeTask({}));
-const retryTask = vi.fn(async () => makeSession({ id: 100 }));
+const retryTask = vi.fn(async () => makeTask({ id: 1, status: "claimed" }));
 const giveUpTask = vi.fn(async () => makeTask({}));
 const reReviewTask = vi.fn(async () => makeTask({}));
 const refreshTasks = vi.fn(async () => {});
@@ -1681,7 +1681,8 @@ describe("TaskDetail action failure paths", () => {
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(screen.getByText("Failed to retry task")).toBeInTheDocument();
+    // The refusal's own message is shown, not a generic fallback.
+    expect(screen.getByText("branch already checked out")).toBeInTheDocument();
     expect(onOpenSession).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Retry" })).not.toBeDisabled();
   });

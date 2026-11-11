@@ -438,12 +438,12 @@ export interface TasksSlice {
   // reviewing -> in_progress: optional feedback, re-seeds the worker if its
   // session already exited.
   rejectTask: (id: number, feedback?: string) => Promise<Task>;
-  // #483 — failed -> claimed: resumes on the preserved branch, spawning a
-  // new session there. Same return shape as claimTask.
+  // #483 — failed -> claimed: queues a resume on the preserved branch; it
+  // starts when a slot is free. Same return shape as claimTask.
   retryTask: (
     id: number,
     opts?: { agent?: string | null; reviewAgent?: string | null },
-  ) => Promise<Session>;
+  ) => Promise<Task>;
   // #483 — reviewing -> failed: the other resolver of a reviewing task.
   giveUpTask: (id: number, reason?: string) => Promise<Task>;
   // Issue #1345 — reviewing -> reviewing: re-arms a task stuck on

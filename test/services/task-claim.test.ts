@@ -104,8 +104,8 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { enqueueTask, dispatchClaimedTask, retryTask } =
-  await import("../../src/services/task-claim.js");
+const { enqueueTask, dispatchClaimedTask } = await import("../../src/services/task-claim.js");
+const { retryTask } = await import("../helpers/retry-task.js");
 const { tasks, projects, hosts } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
@@ -2555,31 +2555,6 @@ describe("retryTask (#483)", () => {
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
-  });
-
-  it("enforces the concurrency cap the same way claimTask does", async () => {
-    const app = await buildApp();
-    const original = app.config.MULLION_TASK_MAX_CONCURRENT;
-    app.config.MULLION_TASK_MAX_CONCURRENT = 0;
-    try {
-      const cwd = createGitRepo();
-      const projectId = await createProject(app, cwd);
-      const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 72);
-
-      const outcome = await retryTask(app, task.id);
-
-      expect(outcome).toMatchObject({ ok: false, reason: "cap", limit: 0 });
-      // `detail` is what routes/tasks.ts forwards as the 429's `message` —
-      // pin it here too, at the source, not only through the HTTP layer.
-      if (!outcome.ok) expect(outcome.detail).toContain("0");
-      const row = getTask(app, task.id);
-      expect(row.status).toBe("failed");
-
-      fs.rmSync(cwd, { recursive: true, force: true });
-    } finally {
-      app.config.MULLION_TASK_MAX_CONCURRENT = original;
-      await app.close();
-    }
   });
 
   it("still retries with an unseedable agent, marking seedDelivered false — always human-initiated, no auto/manual split", async () => {

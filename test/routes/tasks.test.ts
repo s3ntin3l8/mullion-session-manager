@@ -117,6 +117,7 @@ vi.mock("../../src/services/task-promote.js", () => ({
 }));
 
 const { buildApp } = await import("../../src/app.js");
+const { waitForTaskRunning } = await import("../helpers/retry-task.js");
 const { closeDb } = await import("../../src/db/client.js");
 // Task-claim queueing (rate-limit-storm fix) — claim now only ENQUEUES
 // (202, no session yet); dispatchClaimedTask is the exported primitive
@@ -973,24 +974,16 @@ describe("tasks route", () => {
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
 
-      expect(res.statusCode).toBe(201);
-      const session = res.json();
-      expect(fs.readFileSync(path.join(session.cwd, "work.txt"), "utf8")).toBe(
+      // 202 + the task row (queued, like claim); the sweep then resumes the branch.
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toMatchObject({ id: task.id, branchName: task.branchName });
+
+      await waitForTaskRunning(app, task.id);
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json()).toMatchObject({ failureReason: null, completedAt: null });
+      expect(fs.readFileSync(path.join(task.worktreePath ?? "", "work.txt"), "utf8")).toBe(
         "real committed work",
       );
-
-      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
-      // Task-claim queueing (rate-limit-storm fix) — a successful retry now
-      // lands directly on "in_progress", not "claimed" (see task-claim.ts's
-      // retryTask — a "claimed" row is defined everywhere else as
-      // session-less/queued, and a retry already has a real, running
-      // session by this point).
-      expect(check.json()).toMatchObject({
-        status: "in_progress",
-        branchName: task.branchName,
-        failureReason: null,
-        completedAt: null,
-      });
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
@@ -1062,11 +1055,11 @@ describe("tasks route", () => {
         url: `/api/tasks/${task.id}/retry`,
         payload: { agent: "codex", reviewAgent: "none" },
       });
-      expect(res.statusCode).toBe(201);
+      expect(res.statusCode).toBe(202);
+      await waitForTaskRunning(app, task.id);
 
       const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
       expect(check.json()).toMatchObject({
-        status: "in_progress",
         agent: "codex",
         reviewAgent: "none",
         agentCommand: "codex",

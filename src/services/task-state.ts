@@ -57,7 +57,8 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   in_progress: ["reviewing", "failed"],
   reviewing: ["done", "in_progress", "failed"],
   done: [],
-  failed: ["backlog", "ready"],
+  // claimed: Retry queues a resume of the preserved branch (task-retry.ts).
+  failed: ["backlog", "ready", "claimed"],
 };
 
 export function canTransition(from: TaskStatus, to: TaskStatus): boolean {

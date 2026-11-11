@@ -1,7 +1,7 @@
 // Task Master CRUD + lifecycle transitions. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
-import type { Task, Session, ClearDoneResult } from "./types.js";
+import type { Task, ClearDoneResult } from "./types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
 
 export const tasksApi = {
@@ -136,11 +136,11 @@ export const tasksApi = {
       body: JSON.stringify(feedback ? { feedback } : {}),
     }),
 
-  // #483 — failed -> claimed: resumes on the task's preserved
-  // mullion/task-<id> branch (no work lost) rather than starting a fresh
-  // one, spawning a new session there. Same response shape as claimTask.
+  // #483 — failed -> claimed: queues a resume on the task's preserved
+  // mullion/task-<id> branch (no work lost); it starts when a concurrency
+  // slot is free. Same response shape as claimTask.
   retryTask: (id: number, opts?: { agent?: string | null; reviewAgent?: string | null }) =>
-    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/retry`, {
+    request<Task>(`/api/tasks/${id}/retry`, {
       method: "POST",
       body: opts ? JSON.stringify(opts) : undefined,
     }),

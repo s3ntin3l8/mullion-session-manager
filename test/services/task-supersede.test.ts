@@ -34,7 +34,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { closeDb } = await import("../../src/db/client.js");
-const { retryTask } = await import("../../src/services/task-claim.js");
+const { retryTask } = await import("../helpers/retry-task.js");
 const { tasks } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 
