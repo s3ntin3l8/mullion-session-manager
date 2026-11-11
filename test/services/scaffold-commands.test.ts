@@ -47,9 +47,20 @@ describe("commandsTableConflict (issue #2933)", () => {
   });
 
   it("does not treat a longer command name as covering the shorter one", () => {
-    const conflict = commandsTableConflict(["- make test\n- make lint"], "make test-coverage");
+    const conflict = commandsTableConflict(["- `make test`\n- `make lint`"], "make test-coverage");
     expect(conflict?.excerpt).toContain("make test");
     expect(conflict?.excerpt).toContain("make lint");
+  });
+
+  it("ignores a prose list item that merely starts with make", () => {
+    const prose = [
+      "- `make test`",
+      "- `make lint`",
+      "- `npm run build`",
+      "- make sure the lockfile is committed",
+      "- make it obvious",
+    ].join("\n");
+    expect(commandsTableConflict([prose], "make test\nmake lint")).toBeUndefined();
   });
 });
 
@@ -119,6 +130,49 @@ describe("restructure prompt and result (issue #2933)", () => {
         },
       ).find((e) => e.path === "CLAUDE.md");
       expect((claude as { contents: string }).contents).not.toContain("rule");
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("sees a commands table that lives only in CLAUDE.md", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "commands-claude-"));
+    fs.mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
+    fs.writeFileSync(path.join(cwd, "README.md"), "# test\n");
+    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["commit", "-m", "init", "--no-verify"], {
+      cwd,
+      stdio: "pipe",
+      env: gitEnv(),
+    });
+    const agents = "# P\n\nIntro.\n\n<<<MULLION_REGION>>>\n";
+    const claudeMd = `# Claude\n\n## Commands\n${table}\n`;
+    const stdout =
+      `<<<MULLION_SKILL_START>>>\n---\nname: demo\n---\nReal invariant.\n<<<MULLION_SKILL_END>>>\n` +
+      `<<<MULLION_REVIEWER_START>>>\n---\nname: demo-reviewer\ndescription: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"\n---\nRead .claude/skills/demo/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
+      `<<<MULLION_SCAFFOLD_REGION_START>>>\nPointer.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n` +
+      `<<<MULLION_AGENTS_MD_START>>>\n# P\n\n<<<MULLION_REGION>>>\n\n## Repo specifics\n- make test\n<<<MULLION_AGENTS_MD_END>>>\n`;
+    const spawn: SpawnGenerationTurn = async () => stdout;
+    try {
+      const result = await generateScaffoldContent({
+        app: {} as never,
+        hostId: LOCAL_HOST_ID,
+        cwd,
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasScaffoldRegion: false,
+        existingInstructions: "restructure",
+        originalAgentsMd: agents,
+        originalClaudeMd: claudeMd,
+        spawn,
+      });
+      expect(result.conflicts?.find((c) => c.kind === "commands")).toMatchObject({
+        file: "AGENTS.md",
+      });
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
     }

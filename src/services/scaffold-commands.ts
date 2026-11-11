@@ -3,7 +3,10 @@
 // disposition: a disposition on CLAUDE.md is what allows that file to shrink,
 // and this check must not look like one.
 
-const COMMAND_RE = /\b(?:make\s+[A-Za-z0-9_.:-]+|npm\s+run\s+[A-Za-z0-9_.:-]+)\b/g;
+// Only a backticked token counts. A bare "make sure" / "make it" in a list
+// or table cell is prose, and it used to flip the half-kept rule.
+const COMMAND_TOKEN = String.raw`(?:make\s+[A-Za-z0-9_.:-]+|npm\s+run\s+[A-Za-z0-9_.:-]+)`;
+const BACKTICK_COMMAND_RE = new RegExp(String.raw`\`${COMMAND_TOKEN}\``, "g");
 
 export interface CommandsConflict {
   file: string;
@@ -21,16 +24,21 @@ function isCommandLine(line: string): boolean {
   return /^\s*(?:[-*+]|\d+\.)\s+\S/.test(line);
 }
 
-/** `make <target>` / `npm run <script>` tokens from markdown tables and lists. */
+function addBackticked(found: Set<string>, text: string): void {
+  BACKTICK_COMMAND_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = BACKTICK_COMMAND_RE.exec(text)) !== null) {
+    found.add(match[0].replace(/[`\s]+/g, " ").trim());
+  }
+}
+
+/** Backticked `make <target>` / `npm run <script>` tokens from markdown
+ * tables and lists. Unfenced "make <word>" is prose and is ignored. */
 export function repoCommands(text: string): string[] {
   const found = new Set<string>();
   for (const line of text.split("\n")) {
     if (!isCommandLine(line)) continue;
-    COMMAND_RE.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = COMMAND_RE.exec(line)) !== null) {
-      found.add(match[0].replace(/\s+/g, " "));
-    }
+    addBackticked(found, line);
   }
   return [...found];
 }
