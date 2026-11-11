@@ -236,6 +236,17 @@ describe("parseCodexRateLimitSignal", () => {
     expect(signal).not.toBeNull();
     expect(signal!.rateLimited).toBe(false);
     expect(signal!.message).toBeNull();
+    expect(signal!.completedAt).toBe(1792791560);
+    expect(signal!.followed).toBe(false);
+    expect(signal!.lastAgentMessage).toBe("done");
+  });
+
+  it("marks a completion as followed when a later event_msg exists", () => {
+    const signal = parseCodexRateLimitSignal(
+      `${CLEAN_TASK_COMPLETE}\n${rolloutLine({ type: "user_message", message: "again" }, 43)}`,
+    );
+    expect(signal!.followed).toBe(true);
+    expect(signal!.rateLimited).toBe(false);
   });
 
   it("uses the LAST completed turn, not the first", () => {

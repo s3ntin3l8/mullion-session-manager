@@ -132,7 +132,16 @@ export function codexSessionsDir(codexHome) {
  * what counts as a rate limit.
  */
 export class CodexRateLimitSignal {
-  constructor({ turnId, rateLimited, status, variant, message }) {
+  constructor({
+    turnId,
+    rateLimited,
+    status,
+    variant,
+    message,
+    completedAt = null,
+    followed = false,
+    lastAgentMessage = null,
+  }) {
     /** The turn the signal belongs to, so a caller can report it once. */
     this.turnId = turnId;
     /**
@@ -156,6 +165,12 @@ export class CodexRateLimitSignal {
     this.variant = variant;
     /** codex's own human-readable error message. */
     this.message = message;
+    /** Unix time the turn completed, seconds or milliseconds as codex wrote it. */
+    this.completedAt = completedAt;
+    /** True when an event_msg follows this completion, so a new turn has started. */
+    this.followed = followed;
+    /** The agent's last message on a clean completion, when codex recorded one. */
+    this.lastAgentMessage = lastAgentMessage;
   }
 }
 
@@ -268,6 +283,7 @@ export function parseCodexRateLimitSignal(tailText) {
   const lines = tailText.split("\n");
   let completed = null;
   let completedOrdinal = null;
+  let followed = false;
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;
@@ -279,11 +295,21 @@ export function parseCodexRateLimitSignal(tailText) {
     }
     if (parsed?.type !== "event_msg") continue;
     const payload = parsed.payload;
-    if (!COMPLETED_TAGS.has(payload?.type)) continue;
+    if (!COMPLETED_TAGS.has(payload?.type)) {
+      // Anything after the completion means the rollout moved on. A later
+      // completion resets this: that later turn is the one that counts.
+      if (completed !== null) followed = true;
+      continue;
+    }
     completed = payload;
     completedOrdinal = typeof parsed.ordinal === "number" ? parsed.ordinal : null;
+    followed = false;
   }
   if (completed === null) return null;
+
+  const completedAt = typeof completed.completed_at === "number" ? completed.completed_at : null;
+  const lastAgentMessage =
+    typeof completed.last_agent_message === "string" ? completed.last_agent_message : null;
 
   // The identity of this completed turn, most specific first.
   const identity =
@@ -306,6 +332,9 @@ export function parseCodexRateLimitSignal(tailText) {
       status: null,
       variant: null,
       message: null,
+      completedAt,
+      followed,
+      lastAgentMessage,
     });
   }
 
@@ -340,5 +369,8 @@ export function parseCodexRateLimitSignal(tailText) {
     status,
     variant,
     message,
+    completedAt,
+    followed,
+    lastAgentMessage,
   });
 }
