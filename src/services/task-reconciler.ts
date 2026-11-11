@@ -4946,7 +4946,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   (await resolveCommitsPastBase(app, task, hostId)).state === "ahead";
               }
             }
-            if (now > deadline && !salvage) {
+            // #2930 — a worker inside rate-limit grace is not failed for the
+            // budget. Parking it until the provider reset is #2940, not this.
+            if (
+              now > deadline &&
+              !salvage &&
+              !isTaskInRateLimitGrace(task, resolvedTaskMaster.rateLimitGraceMinutes)
+            ) {
               const updated = app.db
                 .update(tasks)
                 .set({

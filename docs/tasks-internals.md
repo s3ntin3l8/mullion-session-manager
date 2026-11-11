@@ -466,7 +466,9 @@ worker has finished (cleanly, or behind such a shell tail) **with commits on
 the branch** is handed to `reviewing` instead of force-failed, since failing
 it now would throw away completed work the normal handoff was about to pick
 up anyway. Outstanding non-shell background work, or a worker still mid-turn
-with no commits, still fails on budget expiry exactly as before.
+with no commits, still fails on budget expiry — except a worker whose
+rate-limit grace window is still open (#2930), which is held instead of
+force-failed. The budget applies again once that window has elapsed.
 
 ## The agent's contract
 
@@ -2393,8 +2395,10 @@ never sets `lastTurnEndedAt`, so the cleared session would otherwise derive
 to a non-`api_error`/non-`finished` status and strand the task).
 
 Max 1440 minutes (24h): quotas can be weekly/monthly. `0` opts out (fail
-immediately, the pre-grace behavior). Independent of `budgetMinutes` — the
-time budget is the hard backstop; this is a softer "wait for recovery"
-that's checked each reconciler tick. Independent of `staleErrorSeconds` —
+immediately, the pre-grace behavior). While `lastRateLimitAt` is still
+inside this window, the per-task time budget does not force-fail the
+worker (#2930); the budget is the backstop again once grace has elapsed,
+not during it. Parking until the provider reset is a separate follow-up.
+Independent of `staleErrorSeconds` —
 the durable task-row anchor decouples the grace window from the session's
 TTL.
