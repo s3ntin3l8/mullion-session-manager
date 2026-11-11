@@ -111,6 +111,28 @@ describe("TaskAgents", () => {
     expect(screen.getByText(/claude · opus-4.1/)).toBeInTheDocument();
   });
 
+  it("does not print a stale reviewer model next to Hermes or none", () => {
+    render(<TaskAgents task={task({ reviewAgent: "hermes", reviewerModel: "gpt-5" })} />);
+    expect(screen.getByText(/Hermes/)).toBeInTheDocument();
+    expect(screen.queryByText(/gpt-5/)).toBeNull();
+  });
+
+  it("marks only task-level overrides with the dot, and locks by status alone", () => {
+    const { container, rerender } = render(<TaskAgents task={task({ agent: "codex" })} />);
+    expect(container.querySelectorAll(".sb-ov-dot")).toHaveLength(1);
+    rerender(<TaskAgents task={task({ status: "in_progress" })} />);
+    expect(container.querySelectorAll(".sb-ov-dot")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  it("says so when the agent list cannot be loaded", async () => {
+    listProjectActions.mockRejectedValueOnce(new Error("offline"));
+    const user = userEvent.setup();
+    render(<TaskAgents task={task({})} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(await screen.findByText(/Could not load agents: offline/)).toBeInTheDocument();
+  });
+
   it.each(["backlog", "failed"] as const)("is editable while %s", (status) => {
     render(<TaskAgents task={task({ status })} />);
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();

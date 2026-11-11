@@ -62,7 +62,10 @@ export function TaskAgents({ task }: { task: Task }) {
   useAsyncData(
     () => api.listProjectActions(task.projectId),
     (all) => setLaunchers(all.filter((l) => l.kind === "agent")),
-    () => {},
+    (e) =>
+      setError(
+        e instanceof Error ? `Could not load agents: ${e.message}` : "Could not load agents",
+      ),
     [task.projectId],
     { enabled: unfolded },
   );
@@ -82,9 +85,9 @@ export function TaskAgents({ task }: { task: Task }) {
   const workerModel =
     task.modelOverride ??
     (workerCli ? resolvedDefaultModel(workerCli, "implementer", task.body, settings) : null);
-  const reviewerModel =
-    task.reviewerModel ??
-    (reviewerCli ? resolvedDefaultModel(reviewerCli, "reviewer", task.body, settings) : null);
+  const reviewerModel = reviewerCli
+    ? (task.reviewerModel ?? resolvedDefaultModel(reviewerCli, "reviewer", task.body, settings))
+    : null;
 
   const workerName =
     !editable && task.agentCommand ? commandToBinary(task.agentCommand) : workerAgent;
