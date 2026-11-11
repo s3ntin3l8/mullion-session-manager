@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
+import type { HostCapacityReport } from "../../src/services/host-capacity.js";
 import { buildTestApp } from "../helpers/app.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
 import { createHost } from "../../src/services/host-registry.js";
@@ -21,13 +22,16 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
     ...actual,
     getRemoteHostClient: (_app: unknown, hostId: string) => ({
       probe: async () => "ok",
-      resolveCapacity: async () => ({
+      resolveCapacity: async (): Promise<HostCapacityReport> => ({
         sampledAt: new Date().toISOString(),
+        platform: "linux",
         logicalCores: 4,
         loadAverage1m: 0,
         memory: { totalBytes: 1, freeBytes: 1 },
         sessions: { tracked: 0, alive: 0 },
-        ...capacity.get(hostId),
+        // A test overrides `platform` with values the type forbids (a number,
+        // null) on purpose: the report is remote input.
+        ...(capacity.get(hostId) as Partial<HostCapacityReport> | undefined),
       }),
       detectAgents: async () => [],
       resolveConfig: async () => ({ version: "0.3.61" }),
