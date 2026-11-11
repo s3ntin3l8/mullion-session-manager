@@ -434,6 +434,12 @@ describe("reconcileTasks re-adopts a local null (issue #2929)", () => {
       .all()
       .find((row) => row.id === task.id);
     expect(saved?.status).toBe("in_progress");
+    const sessionRow = app.db
+      .select()
+      .from(sessions)
+      .all()
+      .find((s) => s.id === row.id);
+    expect(sessionRow?.status).not.toBe("killed");
   });
 
   it("still budget-fails a past-deadline task whose rate-limit grace has expired (#2930)", async () => {
