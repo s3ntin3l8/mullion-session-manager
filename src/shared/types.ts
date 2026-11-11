@@ -258,7 +258,10 @@ export type GitPullReason =
   | "pull-failed"
   // Issue #1896 — a git operation (a clone repair) already holds the clone.
   // Not a failure: the pull was refused, and trying again in a moment works.
-  | "busy";
+  | "busy"
+  // A lock file git names is old enough to be orphaned by a killed process.
+  // `detail` is "<path> (<age> old)"; Pull never deletes it.
+  | "stale-lock";
 
 export interface GitPullResult {
   pulled: boolean;

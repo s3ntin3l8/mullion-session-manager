@@ -22,6 +22,7 @@ describe("pullReasonMessage copy", () => {
     "already-up-to-date": /Already up to date/i,
     "pull-failed": /The pull operation failed/i,
     busy: /already running/i,
+    "stale-lock": /leftover git lock/i,
   };
 
   for (const [reason, matches] of Object.entries(unionCases)) {
