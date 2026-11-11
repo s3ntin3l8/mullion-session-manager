@@ -1361,6 +1361,8 @@ button.sb-chip--label[aria-pressed="true"] {
   .sb-kv dt {
     display: none;
   }
+  /* Outside a .sb-detail root only; inside one, the card and shared-inset rules below
+     (--sb-inset) set the horizontal padding. */
   .sb-taskstatus,
   .sb-actions-block {
     padding-inline: 8px;
