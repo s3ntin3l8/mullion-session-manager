@@ -1150,8 +1150,11 @@ button.sb-chip--label[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px var(--rs-pad-x, 12px);
-  border-bottom: 1px solid var(--border-soft);
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-2);
+  margin: 0 var(--sb-inset, 0);
 }
 .sb-taskstatus-head {
   display: flex;
@@ -1308,8 +1311,7 @@ button.sb-chip--label[aria-pressed="true"] {
   font-size: 0.75rem;
 }
 .sb-actions-block {
-  padding: 8px var(--rs-pad-x, 12px);
-  border-bottom: 1px solid var(--border-soft);
+  padding: 0 var(--sb-inset, 0);
 }
 .sb-body {
   margin-top: 8px;
@@ -1361,8 +1363,81 @@ button.sb-chip--label[aria-pressed="true"] {
   .sb-kv dt {
     display: none;
   }
-  .sb-taskstatus,
-  .sb-actions-block {
-    padding-inline: 8px;
+}
+
+/* ───────── Detail layout (epic #2922, option B) ─────────
+   One inset for task, PR and issue detail. The view root carries .sb-detail and owns
+   the inline inset (--sb-inset); everything inside draws its own edge from it, so
+   section titles and bodies share one left edge. State blocks (status, review, PR,
+   description, details) are cards; long lists (changes, conversation, hierarchy,
+   timeline) stay rule-separated sections. The chevron sits on the right so it never
+   pushes a title off the shared edge. Design record: docs/design/sidebar-boxes. */
+.sb-detail {
+  --sb-inset: var(--rs-pad-x, 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+}
+.sb-detail > .gh-detail-meta,
+.sb-detail > .gh-detail-actions,
+.sb-detail > .gh-detail-notice {
+  padding-inline: var(--sb-inset);
+}
+.sb-detail .sb-sec {
+  border-bottom: 0;
+  border-top: 1px solid var(--border-soft);
+}
+.sb-detail .sb-sec-h {
+  padding: 9px var(--sb-inset) 6px;
+}
+.sb-detail .sb-sec-body {
+  padding: 0 var(--sb-inset) 12px;
+}
+.sb-detail .sb-sec-toggle .sb-chev {
+  order: 3;
+  margin-left: auto;
+}
+.sb-detail .sb-sec--card {
+  margin: 0 var(--sb-inset);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-2);
+  overflow: hidden;
+}
+.sb-detail .sb-sec--card .sb-sec-h {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.sb-detail .sb-sec--card .sb-sec-body {
+  padding: 8px 10px 10px;
+}
+.sb-detail .sb-sec--card .pr-detail-pad,
+.sb-detail .sb-sec .pr-detail-pad {
+  padding-inline: 0;
+}
+/* The label/session chip rows lose their own inset inside a card. */
+.sb-detail .sb-sec--card .gh-issue-card {
+  padding: 0;
+}
+/* A status block already wrapped in a .pr-card (PR / issue detail) is not boxed twice. */
+.sb-detail .pr-card > .sb-taskstatus {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+@container sidebar-frame (max-width: 300px) {
+  .sb-detail {
+    --sb-inset: 8px;
+  }
+  .sb-detail .sb-sec--card,
+  .sb-detail .sb-taskstatus {
+    margin-inline: 0;
+    border-inline-width: 0;
+    border-radius: 0;
+  }
+  .sb-detail .pr-card > .sb-taskstatus {
+    border-width: 0;
   }
 }

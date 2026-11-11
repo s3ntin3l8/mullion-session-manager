@@ -297,6 +297,22 @@ describe("ViewHeader / DetailHeader", () => {
 });
 
 describe("SidebarSection", () => {
+  it("boxes a card section and keeps the default rule section unboxed", () => {
+    const { container } = render(
+      <>
+        <SidebarSection title="Boxed" variant="card">
+          <p>a</p>
+        </SidebarSection>
+        <SidebarSection title="Plain">
+          <p>b</p>
+        </SidebarSection>
+      </>,
+    );
+    const sections = container.querySelectorAll("section");
+    expect(sections[0]).toHaveClass("sb-sec", "sb-sec--card");
+    expect(sections[1]).toHaveClass("sb-sec");
+    expect(sections[1]).not.toHaveClass("sb-sec--card");
+  });
   it("toggles, shows the count and renders the action slot outside the toggle", () => {
     render(
       <SidebarSection title="Branches" count={3} actions={<button>Prune</button>}>

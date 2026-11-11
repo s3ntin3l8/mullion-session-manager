@@ -83,6 +83,24 @@ const renderDetail = (id: number, onBack = vi.fn()) =>
 
 beforeEach(() => vi.restoreAllMocks());
 
+describe("TaskDetailView layout", () => {
+  it("shares the detail inset and boxes the state sections as cards", () => {
+    const t = task({ status: "reviewing" });
+    setTasks([t]);
+    renderDetail(t.id);
+    const root = screen.getByTestId("task-detail-view");
+    expect(root).toHaveClass("sb-detail");
+    const cards = Array.from(root.querySelectorAll("section.sb-sec--card")).map(
+      (el) => el.querySelector(".sb-sec-name")?.textContent,
+    );
+    expect(cards).toEqual(expect.arrayContaining(["Review", "Details"]));
+    const timeline = Array.from(root.querySelectorAll("section.sb-sec")).find(
+      (el) => el.querySelector(".sb-sec-name")?.textContent === "Timeline",
+    );
+    expect(timeline).not.toHaveClass("sb-sec--card");
+  });
+});
+
 describe("TaskDetailView keyboard access", () => {
   it("focuses Back when a task's detail appears, so Enter on a board card does not land nowhere", () => {
     const t = task({ title: "Reach me" });

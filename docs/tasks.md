@@ -604,6 +604,13 @@ The detail reads, top to bottom:
 7. **Timeline**: the task's timeline, with the same Important / All / Custom
    filter as a session's.
 
+Task, PR and issue detail share one layout (design record:
+`docs/design/sidebar-boxes/mockup.html`, option B). The state blocks (status,
+review, pull request, details; a PR's or issue's description) are cards, the
+long lists (hierarchy, timeline, a PR's changes and conversation) are
+rule-separated sections, and every title and body starts on the same left
+edge, with the collapse chevron on the right.
+
 The detail does not depend on the list: a backlog, done, archived or
 other-project task opens too, and Back returns to the list with its filter and
 scroll position. The icon in the header pops the task out to a docked panel.

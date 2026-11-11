@@ -115,6 +115,22 @@ describe("IssuesSection", () => {
     useDashboardStore.setState({ taskMasterEnabled: wasEnabled });
   });
 
+  it("boxes the description as a card and keeps comments a rule section", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, DETAIL))),
+    );
+    const { container } = render(<IssueDetailView projectId={1} number={7} onBack={vi.fn()} />);
+    expect(await screen.findByText(/crashes/)).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveClass("sb-detail");
+    expect(screen.getByRole("button", { name: /^Description/ }).closest("section")).toHaveClass(
+      "sb-sec--card",
+    );
+    expect(screen.getByRole("button", { name: /^Comments/ }).closest("section")).not.toHaveClass(
+      "sb-sec--card",
+    );
+  });
+
   it("shows comments newest first and folds all but the newest", async () => {
     const user = userEvent.setup();
     const comment = (id: number, body: string) => ({
