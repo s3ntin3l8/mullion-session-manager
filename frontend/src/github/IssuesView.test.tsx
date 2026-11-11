@@ -771,10 +771,9 @@ describe("Issues with a queued Task Master task but no session", () => {
     await userEvent.click(within(strip).getByRole("button", { name: "Open task →" }));
     const s = useDashboardStore.getState();
     expect(s.selectedTaskId).toBe(4);
-    expect(s.sidebarBack).toEqual({
-      to: { kind: "task", taskId: 4 },
-      back: { kind: "issue", projectId: 1, number: 7 },
-    });
+    expect(s.sidebarHistory).toEqual([
+      { to: { kind: "task", taskId: 4 }, back: { kind: "issue", projectId: 1, number: 7 } },
+    ]);
   });
 
   it("detail shows an error when the claim fails", async () => {

@@ -125,10 +125,9 @@ describe("a task PR", () => {
       const s = useDashboardStore.getState();
       expect(s.selectedTaskId).toBe(5);
       expect(s.rightSidebarView).toBe("tasks");
-      expect(s.sidebarBack).toEqual({
-        to: { kind: "task", taskId: 5 },
-        back: { kind: "pr", projectId: 1, number: 12 },
-      });
+      expect(s.sidebarHistory).toEqual([
+        { to: { kind: "task", taskId: 5 }, back: { kind: "pr", projectId: 1, number: 12 } },
+      ]);
     });
 
     it("sends its own Back to the task it was opened from", async () => {
@@ -138,15 +137,14 @@ describe("a task PR", () => {
       const openRightSidebarTask = vi.fn();
       useDashboardStore.setState({
         openRightSidebarTask,
-        sidebarBack: {
-          to: { kind: "pr", projectId: 1, number: 12 },
-          back: { kind: "task", taskId: 5 },
-        },
+        sidebarHistory: [
+          { to: { kind: "pr", projectId: 1, number: 12 }, back: { kind: "task", taskId: 5 } },
+        ],
       });
       render(<PrDetailView projectId={1} number={12} onBack={onBack} />);
       await screen.findByRole("region", { name: "Task" });
       await userEvent.click(screen.getByRole("button", { name: "Back" }));
-      expect(openRightSidebarTask).toHaveBeenCalledWith(5);
+      expect(openRightSidebarTask).toHaveBeenCalledWith(5, null);
       expect(onBack).not.toHaveBeenCalled();
     });
   });
