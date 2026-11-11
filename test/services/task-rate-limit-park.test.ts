@@ -18,7 +18,8 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { enqueueTask } = await import("../../src/services/task-claim.js");
-const { parkRateLimitedTask } = await import("../../src/services/task-rate-limit-park.js");
+const { parkRateLimitedTask, PARKABLE_RATE_LIMIT_STATUSES } =
+  await import("../../src/services/task-rate-limit-park.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const sessionLifecycle = await import("../../src/services/session-lifecycle.js");
 
@@ -87,6 +88,24 @@ async function setup(message: string, variant: string | null = "usage_limit_exce
 }
 
 describe("parkRateLimitedTask (#2940)", () => {
+  it("parks only statuses where the turn is already over", () => {
+    for (const status of ["api_error", "finished", "idle", "needs_input"]) {
+      expect(PARKABLE_RATE_LIMIT_STATUSES.has(status)).toBe(true);
+    }
+    for (const live of [
+      "working",
+      "compacting",
+      "subagent",
+      "background",
+      "awaiting_permission",
+      "awaiting_plan",
+      "tool_failure",
+      "suspended",
+    ]) {
+      expect(PARKABLE_RATE_LIMIT_STATUSES.has(live)).toBe(false);
+    }
+  });
+
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;

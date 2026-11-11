@@ -167,7 +167,7 @@ import {
   isTaskInRateLimitGrace,
   recordRateLimitEvent,
 } from "./task-rate-limit-grace.js";
-import { parkRateLimitedTask } from "./task-rate-limit-park.js";
+import { PARKABLE_RATE_LIMIT_STATUSES, parkRateLimitedTask } from "./task-rate-limit-park.js";
 import { holdRedCiWithoutProgress } from "./task-ci-return-hold.js";
 import { ciAllowsAutoApproval } from "./task-ci-approval-gate.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
@@ -5173,12 +5173,14 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   const commits = await resolveCommitsPastBase(app, task, hostId);
                   if (commits.state !== "ahead") {
                     // No commits yet. Park until a parsed reset (#2940)
-                    // only when the session is not mid-turn — a worker
-                    // nudged back to `working` inside grace still has the
-                    // old rate-limited completion in its rollout, and
-                    // parking it would kill a live turn. Otherwise stay
-                    // in grace: failing now is worse.
-                    if (derived.status !== "working") {
+                    // only when the turn is over. `working` is not the
+                    // only in-flight status: `compacting`, `subagent` and
+                    // `background` outrank it, and so do the awaiting_*
+                    // prompts. The allowlist is the statuses where the
+                    // turn has ended (`idle` / `needs_input`; `api_error`
+                    // and `finished` are named too, though this arm is
+                    // already past those). Anything else stays in grace.
+                    if (PARKABLE_RATE_LIMIT_STATUSES.has(derived.status)) {
                       await parkRateLimitedTask(app, task, session.id, project.id);
                     }
                     continue;

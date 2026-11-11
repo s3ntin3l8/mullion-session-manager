@@ -12,6 +12,16 @@ import { recordTaskTransition } from "./task-state.js";
 
 const PARK_REASON = "rate limited; held until the provider reset";
 
+/** Statuses where the turn is already over, so a park cannot kill a live
+ * one. `deriveSessionStatus` checks `compacting`, `subagent`, `background`
+ * and `working` — and every `awaiting_*` prompt — before `idle`. */
+export const PARKABLE_RATE_LIMIT_STATUSES: ReadonlySet<string> = new Set([
+  "api_error",
+  "finished",
+  "idle",
+  "needs_input",
+]);
+
 type ParkTask = typeof tasks.$inferSelect;
 
 /**
