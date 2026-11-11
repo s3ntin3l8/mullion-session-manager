@@ -1526,9 +1526,18 @@ the UI can show them as stale (that UI is issue
 
 **What a host is.** The agent also self-reports its platform
 (`process.platform`) at enrollment and at every renewal, and the primary
-records it in `hosts.platform` — free-form and informational, exactly like
-`bridges.platform`. An agent build that predates the field leaves it null,
-which is a legitimate state, not a defect. Nothing branches on it.
+records it in `hosts.platform` — free-form, like `bridges.platform`. A host
+added by hand never enrolls, so for a row with no platform (null or empty) the
+heartbeat sweep fills it from the capacity report it already receives
+(`fillHostPlatformIfUnset`, issue
+[#2953](https://github.com/s3ntin3l8/mullion-session-manager/issues/2953)):
+only an empty row is written, only for a short lowercase token (the report is
+remote input), and an enrolled agent's own value is never overwritten. An
+agent build that predates the field and has no capacity route leaves it null,
+which is a legitimate state, not a defect. It is not purely informational:
+`resolveExecutionContext` picks the host's path rules (`win32` or POSIX) from
+it, so a Windows host with no platform would resolve a `D:\` checkout with
+POSIX rules.
 
 `GET /api/hosts` carries both: `platform` per host, and `capacity` per host
 (`null` when the host does not report any). The local host's capacity is

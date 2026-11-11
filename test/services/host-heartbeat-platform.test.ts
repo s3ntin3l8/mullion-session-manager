@@ -25,8 +25,8 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
         sampledAt: new Date().toISOString(),
         logicalCores: 4,
         loadAverage1m: 0,
-        totalMemoryBytes: 1,
-        freeMemoryBytes: 1,
+        memory: { totalBytes: 1, freeBytes: 1 },
+        sessions: { tracked: 0, alive: 0 },
         ...capacity.get(hostId),
       }),
       detectAgents: async () => [],
@@ -116,6 +116,16 @@ describe("heartbeat sweep fills a host's platform from its capacity report", () 
       ok: true,
       context: { hostId: id, platform: "win32", checkoutRoot: "D:\\Projects\\runway" },
     });
+  });
+
+  it("fills a row whose platform is the empty string too", async () => {
+    const id = addHost("blank");
+    app.db.update(hosts).set({ platform: "" }).where(eq(hosts.id, id)).run();
+    capacity.set(id, { platform: "win32" });
+
+    await sweep(id);
+
+    expect(platformOf(id)).toBe("win32");
   });
 
   it("never rewrites a platform that is already set", async () => {

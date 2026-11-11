@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
+import { eq, and, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
@@ -973,7 +973,8 @@ const REPORTED_PLATFORM = /^[a-z0-9_-]{1,32}$/;
  * never runs for it and its platform stayed NULL even though every heartbeat
  * sweep receives it).
  *
- * Only an EMPTY platform is filled: an enrolled agent's own self-report stays
+ * Only an EMPTY platform (null, or the empty string the registry treats as
+ * "unreported") is filled: an enrolled agent's own self-report stays
  * authoritative, and a later report never rewrites it. The value comes from a
  * REMOTE host, so anything that is not a short lowercase token is ignored.
  * Returns whether the row was changed.
@@ -987,7 +988,7 @@ export function fillHostPlatformIfUnset(
   const result = app.db
     .update(hosts)
     .set({ platform })
-    .where(and(eq(hosts.id, hostId), isNull(hosts.platform)))
+    .where(and(eq(hosts.id, hostId), or(isNull(hosts.platform), eq(hosts.platform, ""))))
     .run();
   return result.changes > 0;
 }
