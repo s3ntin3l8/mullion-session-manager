@@ -43,6 +43,11 @@
 //    "error":{"message":"exceeded retry limit, last status: 429 Too Many Requests",
 //             "codex_error_info":{"response_too_many_failed_attempts":{"http_status_code":429}}}}}
 //
+// The same field is sometimes a bare string (`"usage_limit_exceeded"`) with
+// no status body. That string is the variant name; a string
+// `response_too_many_failed_attempts` does not count, because there is no
+// HTTP status to require 429.
+//
 // `codex_error_info` is codex's own error taxonomy. Only the quota-shaped
 // variants count: `rate_limit_exceeded` and `usage_limit_exceeded` always,
 // and `response_too_many_failed_attempts` only when its HTTP status is 429.

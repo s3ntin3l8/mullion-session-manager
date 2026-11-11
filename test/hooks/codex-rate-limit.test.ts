@@ -99,6 +99,90 @@ describe("parseCodexRateLimitSignal", () => {
     expect(signal!.rateLimited).toBe(true);
   });
 
+  it("reports a rate limit when usage_limit_exceeded is a bare string (#2928)", () => {
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-string",
+        error: {
+          message: "usage limit exceeded",
+          codex_error_info: "usage_limit_exceeded",
+        },
+      }),
+    );
+    expect(signal!.rateLimited).toBe(true);
+    expect(signal!.variant).toBe("usage_limit_exceeded");
+    expect(signal!.status).toBeNull();
+    expect(signal!.turnId).toBe("turn-string");
+  });
+
+  it("reports a rate limit when rate_limit_exceeded is a bare string", () => {
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-string-rate",
+        error: { message: "rate limit", codex_error_info: "rate_limit_exceeded" },
+      }),
+    );
+    expect(signal!.rateLimited).toBe(true);
+    expect(signal!.variant).toBe("rate_limit_exceeded");
+    expect(signal!.status).toBeNull();
+  });
+
+  it("does NOT report a rate limit for a non-quota variant written as a string", () => {
+    for (const variant of ["server_overloaded", "internal_server_error"]) {
+      const signal = parseCodexRateLimitSignal(
+        rolloutLine({
+          type: "task_complete",
+          turn_id: "turn-string-other",
+          error: { message: variant, codex_error_info: variant },
+        }),
+      );
+      expect(signal!.rateLimited).toBe(false);
+      expect(signal!.variant).toBe(variant);
+      expect(signal!.status).toBeNull();
+    }
+  });
+
+  it("does NOT treat a string response_too_many_failed_attempts as a rate limit", () => {
+    // The object form counts only when http_status_code is 429. A bare string
+    // carries no status, so it must not buy a grace window.
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-string-status",
+        error: {
+          message: "too many failed attempts",
+          codex_error_info: "response_too_many_failed_attempts",
+        },
+      }),
+    );
+    expect(signal!.rateLimited).toBe(false);
+    expect(signal!.variant).toBe("response_too_many_failed_attempts");
+    expect(signal!.status).toBeNull();
+  });
+
+  it("does NOT report a rate limit for an empty-string or array codex_error_info", () => {
+    const empty = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-empty",
+        error: { message: "nope", codex_error_info: "" },
+      }),
+    );
+    expect(empty!.rateLimited).toBe(false);
+    expect(empty!.variant).toBeNull();
+    const array = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-array",
+        error: { message: "nope", codex_error_info: ["usage_limit_exceeded"] },
+      }),
+    );
+    expect(array!.rateLimited).toBe(false);
+    expect(array!.variant).toBeNull();
+  });
+
   it("does NOT report a rate limit for an ordinary server error", () => {
     // The false positive this guards is the expensive one: a task parked in
     // a rate-limit grace window for minutes on a failure that will not
