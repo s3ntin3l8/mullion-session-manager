@@ -43,4 +43,7 @@ export function slugifyProjectName(raw: string): string {
 }
 
 export const trailingSegment = (p: string) =>
-  p.replace(/\/+$/, "").split("/").pop() || "my-project";
+  p
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .pop() || "my-project";
