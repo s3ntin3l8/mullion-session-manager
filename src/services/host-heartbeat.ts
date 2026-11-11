@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { CHANNEL_SATURATED_REASON } from "../shared/constants.js";
-import { LOCAL_HOST_ID, listHosts } from "./host-registry.js";
+import { LOCAL_HOST_ID, fillHostPlatformIfUnset, listHosts } from "./host-registry.js";
 import { HostCapacityTracker } from "./host-capacity.js";
 import { HostAgentTracker, agentsTtlMs, refreshRemoteHostAgents } from "./host-agents.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -291,6 +291,9 @@ async function sweepHost(
     // the WHOLE fleet. Stamp it here, where the untrusted value enters.
     const sampledAt = Date.parse(report.sampledAt);
     capacityTracker.record(hostId, report, Number.isFinite(sampledAt) ? sampledAt : Date.now());
+    // A host that never enrolled has no platform on its row; the report is the
+    // only place the primary learns it (path flavour is chosen from it).
+    fillHostPlatformIfUnset(app, hostId, report.platform);
   } catch (err) {
     // A capacity failure NEVER affects the health verdict — it is
     // advisory input to a placement policy, not a liveness signal. The
