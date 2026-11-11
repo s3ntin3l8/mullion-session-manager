@@ -111,6 +111,12 @@ const MAX_PARENT_TITLE_FETCHES_PER_SWEEP = 20;
 // its children close, and a closed epic must drop out of the board's filter.
 const PARENT_META_TTL_MS = 10 * 60 * 1000;
 const MAX_PARENT_META_FETCHES_PER_SWEEP = 20;
+// A parent whose children are all terminal (a finished epic) is only re-checked
+// this often — enough to notice a reopen without a permanent trickle of calls
+// for every epic that ever existed. A parent that keeps failing (deleted or
+// private epic) backs off to the same interval after this many failures.
+const PARENT_META_SETTLED_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_PARENT_META_FAILURES = 3;
 
 // A deleted or private parent 404s forever, and this pass has no TTL to
 // rate-limit re-attempts the way the blocker pass's BLOCKER_DISPLAY_TTL_MS
@@ -655,6 +661,8 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // refreshParentIssueMeta's TTL. In-memory: a restart refreshes everything
   // once, which is what populates a fresh install's epic counts.
   const parentMetaFetchedAt = new Map<string, number>();
+  // Consecutive failures per parent, for the backoff above. Cleared on success.
+  const parentMetaFailures = new Map<string, number>();
 
   // #484 — every connected project, not just local-hosted ones; the
   // `!row.hostId` normalization (a pre-#26 row predating the NOT NULL
@@ -1366,6 +1374,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         parentIssueNumber: tasks.parentIssueNumber,
         parentIssueRepo: tasks.parentIssueRepo,
         parentIssueState: tasks.parentIssueState,
+        status: tasks.status,
       })
       .from(tasks)
       .where(and(isNotNull(tasks.parentIssueNumber), isNotNull(tasks.parentIssueRepo)))
@@ -1375,7 +1384,13 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
 
     const byParent = new Map<
       string,
-      { repo: string; number: number; projectIds: Set<number>; never: boolean }
+      {
+        repo: string;
+        number: number;
+        projectIds: Set<number>;
+        never: boolean;
+        settled: boolean;
+      }
     >();
     for (const row of candidates) {
       const key = `${row.parentIssueRepo}#${row.parentIssueNumber}`;
@@ -1386,17 +1401,20 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
           number: row.parentIssueNumber!,
           projectIds: new Set(),
           never: false,
+          settled: true,
         };
         byParent.set(key, g);
       }
       g.projectIds.add(row.projectId);
       if (row.parentIssueState === null) g.never = true;
+      if (row.status !== "done" && row.status !== "failed") g.settled = false;
     }
     // Never-fetched parents first (a fresh install converges before refreshes),
     // then the least recently fetched.
     const groups = [...byParent.entries()].sort(
       (a, b) =>
-        Number(b[1].never) - Number(a[1].never) ||
+        Number(b[1].never && !parentMetaFailures.has(b[0])) -
+          Number(a[1].never && !parentMetaFailures.has(a[0])) ||
         (parentMetaFetchedAt.get(a[0]) ?? 0) - (parentMetaFetchedAt.get(b[0]) ?? 0),
     );
 
@@ -1404,7 +1422,9 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     const now = Date.now();
     for (const [key, g] of groups) {
       const last = parentMetaFetchedAt.get(key);
-      if (last !== undefined && now - last < PARENT_META_TTL_MS) continue;
+      const backedOff = (parentMetaFailures.get(key) ?? 0) >= MAX_PARENT_META_FAILURES;
+      const ttl = g.settled || backedOff ? PARENT_META_SETTLED_TTL_MS : PARENT_META_TTL_MS;
+      if (last !== undefined && now - last < ttl) continue;
       if (fetches >= MAX_PARENT_META_FETCHES_PER_SWEEP) break;
       const sep = g.repo.indexOf("/");
       if (sep === -1) continue;
@@ -1438,9 +1458,11 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         if (oldest !== undefined) parentMetaFetchedAt.delete(oldest);
       }
       if (summary === undefined) {
+        parentMetaFailures.set(key, (parentMetaFailures.get(key) ?? 0) + 1);
         app.log.debug({ err: lastErr, parent: key }, "[task-watcher] parent meta fetch failed");
         continue;
       }
+      parentMetaFailures.delete(key);
       const changed = app.db
         .update(tasks)
         .set({

@@ -512,13 +512,19 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
       mockBroadcastTaskEvent.mockClear();
       await vi.advanceTimersByTimeAsync(5 * 60_000);
       expect(mockGetIssueSummary).toHaveBeenCalledTimes(2);
-      // Same values on the refresh: no row rewritten, no hierarchy event.
+      // Past the TTL only the parent with open work is re-fetched (same values:
+      // no row rewritten, no hierarchy event); the settled one waits 6 hours.
       await vi.advanceTimersByTimeAsync(6 * 60_000);
-      expect(mockGetIssueSummary.mock.calls.length).toBeGreaterThanOrEqual(4);
+      expect(mockGetIssueSummary.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(mockGetIssueSummary.mock.calls.slice(2).every((c) => c[3] === 32)).toBe(true);
       expect(getTask(open).updatedAt).toEqual(stamped);
       expect(
         mockBroadcastTaskEvent.mock.calls.filter((c) => c[0].kind === "hierarchy"),
       ).toHaveLength(0);
+      const before = mockGetIssueSummary.mock.calls.length;
+      vi.setSystemTime(Date.now() + 7 * 60 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockGetIssueSummary.mock.calls.slice(before).some((c) => c[3] === 33)).toBe(true);
       // A real change is written and announced.
       mockGetIssueSummary.mockResolvedValue({
         title: "Epic",
@@ -528,6 +534,31 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
       await vi.advanceTimersByTimeAsync(11 * 60_000);
       expect(getTask(open).parentSubIssueCompleted).toBe(2);
       expect(mockBroadcastTaskEvent.mock.calls.some((c) => c[0].kind === "hierarchy")).toBe(true);
+    });
+
+    it("fetches at most 20 parents per sweep and the rest on the next one", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Epic");
+      mockGetIssueSummary.mockResolvedValue({ title: "Epic", state: "open", subIssues: null });
+      for (let n = 200; n < 221; n++) insertChildTask(projectId, { parentIssueNumber: n });
+      await runOneSweep();
+      const seen = new Set(mockGetIssueSummary.mock.calls.map((c) => c[3]));
+      // Every parent is covered once the following sweep has run; none twice.
+      expect(seen.size).toBe(mockGetIssueSummary.mock.calls.length);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(new Set(mockGetIssueSummary.mock.calls.map((c) => c[3])).size).toBe(21);
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(21);
+    });
+
+    it("backs a parent that keeps failing off to the long interval", async () => {
+      const projectId = await createProject();
+      mockGetIssueTitle.mockResolvedValue("Epic");
+      mockGetIssueSummary.mockRejectedValue(new Error("404"));
+      insertChildTask(projectId, { parentIssueNumber: 90 });
+      await runOneSweep();
+      for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(11 * 60_000);
+      // 3 attempts at the short interval, then nothing until the long one.
+      expect(mockGetIssueSummary).toHaveBeenCalledTimes(3);
     });
 
     it("tolerates a failing fetch and leaves the columns null", async () => {
