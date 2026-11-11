@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ABSOLUTE_HOST_PATH_PATTERN,
+  hostPathBasename,
   hostPathKey,
   isAbsoluteHostPath,
   sameHostPath,
@@ -56,5 +57,15 @@ describe("host-path", () => {
     expect(hostPathKey("//")).toBe("/");
     // A backslash is a legal name character on POSIX, so it is not a separator.
     expect(sameHostPath("/srv/a\\b", "/srv/a/b")).toBe(false);
+  });
+
+  it("hostPathBasename: drive paths split on both separators; anything else is POSIX basename", () => {
+    expect(hostPathBasename("D:\\Projects\\Runway")).toBe("Runway");
+    expect(hostPathBasename("D:/Projects/Runway/")).toBe("Runway");
+    expect(hostPathBasename("D:\\")).toBe("");
+    expect(hostPathBasename("/srv/app/")).toBe("app");
+    expect(hostPathBasename("/srv/app")).toBe("app");
+    expect(hostPathBasename("/")).toBe("");
+    expect(hostPathBasename("/srv/a\\b")).toBe("a\\b");
   });
 });

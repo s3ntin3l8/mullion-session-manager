@@ -46,3 +46,18 @@ export function hostPathKey(cwd: string): string {
 export function sameHostPath(a: string, b: string): boolean {
   return hostPathKey(a) === hostPathKey(b);
 }
+
+/** The last segment of a path on another host. A Windows drive path splits on
+ * both separators and ignores trailing ones (`D:\\Projects\\Runway` ->
+ * `Runway`, `D:\\` -> ``); anything else is POSIX `path.basename`, where a
+ * backslash is an ordinary name character. */
+export function hostPathBasename(cwd: string): string {
+  if (!/^[A-Za-z]:[\\/]/.test(cwd)) {
+    // POSIX `path.basename`, by hand: this file is shared with the browser.
+    let end = cwd.length;
+    while (end > 0 && cwd[end - 1] === "/") end--;
+    return cwd.slice(cwd.lastIndexOf("/", end - 1) + 1, end);
+  }
+  const parts = cwd.slice(2).split(/[\\/]/).filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : "";
+}

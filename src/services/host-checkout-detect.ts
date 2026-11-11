@@ -1,10 +1,10 @@
-import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID, MAX_HOST_CWDS } from "../shared/constants.js";
 import {
   ABSOLUTE_HOST_PATH_PATTERN,
+  hostPathBasename,
   hostPathKey,
   isStorablePath,
   sameHostPath,
@@ -169,7 +169,7 @@ export async function detectCheckouts(
   const own = await projectOrigin(app, project, cache);
   const mapped = parseHostCwds(project.hostCwds);
   const declined = new Set(parseHostCwdsMeta(project.hostCwdsMeta).declined);
-  const dirName = path.basename(project.cwd).toLowerCase();
+  const dirName = hostPathBasename(project.cwd).toLowerCase();
   const out: HostCheckoutSuggestion[] = [];
   // A path some project already owns on a host (a Mullion-managed clone
   // included) is never a suggestion for another one.

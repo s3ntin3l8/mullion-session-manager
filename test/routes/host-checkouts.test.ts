@@ -105,6 +105,46 @@ describe("host checkout detection routes", () => {
       expect(row.hostCwds).toBeNull();
     });
 
+    it("name-matches a project whose own cwd is a Windows drive path (#2958)", async () => {
+      const winId = createHost(app, { name: "win", baseUrl: "http://win.test", token: "t" }).id;
+      app.hostHeartbeatTracker!.recordSuccess(winId);
+      app.db
+        .update(projects)
+        .set({ hostId: winId, cwd: "D:\\Projects\\App" })
+        .where(eq(projects.id, projectId))
+        .run();
+      // The project's own checkout reports its origin, so a same-named clone
+      // with a different origin must be refused while an origin-less one is not.
+      discovery.set(winId, [
+        {
+          name: "App",
+          cwd: "D:\\Projects\\App",
+          isGitRepo: true,
+          isWorktree: false,
+          origin: "https://github.com/acme/app.git",
+        },
+      ]);
+      discovery.set(macId, [
+        { name: "app", cwd: "/Users/x/app", isGitRepo: true, isWorktree: false },
+        {
+          name: "app",
+          cwd: "/Users/x/other/app",
+          isGitRepo: true,
+          isWorktree: false,
+          origin: "https://github.com/acme/other.git",
+        },
+      ]);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/host-suggestions`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const mac = res.json().hosts.find((h: { hostId: string }) => h.hostId === macId);
+      expect(mac.candidates).toEqual([{ cwd: "/Users/x/app", match: "name" }]);
+    });
+
     it("404s an unknown project and 400s a malformed id", async () => {
       expect(
         (await app.inject({ method: "GET", url: "/api/projects/999999/host-suggestions" }))
