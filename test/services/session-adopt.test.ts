@@ -288,6 +288,7 @@ describe("reconcileTasks re-adopts a local null (issue #2929)", () => {
     vi.restoreAllMocks();
     delete process.env.MULLION_TASK_MASTER_ENABLED;
     delete process.env.MULLION_TASK_BUDGET_MINUTES;
+    delete process.env.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES;
   });
 
   function trackFinished(app: App) {
@@ -409,6 +410,55 @@ describe("reconcileTasks re-adopts a local null (issue #2929)", () => {
       .all()
       .find((row) => row.id === task.id);
     expect(saved?.status).toBe("in_progress");
+  });
+
+  it("does not budget-fail a past-deadline task that is inside rate-limit grace (#2930)", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+    process.env.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES = "30";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      lastRateLimitAt: new Date(),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("dead");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("in_progress");
+  });
+
+  it("still budget-fails a past-deadline task whose rate-limit grace has expired (#2930)", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+    process.env.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES = "30";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      lastRateLimitAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("dead");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("failed");
+    expect(saved?.failureReason).toContain("budget exceeded");
   });
 
   it("retries a reviewing session whose scope cannot be verified, without failing it", async () => {
