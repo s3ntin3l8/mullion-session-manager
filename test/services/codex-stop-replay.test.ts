@@ -144,6 +144,24 @@ describe("replayDroppedCodexStop (issue #2939)", () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it("does not replay a completion that failed for a non-quota error", async () => {
+    const claimedAt = new Date((COMPLETED_AT - 60) * 1000);
+    const { app, id } = await seedRunning(
+      rollout(
+        cleanPayload({
+          error: {
+            message: "internal server error",
+            codex_error_info: { internal_server_error: { http_status_code: 500 } },
+          },
+        }),
+      ),
+      claimedAt,
+    );
+    const emit = vi.spyOn(app.pty, "emitHookEvent");
+    await replayDroppedCodexStop(app, id);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it("replays when adopt attaches a session whose Stop was already dropped", async () => {
     const app = await buildTestApp();
     const [project] = app.db

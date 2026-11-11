@@ -24,10 +24,12 @@ export interface CodexRateLimitSignalInit {
   message: string | null;
   /** Unix time the turn completed, in the units codex wrote (s or ms). */
   completedAt?: number | null;
-  /** True when a later event_msg follows this completion. */
+  /** True when a later user turn (`user_message` / `task_started`) follows. */
   followed?: boolean;
   /** Codex's `last_agent_message` on the completed turn. */
   lastAgentMessage?: string | null;
+  /** True only when the completed turn carried no error. */
+  clean?: boolean;
 }
 
 export class CodexRateLimitSignal {
@@ -48,10 +50,12 @@ export class CodexRateLimitSignal {
   message: string | null;
   /** Unix time the turn completed, in the units codex wrote (s or ms). */
   completedAt: number | null;
-  /** True when a later event_msg follows this completion. */
+  /** True when a later user turn (`user_message` / `task_started`) follows. */
   followed: boolean;
   /** Codex's `last_agent_message` on the completed turn, when it recorded one. */
   lastAgentMessage: string | null;
+  /** True only when the completed turn carried no error. */
+  clean: boolean;
 }
 
 export function resolveCodexHome(): string;

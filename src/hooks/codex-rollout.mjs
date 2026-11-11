@@ -106,6 +106,10 @@ const TOO_MANY_REQUESTS = 429;
  */
 const COMPLETED_TAGS = new Set(["task_complete", "turn_complete"]);
 
+/** A later one of these means a new turn started. `token_count` and the
+ * other bookkeeping events codex writes after `task_complete` do not. */
+const FOLLOWED_TAGS = new Set(["user_message", "task_started"]);
+
 /**
  * Codex's home directory — the same rule as `resolveCodexHome()` in
  * src/services/hook-adapters/codex.ts (`CODEX_HOME` or `~/.codex`).
@@ -141,6 +145,7 @@ export class CodexRateLimitSignal {
     completedAt = null,
     followed = false,
     lastAgentMessage = null,
+    clean = false,
   }) {
     /** The turn the signal belongs to, so a caller can report it once. */
     this.turnId = turnId;
@@ -167,10 +172,13 @@ export class CodexRateLimitSignal {
     this.message = message;
     /** Unix time the turn completed, seconds or milliseconds as codex wrote it. */
     this.completedAt = completedAt;
-    /** True when an event_msg follows this completion, so a new turn has started. */
+    /** True when a later user turn follows this completion. */
     this.followed = followed;
     /** The agent's last message on a clean completion, when codex recorded one. */
     this.lastAgentMessage = lastAgentMessage;
+    /** True only when the completed turn carried no error. A non-quota
+     * failure is not rate-limited and is also not a successful Stop. */
+    this.clean = clean;
   }
 }
 
@@ -296,9 +304,11 @@ export function parseCodexRateLimitSignal(tailText) {
     if (parsed?.type !== "event_msg") continue;
     const payload = parsed.payload;
     if (!COMPLETED_TAGS.has(payload?.type)) {
-      // Anything after the completion means the rollout moved on. A later
-      // completion resets this: that later turn is the one that counts.
-      if (completed !== null) followed = true;
+      // A later user turn means this completion is no longer the end of
+      // the rollout. Bookkeeping (`token_count`) does not: codex writes
+      // that after a task_complete that is still the last turn. A later
+      // completion resets this below.
+      if (completed !== null && FOLLOWED_TAGS.has(payload?.type)) followed = true;
       continue;
     }
     completed = payload;
@@ -335,6 +345,7 @@ export function parseCodexRateLimitSignal(tailText) {
       completedAt,
       followed,
       lastAgentMessage,
+      clean: true,
     });
   }
 
@@ -372,5 +383,6 @@ export function parseCodexRateLimitSignal(tailText) {
     completedAt,
     followed,
     lastAgentMessage,
+    clean: false,
   });
 }

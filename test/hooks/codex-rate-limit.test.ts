@@ -238,15 +238,39 @@ describe("parseCodexRateLimitSignal", () => {
     expect(signal!.message).toBeNull();
     expect(signal!.completedAt).toBe(1792791560);
     expect(signal!.followed).toBe(false);
+    expect(signal!.clean).toBe(true);
     expect(signal!.lastAgentMessage).toBe("done");
   });
 
-  it("marks a completion as followed when a later event_msg exists", () => {
+  it("marks a completion as followed when a later user turn starts", () => {
     const signal = parseCodexRateLimitSignal(
       `${CLEAN_TASK_COMPLETE}\n${rolloutLine({ type: "user_message", message: "again" }, 43)}`,
     );
     expect(signal!.followed).toBe(true);
     expect(signal!.rateLimited).toBe(false);
+  });
+
+  it("does not treat a trailing token_count as a new turn", () => {
+    const signal = parseCodexRateLimitSignal(
+      `${CLEAN_TASK_COMPLETE}\n${rolloutLine({ type: "token_count" }, 43)}`,
+    );
+    expect(signal!.followed).toBe(false);
+    expect(signal!.clean).toBe(true);
+  });
+
+  it("marks a non-quota error completion as not clean", () => {
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "task_complete",
+        turn_id: "turn-500",
+        error: {
+          message: "internal server error",
+          codex_error_info: { internal_server_error: { http_status_code: 500 } },
+        },
+      }),
+    );
+    expect(signal!.rateLimited).toBe(false);
+    expect(signal!.clean).toBe(false);
   });
 
   it("uses the LAST completed turn, not the first", () => {

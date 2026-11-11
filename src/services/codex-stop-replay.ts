@@ -2,16 +2,28 @@
 // forwarder has already exited, so it cannot be retried. The rollout file
 // is still there. After a session is adopted, replay a clean completion
 // that the reconciler never saw, as the same progress message mapCodexStop
-// emits (forwarder-core.mjs). A rate-limited completion is left for
-// detectCodexRateLimits.
+// emits (forwarder-core.mjs). A failed completion, rate-limited or otherwise,
+// is not a Stop.
 import { eq, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { readCodexRateLimitSignal } from "../hooks/codex-rollout.mjs";
 import { tasks } from "../db/schema.js";
 import type { HookMessage } from "./hook-protocol.js";
 
-/** session id -> turn id already replayed in this process. */
+/** session id -> turn id already replayed in this process. The persisted
+ * `lastTurnEndedAt` check is what actually stops a second apply; this only
+ * skips a repeat read. Capped so a long-lived process cannot grow it
+ * without bound — dropping the oldest entry re-reads, then no-ops. */
 const replayedTurns = new Map<string, string>();
+const REPLAYED_TURN_CAP = 1024;
+
+function rememberReplay(sessionId: string, turnId: string): void {
+  if (!replayedTurns.has(sessionId) && replayedTurns.size >= REPLAYED_TURN_CAP) {
+    const oldest = replayedTurns.keys().next().value;
+    if (oldest !== undefined) replayedTurns.delete(oldest);
+  }
+  replayedTurns.set(sessionId, turnId);
+}
 
 /** Codex writes `completed_at` in unix seconds. A 13-digit value is already ms. */
 function completedAtMs(raw: number): number {
@@ -51,7 +63,7 @@ export async function replayDroppedCodexStop(
   } catch {
     return;
   }
-  if (signal === null || signal.rateLimited || signal.followed) return;
+  if (signal === null || !signal.clean || signal.followed) return;
   if (signal.turnId === null || signal.completedAt === null) return;
   if (completedAtMs(signal.completedAt) < since.getTime()) return;
   if (replayedTurns.get(sessionId) === signal.turnId) return;
@@ -60,7 +72,7 @@ export async function replayDroppedCodexStop(
   if (live && typeof live.toInfo === "function") {
     const ended = live.toInfo().lastTurnEndedAt;
     if (ended !== null && ended >= since.getTime()) {
-      replayedTurns.set(sessionId, signal.turnId);
+      rememberReplay(sessionId, signal.turnId);
       return;
     }
   }
@@ -75,5 +87,9 @@ export async function replayDroppedCodexStop(
   app.pty.emitHookEvent(sessionId, message, completedAtMs(signal.completedAt), {
     provesHookPipeline: false,
   });
-  replayedTurns.set(sessionId, signal.turnId);
+  rememberReplay(sessionId, signal.turnId);
+  app.log.info(
+    { sessionId, turnId: signal.turnId },
+    "replayed a codex completion the restart dropped",
+  );
 }
