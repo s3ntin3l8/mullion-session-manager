@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Design record: restoring per-task agent and model overrides in the task sidebar. Two options: 1 modal, 2 inline expand. DECISION (owner): option 2, inline. The rows stay collapsed and the dropdowns only unfold when the user presses Edit; the modal option was rejected. Tokens copied from frontend/src/styles/tokens.css; the shipped UI is authoritative once built. Data is fictional. -->
+    <title>Mullion — task agent and model overrides: mockup rev 1 (inline chosen)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      /* Tokens copied verbatim from frontend/src/styles/tokens.css as of this commit. Nothing here is a new token; only layout differs between the options. */
+      .t-dark {
+        --sidebar: #161617;
+        --sidebar-2: #1b1b1d;
+        --pane-hd: #242426;
+        --chrome: #1c1c1e;
+        --fg: #ededed;
+        --muted: #9b9ba5;
+        --dim: #8a8a94;
+        --g: #5ec27a;
+        --r: #e5575a;
+        --b: #5c9bf5;
+        --c: #43c1c1;
+        --y: #d7b06a;
+        --p: #b884db;
+        --o: #e0965a;
+        --accent-solid: #0e9f6e; /* base; white text on it is 3.39:1 — known debt, B1 darkens button fill */
+        --ring: #12b981;
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --surface: #1e1e21;
+        --surface-hover: #242427; /* #26262a put --dim at 4.41:1 (tokens.css) */
+        --accent-fill: #0a7a53;
+        --accent: #34d399;
+        --lane-1: #5c9bf5;
+        --lane-2: #5ec27a;
+        --lane-3: #d7b06a;
+        --lane-4: #e66fb0;
+        --lane-5: #43c1c1;
+        --lane-6: #b884db;
+        --lane-more: #6a6a74;
+        color-scheme: dark;
+      }
+      .t-light {
+        --sidebar: #f4f4f2;
+        --sidebar-2: #efefec;
+        --pane-hd: #e9e9e6;
+        --chrome: #eeeeec;
+        --fg: #171717;
+        --muted: #5a5a5a;
+        --dim: #666666;
+        --g: #1a7f37;
+        --r: #cf222e;
+        --b: #0969da;
+        --c: #0e7490;
+        --y: #9a6700;
+        --p: #8250df;
+        --o: #bc5215;
+        --accent-solid: #0b6e4b;
+        --ring: #0b6e4b;
+        --border: #c9c9c4;
+        --border-soft: #dcdcd8;
+        --surface: #ffffff;
+        --surface-hover: #f0f0ed;
+        --accent-fill: #0b6e4b;
+        --accent: #0b6e4b;
+        --lane-1: #0969da;
+        --lane-2: #1a7f37;
+        --lane-3: #9a6700;
+        --lane-4: #bf3989;
+        --lane-5: #0e7490;
+        --lane-6: #8250df;
+        --lane-more: #9a9a9a;
+        color-scheme: light;
+      }
+      /* Semantic status tokens: one vocabulary (success/danger/warn/info/merged/neutral). */
+      .t-dark,
+      .t-light {
+        --status-success-fg: var(--g);
+        --status-danger-fg: var(--r);
+        --status-warn-fg: var(--y);
+        --status-info-fg: var(--b);
+        --status-merged-fg: var(--p);
+        --status-neutral-fg: var(--muted);
+      }
+      .t-dark {
+        --tint: 16%;
+        --status-danger-fg: #ff7b7e;
+        --tint-border: 42%;
+      }
+      .t-light {
+        --tint: 11%;
+        --status-success-fg: #187533;
+        --status-danger-fg: #c1202b;
+        --status-warn-fg: #8a5c00;
+        --status-info-fg: #0862cb;
+        --status-merged-fg: #7649cb;
+        --status-neutral-fg: var(--muted);
+        --tint-border: 38%;
+      }
+      .t-dark,
+      .t-light {
+        --status-success-bg: color-mix(in srgb, var(--g) var(--tint), var(--sidebar));
+        --status-danger-bg: color-mix(in srgb, var(--r) var(--tint), var(--sidebar));
+        --status-warn-bg: color-mix(in srgb, var(--y) var(--tint), var(--sidebar));
+        --status-info-bg: color-mix(in srgb, var(--b) var(--tint), var(--sidebar));
+        --status-merged-bg: color-mix(in srgb, var(--p) var(--tint), var(--sidebar));
+        --status-neutral-bg: color-mix(in srgb, var(--fg) 8%, var(--sidebar));
+        --status-success-border: color-mix(in srgb, var(--g) var(--tint-border), var(--sidebar));
+        --status-danger-border: color-mix(in srgb, var(--r) var(--tint-border), var(--sidebar));
+        --status-warn-border: color-mix(in srgb, var(--y) var(--tint-border), var(--sidebar));
+        --status-info-border: color-mix(in srgb, var(--b) var(--tint-border), var(--sidebar));
+        --status-merged-border: color-mix(in srgb, var(--p) var(--tint-border), var(--sidebar));
+        --status-neutral-border: var(--border);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          13px/1.45 -apple-system,
+          "Inter",
+          system-ui,
+          sans-serif;
+        background: #0c0c0d;
+        color: #ddd;
+      }
+      .mono,
+      code {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+      }
+      .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+        color: #fff;
+      }
+      .sub {
+        color: #9b9ba5;
+        margin: 0 0 16px;
+        max-width: 900px;
+      }
+      nav {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      nav button {
+        background: #1e1e21;
+        color: #ddd;
+        border: 1px solid #3b3b41;
+        border-radius: 6px;
+        padding: 6px 12px;
+        font: inherit;
+        cursor: pointer;
+      }
+      nav button[aria-pressed="true"] {
+        background: #0a7a53;
+        border-color: #12b981;
+        color: #fff;
+      }
+      .note {
+        background: #17171a;
+        border: 1px solid #2b2b30;
+        border-left: 3px solid #12b981;
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin: 0 0 18px;
+        max-width: 1100px;
+        color: #c9c9d0;
+      }
+      .note b {
+        color: #fff;
+      }
+      .note ul {
+        margin: 6px 0 0 18px;
+        padding: 0;
+      }
+      .opt {
+        margin-bottom: 30px;
+      }
+      .opt > h2 {
+        font-size: 14px;
+        color: #fff;
+        margin: 0 0 2px;
+      }
+      .opt > p {
+        margin: 0 0 10px;
+        color: #9b9ba5;
+        max-width: 900px;
+      }
+      .row {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .cap {
+        font-size: 11px;
+        color: #8a8a94;
+        margin-bottom: 4px;
+      }
+
+      /* ───────── Sidebar frame (container query mirrors .sidebar-frame in right-sidebar.css) ───────── */
+      .pane {
+        background: var(--sidebar);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow-y: auto;
+        max-height: 760px;
+        container-type: inline-size;
+        container-name: sidebar-frame;
+        --pad: 12px;
+        font-size: 12px;
+      }
+      .pane .inner {
+        padding: 8px 0 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .pane a,
+      .pane .lnk {
+        color: var(--b);
+        text-decoration: none;
+      }
+      .dim {
+        color: var(--dim);
+      }
+      .sp {
+        flex: 1;
+      }
+      .mono {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+      }
+
+      /* small atoms */
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 1px 8px;
+        font-size: 11px;
+        line-height: 16px;
+        background: var(--surface);
+        white-space: nowrap;
+      }
+      .chip.ok {
+        color: var(--status-success-fg);
+        background: var(--status-success-bg);
+        border-color: var(--status-success-border);
+      }
+      .chip.bad {
+        color: var(--status-danger-fg);
+        background: var(--status-danger-bg);
+        border-color: var(--status-danger-border);
+      }
+      .chip.warn {
+        color: var(--status-warn-fg);
+        background: var(--status-warn-bg);
+        border-color: var(--status-warn-border);
+      }
+      .chip.info {
+        color: var(--status-info-fg);
+        background: var(--status-info-bg);
+        border-color: var(--status-info-border);
+      }
+      .chip.mer {
+        color: var(--status-merged-fg);
+        background: var(--status-merged-bg);
+        border-color: var(--status-merged-border);
+      }
+      .btn {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        border-radius: 6px;
+        padding: 2px 9px;
+        font: inherit;
+        font-size: 11px;
+      }
+      /* ───────── Details card + kv rows (mirrors .sb-kv in sidebar-kit.css) ───────── */
+      .blk {
+        margin: 0 var(--pad);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: var(--surface);
+        position: relative;
+      }
+      .blk-h {
+        display: flex;
+        align-items: center;
+        padding: 7px 10px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        font-size: 11px;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .blk-b {
+        padding: 8px 10px 10px;
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 5px 12px;
+        margin: 0;
+        align-items: center;
+      }
+      .kv dt {
+        color: var(--dim);
+      }
+      .kv dd {
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .src {
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .sbl {
+        color: var(--b);
+        background: none;
+        border: 0;
+        padding: 0;
+        font: inherit;
+        font-size: 11px;
+      }
+      .lock {
+        color: var(--dim);
+        font-size: 11px;
+        margin-top: 8px;
+        border-top: 1px dashed var(--border-soft);
+        padding-top: 6px;
+      }
+      .ov {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--b);
+        margin-right: 4px;
+      }
+      /* ───────── controls ───────── */
+      .sel {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: var(--sidebar);
+        border-radius: 6px;
+        padding: 3px 8px;
+        min-width: 0;
+        white-space: nowrap;
+      }
+      .sel span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sel i {
+        color: var(--dim);
+        font-style: normal;
+      }
+      .grp {
+        font-size: 10.5px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin: 10px 0 5px;
+      }
+      .grp:first-child {
+        margin-top: 0;
+      }
+      .fld {
+        display: grid;
+        grid-template-columns: 74px 1fr;
+        gap: 6px;
+        align-items: center;
+        margin-bottom: 5px;
+      }
+      .fld.two {
+        grid-template-columns: 74px 1fr 1fr;
+      }
+      .fld > label {
+        color: var(--dim);
+      }
+      @container sidebar-frame (max-width: 300px) {
+        .fld,
+        .fld.two {
+          grid-template-columns: 1fr;
+          gap: 3px;
+        }
+        .fld > label {
+          font-size: 11px;
+        }
+      }
+      /* modal */
+      .stage {
+        position: relative;
+      }
+      .scrim {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: grid;
+        place-items: center;
+        padding: 10px;
+        z-index: 2;
+      }
+      .modal {
+        background: var(--sidebar-2);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        width: 100%;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      }
+      .modal .mh {
+        display: flex;
+        align-items: center;
+        padding: 9px 12px;
+        font-weight: 600;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .modal .mb {
+        padding: 10px 12px;
+      }
+      .modal .mf {
+        display: flex;
+        justify-content: flex-end;
+        padding: 8px 12px;
+        border-top: 1px solid var(--border-soft);
+      }
+      .btn.pri {
+        background: var(--accent-fill);
+        border-color: var(--ring);
+        color: #fff;
+      }
+      .hint {
+        color: var(--dim);
+        font-size: 11px;
+        margin: 2px 0 0;
+      }
+      .cols {
+        display: flex;
+        gap: 18px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      .themes {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Task sidebar — agent &amp; model overrides</h1>
+      <p class="sub">
+        The redesign dropped five per-task controls: <b>Agent</b>, <b>Review agent</b>,
+        <b>Model</b>, <b>Small model</b> (opencode/claude only) and <b>Reviewer model</b> (hidden
+        for Hermes/none). The backend still accepts them via <code>PATCH /api/tasks/:id</code>.
+        Details gets a Worker/Reviewer summary showing the <i>effective</i> value and where it comes
+        from (<span class="mono">task</span> override, <span class="mono">issue</span> directive or
+        project <span class="mono">default</span>). Two ways to edit. Mock data is fictional.
+      </p>
+      <div class="note">
+        <b>Rules both options share</b>
+        <ul>
+          <li>
+            Editable only in backlog, ready-and-unclaimed, or failed (same rule as before).
+            Otherwise rows are read-only with the lock hint.
+          </li>
+          <li>Every change saves immediately; a failed save shows an inline error.</li>
+          <li>
+            First entry of each dropdown is “Default (&lt;resolved&gt;)” and clears the override. A
+            dot marks a row that carries a task override.
+          </li>
+          <li>
+            opencode: a provider dropdown then a model dropdown; other CLIs: the Agent is the
+            provider.
+          </li>
+          <li>Changing the agent family clears a model chosen for the old family.</li>
+        </ul>
+      </div>
+      <nav id="nav"></nav>
+      <div id="out"></div>
+    </div>
+    <script>
+      const STATES = {
+        claude: {
+          name: "claude worker · codex reviewer",
+          worker: ["claude", "opus-4.1", "task"],
+          small: "Default (haiku-4.5)",
+          reviewer: ["codex", "Default (gpt-5)", "default"],
+          editable: true,
+        },
+        opencode: {
+          name: "opencode worker (provider + model)",
+          worker: ["opencode", "anthropic/sonnet-4.5", "task"],
+          provider: "anthropic",
+          small: "Default (openai/gpt-5-mini)",
+          reviewer: ["claude", "Default (opus-4.1)", "issue"],
+          editable: true,
+        },
+        hermes: {
+          name: "Hermes reviewer (no reviewer model)",
+          worker: ["claude", "Default (opus-4.1)", "default"],
+          small: "Default (haiku-4.5)",
+          reviewer: ["Hermes", null, "default"],
+          editable: true,
+        },
+        locked: {
+          name: "claimed / running (locked)",
+          worker: ["claude", "opus-4.1", "task"],
+          reviewer: ["Hermes", null, "default"],
+          editable: false,
+        },
+      };
+      const tag = (s) => `<span class="src">(${s})</span>`;
+      const dot = (s) => (s === "task" ? '<span class="ov" title="task override"></span>' : "");
+      const sel = (t) => `<div class="sel"><span>${t}</span><i>▾</i></div>`;
+
+      function rows(st, opt) {
+        const [wa, wm, ws] = st.worker;
+        const [ra, rm, rs] = st.reviewer;
+        const edit = st.editable && opt === 1 ? ' <button class="sbl">✎ Edit</button>' : "";
+        return `<dl class="kv">
+          <dt>Project</dt><dd>mullion-session-manager</dd>
+          <dt>Issue</dt><dd class="lnk">#2958</dd>
+          <dt>Worker</dt><dd>${dot(ws)}${wa}${wm ? " · " + wm : ""} ${tag(ws)}${edit}</dd>
+          <dt>Reviewer</dt><dd>${dot(rs)}${ra}${rm ? " · " + rm : ""} ${tag(rs)}</dd>
+        </dl>
+        ${st.editable ? "" : '<div class="lock">🔒 Locked once a worker has claimed the task — retry or move to backlog to change.</div>'}`;
+      }
+      function fields(st) {
+        const oc = !!st.provider;
+        const w = oc
+          ? `<div class="fld two"><label>Model</label>${sel(st.provider)}${sel("sonnet-4.5")}</div>`
+          : `<div class="fld"><label>Model</label>${sel(st.worker[1])}</div>`;
+        const small = st.small ? `<div class="fld"><label>Small</label>${sel(st.small)}</div>` : "";
+        const rmodel =
+          st.reviewer[1] !== null
+            ? `<div class="fld"><label>Model</label>${sel(st.reviewer[1])}</div>`
+            : '<p class="hint">Hermes picks its own model.</p>';
+        return `<div class="grp">Worker</div>
+          <div class="fld"><label>Agent</label>${sel(st.worker[0] + (st.worker[2] === "issue" ? " (from issue)" : ""))}</div>
+          ${w}${small}
+          <div class="grp">Reviewer</div>
+          <div class="fld"><label>Agent</label>${sel(st.reviewer[0] + (st.reviewer[2] === "issue" ? " (from issue)" : ""))}</div>
+          ${rmodel}`;
+      }
+      const header = `<div class="hdr"><span class="ibtn">←</span><span class="ttl">fix(hosts): name-match a project…</span><span class="sp"></span><span class="chip info">Ready</span></div>`;
+      function card(title, body) {
+        return `<div class="blk"><div class="blk-h">${title}<span class="sp"></span><span class="dim">⌄</span></div><div class="blk-b">${body}</div></div>`;
+      }
+      function pane(theme, w, st, opt, view) {
+        let inner;
+        if (opt === 2 && view === "edit") {
+          inner = card(
+            "Details",
+            `<dl class="kv"><dt>Project</dt><dd>mullion-session-manager</dd><dt>Issue</dt><dd class="lnk">#2958</dd></dl><div style="margin-top:10px">${fields(st)}</div><div style="text-align:right"><button class="sbl">Done</button></div>`,
+          );
+        } else {
+          inner = card("Details", rows(st, opt));
+        }
+        let modal = "";
+        if (opt === 1 && view === "edit") {
+          modal = `<div class="scrim"><div class="modal"><div class="mh">Agents &amp; models<span class="sp"></span><span class="dim">#2958</span></div><div class="mb">${fields(st)}</div><div class="mf"><button class="btn pri">Done</button></div></div></div>`;
+        }
+        return `<div class="${theme}"><div class="cap">${theme === "t-dark" ? "dark" : "light"} · ${w}px · ${view === "edit" ? "editing" : "summary"}</div><div class="stage" style="width:${w}px"><div class="pane" style="width:${w}px;height:${view === "edit" ? 430 : 230}px"><div class="inner">${header}${inner}</div></div>${modal}</div></div>`;
+      }
+      const state = { s: "claude", o: 1 };
+      function render() {
+        const st = STATES[state.s];
+        const title = state.o === 1 ? "Option 1 — modal" : "Option 2 — inline expand";
+        const desc =
+          state.o === 1
+            ? "Summary rows stay compact; ✎ Edit opens an “Agents &amp; models” modal grouped into Worker and Reviewer. Roomy at 260px even for opencode’s two dropdowns, at the cost of an overlay."
+            : "Edit swaps the Worker/Reviewer rows for the dropdowns in place, inside the Details card. No overlay and no context loss, but the card grows and 260px stacks every label above its control.";
+        let h = `<div class="opt"><h2>${title} — ${st.name}</h2><p>${desc}</p><div class="cols">`;
+        const views = st.editable ? ["summary", "edit"] : ["summary"];
+        for (const view of views) {
+          h += `<div class="themes">`;
+          for (const w of [260, 340]) {
+            for (const th of ["t-dark", "t-light"]) h += pane(th, w, st, state.o, view);
+          }
+          h += `</div>`;
+        }
+        h += `</div></div>`;
+        document.getElementById("out").innerHTML = h;
+        document
+          .querySelectorAll("#nav button")
+          .forEach((b) =>
+            b.setAttribute("aria-pressed", String(b.dataset.k === state.s + state.o)),
+          );
+      }
+      const nav = document.getElementById("nav");
+      for (const o of [1, 2])
+        for (const [k, v] of Object.entries(STATES)) {
+          const b = document.createElement("button");
+          b.dataset.k = k + o;
+          b.textContent = `Opt ${o} · ${v.name}`;
+          b.onclick = () => {
+            state.s = k;
+            state.o = o;
+            render();
+          };
+          nav.appendChild(b);
+        }
+      render();
+    </script>
+  </body>
+</html>

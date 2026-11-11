@@ -1460,3 +1460,42 @@ button.sb-chip--label[aria-pressed="true"] {
     border-width: 0;
   }
 }
+
+/* Worker/Reviewer rows in a task's Details and the dropdowns that unfold
+   from them. The old panel's label column (140px) is too wide for the
+   sidebar, so the label stacks above its control instead. */
+.sb-agents {
+  margin-top: 4px;
+}
+.sb-agent-src {
+  font-size: 0.6875rem;
+}
+.sb-ov-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--b);
+}
+.sb-agent-edit {
+  margin-left: 6px;
+}
+.sb-agent-lock {
+  margin: 6px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-soft);
+  font-size: 0.6875rem;
+}
+.sb-agents .task-detail-agents-config {
+  margin-top: 8px;
+  gap: 8px;
+}
+.sb-agents .task-detail-agent-select {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+.sb-agents .task-detail-agent-label {
+  min-width: 0;
+}
