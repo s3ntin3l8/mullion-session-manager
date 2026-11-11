@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   ABSOLUTE_HOST_PATH_PATTERN,
+  hostPathKey,
   isAbsoluteHostPath,
+  sameHostPath,
   isStorablePath,
 } from "../../src/shared/host-path.js";
 
@@ -27,5 +29,20 @@ describe("host-path", () => {
     for (const p of ["/x", "D:\\x", "D:/x", "x", "D:x", "\\\\s\\x"]) {
       expect(re.test(p), p).toBe(isAbsoluteHostPath(p));
     }
+  });
+
+  it("sameHostPath: a drive path ignores separator, case, doubled and trailing separators", () => {
+    for (const other of ["d:/projects/app", "D:\\Projects\\app\\", "D:/Projects//app"]) {
+      expect(sameHostPath("D:\\Projects\\app", other), other).toBe(true);
+    }
+    expect(sameHostPath("D:\\Projects\\app", "D:\\Projects\\app2")).toBe(false);
+    expect(sameHostPath("D:\\a", "E:\\a")).toBe(false);
+    expect(hostPathKey("C:\\")).toBe("c:/");
+  });
+
+  it("sameHostPath: a POSIX path is compared exactly (case-sensitive)", () => {
+    expect(sameHostPath("/srv/App", "/srv/app")).toBe(false);
+    expect(sameHostPath("/srv/app", "/srv/app/")).toBe(false);
+    expect(hostPathKey("/srv/App")).toBe("/srv/App");
   });
 });

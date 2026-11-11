@@ -3,7 +3,12 @@ import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID, MAX_HOST_CWDS } from "../shared/constants.js";
-import { ABSOLUTE_HOST_PATH_PATTERN, isStorablePath } from "../shared/host-path.js";
+import {
+  ABSOLUTE_HOST_PATH_PATTERN,
+  hostPathKey,
+  isStorablePath,
+  sameHostPath,
+} from "../shared/host-path.js";
 import { normalizeGitRemote, readOriginUrl } from "./git-remote.js";
 import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 import { listHosts, type HostSummary } from "./host-registry.js";
@@ -145,7 +150,7 @@ export async function projectRemoteUrl(
 ): Promise<string | null> {
   if (project.hostId === LOCAL_HOST_ID) return readOriginUrl(project.cwd);
   const list = await discoverOnHost(app, project.hostId, cache);
-  const own = list?.find((c) => c.cwd === project.cwd);
+  const own = list?.find((c) => sameHostPath(c.cwd, project.cwd));
   return typeof own?.origin === "string" ? own.origin : null;
 }
 
@@ -170,9 +175,9 @@ export async function detectCheckouts(
   // included) is never a suggestion for another one.
   const claimed = new Set<string>();
   for (const other of app.db.select().from(projects).all()) {
-    claimed.add(`${other.hostId}\0${other.cwd}`);
+    claimed.add(`${other.hostId}\0${hostPathKey(other.cwd)}`);
     for (const [hostId, cwd] of Object.entries(parseHostCwds(other.hostCwds))) {
-      claimed.add(`${hostId}\0${cwd}`);
+      claimed.add(`${hostId}\0${hostPathKey(cwd)}`);
     }
   }
 
@@ -192,7 +197,7 @@ export async function detectCheckouts(
         c.isGitRepo &&
         c.isWorktree !== true &&
         isStorablePath(c.cwd) &&
-        !claimed.has(`${host.id}\0${c.cwd}`),
+        !claimed.has(`${host.id}\0${hostPathKey(c.cwd)}`),
     );
 
     const normalized = (c: DiscoveredCandidate): string | null =>
@@ -285,13 +290,14 @@ export function attachHostCheckout(
     const meta = parseHostCwdsMeta(row.hostCwdsMeta);
     // A different path already mapped for this host is the operator's, and is
     // not silently replaced: they edit it in Edit project.
-    if (Object.hasOwn(map, hostId) && map[hostId] !== cwd) return "mapped";
+    if (Object.hasOwn(map, hostId) && !sameHostPath(map[hostId], cwd)) return "mapped";
     if (!Object.hasOwn(map, hostId) && Object.keys(map).length >= MAX_HOST_CWDS) return "limit";
     // `hostId` came from a request (the route has checked the host is
     // registered): it is set through a Map, never as a computed object key, so
     // it cannot reach the prototype chain. `fromEntries` defines own properties.
     const entries = new Map(Object.entries(map));
-    entries.set(hostId, cwd);
+    // The same location under another spelling keeps the stored one.
+    entries.set(hostId, Object.hasOwn(map, hostId) ? map[hostId] : cwd);
     const next: Record<string, string> = Object.fromEntries(entries);
     tx.update(projects)
       .set({

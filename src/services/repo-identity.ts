@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
+import { sameHostPath } from "../shared/host-path.js";
 import { projects } from "../db/schema.js";
 import { gitRemoteGateKey } from "./git-remote.js";
 import { projectRemoteUrl, type HostCandidateCache } from "./host-checkout-detect.js";
@@ -94,8 +95,9 @@ export function projectHasPath(
   hostId: string,
   cwd: string,
 ): boolean {
-  if (project.hostId === hostId && project.cwd === cwd) return true;
-  return parseHostCwds(project.hostCwds)[hostId] === cwd;
+  if (project.hostId === hostId && sameHostPath(project.cwd, cwd)) return true;
+  const mapped = parseHostCwds(project.hostCwds)[hostId];
+  return mapped !== undefined && sameHostPath(mapped, cwd);
 }
 
 /**

@@ -146,6 +146,73 @@ describe("host checkout detection routes", () => {
     });
   });
 
+  describe("one Windows checkout, several spellings (#2944)", () => {
+    const WIN = "D:\\Projects\\app";
+
+    async function otherProject(name: string, hostCwds?: Record<string, string>) {
+      const cwd = path.join(tmp, name);
+      fs.mkdirSync(cwd, { recursive: true });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name, cwd, ...(hostCwds ? { hostCwds } : {}) },
+      });
+      expect(res.statusCode).toBe(201);
+      return res.json().id as number;
+    }
+
+    it("refuses to attach another spelling of a path another project already owns", async () => {
+      await otherProject("owner", { [macId]: WIN });
+      const attach = (id: number, cwd: string) =>
+        app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/host-checkouts`,
+          payload: { hostId: macId, cwd },
+        });
+
+      for (const spelling of ["D:/Projects/app", "d:\\projects\\app\\"]) {
+        const res = await attach(projectId, spelling);
+        expect(res.statusCode, spelling).toBe(409);
+        expect(res.json().code).toBe("DUPLICATE_PROJECT");
+      }
+    });
+
+    it("re-attaching the same location in another spelling is a no-op that keeps the stored one", async () => {
+      const attach = (cwd: string) =>
+        app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/host-checkouts`,
+          payload: { hostId: macId, cwd },
+        });
+      expect((await attach(WIN)).statusCode).toBe(200);
+      const again = await attach("d:/projects/app");
+      expect(again.statusCode).toBe(200);
+      expect(again.json().hostCwds).toEqual({ [macId]: WIN });
+      // A genuinely different path for the host is still refused.
+      expect((await attach("D:/Projects/other")).statusCode).toBe(409);
+    });
+
+    it("does not suggest a clone that a project already owns under another spelling", async () => {
+      await otherProject("owner", { [macId]: WIN });
+      discovery.set(macId, [
+        {
+          name: "app",
+          cwd: "d:/projects/app",
+          isGitRepo: true,
+          isWorktree: false,
+          origin: "https://github.com/acme/app.git",
+        },
+      ]);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/host-suggestions`,
+      });
+
+      expect(res.json()).toEqual({ hosts: [] });
+    });
+  });
+
   describe("PATCH /api/projects/:id hostCwds bookkeeping", () => {
     async function autoFilled() {
       applySettingsPatch(app, { autoDetectHostCheckouts: true });
