@@ -62,6 +62,20 @@ describe("commandsTableConflict (issue #2933)", () => {
     ].join("\n");
     expect(commandsTableConflict([prose], "make test\nmake lint")).toBeUndefined();
   });
+
+  it("counts a bare command written as a whole table cell", () => {
+    const bare = [
+      "| Command | What |",
+      "| --- | --- |",
+      "| make test | tests |",
+      "| make lint | lint |",
+      "| npm run build | bundle |",
+    ].join("\n");
+    const conflict = commandsTableConflict([bare], "make test");
+    expect(conflict?.excerpt).toContain("make lint");
+    expect(conflict?.excerpt).toContain("npm run build");
+    expect(conflict?.excerpt).not.toContain("make test");
+  });
 });
 
 describe("restructure prompt and result (issue #2933)", () => {

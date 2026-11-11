@@ -3,10 +3,11 @@
 // disposition: a disposition on CLAUDE.md is what allows that file to shrink,
 // and this check must not look like one.
 
-// Only a backticked token counts. A bare "make sure" / "make it" in a list
-// or table cell is prose, and it used to flip the half-kept rule.
+// Only a backticked token counts in a list: a bare "make sure" / "make it"
+// is prose. A table cell is the command itself, so a bare cell counts too.
 const COMMAND_TOKEN = String.raw`(?:make\s+[A-Za-z0-9_.:-]+|npm\s+run\s+[A-Za-z0-9_.:-]+)`;
 const BACKTICK_COMMAND_RE = new RegExp(String.raw`\`${COMMAND_TOKEN}\``, "g");
+const CELL_COMMAND_RE = new RegExp(String.raw`^${COMMAND_TOKEN}$`);
 
 export interface CommandsConflict {
   file: string;
@@ -32,13 +33,21 @@ function addBackticked(found: Set<string>, text: string): void {
   }
 }
 
-/** Backticked `make <target>` / `npm run <script>` tokens from markdown
- * tables and lists. Unfenced "make <word>" is prose and is ignored. */
+/** Backticked `make <target>` / `npm run <script>` tokens from lists, plus
+ * the same token as a whole table cell (backticks optional there). */
 export function repoCommands(text: string): string[] {
   const found = new Set<string>();
   for (const line of text.split("\n")) {
     if (!isCommandLine(line)) continue;
     addBackticked(found, line);
+    if (!line.trim().startsWith("|")) continue;
+    for (const cell of line.split("|")) {
+      const value = cell
+        .trim()
+        .replace(/^`+|`+$/g, "")
+        .replace(/\s+/g, " ");
+      if (CELL_COMMAND_RE.test(value)) found.add(value);
+    }
   }
   return [...found];
 }

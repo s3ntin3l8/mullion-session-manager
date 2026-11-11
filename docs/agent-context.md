@@ -392,7 +392,9 @@ forbids) keep being obeyed. Three modes:
   table or list (`make` targets, `npm run` scripts) in the original
   `AGENTS.md` or `CLAUDE.md` must survive in the rewritten `AGENTS.md`; if
   fewer than half of those commands do, the panel lists an `AGENTS.md`
-  conflict with kind `commands` and no disposition. CI internals may still
+  conflict with kind `commands` and no disposition. A table cell counts
+  bare or backticked; a list item counts only when the command is
+  backticked, so a prose bullet does not. CI internals may still
   move to `CONTRIBUTING.md`.
 
 A `report`/`restructure` turn always starts from a clean checkout of the base
