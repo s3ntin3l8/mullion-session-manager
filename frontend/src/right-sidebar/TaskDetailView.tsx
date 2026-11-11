@@ -4,7 +4,6 @@ import { TaskActions } from "../TaskActions.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
-import { commandToBinary } from "../cliLogos.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
 import { prStatuses, prTriadItems, type PrStatusInput } from "../github/prPhase.js";
 import { parseReviewRounds } from "../lib/reviewRounds.js";
@@ -30,6 +29,7 @@ import {
   TaskStatusBlock,
 } from "../ui/sidebar/index.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
+import { TaskAgents } from "./TaskAgents.js";
 
 // The Tasks sidebar's detail mode (epic #2847): one task, status first. It
 // reads its own task by id from the store, so it does not depend on what the
@@ -374,11 +374,8 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
               "none (local task)"
             )}
           </dd>
-          <dt>Agent</dt>
-          <dd>
-            {task.agentCommand ? commandToBinary(task.agentCommand) : (task.agent ?? "default")}
-          </dd>
         </dl>
+        <TaskAgents task={task} />
         {body && (
           <div className="sb-body">
             <div
