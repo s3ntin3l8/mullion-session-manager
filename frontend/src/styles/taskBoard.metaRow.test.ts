@@ -28,5 +28,7 @@ describe("task card meta row", () => {
     );
     expect(items).toMatch(/min-width:\s*0/);
     expect(items).toMatch(/overflow:\s*hidden/);
+    // The age item is the one that actually renders the ellipsis.
+    expect(items).toMatch(/text-overflow:\s*ellipsis/);
   });
 });

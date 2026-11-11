@@ -2642,9 +2642,10 @@ button.github-panel-row.gh-issue-row {
   align-items: baseline;
   gap: 10px;
   /* Left padding clears the 2px inset severity bar so it never touches the time;
-     the negative margin keeps the time column aligned with the controls above. */
+     the negative margin equals that padding, so the time text sits on the list's
+     14px content edge and the bar hangs in the gutter. */
   padding: 5px 2px 5px 8px;
-  margin-left: -6px;
+  margin-left: -8px;
   font-size: 0.78125rem;
   border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
 }
