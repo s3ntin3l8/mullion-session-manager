@@ -1233,17 +1233,42 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
           const result: ReleaseApproveRunsResult = { approved: 0, reason: "no-held-runs" };
           return result;
         }
+        // Each run is approved on its own: GitHub 403s an approve for a run
+        // that is no longer waiting (a human or a second resolver got there
+        // first), and one stale run must not skip the rest.
         let approved = 0;
-        try {
-          for (const runId of held) {
+        let failure: GitHubApiError | null = null;
+        for (const runId of held) {
+          try {
             await approveRun(token, owner, repo, runId);
             approved += 1;
+          } catch (err) {
+            if (!(err instanceof GitHubApiError)) throw err;
+            failure ??= err;
           }
-        } finally {
-          // Even a partial approval changes what the section should show.
-          invalidateReleaseCache(owner, repo);
         }
-        const result: ReleaseApproveRunsResult = { approved };
+        // Even a partial approval changes what the section should show.
+        invalidateReleaseCache(owner, repo);
+        if (failure === null) {
+          const result: ReleaseApproveRunsResult = { approved };
+          return result;
+        }
+        // Some approve failed. Re-read what is still held: if nothing is, the
+        // failures were raced approvals (already done), not a refusal.
+        const remaining = await listHeldRuns(token, owner, repo, full.headSha).catch((e) => {
+          if (!(e instanceof GitHubApiError)) throw e;
+          return null; // can't tell: report the failure rather than guess
+        });
+        if (remaining !== null && remaining.held.length === 0) {
+          const result: ReleaseApproveRunsResult = { approved };
+          return result;
+        }
+        app.log.warn({ err: failure, owner, repo }, "release approve-runs failed");
+        const result: ReleaseApproveRunsResult = {
+          approved,
+          reason: failure instanceof GitHubWriteScopeError ? "forbidden" : "approve-failed",
+          detail: failure.message,
+        };
         return result;
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;

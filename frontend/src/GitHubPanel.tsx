@@ -148,7 +148,8 @@ function ReleaseSection({
         );
         onChanged();
       } else {
-        setApproveError(approveReasonMessage(result.reason, result.detail));
+        const msg = approveReasonMessage(result.reason, result.detail);
+        setApproveError(result.approved > 0 ? `Approved ${result.approved}, but: ${msg}` : msg);
         // A partial approval or a stale count: refetch so the button is honest.
         onChanged();
       }

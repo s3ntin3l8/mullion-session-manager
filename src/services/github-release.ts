@@ -285,7 +285,10 @@ export interface HeldRuns {
  * Lists the workflow runs for `headSha` that are waiting for someone to click
  * "Approve and run" — `GET /actions/runs?head_sha=`, keeping those with
  * `conclusion: "action_required"` (a completed-but-never-started run, the
- * shape every held run has on a bot-authored PR) or `status: "waiting"`.
+ * shape every held run has on a bot-authored PR) or `status: "action_required"`
+ * (approval-gated with no conclusion yet). `status: "waiting"` is deliberately
+ * NOT counted: it also covers concurrency and environment gates, which
+ * `/approve` refuses.
  *
  * `total` is the number of runs of any kind for that commit: `held` empty with
  * `total` 0 means no workflow ever fired (a PR opened with the default
@@ -309,15 +312,18 @@ export async function listHeldRuns(
     `/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=100`,
   );
   const held = result.workflow_runs
-    .filter((run) => run.conclusion === "action_required" || run.status === "waiting")
+    .filter((run) => run.conclusion === "action_required" || run.status === "action_required")
     .map((run) => run.id);
   return { held, total: result.total_count };
 }
 
 /**
  * Approves one held run — `POST /actions/runs/:id/approve`, 204/empty on
- * success. Needs a token with `actions: write` (DISPATCH_PERMISSIONS); a
- * token without it surfaces as `GitHubWriteScopeError`.
+ * success. Needs a token with `actions: write` — the account PAT the route
+ * resolves, not an App token minted here; a token without it surfaces as
+ * `GitHubWriteScopeError`. GitHub also answers 403 for a run that is no
+ * longer awaiting approval, so a caller must not read every 403 as a scope
+ * problem.
  */
 export async function approveRun(
   token: string,
@@ -388,11 +394,12 @@ interface ReleasePrCacheEntry {
 const releasePrCache = new Map<string, ReleasePrCacheEntry>();
 // Same TTL as getRepoStatus's own CACHE_TTL_MS (github.ts) — this is the
 // same "glance-level widget, not a live feed" tradeoff. Without this, GET
-// .../release costs THREE live calls (getDefaultBranch, findReleasePullRequest,
-// getPullRequestByNumber) every time the frontend refetches — and it refetches
+// .../release costs FOUR live calls (getDefaultBranch, findReleasePullRequest,
+// getPullRequestByNumber, and the head commit's workflow-runs read in
+// listHeldRuns) every time the frontend refetches — and it refetches
 // on every /ws/github frame (pr, issue, ci, push, release —
 // store/slices/github.ts's prsRefreshTrigger), not just release-relevant
-// ones. An active repo's webhook traffic would otherwise spend three calls
+// ones. An active repo's webhook traffic would otherwise spend four calls
 // per frame against the process-wide rate-limit budget (github-fetch.ts)
 // the PR poller and every Task Master write share — degrading features
 // well outside this one panel section.
@@ -403,9 +410,10 @@ const RELEASE_PR_CACHE_TTL_MS = 60_000;
  * cached for `RELEASE_PR_CACHE_TTL_MS` — the read path behind GET
  * .../release. Resolves the default branch, finds the release-please PR
  * against it, reads its full mergeability, and merges in `ciStatus` from
- * the PR poller's own warm cache (github.ts's `getPRsStatus`) when present
- * — never a live Actions-runs call of its own, same posture as
- * `/github/prs`.
+ * the PR poller's own warm cache (github.ts's `getPRsStatus`) when present.
+ * `ciStatus` itself never makes a live Actions-runs call (same posture as
+ * `/github/prs`); the held-run count does, via one `listHeldRuns` read of the
+ * head commit's runs, which is why the result is cached.
  *
  * `invalidateReleaseCache` below lets a route drop the cache immediately
  * after an action it just took (a merge that just closed the PR) rather
