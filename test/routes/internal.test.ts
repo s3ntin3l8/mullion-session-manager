@@ -3221,23 +3221,28 @@ describe("internal routes (agent role, issue #26)", () => {
       process.env.PROJECTS_ROOTS = cwd;
       const app = await buildApp();
 
+      const payload = {
+        cwd,
+        slug: "demo",
+        baseRef: "origin/main",
+        agentCommand: "claude",
+        prompt: "do the thing",
+        timeoutMs: 300_000,
+      };
       const res = await app.inject({
         method: "POST",
         url: "/internal/run-generation-turn",
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: {
-          cwd,
-          slug: "demo",
-          baseRef: "origin/main",
-          agentCommand: "claude",
-          prompt: "do the thing",
-          timeoutMs: 300_000,
-        },
+        payload,
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ outcome: "ok", sandboxed: true, canary: true, stdout: "out" });
       expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith(
-        expect.objectContaining({ sandbox: true, onBeforeTeardown: expect.any(Function) }),
+        expect.objectContaining({
+          ...payload,
+          sandbox: true,
+          onBeforeTeardown: expect.any(Function),
+        }),
       );
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(cwd, { recursive: true, force: true });
