@@ -25,14 +25,19 @@ export function isStorablePath(cwd: string): boolean {
 }
 
 /** The identity of a path on another host, for comparing two spellings of the
- * same location. A Windows drive path is case-insensitive and takes either
- * separator, so `D:\\Projects\\x`, `d:/projects/x/` and `D:/Projects//x` are one
- * key. Chosen by the path's shape, not by the host's platform (which can be
- * unknown). A POSIX path is returned unchanged: it is case-sensitive. */
+ * same location. Doubled and trailing separators fold on every path. A Windows
+ * drive path is also case-insensitive and takes either separator, so
+ * `D:\\Projects\\x`, `d:/projects/x/` and `D:/Projects//x` are one key; a POSIX
+ * path stays case-sensitive, and its backslash is an ordinary name character.
+ * Chosen by the path's shape, not by the host's platform (which can be
+ * unknown). */
 export function hostPathKey(cwd: string): string {
-  if (!/^[A-Za-z]:[\\/]/.test(cwd)) return cwd;
-  const unified = cwd.replace(/[\\/]+/g, "/").toLowerCase();
-  return unified.length > 3 ? unified.replace(/\/$/, "") : unified;
+  const drive = /^[A-Za-z]:[\\/]/.test(cwd);
+  const folded = drive ? cwd.replace(/[\\/]+/g, "/") : cwd.replace(/\/{2,}/g, "/");
+  // A root (`/`, `d:/`) keeps its one separator; anything longer loses a trailing one.
+  const rootLength = drive ? "d:/".length : "/".length;
+  const trimmed = folded.length > rootLength ? folded.replace(/\/+$/, "") : folded;
+  return drive ? trimmed.toLowerCase() : trimmed;
 }
 
 /** Whether two paths on the same host name the same location. */

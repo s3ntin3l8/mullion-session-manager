@@ -40,9 +40,14 @@ describe("host-path", () => {
     expect(hostPathKey("C:\\")).toBe("c:/");
   });
 
-  it("sameHostPath: a POSIX path is compared exactly (case-sensitive)", () => {
+  it("sameHostPath: a POSIX path folds doubled and trailing separators but stays case-sensitive", () => {
+    expect(sameHostPath("/srv/app", "/srv/app/")).toBe(true);
+    expect(sameHostPath("/srv/app", "/srv//app")).toBe(true);
     expect(sameHostPath("/srv/App", "/srv/app")).toBe(false);
-    expect(sameHostPath("/srv/app", "/srv/app/")).toBe(false);
     expect(hostPathKey("/srv/App")).toBe("/srv/App");
+    expect(hostPathKey("/")).toBe("/");
+    expect(hostPathKey("//")).toBe("/");
+    // A backslash is a legal name character on POSIX, so it is not a separator.
+    expect(sameHostPath("/srv/a\\b", "/srv/a/b")).toBe(false);
   });
 });
