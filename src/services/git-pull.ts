@@ -112,8 +112,11 @@ async function runGitWithLockRetry(
   return res;
 }
 
-// A lock older than this is not a concurrent git process: the retries above
-// already outlast any real fetch/merge/commit lock by a wide margin.
+// How old a lock file must be before Pull calls it orphaned. A deliberate
+// heuristic, separate from the ~2.6 s retry budget above: real fetch/merge/commit
+// locks are held for seconds, so anything this old almost certainly belongs to a
+// killed process. The trade-off: an orphaned lock younger than this still
+// reports `busy` until it crosses the threshold.
 export const STALE_LOCK_AGE_MS = 10 * 60_000;
 const LOCK_PATH = /Unable to create '([^']*\.lock)'/;
 
@@ -121,7 +124,8 @@ function formatAge(ms: number): string {
   const min = Math.floor(ms / 60_000);
   if (min < 60) return `${min} min`;
   const h = Math.floor(min / 60);
-  return h < 48 ? `${h} h` : `${Math.floor(h / 24)} days`;
+  if (h < 48) return `${h} h`;
+  return `${Math.floor(h / 24)} days`;
 }
 
 // A fresh object per call (a caller may annotate it). The lock stderr goes to

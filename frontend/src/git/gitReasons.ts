@@ -100,10 +100,6 @@ export function reasonMessage(reason: string | undefined, detail: string | undef
  * exhaustiveness path: a NEWER backend can send a reason this build has
  * never heard of, and that must still say something sensible.
  */
-export function staleLockMessage(detail?: string): string {
-  return `A leftover git lock file${detail ? ` (${detail})` : ""} blocks Pull. If no git command is running, delete it.`;
-}
-
 export function pullReasonMessage(reason: GitPullReason | undefined, detail?: string): string {
   switch (reason) {
     case undefined:
@@ -139,6 +135,10 @@ export function pullReasonMessage(reason: GitPullReason | undefined, detail?: st
       return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
     }
   }
+}
+
+export function staleLockMessage(detail?: string): string {
+  return `A leftover git lock file${detail ? ` (${detail})` : ""} blocks Pull. If no git command is running, delete it.`;
 }
 
 /**
