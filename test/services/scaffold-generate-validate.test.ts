@@ -158,4 +158,39 @@ describe("validateGenerationOutput", () => {
     expect(r.possiblyGeneric).toBe(false);
     expect(r.missingCitedPaths).toBeUndefined();
   });
+
+  it("skips existence-map keys the snapshot did not list (#2932)", () => {
+    const text = "See src/routes/listings.ts and src/domain/a.ts.";
+    const listed = validateGenerationOutput(
+      content(text),
+      work,
+      new Map([["src/routes/listings.ts", true]]),
+    );
+    expect(listed.possiblyGeneric).toBe(false);
+    expect(listed.missingCitedPaths).toBeUndefined();
+    const empty = validateGenerationOutput(content(text), work, new Map());
+    expect(empty.possiblyGeneric).toBe(false);
+    expect(empty.missingCitedPaths).toBeUndefined();
+  });
+
+  it("trusts an existence map over the directory it was given (#2932)", () => {
+    // The checkout lacks src/routes/listings.ts. The map is what the scratch
+    // worktree reported before it was torn down.
+    const checkout = fs.mkdtempSync(path.join(os.tmpdir(), "validate-checkout-"));
+    try {
+      const text = "See src/routes/listings.ts and src/domain/missing.ts.";
+      const map = new Map<string, boolean>([
+        ["src/routes/listings.ts", true],
+        ["src/domain/missing.ts", false],
+      ]);
+      const r = validateGenerationOutput(content(text), checkout, map);
+      expect(r.missingCitedPaths).toEqual({ missing: 1, cited: 2 });
+      expect(r.possiblyGeneric).toBe(false);
+      // The same text against the empty checkout, with no map, misses both.
+      const bare = validateGenerationOutput(content(text), checkout);
+      expect(bare.missingCitedPaths).toEqual({ missing: 2, cited: 2 });
+    } finally {
+      fs.rmSync(checkout, { recursive: true, force: true });
+    }
+  });
 });

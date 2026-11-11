@@ -159,7 +159,7 @@ describe("ProjectSetupPanel", () => {
       await user.click(screen.getByRole("button", { name: /^Generate with / }));
       expect(await screen.findByText(/without a sandbox/)).toBeInTheDocument();
       expect(screen.getByText(/may not have read this repo/)).toBeInTheDocument();
-      expect(screen.getByText(/3 of 8 cited paths do not exist here/)).toBeInTheDocument();
+      expect(screen.getByText(/3 of 8 checked paths do not exist here/)).toBeInTheDocument();
     });
 
     describe.each([
