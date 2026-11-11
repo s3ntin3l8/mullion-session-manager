@@ -972,6 +972,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         dependencyCount: tasks.dependencyCount,
         blockedBy: tasks.blockedBy,
         blockedByCheckedAt: tasks.blockedByCheckedAt,
+        rateLimitUntil: tasks.rateLimitUntil,
       })
       .from(tasks)
       .where(and(eq(tasks.status, "ready"), isNull(tasks.archivedAt)))
@@ -986,6 +987,9 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
 
     for (const row of ready) {
       if (remaining <= 0) break;
+      // #2940 — a parked task stays ready until the provider reset. Skipping
+      // here (not failing the claim) keeps the sweep from warning every tick.
+      if (row.rateLimitUntil != null && row.rateLimitUntil.getTime() > Date.now()) continue;
 
       let gateRow: DependencyGateRow = row;
       let gate = dependencyGate(gateRow);

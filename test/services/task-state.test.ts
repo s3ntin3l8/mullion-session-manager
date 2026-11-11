@@ -20,6 +20,7 @@ const LEGAL: [TaskStatus, TaskStatus][] = [
   ["claimed", "failed"],
   ["in_progress", "reviewing"],
   ["in_progress", "failed"],
+  ["in_progress", "ready"],
   ["reviewing", "done"],
   ["reviewing", "in_progress"],
   ["reviewing", "failed"],

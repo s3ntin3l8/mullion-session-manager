@@ -127,7 +127,7 @@ function mockApp(
   rows: { id: number; cwd: string; hostId: string }[],
   inserted: InsertedTaskRow[],
   conflictConfigs: { set: object; where: unknown }[] = [],
-  readyTasks: { id: number }[] = [],
+  readyTasks: { id: number; rateLimitUntil?: Date | null }[] = [],
   trackedNonTerminal: TrackedTaskRow[] = [],
   // #667 — rows counted toward the capacity pre-count in
   // autoClaimReadyTasks (CONCURRENCY_CAPPED_STATUSES). Empty by default so
@@ -197,6 +197,7 @@ function mockApp(
                         dependencyCount: null,
                         blockedBy: null,
                         blockedByCheckedAt: null,
+                        rateLimitUntil: null,
                         ...t,
                       }))
                     : isParentTitleQuery
@@ -991,6 +992,30 @@ describe("startTaskWatcher", () => {
 
       expect(mockEnqueueTask).toHaveBeenCalledWith(app, 10, { auto: true });
       expect(mockEnqueueTask).toHaveBeenCalledWith(app, 11, { auto: true });
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("does not auto-claim a task held until a future rate-limit reset (#2940)", async () => {
+      mockResolveGitHubToken.mockReturnValue(null);
+      vi.useFakeTimers();
+      const future = new Date(Date.now() + 60 * 60 * 1000);
+      const past = new Date(Date.now() - 60 * 60 * 1000);
+      const readyTasks = [
+        { id: 70, rateLimitUntil: future },
+        { id: 71, rateLimitUntil: null },
+        { id: 72, rateLimitUntil: past },
+      ];
+      const app = mockApp([], [], [], readyTasks);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockEnqueueTask).not.toHaveBeenCalledWith(app, 70, { auto: true });
+      expect(mockEnqueueTask).toHaveBeenCalledWith(app, 71, { auto: true });
+      expect(mockEnqueueTask).toHaveBeenCalledWith(app, 72, { auto: true });
 
       cleanup();
       vi.useRealTimers();

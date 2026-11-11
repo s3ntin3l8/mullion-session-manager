@@ -827,6 +827,13 @@
       "when": 1794356992186,
       "tag": "0117_cold_rockslide",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "6",
+      "when": 1794385457354,
+      "tag": "0118_rate_limit_until",
+      "breakpoints": true
     }
   ]
 }
