@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Design record for epic #2922 (Task Master redesign polish): options for boxing the GitHub and task detail views in the right sidebar. DECISION (owner): option B, cards for the state blocks (status, review, Mullion, description) and rule-separated sections for the long lists (changes, conversation, hierarchy, timeline), section chevron on the right so titles and bodies share one left edge. The shipped UI is authoritative once built; PR/issue numbers in the mock data are fictional. -->
+    <title>Mullion — sidebar detail boxes: mockup · rev 1</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      /* Tokens copied verbatim from frontend/src/styles/tokens.css as of this commit. Nothing here is a new token; only layout differs between the options. */
+      .t-dark {
+        --sidebar: #161617;
+        --sidebar-2: #1b1b1d;
+        --pane-hd: #242426;
+        --chrome: #1c1c1e;
+        --fg: #ededed;
+        --muted: #9b9ba5;
+        --dim: #8a8a94;
+        --g: #5ec27a;
+        --r: #e5575a;
+        --b: #5c9bf5;
+        --c: #43c1c1;
+        --y: #d7b06a;
+        --p: #b884db;
+        --o: #e0965a;
+        --accent-solid: #0e9f6e; /* base; white text on it is 3.39:1 — known debt, B1 darkens button fill */
+        --ring: #12b981;
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --surface: #1e1e21;
+        --surface-hover: #242427; /* #26262a put --dim at 4.41:1 (tokens.css) */
+        --accent-fill: #0a7a53;
+        --accent: #34d399;
+        --lane-1: #5c9bf5;
+        --lane-2: #5ec27a;
+        --lane-3: #d7b06a;
+        --lane-4: #e66fb0;
+        --lane-5: #43c1c1;
+        --lane-6: #b884db;
+        --lane-more: #6a6a74;
+        color-scheme: dark;
+      }
+      .t-light {
+        --sidebar: #f4f4f2;
+        --sidebar-2: #efefec;
+        --pane-hd: #e9e9e6;
+        --chrome: #eeeeec;
+        --fg: #171717;
+        --muted: #5a5a5a;
+        --dim: #666666;
+        --g: #1a7f37;
+        --r: #cf222e;
+        --b: #0969da;
+        --c: #0e7490;
+        --y: #9a6700;
+        --p: #8250df;
+        --o: #bc5215;
+        --accent-solid: #0b6e4b;
+        --ring: #0b6e4b;
+        --border: #c9c9c4;
+        --border-soft: #dcdcd8;
+        --surface: #ffffff;
+        --surface-hover: #f0f0ed;
+        --accent-fill: #0b6e4b;
+        --accent: #0b6e4b;
+        --lane-1: #0969da;
+        --lane-2: #1a7f37;
+        --lane-3: #9a6700;
+        --lane-4: #bf3989;
+        --lane-5: #0e7490;
+        --lane-6: #8250df;
+        --lane-more: #9a9a9a;
+        color-scheme: light;
+      }
+      /* Semantic status tokens: one vocabulary (success/danger/warn/info/merged/neutral). */
+      .t-dark,
+      .t-light {
+        --status-success-fg: var(--g);
+        --status-danger-fg: var(--r);
+        --status-warn-fg: var(--y);
+        --status-info-fg: var(--b);
+        --status-merged-fg: var(--p);
+        --status-neutral-fg: var(--muted);
+      }
+      .t-dark {
+        --tint: 16%;
+        --status-danger-fg: #ff7b7e;
+        --tint-border: 42%;
+      }
+      .t-light {
+        --tint: 11%;
+        --status-success-fg: #187533;
+        --status-danger-fg: #c1202b;
+        --status-warn-fg: #8a5c00;
+        --status-info-fg: #0862cb;
+        --status-merged-fg: #7649cb;
+        --status-neutral-fg: var(--muted);
+        --tint-border: 38%;
+      }
+      .t-dark,
+      .t-light {
+        --status-success-bg: color-mix(in srgb, var(--g) var(--tint), var(--sidebar));
+        --status-danger-bg: color-mix(in srgb, var(--r) var(--tint), var(--sidebar));
+        --status-warn-bg: color-mix(in srgb, var(--y) var(--tint), var(--sidebar));
+        --status-info-bg: color-mix(in srgb, var(--b) var(--tint), var(--sidebar));
+        --status-merged-bg: color-mix(in srgb, var(--p) var(--tint), var(--sidebar));
+        --status-neutral-bg: color-mix(in srgb, var(--fg) 8%, var(--sidebar));
+        --status-success-border: color-mix(in srgb, var(--g) var(--tint-border), var(--sidebar));
+        --status-danger-border: color-mix(in srgb, var(--r) var(--tint-border), var(--sidebar));
+        --status-warn-border: color-mix(in srgb, var(--y) var(--tint-border), var(--sidebar));
+        --status-info-border: color-mix(in srgb, var(--b) var(--tint-border), var(--sidebar));
+        --status-merged-border: color-mix(in srgb, var(--p) var(--tint-border), var(--sidebar));
+        --status-neutral-border: var(--border);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          13px/1.45 -apple-system,
+          "Inter",
+          system-ui,
+          sans-serif;
+        background: #0c0c0d;
+        color: #ddd;
+      }
+      .mono,
+      code {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+      }
+      .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+        color: #fff;
+      }
+      .sub {
+        color: #9b9ba5;
+        margin: 0 0 16px;
+        max-width: 900px;
+      }
+      nav {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      nav button {
+        background: #1e1e21;
+        color: #ddd;
+        border: 1px solid #3b3b41;
+        border-radius: 6px;
+        padding: 6px 12px;
+        font: inherit;
+        cursor: pointer;
+      }
+      nav button[aria-pressed="true"] {
+        background: #0a7a53;
+        border-color: #12b981;
+        color: #fff;
+      }
+      .note {
+        background: #17171a;
+        border: 1px solid #2b2b30;
+        border-left: 3px solid #12b981;
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin: 0 0 18px;
+        max-width: 1100px;
+        color: #c9c9d0;
+      }
+      .note b {
+        color: #fff;
+      }
+      .note ul {
+        margin: 6px 0 0 18px;
+        padding: 0;
+      }
+      .opt {
+        margin-bottom: 30px;
+      }
+      .opt > h2 {
+        font-size: 14px;
+        color: #fff;
+        margin: 0 0 2px;
+      }
+      .opt > p {
+        margin: 0 0 10px;
+        color: #9b9ba5;
+        max-width: 900px;
+      }
+      .row {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .cap {
+        font-size: 11px;
+        color: #8a8a94;
+        margin-bottom: 4px;
+      }
+
+      /* ───────── Sidebar frame (container query mirrors .sidebar-frame in right-sidebar.css) ───────── */
+      .pane {
+        background: var(--sidebar);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow-y: auto;
+        max-height: 760px;
+        container-type: inline-size;
+        container-name: sidebar-frame;
+        --pad: 12px;
+        font-size: 12px;
+      }
+      .pane .inner {
+        padding: 8px 0 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .pane a,
+      .pane .lnk {
+        color: var(--b);
+        text-decoration: none;
+      }
+      .dim {
+        color: var(--dim);
+      }
+      .sp {
+        flex: 1;
+      }
+      .mono {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+      }
+
+      /* small atoms */
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 1px 8px;
+        font-size: 11px;
+        line-height: 16px;
+        background: var(--surface);
+        white-space: nowrap;
+      }
+      .chip.ok {
+        color: var(--status-success-fg);
+        background: var(--status-success-bg);
+        border-color: var(--status-success-border);
+      }
+      .chip.bad {
+        color: var(--status-danger-fg);
+        background: var(--status-danger-bg);
+        border-color: var(--status-danger-border);
+      }
+      .chip.warn {
+        color: var(--status-warn-fg);
+        background: var(--status-warn-bg);
+        border-color: var(--status-warn-border);
+      }
+      .chip.info {
+        color: var(--status-info-fg);
+        background: var(--status-info-bg);
+        border-color: var(--status-info-border);
+      }
+      .chip.mer {
+        color: var(--status-merged-fg);
+        background: var(--status-merged-bg);
+        border-color: var(--status-merged-border);
+      }
+      .btn {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        border-radius: 6px;
+        padding: 2px 9px;
+        font: inherit;
+        font-size: 11px;
+      }
+      .hdr {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px var(--pad);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .hdr .ttl {
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .ibtn {
+        width: 20px;
+        height: 20px;
+        display: inline-grid;
+        place-items: center;
+        color: var(--dim);
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 3px;
+        margin: 8px 0 4px;
+      }
+      .steps i {
+        display: block;
+        height: 2px;
+        background: var(--border);
+      }
+      .steps i.d {
+        background: var(--accent);
+      }
+      .steps i.c {
+        background: var(--b);
+      }
+      .steps-l {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        font-size: 9.5px;
+        color: var(--dim);
+      }
+      .steps-l span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: clip;
+        padding-right: 2px;
+      }
+      .steps-l span.c {
+        color: var(--b);
+        font-weight: 600;
+      }
+      .steps-l span.d {
+        color: var(--accent);
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 3px 8px;
+      }
+      .kv .k {
+        color: var(--dim);
+      }
+      .mdbody {
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .mdbody h4 {
+        margin: 0 0 4px;
+        font-size: 13px;
+      }
+      .clamp {
+        max-height: 6.5em;
+        overflow: hidden;
+        -webkit-mask-image: linear-gradient(#000 60%, transparent);
+        mask-image: linear-gradient(#000 60%, transparent);
+      }
+      .tl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 3px 10px;
+        font-size: 11.5px;
+      }
+      .tl .t {
+        color: var(--dim);
+      }
+      .tl-row {
+        display: contents;
+      }
+      .tl-bar {
+        box-shadow: inset 3px 0 0 var(--accent);
+        padding-left: 8px;
+      }
+      .comment {
+        border: 1px solid var(--border-soft);
+        border-radius: 6px;
+        padding: 6px 8px;
+        background: var(--surface);
+      }
+      .comment .ch {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 4px;
+        font-size: 11px;
+      }
+      .rowline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 0;
+      }
+
+      /* ───────── The blocks: one structure, three treatments ─────────
+         .blk > .blk-h (title left, optional actions, chevron RIGHT) + .blk-b.
+         Title and body share one left edge in every option (the chevron moves to the
+         right, which fixes the "headers sit further right than bodies" report). */
+      .blk-h {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .blk-h .chev {
+        margin-left: auto;
+        font-size: 10px;
+      }
+      .blk-h .acts {
+        margin-left: auto;
+        text-transform: none;
+        letter-spacing: 0;
+        font-weight: 400;
+        display: flex;
+        gap: 6px;
+      }
+      .blk-h .acts + .chev {
+        margin-left: 6px;
+      }
+
+      /* A — every section is a card */
+      .opt-a .blk {
+        margin: 0 var(--pad);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--sidebar-2);
+        overflow: hidden;
+      }
+      .opt-a .blk-h {
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .opt-a .blk.closed .blk-h {
+        border-bottom: 0;
+      }
+      .opt-a .blk-b {
+        padding: 8px 10px 10px;
+      }
+
+      /* B — cards for the "state" blocks, rule-separated sections for the long ones */
+      .opt-b .blk.box {
+        margin: 0 var(--pad);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--sidebar-2);
+        overflow: hidden;
+      }
+      .opt-b .blk.box .blk-h {
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .opt-b .blk.box .blk-b {
+        padding: 8px 10px 10px;
+      }
+      .opt-b .blk.rule {
+        border-top: 1px solid var(--border-soft);
+        margin-top: 2px;
+      }
+      .opt-b .blk.rule .blk-h {
+        padding: 9px var(--pad) 6px;
+      }
+      .opt-b .blk.rule .blk-b {
+        padding: 0 var(--pad) 12px;
+      }
+
+      /* C — inset panel with a tinted hairline header, like the comment cards */
+      .opt-c .blk {
+        margin: 0 var(--pad);
+        border: 1px solid var(--border-soft);
+        border-radius: 5px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .opt-c .blk-h {
+        padding: 5px 10px;
+        background: var(--surface-hover);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .opt-c .blk-b {
+        padding: 8px 10px 10px;
+      }
+      .opt-c .blk.status {
+        border-color: var(--border);
+      }
+
+      @container sidebar-frame (max-width: 300px) {
+        .pane {
+          --pad: 8px;
+        }
+        .steps-l {
+          font-size: 8.5px;
+          letter-spacing: -0.02em;
+        }
+        .opt-a .blk,
+        .opt-b .blk.box,
+        .opt-c .blk {
+          border-left: 0;
+          border-right: 0;
+          border-radius: 0;
+          margin-left: 0;
+          margin-right: 0;
+        }
+        .kv {
+          grid-template-columns: 56px 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Sidebar detail boxes — options</h1>
+      <p class="sub">
+        Epic #2922 · design record. Three ways to box the GitHub PR / issue detail and the task
+        detail so the whole right sidebar reads as one family. Each row shows dark and light at
+        340px and at the 260px compact width (container query).
+      </p>
+      <nav id="nav"></nav>
+      <div id="stage"></div>
+    </div>
+    <script>
+      const chev = (open = true) => `<span class="chev">${open ? "▾" : "▸"}</span>`;
+      const blk = (title, body, o = {}) =>
+        `<div class="blk ${o.kind || "box"} ${o.cls || ""}"><div class="blk-h"><span>${title}</span>${o.acts ? `<span class="acts">${o.acts}</span>` : ""}${o.noChev ? "" : chev()}</div><div class="blk-b">${body}</div></div>`;
+
+      const header = (t, extra = "") =>
+        `<div class="hdr"><span class="ibtn">‹</span><span class="ttl">${t}</span><span class="sp"></span>${extra}<span class="ibtn">↗</span><span class="ibtn">✕</span></div>`;
+
+      const status = (kind, done = false) => `
+        <div class="blk ${kind} status box"><div class="blk-b" style="padding:8px 10px 10px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${done ? '<span class="chip mer">DONE</span><span class="dim">merged 9m ago</span>' : '<span class="chip info">IN PROGRESS</span><span class="dim">2h ago</span>'}</div>
+          <div class="steps">${done ? '<i class="d"></i>'.repeat(5) : '<i class="d"></i><i class="d"></i><i class="c"></i><i></i><i></i>'}</div>
+          <div class="steps-l">${done ? ["Backlog", "Ready", "In progress", "Reviewing", "Done"].map((x) => `<span class="d">${x}</span>`).join("") : '<span>Backlog</span><span>Ready</span><span class="c">In progress</span><span>Reviewing</span><span>Done</span>'}</div>
+          <div style="margin-top:6px"><b>Next:</b> ${done ? "Nothing — the task is done." : "A worker is working on it. The review starts when it finishes."}</div>
+        </div></div>`;
+
+      const comments = `
+        <div class="comment"><div class="ch"><b>codecov</b><span class="dim">9m ago</span></div>Welcome to <b>Codecov</b> 🎉 Once you merge this PR into your default branch, you're all set…</div>
+        <div class="comment" style="margin-top:6px"><div class="ch"><b>s3ntin3l8-hermes</b><span class="dim">8h ago</span></div>Verdict: APPROVE — no blocking findings.</div>`;
+
+      const desc = `<div class="mdbody"><div class="clamp"><h4>Summary</h4>Brings the template's CI callers in line with the current reusable workflows. Pins every action by SHA, removes the duplicate lint job and renames the release job so the required checks keep their names.<br><br>Also bumps the gradle action from 6.4.0 to 6.4.1.</div><a class="lnk" style="font-size:11px">Read more</a></div>`;
+
+      /* PR detail ----------------------------------------------------------- */
+      const prView = (k) => `
+        ${header("#2909 fix(tasks): a merged task owes no review")}
+        <div class="inner">
+          <div style="padding:0 var(--pad)" class="dim">s3ntin3l8 · updated 9m ago · <span class="chip mer">Merged (squash)</span></div>
+          ${status(k, true)}
+          ${blk("Status", `<div class="rowline"><span style="color:var(--g)">✓</span><b>Checks</b><span class="dim">All checks have passed</span></div><div class="rowline"><span style="color:var(--g)">✓</span><b>Reviews</b><span class="dim">Approved by s3ntin3l8-hermes</span></div><div class="rowline"><span style="color:var(--p)">✓</span><b>Merge</b><span class="dim">Merged</span></div>`, { kind: "box" })}
+          ${blk("Latest review", `<div style="display:flex;gap:6px;margin-bottom:4px"><span class="chip ok">Approved</span><span class="dim">s3ntin3l8-hermes · 8h ago</span></div><b>Verdict:</b> APPROVE — no blocking findings. Reviewed the requested commit <code>f9d49c8</code>…<div style="margin-top:6px;display:flex;gap:6px"><span class="btn">Re-review</span><span class="btn">Hand off comments</span></div>`, { kind: "box" })}
+          ${blk("Mullion", `<div class="rowline"><span class="chip info">worker · idle</span><span class="chip">review posted</span></div>`, { kind: "box", acts: '<span class="btn">Preview PR</span>' })}
+          ${blk("Description", desc, { kind: "box" })}
+          ${blk("Changes", `<span style="color:var(--g)">6 files changed +148</span> <span style="color:var(--r)">−7</span> · 1 commit`, { kind: "rule" })}
+          ${blk("Conversation", comments, { kind: "rule" })}
+        </div>`;
+
+      /* Issue detail -------------------------------------------------------- */
+      const issueView = (k) => `
+        ${header("#2900 fix(projects): Add project modal's Browse… button")}
+        <div class="inner">
+          <div style="padding:0 var(--pad)" class="dim">s3ntin3l8 · opened 42m ago · <span class="chip ok">Open</span></div>
+          ${blk("Labels", `<span class="chip">enhancement</span> <span class="chip">mullion-task</span> <span class="chip">ui</span>`, { kind: "box" })}
+          ${status(k)}
+          ${blk("Sessions", `<span class="chip info">worker · idle</span> <span class="dim">reviewer: Hermes · running</span>`, { kind: "box" })}
+          ${blk("Description", desc, { kind: "box" })}
+          ${blk("Comments · 4", comments, { kind: "rule" })}
+        </div>`;
+
+      /* Task detail --------------------------------------------------------- */
+      const taskView = (k) => `
+        ${header("#2900 fix(projects): Add proj…")}
+        <div class="inner">
+          ${status(k)}
+          ${blk("Review", `<div class="kv"><span class="k">Verdict</span><span>none yet</span><span class="k">Round</span><span>— · 2 auto-returns</span><span class="k">Approval</span><span>—</span><span class="k">Sessions</span><span><span class="chip info">worker · idle</span> <span class="chip warn" title="NEW: relay review is shown here">Hermes · running</span></span></div>`, { kind: "box" })}
+          ${blk("Pull request", `<div class="rowline"><span class="mono" style="color:var(--b)">PR #2908</span><span>fix(projects): make Browse open a host-side folder pi…</span></div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px"><span class="chip warn">⋯ 1 ✓ 3</span><span class="chip info">Commented</span><span class="chip">Draft</span></div>`, { kind: "box" })}
+          ${blk("Details", `<div class="kv"><span class="k">Project</span><span>mullion-session-manager</span><span class="k">Issue</span><span class="mono" style="color:var(--b)">#2900</span><span class="k">Agent</span><span>codex</span></div><div class="mdbody" style="margin-top:8px"><div class="clamp"><h4>Context</h4>In the Add project modal (<code>CreateProjectModal.tsx</code>) the <b>Browse…</b> button opens the browser's file picker instead of a host-side folder browser…</div></div>`, { kind: "box" })}
+          ${blk("Hierarchy", `<div class="dim" style="font-size:10px">EPIC</div><div class="rowline"><span class="mono lnk">#2188 ↗</span><span>feat(projects): projects, worktrees &amp; storage</span></div><div class="dim" style="font-size:10px;margin-top:4px">BLOCKS 1</div><div class="rowline"><span class="mono lnk">#2902</span><span>feat(projects): Add project folder work…</span><span class="chip warn">blocked</span></div>`, { kind: "rule" })}
+          ${blk("Timeline", `<div class="tl"><span class="t">50m ago</span><span>Entered full-screen mode</span><span class="t">49m ago</span><span>Agent: done</span><span class="t tl-bar">33m ago</span><span>Exited</span></div>`, { kind: "rule" })}
+        </div>`;
+
+      const SUBJECTS = {
+        pr: {
+          label: "PR detail",
+          build: prView,
+          note: "Today the description (<code>PrDetailView.tsx</code> ~865) is bare HTML between boxed cards, so the view looks cut off. Every option boxes it and moves the section chevron to the right so titles and bodies share one left edge.",
+        },
+        issue: {
+          label: "Issue detail",
+          build: issueView,
+          note: "Today issue detail has no boxes at all (<code>gh-issue-card</code> is only a flex row). It gets the same treatment as the PR view, with the shared status block.",
+        },
+        task: {
+          label: "Task detail",
+          build: taskView,
+          note: "Same blocks, so task and GitHub detail match. The Review row shows the external reviewer as <b>Hermes · running</b> instead of “reviewer: none”. Sections now have bottom padding and title/body alignment.",
+        },
+      };
+      const OPTS = [
+        {
+          k: "a",
+          name: "A · Every section is a card",
+          text: "Most consistent and the most chrome: status, review, description, changes and conversation are all cards. Costs ~6px per block at 260px.",
+        },
+        {
+          k: "b",
+          name: "B · Cards for state, rules for reading (chosen)",
+          text: "Status, review, Mullion and description are cards; Changes, Conversation, Hierarchy and Timeline are long lists and stay rule-separated sections. Least chrome where content is long.",
+        },
+        {
+          k: "c",
+          name: "C · Inset panels with tinted headers",
+          text: "Every block is a quiet panel with a tinted header strip, matching the existing comment cards. Boxed like A, softer borders.",
+        },
+      ];
+
+      const VIEWS = [...Object.keys(SUBJECTS)];
+      let cur = location.hash.slice(1) || "pr";
+      const nav = document.getElementById("nav");
+      function render() {
+        nav.innerHTML = VIEWS.map(
+          (v) => `<button aria-pressed="${v === cur}" data-v="${v}">${SUBJECTS[v].label}</button>`,
+        ).join("");
+        nav.querySelectorAll("button").forEach(
+          (b) =>
+            (b.onclick = () => {
+              cur = b.dataset.v;
+              location.hash = cur;
+              render();
+            }),
+        );
+        const s = SUBJECTS[cur];
+        document.getElementById("stage").innerHTML =
+          `<div class="note"><b>${s.label}.</b> ${s.note}</div>` +
+          OPTS.map((o) => {
+            const pane = (theme, w) =>
+              `<div><div class="cap">${theme === "t-dark" ? "dark" : "light"} · ${w}px</div><div class="pane opt-${o.k} ${theme}" style="width:${w}px">${s.build(o.k)}</div></div>`;
+            return `<section class="opt"><h2>${o.name}</h2><p>${o.text}</p><div class="row">${pane("t-dark", 340)}${pane("t-light", 340)}${pane("t-dark", 260)}${pane("t-light", 260)}</div></section>`;
+          }).join("");
+      }
+      window.onhashchange = () => {
+        cur = location.hash.slice(1) || "pr";
+        render();
+      };
+      render();
+    </script>
+  </body>
+</html>
