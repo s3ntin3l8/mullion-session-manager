@@ -3,6 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveSessionHostId } from "./session-live-info.js";
+import { replayDroppedCodexStop } from "./codex-stop-replay.js";
 import type { SessionInfo } from "./pty-manager.js";
 
 export interface AttachSessionParams {
@@ -159,7 +160,12 @@ async function adopt(app: FastifyInstance, id: string): Promise<AdoptOutcome> {
   } finally {
     clearTimeout(timer);
   }
-  return app.pty.get(id)?.isAlive ? "adopted" : "unverifiable";
+  if (!app.pty.get(id)?.isAlive) return "unverifiable";
+  // #2939 — a Stop rejected before this attach is still in the rollout.
+  await replayDroppedCodexStop(app, id).catch((err) => {
+    app.log.warn({ err, sessionId: id }, "codex stop replay after adoption failed");
+  });
+  return "adopted";
 }
 
 /** Task statuses whose sessions are headless: nothing opens their terminal.
