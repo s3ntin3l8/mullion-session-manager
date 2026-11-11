@@ -1549,11 +1549,27 @@ export const tasks = sqliteTable(
     // a server log line, invisible even during promotion despite docs
     // claiming otherwise).
     githubSyncError: text("github_sync_error"),
-    // #1015 follow-up — the latest `rate_limit` stop_failure. Durable so grace
-    // survives the session error TTL (`staleErrorSeconds`, default 30 min):
-    // a stop_failure never sets `lastTurnEndedAt`, and a cleared session
-    // would otherwise leave the task stuck in_progress. Every new event
-    // restarts the window. Null means no active grace.
+    // #1015 follow-up (PR #1027, Hermes review) — durable record of the
+    // most recent `rate_limit` stop_failure observed for this task. Lives
+    // on the task row so it survives `PtyManager.clearStaleErrorIfOlderThan`
+    // (pty-manager.ts:3274, default `staleErrorSeconds` = 1800s/30min),
+    // which TTL-clears the session's in-memory `errorState`/`errorAt`/
+    // `errorDetail` — a stop_failure never sets `lastTurnEndedAt`, so a
+    // cleared session derives to a non-`api_error`/non-`finished` status
+    // and would otherwise fail the outer `(finished || api_error)` gate
+    // in task-reconciler.ts, stranding the task in_progress even with
+    // `rateLimitGraceMinutes` set high. With this column, the grace
+    // window is anchored to the task itself and works for any value up
+    // to its 1440-min cap regardless of `staleErrorSeconds`.
+    //
+    // Set by task-rate-limit-grace.ts's `recordRateLimitEvent` from both
+    // the worker and review-agent reconcile paths the moment they observe
+    // `info.errorDetail === "rate_limit"`; every observed event restarts
+    // the window (matches the user mental model of "a fresh rate_limit
+    // resets the clock"). Never explicitly cleared by the reconciler —
+    // `status: "failed"` or a Retry that resets the task effectively
+    // retires it. Nullable, no default: `null` = "no active rate_limit
+    // grace," which is the safe default for every pre-existing row.
     lastRateLimitAt: integer("last_rate_limit_at", { mode: "timestamp" }),
     // #2940 — a parked task stays `ready` until this time, then may be claimed.
     // Null means it is not parked. Not `dispatchHeld`: that give-up is hours, and a weekly reset is longer.

@@ -5172,9 +5172,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   // "no commits".
                   const commits = await resolveCommitsPastBase(app, task, hostId);
                   if (commits.state !== "ahead") {
-                    // No commits yet. Park until a parsed reset (#2940);
-                    // otherwise stay in grace — failing now is worse.
-                    await parkRateLimitedTask(app, task, session.id, project.id);
+                    // No commits yet. Park until a parsed reset (#2940)
+                    // only when the session is not mid-turn — a worker
+                    // nudged back to `working` inside grace still has the
+                    // old rate-limited completion in its rollout, and
+                    // parking it would kill a live turn. Otherwise stay
+                    // in grace: failing now is worse.
+                    if (derived.status !== "working") {
+                      await parkRateLimitedTask(app, task, session.id, project.id);
+                    }
                     continue;
                   }
                   // hasCommits: the agent DID make progress between

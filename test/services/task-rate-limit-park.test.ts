@@ -83,7 +83,7 @@ async function setup(message: string, variant: string | null = "usage_limit_exce
   const load = () => app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
   const sessionStatus = () =>
     app.db.select().from(sessions).where(eq(sessions.id, session.id)).get()!.status;
-  return { app, projectId, session, task, load, sessionStatus, reset, codexHome };
+  return { app, projectId, session, task, load, sessionStatus, reset, codexHome, backend };
 }
 
 describe("parkRateLimitedTask (#2940)", () => {
@@ -198,6 +198,19 @@ describe("parkRateLimitedTask (#2940)", () => {
     ).toBe(false);
     expect(stale.sessionStatus()).toBe("active");
     await stale.app.close();
+  });
+
+  it("does not park when terminate fails, leaving the session active", async () => {
+    const { app, projectId, session, task, load, sessionStatus, backend } = await setup(
+      "try again at 2030-01-02T01:00:00.000Z",
+    );
+    backend.terminate.mockRejectedValueOnce(new Error("host down"));
+    expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(false);
+    expect(load().status).toBe("in_progress");
+    expect(load().rateLimitUntil).toBeNull();
+    expect(sessionStatus()).toBe("active");
+    expect(backend.terminate).toHaveBeenCalledWith(String(session.id));
+    await app.close();
   });
 
   it("does not change the task when the kill fails", async () => {
