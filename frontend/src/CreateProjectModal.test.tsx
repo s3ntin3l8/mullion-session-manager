@@ -678,12 +678,13 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     const onCreate = renderEdit({
       initialHostCwds: { "mac-1": "/Users/x/mullion", "gone-9": "/old" },
     });
-    await user.type(screen.getByRole("textbox", { name: "Path on builder" }), "/srv/mullion");
+    // A Windows drive path is as absolute as a POSIX one.
+    await user.type(screen.getByRole("textbox", { name: "Path on builder" }), "D:\\srv\\mullion");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onCreate.mock.calls[0][0].hostCwds).toEqual({
       "mac-1": "/Users/x/mullion",
-      "box-2": "/srv/mullion",
+      "box-2": "D:\\srv\\mullion",
     });
   });
 

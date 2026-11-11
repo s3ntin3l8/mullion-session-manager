@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID, MAX_HOST_CWDS } from "../shared/constants.js";
+import { ABSOLUTE_HOST_PATH_PATTERN, isStorablePath } from "../shared/host-path.js";
 import { normalizeGitRemote, readOriginUrl } from "./git-remote.js";
 import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 import { listHosts, type HostSummary } from "./host-registry.js";
@@ -90,16 +91,7 @@ function sanitizeCandidates(raw: unknown): DiscoveredCandidate[] | null {
   return out;
 }
 
-/** A path that is safe to store in `hostCwds`: absolute POSIX, bounded, no
- * control characters and no `..` segment (the API itself only checks `^/`). */
-export function isStorablePath(cwd: string): boolean {
-  return (
-    cwd.startsWith("/") &&
-    cwd.length <= MAX_FIELD_LENGTH &&
-    !/[\0\r\n]/.test(cwd) &&
-    !cwd.split("/").includes("..")
-  );
-}
+export { ABSOLUTE_HOST_PATH_PATTERN, isStorablePath };
 
 function discoverOnHost(
   app: FastifyInstance,
