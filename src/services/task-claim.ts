@@ -238,16 +238,14 @@ export async function enqueueTask(
     if (!current || current.status !== "ready") {
       return { reserved: false as const, currentStatus: current?.status };
     }
+    const keptBranch = current.resumeQueued === true ? current.branchName : null;
     const patch: Partial<typeof tasks.$inferInsert> = {
       status: "claimed",
       queuedAt: new Date(),
-      // A fresh claim cuts a new worktree; never inherit a queued-retry flag.
-      resumeQueued: false,
-      worktreePath: predictedWorktreePath,
-      branchName,
-      // Issue #1997 — a queued task's `failureReason` means "why it is not
-      // dispatching yet", so a reason left from an earlier spell (a task that
-      // failed, then went back to ready) must not read as that.
+      resumeQueued: keptBranch !== null,
+      worktreePath: keptBranch !== null ? current.worktreePath : predictedWorktreePath,
+      branchName: keptBranch ?? branchName,
+      rateLimitUntil: null,
       failureReason: null,
       dispatchFailingSince: null,
       dispatchHeld: false,

@@ -1571,6 +1571,9 @@ export const tasks = sqliteTable(
     // retires it. Nullable, no default: `null` = "no active rate_limit
     // grace," which is the safe default for every pre-existing row.
     lastRateLimitAt: integer("last_rate_limit_at", { mode: "timestamp" }),
+    // #2940 — a parked task stays `ready` until this time, then may be claimed.
+    // Null means it is not parked. Not `dispatchHeld`: that give-up is hours, and a weekly reset is longer.
+    rateLimitUntil: integer("rate_limit_until", { mode: "timestamp" }),
     // #667 — dependency-aware auto-claim. Snapshot of GitHub's
     // `issue_dependencies_summary.total_blocked_by`, written on every
     // ingest (rides the `listLabeledIssues` list response for free — see

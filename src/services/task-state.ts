@@ -24,7 +24,7 @@ export const ACTIVE_TASK_STATUSES: readonly TaskStatus[] = ["claimed", "in_progr
  * backlog     -> ready, failed        (drag-to-ready / user-marked abandoned)
  * ready       -> claimed, backlog, failed
  * claimed     -> in_progress, reviewing, failed
- * in_progress -> reviewing, failed    (agent's turn ended / session died)
+ * in_progress -> reviewing, failed, ready  (turn ended / session died / rate-limit park)
  * reviewing   -> done, in_progress, failed  (approve / reject / give up)
  * done        -> (terminal)
  * failed      -> backlog, ready       (explicit human retry, or an
@@ -54,7 +54,7 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   backlog: ["ready", "failed"],
   ready: ["claimed", "backlog", "failed"],
   claimed: ["in_progress", "reviewing", "failed"],
-  in_progress: ["reviewing", "failed"],
+  in_progress: ["reviewing", "failed", "ready"],
   reviewing: ["done", "in_progress", "failed"],
   done: [],
   // claimed: Retry queues a resume of the preserved branch (task-retry.ts).
