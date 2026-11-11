@@ -215,6 +215,43 @@ describe("TaskDetailView review reviewer", () => {
     await userEvent.click(screen.getByRole("button", { name: /Hermes · finished/ }));
     expect(open).toHaveBeenCalledWith(4, 7, { kind: "task", taskId: t.id });
   });
+  it("keeps the reviewer session, and shows no Hermes chip, when both a session and a run exist", () => {
+    const t = task({
+      status: "reviewing",
+      reviewSessionId: 55,
+      reviewRunId: "r",
+      reviewRunIngestedId: null,
+    } as never);
+    setTasks([t], {
+      sessions: [{ id: 55, sessionStatus: "idle", sessionStatusDetail: null }] as never,
+    });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(within(row as HTMLElement).getByRole("button", { name: /^reviewer · / })).toBeTruthy();
+    expect(row.textContent).not.toContain("Hermes");
+    expect(row.textContent).not.toContain("reviewer: none");
+  });
+  it("does not claim Hermes reviewed when the reviewer session is no longer in the store", () => {
+    const t = task({
+      status: "reviewing",
+      reviewSessionId: 55,
+      reviewRunId: "r",
+      reviewRunIngestedId: "r",
+    } as never);
+    setTasks([t], { sessions: [] });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("reviewer: ended");
+    expect(row.textContent).not.toContain("Hermes");
+  });
+  it("reads 'worker: ended' when the worker session is no longer in the store", () => {
+    const t = task({ status: "reviewing", sessionId: 41 } as never);
+    setTasks([t], { sessions: [] });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("worker: ended");
+    expect(row.textContent).not.toContain("worker: none");
+  });
   it("keeps 'reviewer: none' with neither a session nor a run", () => {
     const t = task({ status: "reviewing" });
     setTasks([t]);
