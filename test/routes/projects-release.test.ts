@@ -627,6 +627,51 @@ describe("release-please routes (#744)", () => {
       expect(res.json()).toMatchObject({ approved: 1, reason: "approve-failed" });
     });
 
+    it("POST approve-runs says no-held-runs when every run lost the race, and blames a run still held", async () => {
+      // All lost: nothing held on the re-read -> not an approval.
+      let reads = 0;
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          actionsRuns: () =>
+            ++reads === 1
+              ? jsonResponse(200, held)
+              : jsonResponse(200, { total_count: 1, workflow_runs: [] }),
+          approve: () => new Response("not waiting", { status: 403 }),
+        }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const url = `/api/projects/${projectId}/release/approve-runs`;
+      expect((await app.inject({ method: "POST", url })).json()).toEqual({
+        approved: 0,
+        reason: "no-held-runs",
+      });
+
+      // Run 11 raced (403) but run 12 is still held and fails for real (500):
+      // blame the 500, not the token scope.
+      clearReleasePrCacheForTests();
+      let reads2 = 0;
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          actionsRuns: () =>
+            ++reads2 === 1
+              ? jsonResponse(200, held)
+              : jsonResponse(200, {
+                  total_count: 1,
+                  workflow_runs: [{ id: 12, status: "action_required", conclusion: null }],
+                }),
+          approve: (id) =>
+            id === 11
+              ? new Response("raced", { status: 403 })
+              : new Response("boom", { status: 500 }),
+        }),
+      );
+      expect((await app.inject({ method: "POST", url })).json()).toMatchObject({
+        approved: 0,
+        reason: "approve-failed",
+      });
+    });
+
     it("POST approve-runs keeps going past a stale run, and a raced approval is not an error", async () => {
       const approveSpy = vi.fn((runId: number) =>
         runId === 11

@@ -1237,19 +1237,19 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
         // that is no longer waiting (a human or a second resolver got there
         // first), and one stale run must not skip the rest.
         let approved = 0;
-        let failure: GitHubApiError | null = null;
+        const failures = new Map<number, GitHubApiError>();
         for (const runId of held) {
           try {
             await approveRun(token, owner, repo, runId);
             approved += 1;
           } catch (err) {
             if (!(err instanceof GitHubApiError)) throw err;
-            failure ??= err;
+            failures.set(runId, err);
           }
         }
         // Even a partial approval changes what the section should show.
         invalidateReleaseCache(owner, repo);
-        if (failure === null) {
+        if (failures.size === 0) {
           const result: ReleaseApproveRunsResult = { approved };
           return result;
         }
@@ -1260,9 +1260,18 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
           return null; // can't tell: report the failure rather than guess
         });
         if (remaining !== null && remaining.held.length === 0) {
-          const result: ReleaseApproveRunsResult = { approved };
+          // Every failure was a lost race. Nothing of ours approved anything:
+          // say so rather than claim an approval.
+          const result: ReleaseApproveRunsResult =
+            approved === 0 ? { approved, reason: "no-held-runs" } : { approved };
           return result;
         }
+        // Blame a run that is genuinely still held, not a raced 403 on one
+        // that is already approved.
+        const failure =
+          (remaining !== null
+            ? remaining.held.map((id) => failures.get(id)).find((f) => f !== undefined)
+            : undefined) ?? failures.values().next().value!;
         app.log.warn({ err: failure, owner, repo }, "release approve-runs failed");
         const result: ReleaseApproveRunsResult = {
           approved,

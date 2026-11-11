@@ -422,7 +422,8 @@ export interface ReleasePullRequestStatus {
   // null means "no signal yet," not "failing."
   ciStatus: "success" | "failure" | "in_progress" | null;
   // Workflow runs GitHub is holding for approval on the PR's head commit
-  // (`action_required` / `waiting`). 0 also when the token could not read runs.
+  // (`conclusion` or `status` of `action_required`; `waiting` runs are
+  // concurrency/environment gates that /approve refuses, so they are not counted). 0 also when the token could not read runs.
   heldRuns: number;
   // True when GitHub has no workflow run at all for the head commit — the
   // shape of a PR opened with the default GITHUB_TOKEN, which triggers none.
