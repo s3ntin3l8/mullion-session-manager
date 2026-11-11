@@ -18,6 +18,12 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
 import {
+  GENERATED_REGION_END,
+  GENERATED_REGION_START,
+  REVIEWER_END,
+  REVIEWER_START,
+  SKILL_END,
+  SKILL_START,
   snapshotCitedPathExistence,
   validateGenerationOutput,
   type MissingCitedPaths,
@@ -345,20 +351,8 @@ export interface GenerationSeed {
   briefing?: string | null;
 }
 
-const SKILL_START = "<<<MULLION_SKILL_START>>>";
-const SKILL_END = "<<<MULLION_SKILL_END>>>";
-const REVIEWER_START = "<<<MULLION_REVIEWER_START>>>";
-const REVIEWER_END = "<<<MULLION_REVIEWER_END>>>";
-// Issue #1215 — this pair is request-scoped (the prompt below and
-// extractSection's parse are updated together, in this same commit, and
-// nothing persists the delimiter past a single generation turn), unlike
-// mullion-scaffold.ts's SCAFFOLD_REGION_START/END — those are a wire
-// format already committed into every previously-scaffolded repo's
-// AGENTS.md and can't be renamed. This one carries no such history.
-const GENERATED_REGION_START = "<<<MULLION_SCAFFOLD_REGION_START>>>";
-const GENERATED_REGION_END = "<<<MULLION_SCAFFOLD_REGION_END>>>";
-// Issue #2316 — request-scoped like the pairs above; only requested when
-// `existingInstructions` is not "keep".
+// Issue #2316 — request-scoped; only requested when existingInstructions is
+// not "keep". Skill, reviewer and region markers live in scaffold-cited-paths.ts.
 const AGENTS_MD_START = "<<<MULLION_AGENTS_MD_START>>>";
 const AGENTS_MD_END = "<<<MULLION_AGENTS_MD_END>>>";
 const CONTRIBUTING_APPEND_START = "<<<MULLION_CONTRIBUTING_APPEND_START>>>";
@@ -2273,7 +2267,9 @@ export async function generateScaffoldContent(
     validateGenerationOutput(
       parsed,
       opts.cwd,
-      remoteCited ? new Map(remoteCited.map((entry) => [entry.path, entry.exists])) : undefined,
+      remoteCited?.length
+        ? new Map(remoteCited.map((entry) => [entry.path, entry.exists]))
+        : undefined,
     );
   return {
     ...parsed,

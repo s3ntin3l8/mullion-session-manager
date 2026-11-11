@@ -159,6 +159,20 @@ describe("validateGenerationOutput", () => {
     expect(r.missingCitedPaths).toBeUndefined();
   });
 
+  it("skips existence-map keys the snapshot did not list (#2932)", () => {
+    const text = "See src/routes/listings.ts and src/domain/a.ts.";
+    const listed = validateGenerationOutput(
+      content(text),
+      work,
+      new Map([["src/routes/listings.ts", true]]),
+    );
+    expect(listed.possiblyGeneric).toBe(false);
+    expect(listed.missingCitedPaths).toBeUndefined();
+    const empty = validateGenerationOutput(content(text), work, new Map());
+    expect(empty.possiblyGeneric).toBe(false);
+    expect(empty.missingCitedPaths).toBeUndefined();
+  });
+
   it("trusts an existence map over the directory it was given (#2932)", () => {
     // The checkout lacks src/routes/listings.ts. The map is what the scratch
     // worktree reported before it was torn down.

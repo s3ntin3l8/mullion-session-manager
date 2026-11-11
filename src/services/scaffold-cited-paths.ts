@@ -1,17 +1,19 @@
 // Cited-path check for a scaffold generation turn (issues #1145, #2532, #2932).
 //
 // Split out of scaffold-generate.ts so that file stays under the line ceiling.
-// The marker strings match that module's section markers; a drift would make
-// the remote snapshot look at different text than the primary parses.
+// The section markers live here so the remote snapshot and the primary parser
+// read the same text.
 import fs from "node:fs";
 import path from "node:path";
 
-const SKILL_START = "<<<MULLION_SKILL_START>>>";
-const SKILL_END = "<<<MULLION_SKILL_END>>>";
-const REVIEWER_START = "<<<MULLION_REVIEWER_START>>>";
-const REVIEWER_END = "<<<MULLION_REVIEWER_END>>>";
-const REGION_START = "<<<MULLION_SCAFFOLD_REGION_START>>>";
-const REGION_END = "<<<MULLION_SCAFFOLD_REGION_END>>>";
+/** Request-scoped section markers. `GENERATED_REGION_*` is not the persisted
+ * AGENTS.md pair in mullion-scaffold.ts (#1215). */
+export const SKILL_START = "<<<MULLION_SKILL_START>>>";
+export const SKILL_END = "<<<MULLION_SKILL_END>>>";
+export const REVIEWER_START = "<<<MULLION_REVIEWER_START>>>";
+export const REVIEWER_END = "<<<MULLION_REVIEWER_END>>>";
+export const GENERATED_REGION_START = "<<<MULLION_SCAFFOLD_REGION_START>>>";
+export const GENERATED_REGION_END = "<<<MULLION_SCAFFOLD_REGION_END>>>";
 
 /** Paths Mullion's scaffold writes: absent from the worktree until applied. */
 const SCAFFOLD_OUTPUT_PATH = /^\.claude\/(?:skills|agents)\//;
@@ -34,7 +36,9 @@ interface CitedText {
  * agent actually read (issue #2532, #2932) — the scratch worktree, not a
  * checkout that may be behind origin. `.claude/(skills|agents)/` paths are
  * excluded. `existence`, when passed, replaces `existsSync` under `cwd`
- * (the remote host snapshots the worktree before tearing it down). A
+ * (the remote host snapshots the worktree before tearing it down). A key
+ * the snapshot does not list is unknown — skipped, not counted missing —
+ * so a slightly different extraction cannot invent fabricated paths. A
  * signal, not a hard failure.
  */
 export function validateGenerationOutput(
@@ -50,22 +54,36 @@ export function validateGenerationOutput(
   if (collected.kind === "none") return { possiblyGeneric: false, referencedPaths: [] };
   if (collected.kind === "implausible") return { possiblyGeneric: true, referencedPaths: [] };
   const { plausible, checkable } = collected;
-  const missing = checkable.filter((p) => !citedPathExists(p, cwd, existence)).length;
-  const existing = checkable.length - missing;
+  const assessed = assessCitedPaths(checkable, cwd, existence);
+  const existing = assessed.known - assessed.missing;
   return {
-    possiblyGeneric: checkable.length > 0 && existing * 2 < checkable.length,
+    possiblyGeneric: assessed.known > 0 && existing * 2 < assessed.known,
     referencedPaths: plausible,
-    ...(missing > 0 ? { missingCitedPaths: { missing, cited: checkable.length } } : {}),
+    ...(assessed.missing > 0
+      ? { missingCitedPaths: { missing: assessed.missing, cited: assessed.known } }
+      : {}),
   };
 }
 
-function citedPathExists(
-  cited: string,
+/** Paths the snapshot listed (or every checkable path, when there is no
+ * snapshot). An unlisted key is unknown and does not count either way. */
+function assessCitedPaths(
+  checkable: string[],
   cwd: string,
   existence: ReadonlyMap<string, boolean> | undefined,
-): boolean {
-  if (existence) return existence.get(cited) === true;
-  return fs.existsSync(path.join(cwd, cited));
+): { known: number; missing: number } {
+  if (!existence) {
+    const missing = checkable.filter((p) => !fs.existsSync(path.join(cwd, p))).length;
+    return { known: checkable.length, missing };
+  }
+  let known = 0;
+  let missing = 0;
+  for (const cited of checkable) {
+    if (!existence.has(cited)) continue;
+    known += 1;
+    if (existence.get(cited) !== true) missing += 1;
+  }
+  return { known, missing };
 }
 
 type CollectedCitedPaths =
@@ -121,7 +139,7 @@ export function snapshotCitedPathExistence(
   const collected = collectCitedPaths({
     skill: lenientSection(raw, SKILL_START, SKILL_END),
     reviewer: lenientSection(raw, REVIEWER_START, REVIEWER_END),
-    scaffoldRegion: lenientSection(raw, REGION_START, REGION_END) ?? "",
+    scaffoldRegion: lenientSection(raw, GENERATED_REGION_START, GENERATED_REGION_END) ?? "",
   });
   if (collected.kind !== "paths") return [];
   return collected.checkable.map((p) => ({
