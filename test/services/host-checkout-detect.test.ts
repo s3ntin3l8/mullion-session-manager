@@ -11,6 +11,7 @@ import {
   attachHostCheckout,
   autoFillHostCwds,
   detectCheckouts,
+  isStorablePath,
   MAX_AUTOFILL_PER_RUN,
   projectOrigin,
 } from "../../src/services/host-checkout-detect.js";
@@ -103,6 +104,33 @@ describe("host-checkout-detect", () => {
   afterEach(async () => {
     await app.close();
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe("Windows host paths", () => {
+    it("accepts drive paths and refuses UNC, relative and traversal paths", () => {
+      expect(isStorablePath("D:\\Projects\\runway")).toBe(true);
+      expect(isStorablePath("d:/Projects/runway")).toBe(true);
+      expect(isStorablePath("D:\\a\\..\\b")).toBe(false);
+      expect(isStorablePath("D:/a/../b")).toBe(false);
+      expect(isStorablePath("\\\\srv\\share\\x")).toBe(false);
+      expect(isStorablePath("D:relative")).toBe(false);
+      expect(isStorablePath("relative/x")).toBe(false);
+    });
+
+    it("suggests and auto-fills a Windows clone matched by origin", async () => {
+      enable(true);
+      const project = localProject("app");
+      const cwd = "D:\\Projects\\app";
+      discovery.set(macId, [repo("app", { cwd })]);
+
+      const found = await detectCheckouts(app, project);
+      expect(found[0]?.candidates).toEqual([{ cwd, match: "origin" }]);
+
+      expect((await autoFillHostCwds(app, { hostId: macId })).added).toEqual([
+        { projectId: project.id, hostId: macId, cwd },
+      ]);
+      expect(parseHostCwds(row(project.id).hostCwds)).toEqual({ [macId]: cwd });
+    });
   });
 
   describe("projectOrigin", () => {
@@ -463,10 +491,10 @@ describe("host-checkout-detect", () => {
       expect(parseHostCwds(row(project.id).hostCwds)).toEqual({ [macId]: "/operator/choice" });
     });
 
-    it("does not fill a path the API would reject (not absolute POSIX)", async () => {
+    it("does not fill a path the API would reject (UNC, not a drive path)", async () => {
       enable(true);
       const project = localProject("app");
-      discovery.set(macId, [repo("app", { cwd: "C:\\Users\\x\\app" })]);
+      discovery.set(macId, [repo("app", { cwd: "\\\\srv\\share\\app" })]);
 
       expect((await autoFillHostCwds(app)).added).toEqual([]);
       expect(row(project.id).hostCwds).toBeNull();

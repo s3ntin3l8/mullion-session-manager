@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { CSSProperties, DragEvent } from "react";
+import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import { useDashboardStore } from "../store/index.js";
 import type { Theme } from "../store/index.js";
 import type { Session, Task } from "../api/index.js";
@@ -17,11 +17,13 @@ import {
   reviewPhaseText,
 } from "../needsHuman.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
+import { isPlainClick, openEpicInSidebar } from "../lib/sidebarLinks.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { epicColourVar, epicUrl } from "./taskLanes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
+import { reviewRunState } from "../taskStatusModel.js";
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
 // (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
@@ -121,6 +123,30 @@ export function TaskCard({
     onOpen();
   };
 
+  // #2918 — a plain click on a linked #issue / PR / epic opens it in the right sidebar's GitHub
+  // tab; Ctrl/⌘/middle-click keep the real href (a new tab). `open` returns false when it can't
+  // (an epic in a repo no project tracks), and the link then behaves as the external link it is.
+  const linkClick = (open: () => boolean) => (e: MouseEvent<HTMLAnchorElement>) => {
+    e.stopPropagation();
+    if (suppressClickRef.current) {
+      e.preventDefault();
+      return;
+    }
+    if (isPlainClick(e) && open()) e.preventDefault();
+  };
+  const openIssueLink = linkClick(() => {
+    if (!project || task.issueNumber === null) return false;
+    useDashboardStore.getState().openRightSidebarIssue(project.id, task.issueNumber);
+    return true;
+  });
+  const openPrLink = (n: number) =>
+    linkClick(() => {
+      if (!project) return false;
+      useDashboardStore.getState().openRightSidebarPr(project.id, n);
+      return true;
+    });
+  const openEpicLink = linkClick(() => openEpicInSidebar(useDashboardStore.getState().tasks, task));
+
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
     if (!acceptsDrop || !e.dataTransfer.types.includes(TASK_DRAG_MIME)) return;
     e.preventDefault();
@@ -196,13 +222,13 @@ export function TaskCard({
   // An external (Hermes) review is a run, not a session: same "verdict is in"
   // pairing (reviewRunIngestedId === reviewRunId). An unsent run (dispatch
   // gave up) never ran, so it is never in flight.
-  const hasReviewRun = task.reviewRunId !== null;
-  const reviewRunFinished = hasReviewRun && task.reviewRunIngestedId === task.reviewRunId;
+  const runState = reviewRunState(task);
+  const hasReviewRun = runState !== null;
   const reviewInFlight =
     task.status === "reviewing" &&
     ((task.reviewSessionId !== null &&
       task.reviewFindingsIngestedSessionId !== task.reviewSessionId) ||
-      (hasReviewRun && !task.reviewRunUnsent && !reviewRunFinished));
+      runState === "running");
 
   // Issue #1038 — autoReturnCapped alone answers "has the round budget been
   // spent," not "has the machine actually stopped." autoReturnRounds hits
@@ -277,10 +303,7 @@ export function TaskCard({
               href={task.htmlUrl}
               target="_blank"
               rel="noreferrer"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (suppressClickRef.current) e.preventDefault();
-              }}
+              onClick={openIssueLink}
             >
               <GitHubIcon size={11} />#{task.issueNumber}
             </a>
@@ -304,10 +327,7 @@ export function TaskCard({
             // anchor's own default navigation, so the PR would still open
             // in a new tab as an unwanted side effect of the drag. Same
             // suppressClickRef guard the card's own handleClick uses above.
-            onClick={(e) => {
-              e.stopPropagation();
-              if (suppressClickRef.current) e.preventDefault();
-            }}
+            onClick={openPrLink(matchedPr.number)}
           >
             <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />
             PR #{matchedPr.number}
@@ -319,10 +339,7 @@ export function TaskCard({
             href={task.prUrl}
             target="_blank"
             rel="noreferrer"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (suppressClickRef.current) e.preventDefault();
-            }}
+            onClick={openPrLink(task.prNumber)}
           >
             PR #{task.prNumber}
           </a>
@@ -354,10 +371,7 @@ export function TaskCard({
             target="_blank"
             rel="noreferrer"
             title={`Epic: ${task.parentIssueTitle ?? `#${task.parentIssueNumber}`}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (suppressClickRef.current) e.preventDefault();
-            }}
+            onClick={openEpicLink}
           >
             <span className="task-card-epic-dot" aria-hidden="true" />
             epic #{task.parentIssueNumber}
@@ -585,12 +599,12 @@ export function TaskCard({
       )}
       {hasReviewRun && task.reviewSessionId === null && (
         <span
-          className={`task-card-session-strip${task.reviewRunUnsent ? " is-gone" : ""}`}
+          className={`task-card-session-strip${runState === "unsent" ? " is-gone" : ""}`}
           data-testid="task-card-hermes-review"
         >
-          {task.reviewRunUnsent
+          {runState === "unsent"
             ? "Hermes review · could not be sent"
-            : `Hermes review · ${reviewRunFinished ? "finished" : "running"}`}
+            : `Hermes review · ${runState}`}
         </span>
       )}
       {task.status === "ready" && !taskMasterEnabled && (

@@ -134,7 +134,8 @@ function ConflictList({
       <ul>
         {conflicts.map((c, i) => (
           <li key={i}>
-            <code>{c.file}</code> — {c.kind}: “{c.excerpt}” — {c.note}
+            <code>{c.file}</code>
+            {c.disposition ? ` (${c.disposition})` : ""} — {c.kind}: “{c.excerpt}” — {c.note}
           </li>
         ))}
       </ul>
@@ -805,7 +806,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           <div className="agent-rules-panel-notice warning">
             The agent may not have read this repo — the generated skill and reviewer look generic.
             {preview.missingCitedPaths &&
-              ` ${preview.missingCitedPaths.missing} of ${preview.missingCitedPaths.cited} cited paths do not exist here.`}{" "}
+              ` ${preview.missingCitedPaths.missing} of ${preview.missingCitedPaths.cited} checked paths do not exist here.`}{" "}
             Review them carefully, or go back and generate again.
           </div>
         )}

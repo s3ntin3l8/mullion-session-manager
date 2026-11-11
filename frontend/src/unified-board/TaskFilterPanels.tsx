@@ -134,7 +134,7 @@ export function EpicChecklist({
           key={o.key}
           checked={selectedEpics.includes(o.key)}
           onChange={() => onToggleEpic(o.key)}
-          count={o.total !== null ? `${o.done ?? 0}/${o.total}` : o.count}
+          count={`${o.done}/${o.total}`}
         >
           {o.label}
         </CheckItem>

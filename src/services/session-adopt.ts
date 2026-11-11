@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { eq, inArray } from "drizzle-orm";
+import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveSessionHostId } from "./session-live-info.js";
+import { replayDroppedCodexStop } from "./codex-stop-replay.js";
+import type { SessionInfo } from "./pty-manager.js";
 
 export interface AttachSessionParams {
   id: string;
@@ -158,5 +160,107 @@ async function adopt(app: FastifyInstance, id: string): Promise<AdoptOutcome> {
   } finally {
     clearTimeout(timer);
   }
-  return app.pty.get(id)?.isAlive ? "adopted" : "unverifiable";
+  if (!app.pty.get(id)?.isAlive) return "unverifiable";
+  // #2939 — a Stop rejected before this attach is still in the rollout.
+  await replayDroppedCodexStop(app, id).catch((err) => {
+    app.log.warn({ err, sessionId: id }, "codex stop replay after adoption failed");
+  });
+  return "adopted";
+}
+
+/** Task statuses whose sessions are headless: nothing opens their terminal.
+ * Boot adoption and the reconciler loops share this set, so a status added
+ * later cannot be reconciled and then missed at the next restart. */
+export const TASK_WORKER_STATUSES = ["claimed", "in_progress"] as const;
+export const TASK_REVIEW_STATUS = "reviewing" as const;
+export const TASK_SESSION_STATUSES = [...TASK_WORKER_STATUSES, TASK_REVIEW_STATUS] as const;
+
+/** How many surviving sessions boot adoption attaches at once. Each one is a
+ * systemctl listing plus a dtach attach racing a 5s settle. */
+const ADOPT_BOOT_CONCURRENCY = 4;
+
+/**
+ * Issue #2929 — after a restart `PtyManager`'s map is empty. A browser
+ * re-attaches a session someone opens; a Task Master worker (and its review
+ * session) has no browser, so its Stop hook is rejected and the reconciler
+ * never sees "finished". Adopt those active local sessions at boot.
+ * `adoptSurvivingSession` already refuses a non-local, non-active, or dead
+ * scope, and never respawns one.
+ */
+export async function adoptActiveTaskSessions(app: FastifyInstance): Promise<void> {
+  const rows = app.db
+    .select({ sessionId: tasks.sessionId, reviewSessionId: tasks.reviewSessionId })
+    .from(tasks)
+    .where(inArray(tasks.status, [...TASK_SESSION_STATUSES]))
+    .all();
+  const ids = new Set<number>();
+  for (const row of rows) {
+    if (row.sessionId !== null) ids.add(row.sessionId);
+    if (row.reviewSessionId !== null) ids.add(row.reviewSessionId);
+  }
+  const list = [...ids];
+  for (let i = 0; i < list.length; i += ADOPT_BOOT_CONCURRENCY) {
+    await Promise.all(
+      list.slice(i, i + ADOPT_BOOT_CONCURRENCY).map((id) => adoptTaskSession(app, id)),
+    );
+  }
+}
+
+async function adoptTaskSession(app: FastifyInstance, id: number): Promise<void> {
+  try {
+    const outcome = await adoptSurvivingSession(app, String(id));
+    if (outcome === "adopted") {
+      app.log.info({ sessionId: id }, "adopted surviving task session");
+    } else if (outcome === "unverifiable") {
+      app.log.warn({ sessionId: id }, "task session adoption unverifiable; will retry");
+    }
+  } catch (err) {
+    app.log.warn({ err, sessionId: id }, "task session adoption failed");
+  }
+}
+
+/**
+ * Issue #2929 — `LocalBackend.liveStatus` reports `null` for a session this
+ * process does not track. On the local host that means "not adopted yet",
+ * not "idle". Adopt and replace the null entry before the caller decides
+ * (budget, handoff, review ingest).
+ *
+ * Returns true when this tick should skip the task: liveness could not be
+ * verified, or the reattach threw. A dead scope stays `null` (returns false)
+ * so the existing idle/budget path runs. An unverifiable scope also falls
+ * through once `pastDeadline` is set — a bus-less host stays "unknown" on
+ * every tick, and that must not hold a concurrency slot past the budget.
+ * A remote host is left alone — its agent owns that PtyManager, and an
+ * omitted key (`undefined`) is not null.
+ */
+export async function healUntrackedLocalSession(
+  app: FastifyInstance,
+  hostId: string,
+  sessionId: string,
+  liveMap: Record<string, SessionInfo | null>,
+  idleThresholdMs: number,
+  backend: {
+    liveStatus(ids: string[], idleThresholdMs: number): Promise<Record<string, SessionInfo | null>>;
+  },
+  opts: { pastDeadline?: boolean } = {},
+): Promise<boolean> {
+  if (hostId !== LOCAL_HOST_ID || liveMap[sessionId] !== null) return false;
+  let outcome: AdoptOutcome;
+  try {
+    outcome = await adoptSurvivingSession(app, sessionId);
+  } catch (err) {
+    app.log.warn({ err, sessionId }, "task reconcile: session adoption failed");
+    return true;
+  }
+  if (outcome === "unverifiable") return opts.pastDeadline !== true;
+  if (outcome !== "adopted" && outcome !== "live") return false;
+  try {
+    const again = await backend.liveStatus([sessionId], idleThresholdMs);
+    if (!(sessionId in again) || again[sessionId] === undefined) return true;
+    liveMap[sessionId] = again[sessionId];
+  } catch (err) {
+    app.log.warn({ err, sessionId }, "task reconcile: live status after adoption failed");
+    return true;
+  }
+  return false;
 }

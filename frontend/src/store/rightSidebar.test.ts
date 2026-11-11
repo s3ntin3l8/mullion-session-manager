@@ -82,12 +82,77 @@ describe("right sidebar actions", () => {
         useDashboardStore.getState().takeSidebarBack({ kind: "issue", projectId: 3, number: 7 }),
       ).toEqual(task5);
     });
+    it("records the detail the sidebar is showing as the origin when none is named", () => {
+      useDashboardStore.getState().openRightSidebarTask(5, null);
+      useDashboardStore.getState().openRightSidebarPr(3, 12);
+      expect(useDashboardStore.getState().takeSidebarBack(pr12)).toEqual(task5);
+    });
+    it("records nothing for an explicit null origin, or when no detail is showing", () => {
+      useDashboardStore.getState().selectTask(null);
+      useDashboardStore.getState().openRightSidebarPr(3, 12);
+      expect(useDashboardStore.getState().sidebarHistory).toEqual([]);
+      useDashboardStore.getState().openRightSidebarTask(5, null);
+      useDashboardStore.getState().openRightSidebarPr(3, 13, null);
+      expect(useDashboardStore.getState().sidebarHistory).toEqual([]);
+    });
+    it("keeps a stack, pops the latest first and caps its length", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, task5);
+      s().openRightSidebarTask(6, pr12);
+      expect(s().sidebarHistory).toHaveLength(2);
+      expect(s().takeSidebarBack({ kind: "task", taskId: 6 })).toEqual(pr12);
+      expect(s().takeSidebarBack(pr12)).toEqual(task5);
+      for (let n = 0; n < 30; n++) s().openRightSidebarPr(3, 100 + n, task5);
+      expect(s().sidebarHistory).toHaveLength(20);
+    });
+    it("takes the origin from the project the sidebar follows, not another host's drill-in", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarView("github", 3);
+      useDashboardStore.setState({
+        followedProjectId: 3,
+        githubOpenPrByProject: { 1: 30, 3: 12 },
+      });
+      s().openRightSidebarIssue(3, 7);
+      expect(s().takeSidebarBack({ kind: "issue", projectId: 3, number: 7 })).toEqual(pr12);
+      useDashboardStore.setState({ followedProjectId: null });
+    });
+    it("leaves only one of PR / issue open for a project", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, null);
+      s().openRightSidebarIssue(3, 7, null);
+      expect(s().githubOpenPrByProject[3]).toBeNull();
+      expect(s().githubOpenIssueByProject[3]).toBe(7);
+      s().openRightSidebarPr(3, 12, null);
+      expect(s().githubOpenIssueByProject[3]).toBeNull();
+    });
+    it("drops a stale entry when the sidebar was navigated elsewhere in the meantime", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, task5);
+      // The panel's own list → detail click: no history call.
+      s().setGithubOpenPr(3, null);
+      s().setGithubOpenPr(3, 99);
+      s().openRightSidebarPr(3, 12);
+      // Back returns to the PR it was actually reached from, not the stale task entry.
+      expect(s().sidebarHistory).toHaveLength(1);
+      expect(s().takeSidebarBack(pr12)).toEqual({ kind: "pr", projectId: 3, number: 99 });
+    });
+    it("prunes when the panel's own drill-in moves without a history call", () => {
+      const s = () => useDashboardStore.getState();
+      s().openRightSidebarPr(3, 12, task5);
+      expect(s().sidebarHistory).toHaveLength(1);
+      s().setGithubOpenPr(3, null);
+      expect(s().sidebarHistory).toEqual([]);
+      s().openRightSidebarPr(3, 12, task5);
+      s().setGithubOpenPr(3, null);
+      s().setGithubOpenIssue(3, 7);
+      expect(s().sidebarHistory).toEqual([]);
+    });
     it("is cleared by any other navigation", () => {
       const nav = [
         () => useDashboardStore.getState().selectTask(null),
         () => useDashboardStore.getState().openRightSidebarView("files"),
-        () => useDashboardStore.getState().openRightSidebarTask(5),
-        () => useDashboardStore.getState().openRightSidebarPr(3, 12),
+        () => useDashboardStore.getState().toggleRightSidebarView("git"),
+        () => useDashboardStore.getState().closeRightSidebar(),
       ];
       for (const go of nav) {
         useDashboardStore.getState().openRightSidebarPr(3, 12, task5);

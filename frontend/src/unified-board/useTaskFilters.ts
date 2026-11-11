@@ -152,14 +152,20 @@ export function useTaskFilters(
         : selectedProjectIds.filter((id) => knownProjectIds.has(id)),
     [followActive, followedId, selectedProjectIds, knownProjectIds],
   );
-  const epicOpts = useMemo(() => epicOptions(tasks), [tasks]);
+  const allEpicOpts = useMemo(() => epicOptions(tasks), [tasks]);
+  // Closed epics drop out of the list (#2919) unless one is selected, so a
+  // saved filter stays visible and removable.
+  const epicOpts = useMemo(
+    () => allEpicOpts.filter((o) => !o.closed || selectedEpicKeys.includes(o.key)),
+    [allEpicOpts, selectedEpicKeys],
+  );
   const noEpic = useMemo(() => noEpicCount(tasks), [tasks]);
   const activeEpicKeys = useMemo(
     () =>
       selectedEpicKeys.filter(
-        (k) => (k === NO_EPIC && noEpic > 0) || epicOpts.some((o) => o.key === k),
+        (k) => (k === NO_EPIC && noEpic > 0) || allEpicOpts.some((o) => o.key === k),
       ),
-    [selectedEpicKeys, epicOpts, noEpic],
+    [selectedEpicKeys, allEpicOpts, noEpic],
   );
   const agentOpts = useMemo(() => agentOptions(tasks), [tasks]);
   const activeAgents = useMemo(

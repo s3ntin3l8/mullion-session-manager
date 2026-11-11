@@ -50,6 +50,8 @@ const updateTask = vi.fn(async () => makeTask({}));
 const createTask = vi.fn(async () => makeTask({}));
 const requestOpenTask = vi.fn();
 const openRightSidebarTask = vi.fn();
+const openRightSidebarPr = vi.fn();
+const openRightSidebarIssue = vi.fn();
 
 function storeState() {
   return {
@@ -69,6 +71,8 @@ function storeState() {
     createTask,
     requestOpenTask,
     openRightSidebarTask,
+    openRightSidebarPr,
+    openRightSidebarIssue,
     settings: { sessions: { confirmBeforeKill: false } },
     theme: "dark",
     events,
@@ -454,6 +458,31 @@ describe("UnifiedBoard task columns", () => {
       await user.click(stops[3]);
       expect(onOpenSession).toHaveBeenCalledTimes(1);
       expect(openRightSidebarTask).not.toHaveBeenCalled();
+    });
+
+    it("opens the linked issue and PR in the right sidebar on a plain click, and the real link on a modifier click (#2918)", async () => {
+      const user = userEvent.setup();
+      withLinksAndSession();
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      const issue = screen.getByRole("link", { name: /#12/ });
+      const pr = screen.getByRole("link", { name: /PR #13/ });
+      openRightSidebarIssue.mockClear();
+      openRightSidebarPr.mockClear();
+
+      await user.click(issue);
+      expect(openRightSidebarIssue).toHaveBeenCalledWith(expect.any(Number), 12);
+      await user.click(pr);
+      expect(openRightSidebarPr).toHaveBeenCalledWith(expect.any(Number), 13);
+
+      // Ctrl-click keeps the href (a new tab): the sidebar is not opened.
+      openRightSidebarIssue.mockClear();
+      openRightSidebarPr.mockClear();
+      await user.keyboard("{Control>}");
+      await user.click(issue);
+      await user.click(pr);
+      await user.keyboard("{/Control}");
+      expect(openRightSidebarIssue).not.toHaveBeenCalled();
+      expect(openRightSidebarPr).not.toHaveBeenCalled();
     });
 
     it("still opens the task on a pointer click anywhere on the card", async () => {

@@ -8,6 +8,8 @@ export interface DirectoryListing {
 }
 
 export const fsApi = {
-  listDirectories: (path: string) =>
-    request<DirectoryListing>(`/api/fs/dirs?path=${encodeURIComponent(path)}`),
+  listDirectories: (path: string, opts?: { hidden?: boolean }) =>
+    request<DirectoryListing>(
+      `/api/fs/dirs?path=${encodeURIComponent(path)}${opts?.hidden ? "&hidden=1" : ""}`,
+    ),
 };

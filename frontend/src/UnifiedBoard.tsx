@@ -39,6 +39,7 @@ import {
   laneKeyOf,
 } from "./unified-board/taskLanes.js";
 import { AdhocLane } from "./unified-board/AdhocLane.js";
+import { openEpicInSidebar } from "./lib/sidebarLinks.js";
 
 // The window's inner width, for the facets panel's "Auto" setting.
 function useViewportWidth(): number {
@@ -542,6 +543,7 @@ export function UnifiedBoard({
                         colour={epicKey !== null ? `var(--lane-${epicColourSlot(epicKey)})` : null}
                         progress={progress}
                         href={epicKey !== null && sample ? epicUrl(sample) : null}
+                        onOpen={sample ? () => openEpicInSidebar(tasks, sample) : undefined}
                       />
                     )}
                     <div

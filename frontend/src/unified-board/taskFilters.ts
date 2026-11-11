@@ -146,47 +146,57 @@ export interface EpicOption {
   /** "#N title", or "#N" until the title loads. */
   label: string;
   count: number;
-  /** Sub-issue progress, when the parent reports it. */
-  done: number | null;
-  total: number | null;
+  /** Sub-issue progress of the EPIC itself (closed / total); until the backend
+   * has fetched it, the done share of the child tasks (done / tasks). */
+  done: number;
+  total: number;
+  /** The epic issue is closed on GitHub AND none of its tasks is still open:
+   * nothing left to filter down to, so the Filter menu hides it. */
+  closed: boolean;
 }
 
 /** One option per parent issue present on the board, sorted by label. */
 export function epicOptions(tasks: Task[]): EpicOption[] {
-  const byKey = new Map<string, EpicOption>();
-  const hasTitle = new Set<string>();
+  const byKey = new Map<string, { children: Task[]; label: string; titled: boolean }>();
   for (const t of tasks) {
     const key = epicKeyOf(t);
     if (key === null) continue;
     const label = t.parentIssueTitle
       ? `#${t.parentIssueNumber} ${t.parentIssueTitle}`
       : `#${t.parentIssueNumber}`;
-    const existing = byKey.get(key);
-    if (!existing) {
-      byKey.set(key, {
-        key,
-        label,
-        count: 1,
-        done: t.subIssueTotal !== null ? t.subIssueCompleted : null,
-        total: t.subIssueTotal,
-      });
-      if (t.parentIssueTitle) hasTitle.add(key);
+    const entry = byKey.get(key);
+    if (!entry) {
+      byKey.set(key, { children: [t], label, titled: !!t.parentIssueTitle });
       continue;
     }
-    existing.count += 1;
-    // The parent title lands after the row itself is ingested
-    // (task-watcher's fillParentIssueTitles): upgrade an option that has only
-    // the "#N" placeholder rather than waiting for a fresh one.
-    if (!hasTitle.has(key) && t.parentIssueTitle) {
-      existing.label = label;
-      hasTitle.add(key);
-    }
-    if (existing.total === null && t.subIssueTotal !== null) {
-      existing.total = t.subIssueTotal;
-      existing.done = t.subIssueCompleted;
+    entry.children.push(t);
+    // The parent title lands after the row itself is ingested: upgrade an
+    // option that has only the "#N" placeholder.
+    if (!entry.titled && t.parentIssueTitle) {
+      entry.label = label;
+      entry.titled = true;
     }
   }
-  return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+  const out: EpicOption[] = [];
+  for (const [key, { children, label }] of byKey) {
+    // The epic's own counts live on every child (denormalised); any one will do.
+    const fetched = children.find((t) => (t.parentSubIssueTotal ?? 0) > 0);
+    const done = fetched
+      ? (fetched.parentSubIssueCompleted ?? 0)
+      : children.filter((t) => t.status === "done").length;
+    const total = fetched ? (fetched.parentSubIssueTotal ?? 0) : children.length;
+    out.push({
+      key,
+      label,
+      count: children.length,
+      done,
+      total,
+      closed: children.every(
+        (t) => t.parentIssueState === "closed" && (t.status === "done" || t.status === "failed"),
+      ),
+    });
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label));
 }
 
 export function noEpicCount(tasks: Task[]): number {

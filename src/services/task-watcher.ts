@@ -5,7 +5,7 @@ import { resolveGitHubToken } from "./github-integration.js";
 import { pickRepoOwners, repoKey, resolveRepoKeys, type ResolvedRepo } from "./repo-key.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
-import { getIssueState, getIssueTitle } from "./github-write.js";
+import { getIssueState, getIssueSummary, getIssueTitle } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
@@ -104,6 +104,19 @@ const MAX_DISPLAY_DEPENDENCY_CHECKS_PER_SWEEP = 10;
 // MAX_PARENT_TITLE_ATTEMPTS below) without stretching convergence past a
 // single sweep.
 const MAX_PARENT_TITLE_FETCHES_PER_SWEEP = 20;
+
+// #2919 — refreshParentIssueMeta: how often one distinct parent (epic) is
+// re-fetched for its state and sub-issue progress, and the per-sweep cap.
+// Unlike the title fill this IS a TTL refresh: an epic's progress changes as
+// its children close, and a closed epic must drop out of the board's filter.
+const PARENT_META_TTL_MS = 10 * 60 * 1000;
+const MAX_PARENT_META_FETCHES_PER_SWEEP = 20;
+// A parent whose children are all terminal (a finished epic) is only re-checked
+// this often — enough to notice a reopen without a permanent trickle of calls
+// for every epic that ever existed. A parent that keeps failing (deleted or
+// private epic) backs off to the same interval after this many failures.
+const PARENT_META_SETTLED_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_PARENT_META_FAILURES = 3;
 
 // A deleted or private parent 404s forever, and this pass has no TTL to
 // rate-limit re-attempts the way the blocker pass's BLOCKER_DISPLAY_TTL_MS
@@ -350,6 +363,18 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
               parentIssueTitle: sql`CASE WHEN ${tasks.parentIssueNumber} IS NOT ${newParentNumber}
                                           OR ${tasks.parentIssueRepo} IS NOT ${newParentRepo}
                                      THEN NULL ELSE ${tasks.parentIssueTitle} END`,
+              // #2919 — the epic's own state/progress belong to the parent
+              // identity too; clear them with the title so a re-parented
+              // child never shows the old epic's numbers.
+              parentIssueState: sql`CASE WHEN ${tasks.parentIssueNumber} IS NOT ${newParentNumber}
+                                          OR ${tasks.parentIssueRepo} IS NOT ${newParentRepo}
+                                     THEN NULL ELSE ${tasks.parentIssueState} END`,
+              parentSubIssueTotal: sql`CASE WHEN ${tasks.parentIssueNumber} IS NOT ${newParentNumber}
+                                          OR ${tasks.parentIssueRepo} IS NOT ${newParentRepo}
+                                     THEN NULL ELSE ${tasks.parentSubIssueTotal} END`,
+              parentSubIssueCompleted: sql`CASE WHEN ${tasks.parentIssueNumber} IS NOT ${newParentNumber}
+                                          OR ${tasks.parentIssueRepo} IS NOT ${newParentRepo}
+                                     THEN NULL ELSE ${tasks.parentSubIssueCompleted} END`,
             }
           : {}),
         ...(hasSubIssues
@@ -632,6 +657,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // process) rather than per-tick, so it actually bounds attempts across
   // sweeps — see MAX_PARENT_TITLE_ATTEMPTS' own comment.
   const parentTitleFetchAttempts = new Map<string, number>();
+  // #2919 — `repo#number` -> last attempt (success or failure) for
+  // refreshParentIssueMeta's TTL. In-memory: a restart refreshes everything
+  // once, which is what populates a fresh install's epic counts.
+  const parentMetaFetchedAt = new Map<string, number>();
+  // Consecutive failures per parent, for the backoff above. Cleared on success.
+  const parentMetaFailures = new Map<string, number>();
 
   // #484 — every connected project, not just local-hosted ones; the
   // `!row.hostId` normalization (a pre-#26 row predating the NOT NULL
@@ -1326,6 +1357,146 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     }
   }
 
+  // #2919 — the parent (epic) refresh: state and sub-issue progress, plus the
+  // title as a side effect. Candidates are the children of every parent,
+  // terminal or not (a closed epic can be reopened, and its terminal children
+  // must not strand it as "closed"), deduped per distinct parent, fetched at
+  // most once per PARENT_META_TTL_MS, never-fetched first and then least
+  // recently fetched, so the per-sweep cap rotates fairly through a long
+  // tail of parents. A failed attempt also waits out the TTL.
+  async function refreshParentIssueMeta(
+    githubContext: Map<number, { owner: string; repo: string; token: string }>,
+  ): Promise<void> {
+    const candidates = app.db
+      .select({
+        id: tasks.id,
+        projectId: tasks.projectId,
+        parentIssueNumber: tasks.parentIssueNumber,
+        parentIssueRepo: tasks.parentIssueRepo,
+        parentIssueState: tasks.parentIssueState,
+        status: tasks.status,
+      })
+      .from(tasks)
+      .where(and(isNotNull(tasks.parentIssueNumber), isNotNull(tasks.parentIssueRepo)))
+      .orderBy(tasks.id)
+      .all();
+    if (candidates.length === 0) return;
+
+    const byParent = new Map<
+      string,
+      {
+        repo: string;
+        number: number;
+        projectIds: Set<number>;
+        never: boolean;
+        settled: boolean;
+      }
+    >();
+    for (const row of candidates) {
+      const key = `${row.parentIssueRepo}#${row.parentIssueNumber}`;
+      let g = byParent.get(key);
+      if (!g) {
+        g = {
+          repo: row.parentIssueRepo!,
+          number: row.parentIssueNumber!,
+          projectIds: new Set(),
+          never: false,
+          settled: true,
+        };
+        byParent.set(key, g);
+      }
+      g.projectIds.add(row.projectId);
+      if (row.parentIssueState === null) g.never = true;
+      if (row.status !== "done" && row.status !== "failed") g.settled = false;
+    }
+    // Never-fetched parents first (a fresh install converges before refreshes),
+    // then the least recently fetched.
+    const groups = [...byParent.entries()].sort(
+      (a, b) =>
+        Number(b[1].never && !parentMetaFailures.has(b[0])) -
+          Number(a[1].never && !parentMetaFailures.has(a[0])) ||
+        (parentMetaFetchedAt.get(a[0]) ?? 0) - (parentMetaFetchedAt.get(b[0]) ?? 0),
+    );
+
+    let fetches = 0;
+    const now = Date.now();
+    for (const [key, g] of groups) {
+      const last = parentMetaFetchedAt.get(key);
+      const backedOff = (parentMetaFailures.get(key) ?? 0) >= MAX_PARENT_META_FAILURES;
+      const ttl = g.settled || backedOff ? PARENT_META_SETTLED_TTL_MS : PARENT_META_TTL_MS;
+      if (last !== undefined && now - last < ttl) continue;
+      if (fetches >= MAX_PARENT_META_FETCHES_PER_SWEEP) break;
+      const sep = g.repo.indexOf("/");
+      if (sep === -1) continue;
+      const owner = g.repo.slice(0, sep);
+      const repo = g.repo.slice(sep + 1);
+      const ctxs = [
+        ...new Map(
+          [...g.projectIds]
+            .map((id) => githubContext.get(id))
+            .filter((c): c is { owner: string; repo: string; token: string } => c !== undefined)
+            .map((c) => [c.token, c] as const),
+        ).values(),
+      ];
+      if (ctxs.length === 0) continue;
+      let summary: Awaited<ReturnType<typeof getIssueSummary>> | undefined;
+      let lastErr: unknown;
+      // The cap bounds distinct parents, not token attempts: a parent that
+      // needs a fallback token must not eat two slots.
+      fetches++;
+      for (const ctx of ctxs) {
+        try {
+          summary = await getIssueSummary(ctx.token, owner, repo, g.number);
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      parentMetaFetchedAt.set(key, now);
+      if (parentMetaFetchedAt.size > 1000) {
+        const oldest = parentMetaFetchedAt.keys().next().value;
+        if (oldest !== undefined) parentMetaFetchedAt.delete(oldest);
+      }
+      if (summary === undefined) {
+        parentMetaFailures.set(key, (parentMetaFailures.get(key) ?? 0) + 1);
+        app.log.debug({ err: lastErr, parent: key }, "[task-watcher] parent meta fetch failed");
+        continue;
+      }
+      parentMetaFailures.delete(key);
+      const changed = app.db
+        .update(tasks)
+        .set({
+          parentIssueTitle: summary.title,
+          parentIssueState: summary.state,
+          parentSubIssueTotal: summary.subIssues?.total ?? null,
+          parentSubIssueCompleted: summary.subIssues?.completed ?? null,
+        })
+        .where(
+          and(
+            eq(tasks.parentIssueRepo, g.repo),
+            eq(tasks.parentIssueNumber, g.number),
+            // Only rows whose values actually differ: an unchanged refresh
+            // must neither bump updatedAt nor emit a hierarchy event per child
+            // every 10 minutes.
+            sql`(${tasks.parentIssueTitle} IS NOT ${summary.title}
+              OR ${tasks.parentIssueState} IS NOT ${summary.state}
+              OR ${tasks.parentSubIssueTotal} IS NOT ${summary.subIssues?.total ?? null}
+              OR ${tasks.parentSubIssueCompleted} IS NOT ${summary.subIssues?.completed ?? null})`,
+          ),
+        )
+        .returning({ id: tasks.id, projectId: tasks.projectId })
+        .all();
+      for (const row of changed) {
+        broadcastTaskEvent({
+          taskId: row.id,
+          projectId: row.projectId,
+          kind: "hierarchy",
+          ts: Date.now(),
+        });
+      }
+    }
+  }
+
   async function pollOnce(): Promise<void> {
     if (running) return;
     running = true;
@@ -1421,6 +1592,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // NULL) can't overlap with anything the blocker passes above just
       // did, since those only ever touch dependencyCount/blockedBy.
       await fillParentIssueTitles(githubContext);
+      await refreshParentIssueMeta(githubContext);
     } catch (err) {
       app.log.error({ err }, "[task-watcher] poll cycle failed");
     } finally {

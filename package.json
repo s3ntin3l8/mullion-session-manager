@@ -1,6 +1,6 @@
 {
   "name": "mullion-session-manager",
-  "version": "0.3.60",
+  "version": "0.3.61",
   "type": "module",
   "description": "Self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals (Claude Code, Codex, opencode, ...)",
   "license": "AGPL-3.0-or-later",
@@ -75,6 +75,7 @@
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.8",
     "fastify-plugin": "^6.0.1",
+    "jpeg-js": "^0.4.4",
     "node-pty": "^1.1.0",
     "openid-client": "^6.8.9",
     "pino": "^10.4.0",
@@ -107,7 +108,16 @@
   },
   "overrides": {
     "esbuild": "^0.28.1",
-    "shell-quote": "^1.9.0"
+    "shell-quote": "^1.9.0",
+    "eslint": {
+      "minimatch": "^11.0.1"
+    },
+    "@eslint/config-array": {
+      "minimatch": "^11.0.1"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   },
   "allowScripts": {
     "better-sqlite3": false,

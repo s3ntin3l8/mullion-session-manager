@@ -34,6 +34,11 @@
 //    "error":{"message":"exceeded retry limit, last status: 429 Too Many Requests",
 //             "codex_error_info":{"response_too_many_failed_attempts":{"http_status_code":429}}}}}
 //
+// The same field is sometimes a bare string (`"codex_error_info":"usage_limit_exceeded"`)
+// with no status body. That string is the variant name. Only the two quota
+// variants count in that form; `response_too_many_failed_attempts` does not,
+// because there is no HTTP status to require 429.
+//
 // `codex_error_info` is codex's own error taxonomy, whose variants are
 // `rate_limit_exceeded`, `usage_limit_exceeded`,
 // `response_too_many_failed_attempts`, `server_overloaded`,
@@ -101,6 +106,12 @@ const TOO_MANY_REQUESTS = 429;
  */
 const COMPLETED_TAGS = new Set(["task_complete", "turn_complete"]);
 
+/** A later one of these means a new turn started. v2 writes `turn_started`
+ * (alias of `task_started`, same as `turn_complete`). Bookkeeping such as
+ * `token_count` does not: codex writes that after a completion that is
+ * still the last turn. */
+const FOLLOWED_TAGS = new Set(["user_message", "task_started", "turn_started"]);
+
 /**
  * Codex's home directory — the same rule as `resolveCodexHome()` in
  * src/services/hook-adapters/codex.ts (`CODEX_HOME` or `~/.codex`).
@@ -127,7 +138,17 @@ export function codexSessionsDir(codexHome) {
  * what counts as a rate limit.
  */
 export class CodexRateLimitSignal {
-  constructor({ turnId, rateLimited, status, variant, message }) {
+  constructor({
+    turnId,
+    rateLimited,
+    status,
+    variant,
+    message,
+    completedAt = null,
+    followed = false,
+    lastAgentMessage = null,
+    clean = false,
+  }) {
     /** The turn the signal belongs to, so a caller can report it once. */
     this.turnId = turnId;
     /**
@@ -151,6 +172,15 @@ export class CodexRateLimitSignal {
     this.variant = variant;
     /** codex's own human-readable error message. */
     this.message = message;
+    /** Unix time the turn completed, seconds or milliseconds as codex wrote it. */
+    this.completedAt = completedAt;
+    /** True when a later user turn follows this completion. */
+    this.followed = followed;
+    /** The agent's last message on a clean completion, when codex recorded one. */
+    this.lastAgentMessage = lastAgentMessage;
+    /** True only when the completed turn carried no error. A non-quota
+     * failure is not rate-limited and is also not a successful Stop. */
+    this.clean = clean;
   }
 }
 
@@ -263,6 +293,7 @@ export function parseCodexRateLimitSignal(tailText) {
   const lines = tailText.split("\n");
   let completed = null;
   let completedOrdinal = null;
+  let followed = false;
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;
@@ -274,11 +305,23 @@ export function parseCodexRateLimitSignal(tailText) {
     }
     if (parsed?.type !== "event_msg") continue;
     const payload = parsed.payload;
-    if (!COMPLETED_TAGS.has(payload?.type)) continue;
+    if (!COMPLETED_TAGS.has(payload?.type)) {
+      // A later user turn means this completion is no longer the end of
+      // the rollout. Bookkeeping (`token_count`) does not: codex writes
+      // that after a task_complete that is still the last turn. A later
+      // completion resets this below.
+      if (completed !== null && FOLLOWED_TAGS.has(payload?.type)) followed = true;
+      continue;
+    }
     completed = payload;
     completedOrdinal = typeof parsed.ordinal === "number" ? parsed.ordinal : null;
+    followed = false;
   }
   if (completed === null) return null;
+
+  const completedAt = typeof completed.completed_at === "number" ? completed.completed_at : null;
+  const lastAgentMessage =
+    typeof completed.last_agent_message === "string" ? completed.last_agent_message : null;
 
   // The identity of this completed turn, most specific first.
   const identity =
@@ -301,15 +344,29 @@ export function parseCodexRateLimitSignal(tailText) {
       status: null,
       variant: null,
       message: null,
+      completedAt,
+      followed,
+      lastAgentMessage,
+      clean: true,
     });
   }
 
   const message = typeof error.message === "string" ? error.message : null;
   const info = error.codex_error_info ?? null;
-  const variant = info && typeof info === "object" ? (Object.keys(info)[0] ?? null) : null;
+  // Codex writes `codex_error_info` two ways. The object form is a one-key
+  // map (`{ usage_limit_exceeded: { ... } }`, sometimes carrying
+  // `http_status_code`). Some rollouts write the variant as a bare string
+  // (`"usage_limit_exceeded"`) with no nested status — issue #2928. An empty
+  // string, an array, or a missing field is not a variant.
+  let variant = null;
+  if (typeof info === "string") {
+    variant = info.length > 0 ? info : null;
+  } else if (info && typeof info === "object" && !Array.isArray(info)) {
+    variant = Object.keys(info)[0] ?? null;
+  }
 
   let status = null;
-  if (variant !== null && info !== null) {
+  if (variant !== null && info !== null && typeof info === "object" && !Array.isArray(info)) {
     const body = info[variant];
     const raw = body && typeof body === "object" ? body.http_status_code : undefined;
     if (typeof raw === "number") status = raw;
@@ -325,5 +382,9 @@ export function parseCodexRateLimitSignal(tailText) {
     status,
     variant,
     message,
+    completedAt,
+    followed,
+    lastAgentMessage,
+    clean: false,
   });
 }

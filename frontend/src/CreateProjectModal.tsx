@@ -23,23 +23,21 @@ import {
   type PlacementCapability,
   type PlacementPlatform,
 } from "../../src/shared/constants.js";
+import { isAbsoluteHostPath } from "../../src/shared/host-path.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
-import { normalizeHostPaths, sameHostPaths } from "./projectPathUtils.js";
-import { FolderPicker } from "./FolderPicker.js";
+import {
+  PLATFORM_LABELS,
+  CAPABILITY_LABELS,
+  sameIds,
+  normalizeHostPaths,
+  sameHostPaths,
+  slugifyProjectName,
+  trailingSegment,
+} from "./createProjectModalUtils.js";
+import { BrowseButton, FolderPicker } from "./FolderPicker.js";
 import { Modal } from "./ui/Modal.js";
-
-const PLATFORM_LABELS: Record<PlacementPlatform, string> = {
-  darwin: "macOS",
-  linux: "Linux",
-  win32: "Windows",
-};
-
-const CAPABILITY_LABELS: Record<PlacementCapability, string> = {
-  xcode: "Needs Xcode (iOS Simulator)",
-  "android-emulator": "Needs an Android emulator",
-};
 
 // Empty string represents "unset" (fall through to the next precedence
 // tier) in the Dropdown below, which is string-only — converted to/from
@@ -190,12 +188,6 @@ interface CreateProjectModalProps {
   initialHostCwdsMeta?: HostCwdsMeta;
 }
 
-/** Whether two project-id selections hold the same ids (order and null/empty aside). */
-function sameIds(a: number[], b: number[] | null | undefined): boolean {
-  const other = b ?? [];
-  return a.length === other.length && a.every((id) => other.includes(id));
-}
-
 export function CreateProjectModal({
   onClose,
   onCreate,
@@ -227,6 +219,10 @@ export function CreateProjectModal({
   const [path, setPath] = useState(initialPath);
   const [pickerPath, setPickerPath] = useState<string | null>(null);
   const projectRoot = useDashboardStore((s) => s.settings?.projectRoots[0]);
+  // Issue #2901 — has the user taken the path into their own hands? Until
+  // they do, the Display name drives it (see `handleNameInput`). The autofill
+  // itself never sets this: it is the NAME that moved the path, not the user.
+  const [pathEdited, setPathEdited] = useState(false);
   const [name, setName] = useState(initialName);
   const [namePlaceholder, setNamePlaceholder] = useState("my-project");
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
@@ -451,9 +447,11 @@ export function CreateProjectModal({
     return withCurrentReviewAgent(options, current);
   }
 
-  const trailingSegment = (p: string) => p.replace(/\/+$/, "").split("/").pop() || "my-project";
-
-  const handlePathInput = (value: string) => {
+  // Writes a path into the field, with the same bookkeeping a typed path
+  // gets: the Display name's placeholder follows the path's trailing segment,
+  // and a stale error / "Create folder" confirmation never survives a new
+  // path.
+  const applyPath = (value: string) => {
     setPath(value);
     setNamePlaceholder(trailingSegment(value));
     // A stale "Create folder" affordance (or git-init-failed notice) must
@@ -461,6 +459,33 @@ export function CreateProjectModal({
     setError(null);
     setGitInitFailed(false);
     setGitInit(false);
+  };
+
+  // A path the USER typed (or picked with Browse…): from here on the path is
+  // theirs, and the Display name never touches it again (issue #2901).
+  const handlePathInput = (value: string) => {
+    setPathEdited(true);
+    applyPath(value);
+  };
+
+  // Issue #2901 — the Display name fills the path in: with the base project
+  // folder prefilled, typing a name makes the path "<base>/<name>", so the
+  // user does not retype the folder they already picked. The result is shown
+  // in the path field itself, and can be overwritten there at any time.
+  const handleNameInput = (value: string) => {
+    setName(value);
+    // Editing a project renames it; it never moves its checkout.
+    if (isEdit) return;
+    // The user took the path over — it is theirs now.
+    if (pathEdited) return;
+    // `initialPath` is this machine's base project folder (the user's
+    // `projectRoots`); it says nothing about where a checkout lives on
+    // another host.
+    if (hostId !== LOCAL_HOST_ID) return;
+    const base = initialPath.replace(/\/+$/, "");
+    if (!base) return;
+    const slug = slugifyProjectName(value);
+    applyPath(slug ? `${base}/${slug}` : base);
   };
 
   const canBrowse = (isEdit ? projectHostId : hostId) === LOCAL_HOST_ID;
@@ -490,10 +515,10 @@ export function CreateProjectModal({
       ),
     );
     if (isEdit) {
-      const relative = Object.entries(editedHostPaths).find(([, v]) => !v.startsWith("/"));
+      const relative = Object.entries(editedHostPaths).find(([, v]) => !isAbsoluteHostPath(v));
       if (relative) {
         setError({
-          message: `The path on ${previewHostName(relative[0])} must be absolute (start with "/").`,
+          message: `The path on ${previewHostName(relative[0])} must be absolute (start with "/" or a drive letter like "D:\\").`,
         });
         return;
       }
@@ -1037,7 +1062,10 @@ export function CreateProjectModal({
             <HostsIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
             <Dropdown
               value={hostId}
-              onChange={setHostId}
+              onChange={(value) => {
+                setHostId(value);
+                setPickerPath(null);
+              }}
               options={[
                 { value: LOCAL_HOST_ID, label: "This machine" },
                 ...remoteHosts.map((h) => ({
@@ -1070,19 +1098,7 @@ export function CreateProjectModal({
               if (e.key === "Enter") void confirm();
             }}
           />
-          <button
-            type="button"
-            className="create-modal-browse-btn"
-            onClick={browse}
-            disabled={!canBrowse}
-            title={
-              canBrowse
-                ? "Browse folders on this machine"
-                : "Folder browsing is not available for remote hosts yet"
-            }
-          >
-            Browse…
-          </button>
+          <BrowseButton canBrowse={canBrowse} onClick={browse} />
         </span>
       </label>
 
@@ -1160,7 +1176,7 @@ export function CreateProjectModal({
         <span className="create-modal-input-row">
           <input
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => handleNameInput(e.target.value)}
             placeholder={namePlaceholder}
             onKeyDown={(e) => {
               if (e.key === "Enter") void confirm();

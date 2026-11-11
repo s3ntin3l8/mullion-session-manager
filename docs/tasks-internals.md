@@ -217,10 +217,14 @@ which assumed no such field existed on the plain issues-list response and
 planned a `GET .../issues/{n}/sub_issues` call per parent to derive it; that
 call is never made.
 
-Five columns on `tasks`, all nullable — `parentIssueNumber` /
+Eight columns on `tasks`, all nullable — `parentIssueNumber` /
 `parentIssueRepo` (the parent's own `"owner/repo"`, which can differ from
 the child's project repo: cross-repo sub-issues are first-class in GitHub's
-model) / `parentIssueTitle` / `subIssueTotal` / `subIssueCompleted`. Unlike
+model) / `parentIssueTitle` / `subIssueTotal` / `subIssueCompleted`, plus
+the **parent's own** `parentIssueState` / `parentSubIssueTotal` /
+`parentSubIssueCompleted` (`#2919`; `subIssueTotal`/`Completed` above are the
+_child's_ own summary, 0/0 for any ordinary issue, and must not be read as its
+epic's progress). Unlike
 `dependencyCount`, nullability here carries no fail-closed meaning for the
 four parent-identity columns — they stay **display-only**, so "not yet
 observed" and "known to have no parent" don't need to be distinguishable the
@@ -251,9 +255,14 @@ declining to update it.
 
 **The title is the one piece that isn't free**, and gets a deliberately
 different shape from the dependency-badge display pass above. Resolving it
-is `fillParentIssueTitles` (`task-watcher.ts`), a **one-shot cache-fill, not
-a TTL-guarded refresh**: an issue's title doesn't go stale in a way that
-matters to a chip, so there's no TTL and no periodic re-check. The
+is `fillParentIssueTitles` (`task-watcher.ts`), a **one-shot cache-fill**: an
+issue's title doesn't go stale in a way that matters to a chip, so this pass
+has no TTL and no periodic re-check. (The parent's _state and progress_ are
+different: `refreshParentIssueMeta` re-fetches each distinct parent through
+`getIssueSummary` at most every 10 minutes, in-memory, never-fetched first
+then least recently fetched, capped at 20 parents per sweep, and writes only
+rows whose values changed; it also refreshes the title, so a renamed epic
+catches up.) The
 candidate query is simply `parentIssueTitle IS NULL`, deduped to one
 GitHub call per **distinct parent** (not per child — the reference install's
 32 children of 10 parents is 10 calls, not 32), converges to zero rows once
@@ -279,14 +288,17 @@ actively looking at.
 **The `sub_issues` webhook is deliberately not subscribed.** For
 dependencies, the `issue_dependencies` webhook was the cheap path to
 correctness because a blocker refresh was an extra, TTL-gated API call.
-Parentage already re-syncs on every 60s poll at zero marginal cost, so a
+Parentage already re-syncs on every 60s poll at zero marginal cost (the
+parent's own state and progress cost one REST call per distinct parent per 10
+minutes, `refreshParentIssueMeta`), so a
 `sub_issues` subscription would only buy latency: `upsertIssueTask`'s
 `/ws/tasks` push (`kind: "ingested"`) fires only on a task's first sighting,
 not a re-sighting, so a re-parenting written by a later poll produces no
 live broadcast at all — it surfaces whenever the frontend's own periodic
 `refreshTasks()` next runs, not instantly. (The `kind: "hierarchy"` event is
 separate and narrower: it's `fillParentIssueTitles` announcing a newly
-_filled title_, not a changed parent identity.) Subscribing to the webhook
+_filled title_, or `refreshParentIssueMeta` announcing a changed parent state,
+progress or title — not a changed parent identity.) Subscribing to the webhook
 would also force `WEBHOOK_EVENTS_VERSION` (`github-webhook.ts`) up, which
 re-registers the hook on every connected project — accepted deferred cost,
 filed as a follow-up rather than bundled in.
@@ -466,7 +478,9 @@ worker has finished (cleanly, or behind such a shell tail) **with commits on
 the branch** is handed to `reviewing` instead of force-failed, since failing
 it now would throw away completed work the normal handoff was about to pick
 up anyway. Outstanding non-shell background work, or a worker still mid-turn
-with no commits, still fails on budget expiry exactly as before.
+with no commits, still fails on budget expiry — except a worker whose
+rate-limit grace window is still open (#2930), which is held instead of
+force-failed. The budget applies again once that window has elapsed.
 
 ## The agent's contract
 
@@ -824,8 +838,8 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   the task (`holdsForReviewPost`, which also honours a legacy row whose reason
   alone is `review-post-failed`) whatever other reason it carries, and the card
   and task detail show the `githubSyncError` text. The retry sweep never posts the
-  terminal marker; it keeps it while a human can still act (`reviewing`, or
-  `done` and unmerged) and drops it otherwise. A human exit clears it: approve
+  terminal marker; it keeps it while a human can still act (unmerged, and
+  `reviewing` or `done`) and drops it otherwise, including on a merged task. A human exit clears it: approve
   or `POST /api/tasks/:id/merge` (`clearedFor`), or the next review ingest
   overwriting the column; **every path that records a merge** clears it too
   (the webhook, `markTaskMerged`, the reviewing-task ending, archive-merged, the
@@ -851,8 +865,9 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
     failing) is just cleared, with the unresolved thread work recorded in
     `githubSyncError` — nothing is held.
 
-  A non-approving verdict just clears the marker in each case. A marker on a task that is merged or no longer
-  claimed/in-progress/reviewing/done is dropped. A thread-resolution failure
+  A non-approving verdict just clears the marker in each case. A marker on a task that is merged (`mergedAt` set, whatever its
+  status) or no longer claimed/in-progress/reviewing/done is dropped, so a
+  late 24 h give-up can never re-set the hold on a merged task. A thread-resolution failure
   (rate limit) keeps the marker with `posted: true`, so only the resolution is
   retried; a project on another host whose repo ref can't be resolved
   (`busy`/`unreachable`/`outcome-unknown`) counts as transient too — it is read
@@ -2392,8 +2407,10 @@ never sets `lastTurnEndedAt`, so the cleared session would otherwise derive
 to a non-`api_error`/non-`finished` status and strand the task).
 
 Max 1440 minutes (24h): quotas can be weekly/monthly. `0` opts out (fail
-immediately, the pre-grace behavior). Independent of `budgetMinutes` — the
-time budget is the hard backstop; this is a softer "wait for recovery"
-that's checked each reconciler tick. Independent of `staleErrorSeconds` —
+immediately, the pre-grace behavior). While `lastRateLimitAt` is still
+inside this window, the per-task time budget does not force-fail the
+worker (#2930); the budget is the backstop again once grace has elapsed,
+not during it. Parking until the provider reset is a separate follow-up.
+Independent of `staleErrorSeconds` —
 the durable task-row anchor decouples the grace window from the session's
 TTL.

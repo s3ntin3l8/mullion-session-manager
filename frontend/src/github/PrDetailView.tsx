@@ -650,7 +650,7 @@ export function PrDetailView({
   };
 
   return (
-    <div className="gh-detail pr-detail">
+    <div className="gh-detail pr-detail sb-detail">
       <div ref={topSentinelRef} className="pr-top-sentinel" aria-hidden="true" />
       <div className="pr-detail-top">
         <DetailHeader
@@ -863,12 +863,15 @@ export function PrDetailView({
         </div>
 
         {pr.bodyHtml && (
-          <div className="pr-detail-pad">
-            <SafeHtml className={`gh-html${showBody ? "" : " gh-clamp"}`} html={pr.bodyHtml} />
+          <SidebarSection title="Description" persistKey="github-pr-description" variant="card">
+            <SafeHtml
+              className={`gh-html${showBody ? "" : " sb-body-text--clamped"}`}
+              html={pr.bodyHtml}
+            />
             <button type="button" className="gh-link-button" onClick={() => setShowBody((s) => !s)}>
               {showBody ? "Show less" : "Read more"}
             </button>
-          </div>
+          </SidebarSection>
         )}
 
         <SidebarSection title="Changes" persistKey="github-pr-changes">

@@ -153,6 +153,11 @@ describe("release-please routes (#744)", () => {
     prDetail?: (number: number) => Response;
     dispatch?: () => Response;
     merge?: () => Response;
+    // GET /actions/runs?head_sha= — the release PR head's runs. Defaults to
+    // one finished run, so nothing is held and CI has started.
+    actionsRuns?: () => Response;
+    // POST /actions/runs/:id/approve.
+    approve?: (runId: number) => Response;
     // conventionalTitlesWarning's own detectReleasePleaseConfig probe — a
     // repo-root contents listing. Defaults to "no release-please config
     // files present" (a 404), same "nothing there unless overridden"
@@ -223,6 +228,27 @@ describe("release-please routes (#744)", () => {
       if (url === "https://api.github.com/repos/acme/widgets/contents") {
         return Promise.resolve(
           (overrides.contents ?? (() => new Response("nope", { status: 404 })))(),
+        );
+      }
+      if (
+        url ===
+        "https://api.github.com/repos/acme/widgets/actions/runs?head_sha=deadbeef&per_page=100"
+      ) {
+        return Promise.resolve(
+          (
+            overrides.actionsRuns ??
+            (() =>
+              jsonResponse(200, {
+                total_count: 1,
+                workflow_runs: [{ id: 5, status: "completed", conclusion: "success" }],
+              }))
+          )(),
+        );
+      }
+      const approveMatch = url.match(/\/repos\/acme\/widgets\/actions\/runs\/(\d+)\/approve$/);
+      if (approveMatch && method === "POST") {
+        return Promise.resolve(
+          (overrides.approve ?? (() => jsonResponse(200, {})))(Number(approveMatch[1])),
         );
       }
       if (url === "https://api.github.com/repos/acme/widgets/pulls/12/merge") {
@@ -318,6 +344,8 @@ describe("release-please routes (#744)", () => {
           mergeable: true,
           mergeableState: "clean",
           ciStatus: "success",
+          heldRuns: 0,
+          noRuns: false,
         },
         // githubApiRouter's own /contents route defaults to a 404 (no
         // release-please config files), so both this test's own probe and
@@ -474,6 +502,202 @@ describe("release-please routes (#744)", () => {
         expect(res.json()).toMatchObject({ conventionalTitlesWarning: false });
         expect(contentsSpy).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe("held runs on the release PR", () => {
+    const held = {
+      total_count: 4,
+      workflow_runs: [
+        { id: 11, status: "completed", conclusion: "action_required" },
+        { id: 12, status: "action_required", conclusion: null },
+        { id: 13, status: "completed", conclusion: "success" },
+        // A concurrency/environment gate: /approve refuses it, so it is not held.
+        { id: 14, status: "waiting", conclusion: null },
+      ],
+    };
+
+    it("GET reports how many runs are held for approval", async () => {
+      fetchMock.mockImplementation(githubApiRouter({ actionsRuns: () => jsonResponse(200, held) }));
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+      expect(res.json().pr).toMatchObject({ heldRuns: 2, noRuns: false });
+    });
+
+    it("GET reports noRuns when GitHub has no run at all for the head", async () => {
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          actionsRuns: () => jsonResponse(200, { total_count: 0, workflow_runs: [] }),
+        }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+      expect(res.json().pr).toMatchObject({ heldRuns: 0, noRuns: true });
+    });
+
+    it("GET still returns the PR when the runs read fails", async () => {
+      fetchMock.mockImplementation(
+        githubApiRouter({ actionsRuns: () => new Response("nope", { status: 403 }) }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+      expect(res.json().pr).toMatchObject({ number: 12, heldRuns: 0, noRuns: false });
+    });
+
+    it("POST approve-runs approves every held run and drops the cached status", async () => {
+      const approveSpy = vi.fn(() => jsonResponse(200, {}));
+      fetchMock.mockImplementation(
+        githubApiRouter({ actionsRuns: () => jsonResponse(200, held), approve: approveSpy }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/approve-runs`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ approved: 2 });
+      expect(approveSpy.mock.calls.map((c) => (c as unknown[])[0])).toEqual([11, 12]);
+
+      // The cache was invalidated, so the next read refetches (not a stale count).
+      fetchMock.mockImplementation(githubApiRouter({}));
+      const after = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+      expect(after.json().pr.heldRuns).toBe(0);
+    });
+
+    it("POST approve-runs refuses with no-held-runs when nothing is waiting", async () => {
+      fetchMock.mockImplementation(githubApiRouter({}));
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/approve-runs`,
+      });
+      expect(res.json()).toEqual({ approved: 0, reason: "no-held-runs" });
+    });
+
+    it("POST approve-runs refuses with no-release-pr when no release PR is open", async () => {
+      fetchMock.mockImplementation(githubApiRouter({ releasePrs: () => jsonResponse(200, []) }));
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/approve-runs`,
+      });
+      expect(res.json()).toEqual({ approved: 0, reason: "no-release-pr" });
+    });
+
+    it("POST approve-runs maps a 403 to reason: forbidden", async () => {
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          actionsRuns: () => jsonResponse(200, held),
+          approve: () => new Response("Resource not accessible", { status: 403 }),
+        }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/approve-runs`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ approved: 0, reason: "forbidden" });
+    });
+
+    it("POST approve-runs reports the partial count when a later run still fails to approve", async () => {
+      let calls = 0;
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          actionsRuns: () => jsonResponse(200, held),
+          approve: () =>
+            ++calls === 1 ? jsonResponse(200, {}) : new Response("boom", { status: 500 }),
+        }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/approve-runs`,
+      });
+      expect(res.json()).toMatchObject({ approved: 1, reason: "approve-failed" });
+    });
+
+    it("POST approve-runs says no-held-runs when every run lost the race, and blames a run still held", async () => {
+      // All lost: nothing held on the re-read -> not an approval.
+      let reads = 0;
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          actionsRuns: () =>
+            ++reads === 1
+              ? jsonResponse(200, held)
+              : jsonResponse(200, { total_count: 1, workflow_runs: [] }),
+          approve: () => new Response("not waiting", { status: 403 }),
+        }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const url = `/api/projects/${projectId}/release/approve-runs`;
+      expect((await app.inject({ method: "POST", url })).json()).toEqual({
+        approved: 0,
+        reason: "no-held-runs",
+      });
+
+      // Run 11 raced (403) but run 12 is still held and fails for real (500):
+      // blame the 500, not the token scope.
+      clearReleasePrCacheForTests();
+      let reads2 = 0;
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          actionsRuns: () =>
+            ++reads2 === 1
+              ? jsonResponse(200, held)
+              : jsonResponse(200, {
+                  total_count: 1,
+                  workflow_runs: [{ id: 12, status: "action_required", conclusion: null }],
+                }),
+          approve: (id) =>
+            id === 11
+              ? new Response("raced", { status: 403 })
+              : new Response("boom", { status: 500 }),
+        }),
+      );
+      expect((await app.inject({ method: "POST", url })).json()).toMatchObject({
+        approved: 0,
+        reason: "approve-failed",
+      });
+    });
+
+    it("POST approve-runs keeps going past a stale run, and a raced approval is not an error", async () => {
+      const approveSpy = vi.fn((runId: number) =>
+        runId === 11
+          ? new Response("This run is not waiting for approval", { status: 403 })
+          : jsonResponse(200, {}),
+      );
+      let reads = 0;
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          // Held on the first two reads (route + approve loop's source), then
+          // nothing is held once the stale run turns out to be approved.
+          actionsRuns: () =>
+            ++reads === 1
+              ? jsonResponse(200, held)
+              : jsonResponse(200, { total_count: 1, workflow_runs: [] }),
+          approve: approveSpy,
+        }),
+      );
+      const app = await buildTestApp();
+      const { projectId } = await createConnectedProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/release/approve-runs`,
+      });
+      expect(res.json()).toEqual({ approved: 1 });
+      expect(approveSpy.mock.calls.map((c) => (c as unknown[])[0])).toEqual([11, 12]);
     });
   });
 

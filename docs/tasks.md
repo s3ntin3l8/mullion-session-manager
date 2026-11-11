@@ -280,19 +280,17 @@ waiting for a free concurrency slot. It never holds a session; see the
   longer a window where a `claimed` row has a live session: dispatch
   commits the status flip first.
 
-  **Retry is the one exception that skips this queue.** `POST
-/api/tasks/:id/retry` (`failed → in_progress`, below) performs its own
-  separate, single-phase atomic reservation (`task-claim.ts`'s `retryTask`)
-  — it does **not** go through `enqueueTask`/`dispatchClaimedTask` at all.
-  It briefly writes `status: "claimed"` as part of its own transaction (so
-  the same `CONCURRENCY_CAPPED_STATUSES`-based cap check that gates a fresh
-  claim also gates a retry), then resumes the preserved worktree, spawns
-  the session, and flips straight to `in_progress` — all synchronously
-  within the one HTTP request. A retry that can't win the reservation 429s
-  immediately rather than queuing; one that wins but then fails to resume
-  the worktree or spawn a session rolls the row back to `failed` (`via:
-"retry-release"`), never leaving it stuck at `claimed` with nothing behind
-  it.
+  **Retry goes through the same queue.** `POST /api/tasks/:id/retry`
+  (`failed → claimed`, then `claimed → in_progress`, below) calls
+  `enqueueRetry` (`task-retry.ts`): it kills the failed task's old session,
+  then in one transaction moves the row to `claimed` with `resumeQueued`
+  set, and answers `202`. The same dispatch sweep then picks it up and calls
+  `dispatchQueuedRetry` (`task-claim.ts`) instead of `dispatchClaimedTask`:
+  the same cap-checked `claimed → in_progress` reservation, then it resumes
+  the preserved worktree and spawns the session. A full cap therefore
+  delays a retry, it does not refuse it. One that wins its slot but fails to
+  resume the worktree or spawn a session ends `failed` with the reason (`via:
+"retry-release"`), never stuck at `claimed` with nothing behind it.
 
 - **`in_progress → reviewing`** fires once the worker's turn has genuinely
   ended and the branch has commits past its base — see
@@ -340,7 +338,11 @@ waiting for a free concurrency slot. It never holds a session; see the
   supersedes the two-step "flip to ready, then claim" flow they would
   otherwise have required for a task Retry can actually resume. Gated on
   Task Master being enabled, same as Claim, since it also spawns a session.
-  Still cap-checked — a retry can still 429 at capacity. A task copy that a
+  Retry is **queued**, like a claim: the route answers `202` with the task
+  row and the task waits in `claimed` (`resumeQueued`) until the dispatch
+  sweep finds a free concurrency slot, so a full cap delays a retry instead
+  of refusing it. The budget clock starts at dispatch, not while queued. A
+  task copy that a
   project merge superseded is refused with a 409 instead of retried
   (`#2292` — see "Merging two projects" below).
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
@@ -404,8 +406,13 @@ The strip is on every layout, phone included.
   "Needs me", "Running" and "Awaiting merge" use the same definitions as the
   Tasks sidebar (`needsYouReason` / `taskBucket` in `github/taskMasterSummary.ts`,
   `isAwaitingMerge`), so the board and the sidebar agree. The **epic** filter
-  was the "Phase" select (`#701`): the parent issue, shown as `#N title` with
-  sub-issue progress, plus "No epic"; it is multi-select. An optional **facets
+  was the "Phase" select (`#701`): the parent issue, shown as `#N title` with the
+  epic's own sub-issue progress (`closed/total`, read from the epic issue itself —
+  Task Master refreshes each distinct parent's state and `sub_issues_summary`
+  about every 10 minutes; until the first fetch it shows done tasks / tasks),
+  plus "No epic"; it is multi-select. A closed epic whose tasks are all done
+  is left out of the list unless it is currently selected; one that still has
+  open tasks stays. An optional **facets
   panel** (the left-rail toggle, or Display → Facets panel: Off / On / Auto —
   Auto opens it from a 1440px window or with more than 8 projects) shows the
   same state, project and epic choices with counts; it edits the same filter
@@ -435,9 +442,10 @@ The strip is on every layout, phone included.
   order around a stack; dragging still reorders the saved order correctly.
 - **Group by** (Display menu, `crs.taskGroupBy`): None, **Epic** or **Project**.
   Grouped, the board becomes swimlanes, each with its own columns. An epic lane
-  is titled `#N title` with a link to the issue and a progress bar — the epic
-  task's own `n/m closed` sub-issue counts when that task is on the board,
-  otherwise the done share of its child tasks — and a final "No epic" lane. A
+  is titled `#N title` with a link to the issue and a progress bar — the epic's
+  fetched `n/m closed` sub-issue counts (the same figure as the epic filter),
+  else the epic task's own counts when that task is on the board, else the done
+  share of its child tasks — and a final "No epic" lane. A
   card can be dragged between Backlog and Ready inside its lane, never into
   another lane (that would change its parent or project). The phone board stays
   flat. **Card density** (`crs.taskDensity`): Compact (default) or Comfortable.
@@ -596,6 +604,13 @@ The detail reads, top to bottom:
 7. **Timeline**: the task's timeline, with the same Important / All / Custom
    filter as a session's.
 
+Task, PR and issue detail share one layout (design record:
+`docs/design/sidebar-boxes/mockup.html`, option B). The state blocks (status,
+review, pull request, details; a PR's or issue's description) are cards, the
+long lists (hierarchy, timeline, a PR's changes and conversation) are
+rule-separated sections, and every title and body starts on the same left
+edge, with the collapse chevron on the right.
+
 The detail does not depend on the list: a backlog, done, archived or
 other-project task opens too, and Back returns to the list with its filter and
 scroll position. The icon in the header pops the task out to a docked panel.
@@ -633,7 +648,7 @@ non-Abandon-path task) are not gated either way.
   the session already exited, a fresh one is re-seeded in the **same**
   worktree. Unlike an automatic auto-return round, Reject never spends
   `tasks.autoReturnRounds`.
-- **Retry** (`failed → in_progress`) — resumes a failed task's preserved
+- **Retry** (`failed → claimed → in_progress`) — queues a resume of a failed task's preserved
   branch into a fresh worktree and spawns a new worker; see "Lifecycle"
   above for its own reservation mechanics. Only available when the task
   has a preserved branch (a task that failed before ever committing
@@ -997,8 +1012,8 @@ mapping each one to its Settings key and explaining what it actually gates.
 | Control                               | Setting (overrides the env default)          | Env default                                    | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------------------- | -------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Whether Task Master runs at all       | `settings.taskMaster.enabled`                | `MULLION_TASK_MASTER_ENABLED` (`false`)        | Gates every _new_ piece of autonomous work: the watcher's GitHub ingest + auto-claim, the claim/approve/retry endpoints (all refuse with 403/501 while off), and the reconciler's `in_progress` → `reviewing` transition itself (which includes spawning the review-agent session) — a finished session while disabled is left in `in_progress` instead, still reachable by the budget force-fail below, and transitions normally on the next tick once re-enabled. **`reject`/give-up/re-review are deliberately NOT gated** (Hermes review, PR #480, fourth pass; extended to give-up by `#483` and to re-review by `#1345`): they're the only routes that can act on an already-`reviewing` task, so a task that reached `reviewing` before the toggle flipped off — the one case the transition-gate above can't prevent — still has an escape hatch instead of being stranded until re-enabled; `approve`/`retry` stay gated since they create a real PR/spawn a real session. Does **not** gate an already-in-flight task's own budget enforcement or `in_progress` status sync to GitHub — that stays a safety net regardless. The local task board (create/edit/drag/delete) works regardless too, as does Abandon/Archive. |
-| Max concurrent autonomous workers     | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)            | Only tasks in `in_progress` count against this cap (task-claim queueing, rate-limit-storm fix) — `claimed` is the queue, and `reviewing` never held it. `dispatchClaimedTask`'s own transactional reservation (count `in_progress` + flip `claimed → in_progress`) is the sole correctness authority for a fresh claim; Retry performs its own separate reservation against the same `in_progress` count (see "Lifecycle" above) rather than sharing that transaction. A manual claim, auto-claim, and Retry are all cap-checked, so this is an actual ceiling on live workers, not a soft throttle — it's just no longer a ceiling on how many tasks may be QUEUED, which is unbounded by design (that's the whole point: a manual claim past capacity queues instead of 429ing). `reviewing` deliberately isn't counted either, even though it can hold a live review-agent session and an open draft PR.                                                                                                                                                                                                                                                                                                                         |
-| Per-task time budget                  | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `in_progress` task that's been running longer than this, measured from `claimedAt` (stamped at dispatch, when the worker spell actually starts, not at enqueue — time spent queued never counts). One exception: a task past its deadline whose worker has already finished — cleanly, or stuck behind a stale background shell job past `SHELL_TAIL_GRACE_MS` (5 minutes) — with commits on the branch is handed to the normal `→ reviewing` gate instead of force-failed, so completed work isn't thrown away purely because the handoff was a few minutes late; see [`tasks-internals.md`](tasks-internals.md#the-no-commits-gate-and-turn-finished-check). `0` = unlimited.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Max concurrent autonomous workers     | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)            | Only tasks in `in_progress` count against this cap (task-claim queueing, rate-limit-storm fix) — `claimed` is the queue, and `reviewing` never held it. `dispatchClaimedTask`'s own transactional reservation (count `in_progress` + flip `claimed → in_progress`) is the sole correctness authority for a fresh claim; a queued Retry reserves the same way in `dispatchQueuedRetry` (see "Lifecycle" above). A manual claim, auto-claim, and Retry are all cap-checked, so this is an actual ceiling on live workers, not a soft throttle — it's just no longer a ceiling on how many tasks may be QUEUED, which is unbounded by design (that's the whole point: a manual claim past capacity queues instead of 429ing). `reviewing` deliberately isn't counted either, even though it can hold a live review-agent session and an open draft PR.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Per-task time budget                  | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `in_progress` task that's been running longer than this, measured from `claimedAt` (stamped at dispatch, when the worker spell actually starts, not at enqueue — time spent queued never counts). One exception: a task past its deadline whose worker has already finished — cleanly, or stuck behind a stale background shell job past `SHELL_TAIL_GRACE_MS` (5 minutes) — with commits on the branch is handed to the normal `→ reviewing` gate instead of force-failed, so completed work isn't thrown away purely because the handoff was a few minutes late; see [`tasks-internals.md`](tasks-internals.md#the-no-commits-gate-and-turn-finished-check). A second exception: a task still inside its rate-limit grace window (`lastRateLimitAt` within `rateLimitGraceMinutes`) is not force-failed for the budget; the budget applies again once that window has elapsed (#2930). `0` = unlimited.                                                                                                                                                                                                                                                              |
 | Runtime kill-switch                   | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops the watcher picking new candidates off `ready`; it does **not** stop dispatch draining the queue — a task a human already queued (or that was auto-claimed before the pause) still dispatches once a slot is free, same as if the toggle were off. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual-launch CommandPalette and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |

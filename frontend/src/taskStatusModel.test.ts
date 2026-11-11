@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Task } from "./api/types.js";
 import {
   TASK_STEPS,
+  reviewRunState,
   blockerIsTask,
   findTaskForIssue,
   statusSince,
@@ -168,4 +169,21 @@ describe("relations", () => {
     const other = task({ parentIssueNumber: 900, parentIssueRepo: "elsewhere/r" });
     expect(taskRelations(epic, [...all, other]).children.map((t) => t.id)).toEqual([child.id]);
   });
+});
+
+describe("reviewRunState", () => {
+  const run = (o: Record<string, unknown>) =>
+    reviewRunState({
+      reviewRunId: null,
+      reviewRunIngestedId: null,
+      reviewRunUnsent: false,
+      ...o,
+    } as never);
+  it("is null without a run", () => expect(run({})).toBeNull());
+  it("is running until the verdict is ingested", () =>
+    expect(run({ reviewRunId: "a" })).toBe("running"));
+  it("is finished once ingested", () =>
+    expect(run({ reviewRunId: "a", reviewRunIngestedId: "a" })).toBe("finished"));
+  it("is unsent when dispatch gave up, even if ids differ", () =>
+    expect(run({ reviewRunId: "a", reviewRunUnsent: true })).toBe("unsent"));
 });

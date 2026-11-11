@@ -63,6 +63,14 @@ export type SidebarBack =
   | { kind: "pr"; projectId: number; number: number }
   | { kind: "issue"; projectId: number; number: number };
 
+/** One step of the right sidebar's navigation history: Back from `to` returns
+ * to `back`. Entries are tagged with their destination so a stale one never
+ * reroutes a Back from somewhere else. */
+export interface SidebarHistoryEntry {
+  to: SidebarBack;
+  back: SidebarBack;
+}
+
 // The *resolved* theme — what's actually painted (dockview class, root
 // `.light` class, xterm palette). Distinct from `AppSettings["theme"]`
 // (imported as `ThemePreference` in store/helpers.ts, where resolveTheme()
@@ -438,12 +446,12 @@ export interface TasksSlice {
   // reviewing -> in_progress: optional feedback, re-seeds the worker if its
   // session already exited.
   rejectTask: (id: number, feedback?: string) => Promise<Task>;
-  // #483 — failed -> claimed: resumes on the preserved branch, spawning a
-  // new session there. Same return shape as claimTask.
+  // #483 — failed -> claimed: queues a resume on the preserved branch; it
+  // starts when a slot is free. Same return shape as claimTask.
   retryTask: (
     id: number,
     opts?: { agent?: string | null; reviewAgent?: string | null },
-  ) => Promise<Session>;
+  ) => Promise<Task>;
   // #483 — reviewing -> failed: the other resolver of a reviewing task.
   giveUpTask: (id: number, reason?: string) => Promise<Task>;
   // Issue #1345 — reviewing -> reviewing: re-arms a task stuck on
@@ -806,8 +814,8 @@ export interface UiSlice {
   openRightSidebarView: (view: string, projectId?: number) => void;
   setGithubOpenPr: (projectId: number, number: number | null) => void;
   /** Shows a PR's drill-in in the right sidebar's GitHub view. */
-  openRightSidebarPr: (projectId: number, number: number, back?: SidebarBack) => void;
-  openRightSidebarIssue: (projectId: number, number: number, back?: SidebarBack) => void;
+  openRightSidebarPr: (projectId: number, number: number, back?: SidebarBack | null) => void;
+  openRightSidebarIssue: (projectId: number, number: number, back?: SidebarBack | null) => void;
   /** Opens the History rail view scoped to `scope` (`branch:<name>`, `all`, `head`). */
   openRightSidebarHistory: (projectId: number, scope: string) => void;
   clearRightSidebarHistoryRequest: () => void;
@@ -875,10 +883,10 @@ export interface UiSlice {
   // same task selected again" from "the selection that was already there".
   taskSelectionSeq: number;
   selectTask: (taskId: number | null) => void;
-  openRightSidebarTask: (taskId: number, back?: SidebarBack) => void;
+  openRightSidebarTask: (taskId: number, back?: SidebarBack | null) => void;
   // The destination a cross-link opened and where its Back returns; every
   // other navigation clears it, so a stale entry never reroutes a Back.
-  sidebarBack: { to: SidebarBack; back: SidebarBack } | null;
+  sidebarHistory: SidebarHistoryEntry[];
   // Consumes the Back target recorded for `to`, or null when none applies.
   takeSidebarBack: (to: SidebarBack) => SidebarBack | null;
   // The project the right sidebar currently follows (useFollowedProject's

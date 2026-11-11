@@ -1,3 +1,4 @@
+import { pngDimensions, shapeScreenshot } from "../services/screenshot-image.js";
 import type { FastifyInstance } from "fastify";
 import {
   deleteDeviceRow,
@@ -125,7 +126,7 @@ export function extractPng(bytes: Uint8Array): Uint8Array | null {
 }
 
 type DeviceAction =
-  | { action: "screenshot" }
+  | { action: "screenshot"; maxWidth?: number }
   | { action: "tap"; x: number; y: number }
   | { action: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs?: number }
   | { action: "text"; text: string }
@@ -139,7 +140,10 @@ function isDeviceAction(value: unknown): value is DeviceAction {
   if (typeof v !== "object" || v === null || typeof v.action !== "string") return false;
   switch (v.action) {
     case "screenshot":
-      return true;
+      return (
+        v.maxWidth === undefined ||
+        (typeof v.maxWidth === "number" && Number.isFinite(v.maxWidth) && v.maxWidth >= 0)
+      );
     case "tap":
       return typeof v.x === "number" && typeof v.y === "number";
     case "swipe":
@@ -851,7 +855,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
               .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
             return reply.badGateway(`screencap did not return a PNG: ${head}`);
           }
-          return { screenshot: Buffer.from(image).toString("base64") };
+          // No maxWidth (CLI, dashboard) keeps the native PNG; the MCP tool
+          // supplies a default. tap/swipe always take native pixels.
+          if (!pngDimensions(image)) {
+            return reply.badGateway("screencap returned a PNG with no readable header");
+          }
+          const shaped = shapeScreenshot(image, action.maxWidth);
+          return {
+            screenshot: Buffer.from(shaped.data).toString("base64"),
+            mimeType: shaped.mimeType,
+            width: shaped.width,
+            height: shaped.height,
+            nativeWidth: shaped.nativeWidth,
+            nativeHeight: shaped.nativeHeight,
+          };
         }
         case "tap": {
           await shell.spawnWaitText(

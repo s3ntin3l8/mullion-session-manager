@@ -242,3 +242,16 @@ export function hasStripActions(task: Task): boolean {
     (task.status === "done" && task.prNumber !== null)
   );
 }
+
+/** State of a task's external (Hermes) review run; null when it has none. An
+ *  unsent run (dispatch gave up) never ran; a run is finished once its
+ *  verdict was ingested (reviewRunIngestedId === reviewRunId). */
+export type ReviewRunState = "running" | "finished" | "unsent";
+
+export function reviewRunState(
+  task: Pick<Task, "reviewRunId" | "reviewRunIngestedId" | "reviewRunUnsent">,
+): ReviewRunState | null {
+  if (task.reviewRunId === null) return null;
+  if (task.reviewRunUnsent) return "unsent";
+  return task.reviewRunIngestedId === task.reviewRunId ? "finished" : "running";
+}

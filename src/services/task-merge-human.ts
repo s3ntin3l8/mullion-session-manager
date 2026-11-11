@@ -13,7 +13,7 @@ export type MergeNeedsHumanReason = "rebase-exhausted" | "blocked-threads";
  * A `.set()` value for `tasks.needsHumanReason` that clears a merge-tied
  * reason and leaves every other value (a review-loop reason) alone. Use it at
  * each site that clears `mergeError` without recording a merge. For a recorded
- * merge, use `clearNeedsHumanOnMerge` instead.
+ * merge, use `mergeRecordedSet` instead.
  */
 export const clearMergeNeedsHumanReason = sql<
   string | null
@@ -63,8 +63,16 @@ export function mergeRecordedSet<T extends object>(mergedAt: Date, extra?: T) {
     mergedAt,
     needsHumanReason: clearNeedsHumanOnMerge,
     reviewPostPending: clearReviewPostFailedMarker,
+  } as T & {
+    mergedAt: Date;
+    needsHumanReason: typeof clearNeedsHumanOnMerge;
+    reviewPostPending: typeof clearReviewPostFailedMarker;
   };
 }
+
+/** What `recordMergeIfUnmerged` takes, so a caller cannot record a merge with a
+ * hand-built patch (it lacks the marker and reason clears, so it fails to type-check). */
+export type MergeRecordedPatch = ReturnType<typeof mergeRecordedSet<{ archivedAt?: Date }>>;
 
 /** The `.set()` fields that clear a merge error and its merge-tied reason. */
 export const CLEARED_MERGE_ERROR = {

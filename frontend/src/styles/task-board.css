@@ -100,8 +100,14 @@
   border-left-color: var(--task-epic-colour, var(--ring));
   box-shadow: 0 0 0 1px var(--ring);
 }
+/* The links row wraps (issue+PR, agent and age each fall onto their own line when the card
+   is very narrow) instead of spilling past the card, e.g. with the right sidebar open
+   (#2917). An item wider than the card on its own is clipped; the ellipsis only renders on
+   the age, because the link items are flex containers. */
 .task-card-meta-links {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  min-width: 0;
 }
 .task-card-meta-spacer {
   flex: 1;
@@ -111,6 +117,10 @@
 .task-card-meta-links .task-card-agent,
 .task-card-meta-links .task-card-age {
   white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The project is what tells #310 from #2310 across projects, so it keeps its room and
    truncates last; the context row wraps rather than clip it to nothing. */

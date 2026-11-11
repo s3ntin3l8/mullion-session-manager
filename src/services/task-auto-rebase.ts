@@ -94,6 +94,11 @@ async function findRebaseBlocker(
   // retry spawns): its terminate is best-effort and may have thrown or been
   // skipped, leaving a dead session with a null `workFinishedAt` in the map,
   // which must not hold the retry for REBASE_HOLD_MAX_MS on top of the backoff.
+  // The suggestions-round rapid-exit path stamps the same marker; that is safe
+  // only because every live suggestions round starts through autoReturnTask,
+  // which clears it (pinned by "resets the rapid-exit ledger whenever
+  // autoReturnTask seeds a suggestions round"). A new path that re-seeds a
+  // worker must clear it too, or this check skips for a live round.
   if (
     task.status === "reviewing" &&
     task.approvalCarriedAt !== null &&

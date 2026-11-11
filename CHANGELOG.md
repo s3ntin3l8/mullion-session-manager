@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.61](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.60...v0.3.61) (2026-11-10)
+
+
+### Features
+
+* **tasks:** ad-hoc sessions strip, phone and tablet board, and board docs ([#2871](https://github.com/s3ntin3l8/mullion-session-manager/issues/2871)) ([6eec446](https://github.com/s3ntin3l8/mullion-session-manager/commit/6eec446810bdd31d09fd9c1a24282fd9afd4534b))
+* **tasks:** board filter bar with project picker, quick views, Filter and Display menus and a facets panel ([#2863](https://github.com/s3ntin3l8/mullion-session-manager/issues/2863)) ([77101a0](https://github.com/s3ntin3l8/mullion-session-manager/commit/77101a0e0218ddb7e6d0194d6a1be96ac1dad11b))
+* **tasks:** board project picker can follow the sidebar's project ([#2867](https://github.com/s3ntin3l8/mullion-session-manager/issues/2867)) ([fc39578](https://github.com/s3ntin3l8/mullion-session-manager/commit/fc39578a48590828df8b0b311bd0df26620aefca))
+* **tasks:** board project picker follows the phone navigator's project ([#2885](https://github.com/s3ntin3l8/mullion-session-manager/issues/2885)) ([83899f5](https://github.com/s3ntin3l8/mullion-session-manager/commit/83899f598383f998097ec92da31ca75e8048a126))
+* **tasks:** compact cards, blocked stacks, Claimed folded into In progress and epic swimlanes ([#2870](https://github.com/s3ntin3l8/mullion-session-manager/issues/2870)) ([e6f9392](https://github.com/s3ntin3l8/mullion-session-manager/commit/e6f939287a073ba36af5db81df7f9f0405ee4e29))
+* **tasks:** Tasks sidebar detail mode, status first, with shared task selection ([#2872](https://github.com/s3ntin3l8/mullion-session-manager/issues/2872)) ([bb78c3a](https://github.com/s3ntin3l8/mullion-session-manager/commit/bb78c3aa42ff096516a0201b5efb4a7a8d45e719))
+* **uiux:** timeline filter presets and a grouped kind popover ([#2861](https://github.com/s3ntin3l8/mullion-session-manager/issues/2861)) ([5facd7c](https://github.com/s3ntin3l8/mullion-session-manager/commit/5facd7cf06ed6bcbd16f3b5a0ecf0dd5d6bd1d00))
+
+
+### Bug Fixes
+
+* **devices:** return use_device/device_action screenshots as MCP image content, downscaled by default ([#2898](https://github.com/s3ntin3l8/mullion-session-manager/issues/2898)) ([0672c5c](https://github.com/s3ntin3l8/mullion-session-manager/commit/0672c5cee8eb571fd338eb8dd6547f132ace46a2))
+* **github:** the Fix-in-session prompt covers a merge conflict with the base ([#2876](https://github.com/s3ntin3l8/mullion-session-manager/issues/2876)) ([b8df241](https://github.com/s3ntin3l8/mullion-session-manager/commit/b8df2414c5257e6d5dccc93da51907fdb81d25c1))
+* **git:** pull no longer fails on index.lock contention ([#2836](https://github.com/s3ntin3l8/mullion-session-manager/issues/2836)) ([8bfbc15](https://github.com/s3ntin3l8/mullion-session-manager/commit/8bfbc15d364e80ac5efbcdf5b6e279b1e8bb89cd))
+* **tasks:** a failed terminate cannot hold a rebase retry, and the rapid-exit gate is pinned ([205c682](https://github.com/s3ntin3l8/mullion-session-manager/commit/205c682f22d8c1c90b6998f10daeb05285beccfb))
+* **tasks:** a late-findings ingest that keeps failing is retried on an interval instead of dropped ([20c56b3](https://github.com/s3ntin3l8/mullion-session-manager/commit/20c56b3b38edfe91e47fe9c62d2925f266147d65))
+* **tasks:** a mid-loop turn end or a recovered API error is not a rebase worker that finished ([202b3ac](https://github.com/s3ntin3l8/mullion-session-manager/commit/202b3acb465ae95a9e0081e905ce779ec85526c5))
+* **tasks:** an approving review that never posted keeps holding auto-approve whatever other reason the task carries ([4f74c5f](https://github.com/s3ntin3l8/mullion-session-manager/commit/4f74c5fb6a72938b5083f962943b34fbe220701e))
+* **tasks:** approve resyncs a worktree left stale by an outside rebase instead of refusing as uncommitted ([39e60a4](https://github.com/s3ntin3l8/mullion-session-manager/commit/39e60a437e4801e5e95b5fa746db36d85e3f38bf))
+* **tasks:** contain a throwing late-findings ingest and pin its tests ([eecad4b](https://github.com/s3ntin3l8/mullion-session-manager/commit/eecad4bbddeba316de15690d41216634b93cd914))
+* **tasks:** demote a ready task to backlog when its issue gains Manual: true ([#2834](https://github.com/s3ntin3l8/mullion-session-manager/issues/2834)) ([ee46436](https://github.com/s3ntin3l8/mullion-session-manager/commit/ee464369b23c37d1942092d3906516be1278ee7d))
+* **tasks:** don't let a workflow run GitHub lost block auto-approve forever ([#2868](https://github.com/s3ntin3l8/mullion-session-manager/issues/2868)) ([29de719](https://github.com/s3ntin3l8/mullion-session-manager/commit/29de719ee27567454b185f9729cc4fce4aad035f))
+* **tasks:** every merge-recording path clears review-post-failed and the detail view guard is tested ([04bf3c2](https://github.com/s3ntin3l8/mullion-session-manager/commit/04bf3c255f790bd9a039419bb4452274128e682a))
+* **tasks:** flag an approved task whose PR closed unmerged, and re-poll for hand-merges ([#2878](https://github.com/s3ntin3l8/mullion-session-manager/issues/2878)) ([27430ae](https://github.com/s3ntin3l8/mullion-session-manager/commit/27430ae6885a652fae15cb2419ad6ab51312ffd6))
+* **tasks:** keep the issue open from approval until the PR merges ([#2866](https://github.com/s3ntin3l8/mullion-session-manager/issues/2866)) ([08fd575](https://github.com/s3ntin3l8/mullion-session-manager/commit/08fd575322410c83bd3773d64ea3d1dccdfa9c8f))
+* **tasks:** one merge-set helper clears the review-post marker on every merge path ([aed47fb](https://github.com/s3ntin3l8/mullion-session-manager/commit/aed47fbf0c3ee08139e2e95f2b8d3549db9b341d))
+* **tasks:** rerun the workflow run that owns a red check ([#2869](https://github.com/s3ntin3l8/mullion-session-manager/issues/2869)) ([5ab46bb](https://github.com/s3ntin3l8/mullion-session-manager/commit/5ab46bbc272ba508265dd835e7fe6f3a63911eeb))
+* **tasks:** stop returning the worker for the same red CI head ([#2859](https://github.com/s3ntin3l8/mullion-session-manager/issues/2859)) ([caa151b](https://github.com/s3ntin3l8/mullion-session-manager/commit/caa151bc4bd6bdc33bed854cbddf4271c9c59e62))
+* **tasks:** sweep task sessions that no task links to ([#2813](https://github.com/s3ntin3l8/mullion-session-manager/issues/2813)) ([5d84937](https://github.com/s3ntin3l8/mullion-session-manager/commit/5d849372017f95becfe5990f72ba68286d0fcc46)), closes [#2804](https://github.com/s3ntin3l8/mullion-session-manager/issues/2804)
+* **tasks:** the 24h review-post give-up holds only a review that never posted ([d57b699](https://github.com/s3ntin3l8/mullion-session-manager/commit/d57b6994c8217a124a99ec88d9e25a2daee8dab6))
+* **terminal:** a new session answers its startup color query from the creating dashboard's palette ([#2862](https://github.com/s3ntin3l8/mullion-session-manager/issues/2862)) ([d7d7746](https://github.com/s3ntin3l8/mullion-session-manager/commit/d7d7746f05c101eba9d8906af8a86377f6361199))
+* **terminal:** a session on a remote host answers its startup color query from the creating dashboard's palette ([#2879](https://github.com/s3ntin3l8/mullion-session-manager/issues/2879)) ([ffc275a](https://github.com/s3ntin3l8/mullion-session-manager/commit/ffc275abcdd1cac32895b3a7b27d4215e3e3fbc1))
+* **uiux:** task cards no longer nest interactive controls in a role=button, and the board sits in a Tasks region ([#2887](https://github.com/s3ntin3l8/mullion-session-manager/issues/2887)) ([50721b6](https://github.com/s3ntin3l8/mullion-session-manager/commit/50721b6232a4f004a2ab1eab0f8fbddec236a37d))
+
 ## [0.3.60](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.59...v0.3.60) (2026-11-09)
 
 

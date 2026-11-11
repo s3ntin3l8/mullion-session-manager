@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNotNull, isNull, or, type SQL } from "drizzle-orm";
 import { TASK_MODEL_COLUMNS } from "./task-model-patch.js";
 import { getProjectById, listProjects } from "./project-store.js";
+import type { MergeRecordedPatch } from "./task-merge-human.js";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 
 // The DB access of the task, task-push, review-relay and webhook routes lives
@@ -161,6 +162,10 @@ const TASK_ROW_COLUMNS = {
   parentIssueTitle: tasks.parentIssueTitle,
   subIssueTotal: tasks.subIssueTotal,
   subIssueCompleted: tasks.subIssueCompleted,
+  // #2919 — the parent epic's own state and sub-issue progress.
+  parentIssueState: tasks.parentIssueState,
+  parentSubIssueTotal: tasks.parentSubIssueTotal,
+  parentSubIssueCompleted: tasks.parentSubIssueCompleted,
   createdAt: tasks.createdAt,
   updatedAt: tasks.updatedAt,
   // Task-claim queueing (rate-limit-storm fix) — when the task JOINED the
@@ -378,7 +383,7 @@ export function findReviewingTaskByPr(
 export function recordMergeIfUnmerged(
   app: FastifyInstance,
   taskId: number,
-  patch: TaskPatch,
+  patch: MergeRecordedPatch,
 ): number {
   return app.db
     .update(tasks)

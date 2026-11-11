@@ -30,6 +30,8 @@ import type {
   ReleasePullRequestStatus,
   ReleaseRunReason,
   ReleaseRunResult,
+  ReleaseApproveRunsReason,
+  ReleaseApproveRunsResult,
   ReleaseMergeReason,
   ReleaseMergeResult,
   DockControl,
@@ -71,6 +73,8 @@ export type {
   ReleasePullRequestStatus,
   ReleaseRunReason,
   ReleaseRunResult,
+  ReleaseApproveRunsReason,
+  ReleaseApproveRunsResult,
   ReleaseMergeReason,
   ReleaseMergeResult,
 };
@@ -2296,6 +2300,12 @@ export interface Task {
   parentIssueTitle: string | null;
   subIssueTotal: number | null;
   subIssueCompleted: number | null;
+  // #2919 — the PARENT epic's own state ("open" | "closed") and sub-issue
+  // progress (task-watcher's refreshParentIssueMeta). Null until fetched;
+  // optional because an older backend (mid-deploy) does not send them.
+  parentIssueState?: string | null;
+  parentSubIssueTotal?: number | null;
+  parentSubIssueCompleted?: number | null;
   createdAt: string;
   updatedAt: string;
   // Task-claim queueing (rate-limit-storm fix) — when the task joined the

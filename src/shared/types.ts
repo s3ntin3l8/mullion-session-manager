@@ -421,6 +421,15 @@ export interface ReleasePullRequestStatus {
   // Warm-cache-only, same posture as /github/prs (github-pr-poller.ts) —
   // null means "no signal yet," not "failing."
   ciStatus: "success" | "failure" | "in_progress" | null;
+  // Workflow runs GitHub is holding for approval on the PR's head commit
+  // (`conclusion` or `status` of `action_required`; `waiting` runs are
+  // concurrency/environment gates that /approve refuses, so they are not counted). 0 also when the token could not read runs.
+  heldRuns: number;
+  // True when GitHub has no workflow run at all for the head commit — the
+  // shape of a PR opened with the default GITHUB_TOKEN, which triggers none.
+  // Approving cannot help; only a push by another identity (or a manual
+  // dispatch) starts CI.
+  noRuns: boolean;
 }
 
 export interface ProjectReleaseStatus {
@@ -442,6 +451,15 @@ export interface ProjectReleaseStatus {
 }
 
 export type ReleaseRunReason = "no-workflow" | "no-dispatch-trigger" | "dispatch-failed";
+
+export type ReleaseApproveRunsReason =
+  "no-release-pr" | "no-held-runs" | "forbidden" | "approve-failed";
+
+export interface ReleaseApproveRunsResult {
+  approved: number;
+  reason?: ReleaseApproveRunsReason;
+  detail?: string;
+}
 
 export interface ReleaseRunResult {
   dispatched: boolean;

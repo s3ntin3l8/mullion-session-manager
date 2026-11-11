@@ -1419,6 +1419,9 @@ export const tasks = sqliteTable(
     // Re-runs of the failed Actions jobs on `ciReturnHeadSha` (capped by
     // MAX_CI_RERUNS_PER_HEAD); reset whenever a new head is returned.
     ciRerunCount: integer("ci_rerun_count").notNull().default(0),
+    // A `claimed` row that is a queued RETRY: when a slot frees, the dispatch
+    // sweep resumes the preserved branch instead of cutting a fresh worktree.
+    resumeQueued: integer("resume_queued", { mode: "boolean" }).notNull().default(false),
     // Suggestions-round workers that ended within RAPID_EXIT_MS with the PR
     // head unchanged.
     suggestionsRapidExits: integer("suggestions_rapid_exits").notNull().default(0),
@@ -1620,6 +1623,15 @@ export const tasks = sqliteTable(
     // not a bug).
     subIssueTotal: integer("sub_issue_total"),
     subIssueCompleted: integer("sub_issue_completed"),
+    // The PARENT (epic) issue's own state and sub-issue summary, denormalised
+    // onto every child like parentIssueTitle. Filled and refreshed by
+    // task-watcher's refreshParentIssueMeta, one GitHub call per distinct
+    // parent per throttle window. Null = not fetched yet. This is what the
+    // board's epic filter reads for "closed / total" and for hiding closed
+    // epics; the child's own subIssueTotal above says nothing about its parent.
+    parentIssueState: text("parent_issue_state"),
+    parentSubIssueTotal: integer("parent_sub_issue_total"),
+    parentSubIssueCompleted: integer("parent_sub_issue_completed"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),

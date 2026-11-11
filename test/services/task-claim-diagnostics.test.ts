@@ -7,7 +7,8 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 }));
 
 const { buildApp } = await import("../../src/app.js");
-const { retryTask, failQueuedTask } = await import("../../src/services/task-claim.js");
+const { failQueuedTask } = await import("../../src/services/task-claim.js");
+const { retryTask } = await import("../helpers/retry-task.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const { HostRequestError } = await import("../../src/services/remote-host-client.js");

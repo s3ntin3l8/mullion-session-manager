@@ -691,7 +691,10 @@ describe("negotiated support (issue #2569)", () => {
 
   it("fails open on an un-negotiated host and ignores support when nothing is required", () => {
     const hosts = [candidate({ hostId: "unknown", protocol: null })];
-    expect(chooseHost(hosts, context({ requiredLaunchOptions: ["model"] })).hostId).toBe("unknown");
+    const open = chooseHost(hosts, context({ requiredLaunchOptions: ["model"] }));
+    expect(open.hostId).toBe("unknown");
+    expect(open.reason).toContain("agent protocol unknown");
+    expect(chooseHost(hosts, context()).reason ?? "").not.toContain("agent protocol unknown");
     const legacy = [candidate({ hostId: "legacy", protocol: protocol([]) })];
     expect(chooseHost(legacy, context()).hostId).toBe("legacy");
   });

@@ -17,6 +17,20 @@ export type { GenerationTurnResult };
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
+import { commandsTableConflict } from "./scaffold-commands.js";
+import {
+  GENERATED_REGION_END,
+  GENERATED_REGION_START,
+  REVIEWER_END,
+  REVIEWER_START,
+  SKILL_END,
+  SKILL_START,
+  snapshotCitedPathExistence,
+  validateGenerationOutput,
+  type MissingCitedPaths,
+} from "./scaffold-cited-paths.js";
+export { snapshotCitedPathExistence, validateGenerationOutput };
+export type { MissingCitedPaths };
 import { homeMaskArgs, turnEnv } from "./scaffold-sandbox-home.js";
 import {
   FAILURE_LOG_TAIL_CHARS,
@@ -215,7 +229,13 @@ import {
 } from "./mullion-scaffold.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import { stripMarkedRegion, topLevelLines } from "./marked-region.js";
-import type { ExistingInstructionsMode } from "../shared/constants.js";
+import {
+  DROP_DISPOSITIONS,
+  isDropDisposition,
+  type DropDisposition,
+  type ExistingInstructionsMode,
+} from "../shared/constants.js";
+export { DROP_DISPOSITIONS, isDropDisposition, type DropDisposition };
 
 export class UnsupportedGenerationAgentError extends Error {
   constructor(agentCommand: string) {
@@ -266,6 +286,9 @@ export interface ScaffoldConflict {
    * whatever kind the agent used ("stale-reference", "other", ...). */
   kind: string;
   note: string;
+  /** Set only for a passage the agent dropped on purpose (#2934). Any other
+   * value, including none, still blocks reducing CLAUDE.md. */
+  disposition?: DropDisposition;
 }
 
 export interface GeneratedScaffoldContent {
@@ -338,20 +361,8 @@ export interface GenerationSeed {
   briefing?: string | null;
 }
 
-const SKILL_START = "<<<MULLION_SKILL_START>>>";
-const SKILL_END = "<<<MULLION_SKILL_END>>>";
-const REVIEWER_START = "<<<MULLION_REVIEWER_START>>>";
-const REVIEWER_END = "<<<MULLION_REVIEWER_END>>>";
-// Issue #1215 — this pair is request-scoped (the prompt below and
-// extractSection's parse are updated together, in this same commit, and
-// nothing persists the delimiter past a single generation turn), unlike
-// mullion-scaffold.ts's SCAFFOLD_REGION_START/END — those are a wire
-// format already committed into every previously-scaffolded repo's
-// AGENTS.md and can't be renamed. This one carries no such history.
-const GENERATED_REGION_START = "<<<MULLION_SCAFFOLD_REGION_START>>>";
-const GENERATED_REGION_END = "<<<MULLION_SCAFFOLD_REGION_END>>>";
-// Issue #2316 — request-scoped like the pairs above; only requested when
-// `existingInstructions` is not "keep".
+// Issue #2316 — request-scoped; only requested when existingInstructions is
+// not "keep". Skill, reviewer and region markers live in scaffold-cited-paths.ts.
 const AGENTS_MD_START = "<<<MULLION_AGENTS_MD_START>>>";
 const AGENTS_MD_END = "<<<MULLION_AGENTS_MD_END>>>";
 const CONTRIBUTING_APPEND_START = "<<<MULLION_CONTRIBUTING_APPEND_START>>>";
@@ -546,11 +557,13 @@ function instructionsItem(
     `it exactly once, replace any existing Mullion region with it, and never write ` +
     `workflow conventions yourself); then \`## Repo specifics\` (how THIS repo applies those ` +
     `conventions: its real commands, gates, CI quirks and footguns, stated as facts, not ` +
-    `rules); then the repo's existing invariants and command sections. Drop passages that ` +
+    `rules); then the repo's existing invariants and command sections. Keep a commands ` +
+    `table or list (\`make\` targets, \`npm run\` scripts) in AGENTS.md; CI internals may ` +
+    `move to CONTRIBUTING.md. Drop passages that ` +
     `contradict or restate the conventions. Mind the context budget: AGENTS.md is read in every ` +
     `session, so every line costs every session. Keep what an agent needs and cannot get from ` +
     `the repo itself (Makefile, config, CI, tool output); drop what is standard or discoverable ` +
-    `(command lists a help target prints, CI check names, timing remarks, framework ` +
+    `(CI check names, timing remarks, framework ` +
     `boilerplate). Anything needed on every change stays in AGENTS.md. Procedure that is only ` +
     `needed rarely may move to a file that is not auto-loaded (return it verbatim as a ` +
     `CONTRIBUTING append) only with a one-line pointer left in AGENTS.md saying when to read ` +
@@ -561,8 +574,8 @@ function instructionsItem(
     `(kind "contradicts"), restate them ("duplicates"), are workflow rules that belong in the ` +
     `conventions ("misplaced"), point at something the rewrite renamed or removed ` +
     `("stale-reference"), or are otherwise inconsistent ("other"). One JSON object per line, ` +
-    `with exactly the keys "file", "excerpt" (at most 200 characters), "kind", "note" (one ` +
-    `sentence). Mullion reduces CLAUDE.md to its title plus an \`@AGENTS.md\` import, deleting its body: report with file "CLAUDE.md" every passage your AGENTS.md or CONTRIBUTING append does not cover (workflow rules the conventions replace excepted), and Mullion keeps CLAUDE.md as is. Between the conflicts markers below; write the single word none if there are none.`
+    `with the keys "file", "excerpt" (at most 200 characters), "kind", "note" (one ` +
+    `sentence) and, when you dropped the passage on purpose, "disposition" ("dropped-obsolete" if the repo says it no longer applies, "not-carried" if you left it out and the note says why). Mullion reduces CLAUDE.md to its title plus an \`@AGENTS.md\` import. Report file "CLAUDE.md" for every passage the rewrite does not cover (workflow rules the conventions replace excepted). A CLAUDE.md conflict whose disposition is "dropped-obsolete" or "not-carried" still reduces CLAUDE.md; any other CLAUDE.md conflict keeps the body. Between the conflicts markers below; write the single word none if there are none.`
   );
 }
 
@@ -791,11 +804,13 @@ export function parseConflicts(
           : (CONFLICT_KINDS as readonly string[]).includes(v.kind))
       ) {
         if (conflicts.length < MAX_CONFLICTS) {
+          const disposition = isDropDisposition(v.disposition) ? v.disposition : undefined;
           conflicts.push({
             file: v.file.slice(0, 200),
             excerpt: v.excerpt.slice(0, MAX_CONFLICT_EXCERPT),
             kind: v.kind.slice(0, 40),
             note: v.note.slice(0, MAX_CONFLICT_NOTE),
+            ...(disposition ? { disposition } : {}),
           });
         } else {
           // Valid, but past the cap: counted so the UI can say some were left out.
@@ -882,104 +897,6 @@ export function assessRewrite(
   const vanished = titles.filter((t) => !haystack.includes(t)).length;
   return vanished / titles.length > 0.6;
 }
-
-/** Cited-path existence counts (issue #2532). */
-export interface MissingCitedPaths {
-  missing: number;
-  cited: number;
-}
-
-/**
- * Post-generation heuristic (issue #1145): checks whether the generated
- * content references concrete file paths from the repo. A turn that read
- * nothing from the repo (e.g. agy with all tool calls denied, or a
- * misconfigured permission set) produces plausible-looking but generic
- * content with no real file references.
- *
- * Returns `{ possiblyGeneric: true }` when the content references paths
- * (embedded in the text) but none of them appear to be real
- * repo-specific paths — a signal that the agent may have fabricated
- * plausible-sounding paths rather than reading real files. Content that
- * references no paths at all (pure prose with zero path tokens) is NOT
- * flagged — that's a different problem (missing specificity) this
- * heuristic does not cover.
- *
- * Paths that look plausible (real extension, not a placeholder or shallow
- * generic path) are then checked against `cwd` (issue #2532): the content is
- * also flagged when fewer than half of its plausible cited paths exist
- * there, and `missingCitedPaths` reports how many could not be found. Paths
- * Mullion's scaffold itself writes (`.claude/skills|agents/`) are excluded,
- * since they do not exist until first applied.
- *
- * A signal, not a hard failure. The caller surfaces it as a warning;
- * tightening to a failure is a follow-up once confidence is high.
- */
-export function validateGenerationOutput(
-  content: GeneratedScaffoldContent,
-  cwd: string,
-): {
-  possiblyGeneric: boolean;
-  referencedPaths: string[];
-  /** Set when some cited paths do not exist in `cwd` (issue #2532). */
-  missingCitedPaths?: MissingCitedPaths;
-} {
-  // Match file path references: src/foo.ts, lib/bar.js, test/baz.test.ts, etc.
-  const pathPattern =
-    /(?:^|\s|`|\()([A-Za-z0-9_/.-]+\.(?:ts|js|mjs|tsx|jsx|json|md|yaml|yml|toml|sh))\b/g;
-  const allText = `${content.skill ?? ""}\n${content.reviewer ?? ""}\n${content.scaffoldRegion}`;
-  const referencedPaths = new Set<string>();
-  let match;
-  while ((match = pathPattern.exec(allText)) !== null) {
-    referencedPaths.add(match[1]);
-  }
-
-  if (referencedPaths.size === 0) {
-    // No path tokens at all — a different problem (missing specificity)
-    // this heuristic does not cover.
-    return { possiblyGeneric: false, referencedPaths: [] };
-  }
-
-  // First filter to paths that look like real repo-specific files.
-  const plausiblePaths = [...referencedPaths].filter((p) => {
-    if (p.includes("..") || path.isAbsolute(p)) return false;
-    // Reject obviously generic / placeholder patterns
-    const segments = p.split("/");
-    if (segments.length === 1) return false; // bare filename like `file.ts`
-    if (segments.some((s) => /^(example|sample|placeholder|foo|bar|baz)$/i.test(s))) return false;
-    if (/^src\/example\//i.test(p)) return false;
-    // Deeper nesting is a strong signal of real content (generic templates
-    // tend to produce shallow paths like `src/index.ts`)
-    if (segments.length >= 3) return true;
-    // Two-segment paths with reasonable dir names are plausible
-    if (segments.length === 2) {
-      const dir = segments[0];
-      // Reject generic directory names
-      if (/^(src|lib|test|tests|docs|config)$/i.test(dir)) return true;
-      return false;
-    }
-    return false;
-  });
-
-  if (plausiblePaths.length === 0) {
-    return { possiblyGeneric: true, referencedPaths: plausiblePaths };
-  }
-
-  // Issue #2532 — a skill that cites one real path and invents the rest used
-  // to pass. Count how many of the cited paths exist in the scratch worktree;
-  // fewer than half is flagged. Paths the scaffold itself writes are skipped
-  // (they do not exist before the first apply).
-  const checkable = plausiblePaths.filter((p) => !SCAFFOLD_OUTPUT_PATH.test(p));
-  const missing = checkable.filter((p) => !fs.existsSync(path.join(cwd, p))).length;
-  const existing = checkable.length - missing;
-  return {
-    possiblyGeneric: checkable.length > 0 && existing * 2 < checkable.length,
-    referencedPaths: plausiblePaths,
-    ...(missing > 0 ? { missingCitedPaths: { missing, cited: checkable.length } } : {}),
-  };
-}
-
-/** Paths Mullion's scaffold writes: absent from the worktree until applied. */
-const SCAFFOLD_OUTPUT_PATH = /^\.claude\/(?:skills|agents)\//;
 
 export interface SpawnGenerationTurnOptions {
   agentCommand: string;
@@ -2077,6 +1994,12 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
    * executes here would defeat the sandboxing this function's own spawn
    * step applies. */
   spawn?: SpawnGenerationTurn;
+  /**
+   * Runs after the turn returns and BEFORE the scratch worktree is torn
+   * down (issue #2932). The cited-path check has to see the directory the
+   * agent read; the `finally` below removes it before this function returns.
+   */
+  onBeforeTeardown?: (worktreePath: string, stdout: string) => void | Promise<void>;
 }
 
 /**
@@ -2143,7 +2066,7 @@ export async function runGenerationTurnInScratchWorktree(
   const { path: worktreePath, branch } = worktreeResult;
 
   try {
-    return await spawn({
+    const stdout = await spawn({
       agentCommand: opts.agentCommand,
       cwd: worktreePath,
       prompt: opts.prompt,
@@ -2151,6 +2074,8 @@ export async function runGenerationTurnInScratchWorktree(
       signal: opts.signal,
       sandbox: opts.sandbox,
     });
+    if (opts.onBeforeTeardown) await opts.onBeforeTeardown(worktreePath, stdout);
+    return stdout;
   } finally {
     await removeWorktree(worktreePath, opts.cwd);
     await deleteBranch(opts.cwd, branch, { force: true }).catch(() => {
@@ -2182,6 +2107,8 @@ export interface GenerateScaffoldContentOptions {
   conventionsText?: string;
   /** The repo's current AGENTS.md, for `assessRewrite`. */
   originalAgentsMd?: string;
+  /** Issue #2933 — CLAUDE.md, so a commands table that lives only there is seen. */
+  originalClaudeMd?: string;
   /** Issue #2320 — skill and reviewer already exist and are not being
    * refreshed: ask only for the region paragraph and the instructions output.
    * Ignored (treated as false) for `keep`. */
@@ -2260,6 +2187,11 @@ export async function generateScaffoldContent(
   let raw: string;
   let sandboxed: boolean;
   let canary = true;
+  // Set on the local path, where the worktree is still alive inside
+  // onBeforeTeardown. The remote path carries the same answer as
+  // `remoteCited`, snapshotted on the agent before ITS teardown.
+  let checked: { possiblyGeneric: boolean; missingCitedPaths?: MissingCitedPaths } | undefined;
+  let remoteCited: Array<{ path: string; exists: boolean }> | undefined;
   if (!opts.hostId || opts.hostId === LOCAL_HOST_ID) {
     raw = await runGenerationTurnInScratchWorktree({
       cwd: opts.cwd,
@@ -2271,6 +2203,19 @@ export async function generateScaffoldContent(
       signal: opts.signal,
       sandbox: opts.sandbox,
       spawn: opts.spawn,
+      onBeforeTeardown: (worktreePath, stdout) => {
+        const parsedNow = parseGeneratedOutput(stdout, opts.slug, {
+          mode: opts.existingInstructions,
+          originalAgentsMd: opts.originalAgentsMd,
+          instructionsOnly,
+          noPointer,
+        });
+        const result = validateGenerationOutput(parsedNow, worktreePath);
+        checked = {
+          possiblyGeneric: result.possiblyGeneric,
+          ...(result.missingCitedPaths ? { missingCitedPaths: result.missingCitedPaths } : {}),
+        };
+      },
     });
     // Issue #1144, #1159 — determine sandboxed status for the local path.
     // The config opt-out short-circuits before isSandboxCapable() in
@@ -2318,6 +2263,9 @@ export async function generateScaffoldContent(
     raw = turn.stdout;
     sandboxed = turn.sandboxed ?? false;
     canary = turn.canary === true;
+    // Absent on an agent that predates #2932: fall back to the checkout,
+    // which is the old (wrong-when-behind) behavior.
+    remoteCited = turn.citedPaths;
   }
 
   const parsed = parseGeneratedOutput(raw, opts.slug, {
@@ -2326,12 +2274,26 @@ export async function generateScaffoldContent(
     instructionsOnly,
     noPointer,
   });
+  const commandConflict =
+    opts.existingInstructions === "restructure"
+      ? commandsTableConflict([opts.originalAgentsMd, opts.originalClaudeMd], parsed.agentsMdBody)
+      : undefined;
   // On an instructions-only pass only the region paragraph is agent-produced
   // (the skill and reviewer fields are absent), and it is still worth checking
-  // for fabricated paths.
-  const { possiblyGeneric, missingCitedPaths } = validateGenerationOutput(parsed, opts.cwd);
+  // for fabricated paths. Local already checked the live worktree; remote
+  // uses the snapshot the agent took before tearing its worktree down.
+  const { possiblyGeneric, missingCitedPaths } =
+    checked ??
+    validateGenerationOutput(
+      parsed,
+      opts.cwd,
+      remoteCited?.length
+        ? new Map(remoteCited.map((entry) => [entry.path, entry.exists]))
+        : undefined,
+    );
   return {
     ...parsed,
+    ...(commandConflict ? { conflicts: [...(parsed.conflicts ?? []), commandConflict] } : {}),
     sandboxed,
     canary,
     possiblyGeneric,

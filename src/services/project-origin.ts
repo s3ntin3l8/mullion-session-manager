@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
+import { sameHostPath } from "../shared/host-path.js";
 import { effectiveProjectsRoots } from "./agent-projects-roots.js";
 import { normalizeGitRemote, readOriginUrl } from "./git-remote.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -42,7 +43,7 @@ async function readRemoteOrigin(
   try {
     const list = await getRemoteHostClient(app, project.hostId).discover();
     if (!Array.isArray(list)) return null;
-    const own = list.find((c) => c?.cwd === project.cwd);
+    const own = list.find((c) => typeof c?.cwd === "string" && sameHostPath(c.cwd, project.cwd));
     return typeof own?.origin === "string" && own.origin.length <= 4096 ? own.origin : null;
   } catch {
     return null;

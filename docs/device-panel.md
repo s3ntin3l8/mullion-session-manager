@@ -126,8 +126,9 @@ uses the host GPU before comparing performance. This accelerates guest graphics
 rendering; scrcpy's H.264 encoding remains software-based, so host GPU rendering
 does not remove that cost or guarantee a faster stream on every workload.
 
-These bound the **stream** only — `tap`/`swipe`/`screenshot` still operate at
-native screen resolution. If the guest itself renders slowly (software
+These bound the **stream** only — `tap`/`swipe` and the CLI/dashboard
+`screenshot` still operate at native screen resolution (the MCP `use_device`
+screenshot is downscaled by default, see "Screenshots for agents" below). If the guest itself renders slowly (software
 SwiftShader drawing a 4-megapixel screen), lowering the AVD's own `hw.lcd`
 resolution helps more than any stream setting — the encoder and the software
 renderer compete for the same guest CPUs. In the browser, the pane draws frames with WebGL when available and
@@ -463,7 +464,23 @@ space: the panel's stream is downscaled (see "Stream tuning" above), and
 `DevicePane.tsx` rescales its own mouse events into that video space before
 sending them over the WebSocket.
 
-`screenshot` always returns a bare base64 PNG: anything `screencap` printed
+### Screenshots for agents
+
+Over MCP (`use_device`/`device_action`) `screenshot` returns a real image
+content block, not base64 text, plus a text block with the scale (for example
+"Returned 672x1496 of native 1344x2992; multiply image coordinates by 2").
+The optional `maxWidth` input (pixels) defaults to **720**: the image is
+box-downscaled and JPEG-encoded (pure JS — `node:zlib` + `jpeg-js`, no native
+module, so it builds on Linux, macOS and the Windows agent). `maxWidth: 0`, or
+a value at least the native width, returns the native PNG. `tap`/`swipe` always
+take **native** pixels, so multiply coordinates read off a downscaled image by
+the reported factor. `POST /api/devices/:id/action` accepts the same
+`maxWidth`; without it (the CLI, the dashboard buttons) the native PNG comes
+back, with `mimeType`, `width`, `height`, `nativeWidth`, `nativeHeight` next to
+the base64 `screenshot`. A PNG the decoder does not handle (16-bit, palette,
+interlaced) falls back to native.
+
+Without `maxWidth` the `screenshot` field is the native PNG (base64): anything `screencap` printed
 before the PNG signature (the multi-display warning) is stripped, and output
 with no complete PNG is a 502 carrying the head of that output. It is always
 the device's _default_ display (`screencap` without `-d`), which on a
@@ -502,7 +519,8 @@ scrcpy session attached (issue #1476).
 ## 2. `mullion mcp` tools
 
 `list_devices`, `start_device`, `stop_device` and `use_device`/`device_action`
-mirror the CLI 1:1 — see `src/mcp/tools.mjs`. Unlike most control-socket-backed
+mirror the CLI 1:1 — see `src/mcp/tools.mjs` (and `src/mcp/device-use.mjs` for
+`use_device`/`device_action`). Unlike most control-socket-backed
 tools (`list_sessions`, `list_projects`, ...), these are reachable at **session
 scope**, not just full scope: a device has no "belongs to this session"
 relationship to pin a session-scoped connection to the way a browser pane's

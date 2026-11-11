@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
@@ -13,6 +13,7 @@ import {
 } from "../../src/services/placement.js";
 import * as listHostsModule from "../../src/services/host-registry.js";
 import type { HostCapacity } from "../../src/services/host-capacity.js";
+import { LEGACY_BASELINE } from "../../src/shared/agent-protocol.js";
 
 // Issue #1723 / roadmap 8.9 — the assembler's half: what goes INTO the
 // candidate set. The policy's own decision table lives in
@@ -428,5 +429,53 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
     });
     expect(decision.hostId).toBe("local");
     expect(decision.considered.length).toBeGreaterThan(0);
+  });
+
+  it("holds a platform target when the only matching host is offline and its protocol was never read (#2931)", async () => {
+    const prev = process.env.MULLION_TEST_REAL_PROTOCOL;
+    process.env.MULLION_TEST_REAL_PROTOCOL = "1";
+    try {
+      const hostId = await registerHost("mac-offline");
+      app.db.update(hosts).set({ platform: "darwin" }).where(eq(hosts.id, hostId)).run();
+      // Pending is not offline: a host that was never pinged stays "pending",
+      // and ensureRemoteHostProtocols only skips a heartbeat-offline host.
+      // markOffline is that failed heartbeat.
+      app.hostHeartbeatTracker?.markOffline(hostId);
+      expect(app.hostHeartbeatTracker?.getHealth(hostId).status).toBe("offline");
+      const project = {
+        hostId: "local",
+        placement: "auto" as const,
+        cwd: LOCAL_CWD,
+        hostCwds: JSON.stringify({ [hostId]: REMOTE_CWD }),
+      };
+      const held = resolveTargetHost(app, {
+        project,
+        target: { platform: "darwin" },
+        unattended: true,
+        requiredOperations: ["git-worktrees"],
+        requiredLaunchOptions: ["taskId"],
+      });
+      expect(held).toMatchObject({ ok: false, transient: true });
+
+      // A protocol that WAS read as the legacy baseline still lacks taskId,
+      // and waiting will not grow that option. That refusal stays permanent.
+      app.hostAgentTracker?.record(hostId, {
+        agents: null,
+        capabilities: null,
+        mullionVersion: null,
+        protocol: { ...LEGACY_BASELINE, legacy: true },
+      });
+      const refused = resolveTargetHost(app, {
+        project,
+        target: { platform: "darwin" },
+        unattended: true,
+        requiredOperations: ["git-worktrees"],
+        requiredLaunchOptions: ["taskId"],
+      });
+      expect(refused).toMatchObject({ ok: false, transient: false });
+    } finally {
+      if (prev === undefined) delete process.env.MULLION_TEST_REAL_PROTOCOL;
+      else process.env.MULLION_TEST_REAL_PROTOCOL = prev;
+    }
   });
 });

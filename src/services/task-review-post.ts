@@ -226,18 +226,23 @@ export async function retryPendingReviewPosts(
     const raw = task.reviewPostPending!;
     if (raw === REVIEW_POST_FAILED_MARKER) {
       // A terminal hold, never retried: kept while a human can still act on it
-      // (in review, or approved and awaiting the merge), dropped otherwise.
+      // (unmerged, and in review or approved and awaiting the merge), dropped
+      // otherwise, including on any task whose PR already merged.
       const held =
-        task.status === "reviewing" || (task.status === "done" && task.mergedAt === null);
+        task.mergedAt === null && (task.status === "reviewing" || task.status === "done");
       if (!held) writeReviewPostPending(app, task.id, raw, null);
       continue;
     }
     const pending = parsePendingReviewPost(raw);
+    // A merged task owes nothing, whatever its status: a recorded merge can
+    // land on a claimed or in_progress row, and a late give-up there would
+    // re-set a hold that nothing clears afterwards.
     const owed =
-      task.status === "reviewing" ||
-      task.status === "claimed" ||
-      task.status === "in_progress" ||
-      (task.status === "done" && task.mergedAt === null);
+      task.mergedAt === null &&
+      (task.status === "reviewing" ||
+        task.status === "claimed" ||
+        task.status === "in_progress" ||
+        task.status === "done");
     if (pending === null || !owed) {
       writeReviewPostPending(app, task.id, raw, null);
       reviewPostRetryBackoff.clear(task.id);

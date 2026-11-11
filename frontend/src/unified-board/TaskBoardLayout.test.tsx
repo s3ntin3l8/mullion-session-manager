@@ -454,7 +454,7 @@ describe("group by", () => {
     ]);
     const laneA = screen.getByRole("region", { name: "#10 Parent A" });
     expect(laneA).toHaveTextContent("1/2 done");
-    expect(within(laneA).getByRole("link", { name: "Open epic on GitHub" })).toHaveAttribute(
+    expect(within(laneA).getByRole("link", { name: "Open epic" })).toHaveAttribute(
       "href",
       "https://github.com/acme/widgets/issues/10",
     );

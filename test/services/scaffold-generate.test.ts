@@ -363,6 +363,40 @@ describe("generateScaffoldContent", () => {
     expect(fs.existsSync(capturedCwd)).toBe(false);
   });
 
+  it("checks cited paths against the scratch worktree, not the project checkout (#2932)", async () => {
+    const cited = "src/routes/listings.ts";
+    const absent = "src/domain/missing.ts";
+    fs.mkdirSync(path.join(repoDir, "src/routes"), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, cited), "export {}\n");
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "add listings", "--no-verify"]);
+    // The checkout is now behind the commit the worktree is cut from.
+    fs.rmSync(path.join(repoDir, cited));
+
+    const result = await generateScaffoldContent({
+      app: fakeApp,
+      hostId: LOCAL_HOST_ID,
+      cwd: repoDir,
+      slug: "demo",
+      agentCommand: "claude",
+      seed: {},
+      hasSkill: false,
+      hasReviewer: false,
+      hasScaffoldRegion: false,
+      spawn: async () =>
+        validOutput("demo").replace(
+          "Real invariant.\n",
+          `Real invariant. See ${cited} and ${absent}.\n`,
+        ),
+    });
+
+    // listings.ts exists in the worktree (it is in HEAD) and is gone from
+    // the checkout. Only the path missing from both is reported.
+    expect(result.missingCitedPaths).toEqual({ missing: 1, cited: 2 });
+    expect(result.possiblyGeneric).toBe(false);
+    expect(fs.existsSync(path.join(repoDir, cited))).toBe(false);
+  });
+
   describe("instructionsOnly (issue #2320)", () => {
     const region =
       "<<<MULLION_SCAFFOLD_REGION_START>>>\nPointer.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n";
@@ -670,6 +704,66 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
     baseRefSpy.mockRestore();
     turnSpy.mockRestore();
     await app.close();
+  });
+
+  it("trusts a remote citedPaths snapshot and falls back when it is absent or empty (#2932)", async () => {
+    const remoteHostClientModule = await import("../../src/services/remote-host-client.js");
+    const { app, hostId } = await makeRemoteHost();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "remote-cited-"));
+    const stdout = validOutput("demo").replace(
+      "Real invariant.\n",
+      "Real invariant. See src/routes/listings.ts and src/domain/missing.ts.\n",
+    );
+    const baseRefSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveHostBaseRef")
+      .mockResolvedValue({ baseRef: "HEAD", sha: null });
+    const turnSpy = vi
+      .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
+      .mockResolvedValueOnce({
+        outcome: "ok",
+        stdout,
+        sandboxed: true,
+        canary: true,
+        citedPaths: [
+          { path: "src/routes/listings.ts", exists: true },
+          { path: "src/domain/missing.ts", exists: false },
+        ],
+      })
+      .mockResolvedValueOnce({ outcome: "ok", stdout, sandboxed: true, canary: true })
+      .mockResolvedValueOnce({
+        outcome: "ok",
+        stdout,
+        sandboxed: true,
+        canary: true,
+        citedPaths: [],
+      });
+    const call = () =>
+      generateScaffoldContent({
+        app,
+        hostId,
+        cwd,
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: false,
+        hasReviewer: false,
+        hasScaffoldRegion: false,
+      });
+
+    const snapshotted = await call();
+    expect(snapshotted.missingCitedPaths).toEqual({ missing: 1, cited: 2 });
+    expect(snapshotted.possiblyGeneric).toBe(false);
+    // No field, and an empty list, both mean "this agent did not snapshot":
+    // fall back to the checkout, where neither cited path exists.
+    for (const fallback of [await call(), await call()]) {
+      expect(fallback.missingCitedPaths).toEqual({ missing: 2, cited: 2 });
+      expect(fallback.possiblyGeneric).toBe(true);
+    }
+
+    baseRefSpy.mockRestore();
+    turnSpy.mockRestore();
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
   });
 
   it("maps a worktree-error outcome from the remote agent to GenerationWorktreeError", async () => {

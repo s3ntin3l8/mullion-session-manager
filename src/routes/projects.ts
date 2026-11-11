@@ -59,6 +59,7 @@ import {
 import {
   attachHostCheckout,
   detectCheckouts,
+  ABSOLUTE_HOST_PATH_PATTERN,
   isStorablePath,
 } from "../services/host-checkout-detect.js";
 import {
@@ -462,7 +463,7 @@ const createProjectSchema = {
       // whatever the agent's cwd happened to be.
       hostCwds: {
         type: ["object", "null"],
-        additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
+        additionalProperties: { type: "string", minLength: 1, pattern: ABSOLUTE_HOST_PATH_PATTERN },
         maxProperties: MAX_HOST_CWDS,
       },
       placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
@@ -489,7 +490,7 @@ const updateProjectSchema = {
       // Issue #1724 — the per-host cwd map; see the column's own comment.
       hostCwds: {
         type: ["object", "null"],
-        additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
+        additionalProperties: { type: "string", minLength: 1, pattern: ABSOLUTE_HOST_PATH_PATTERN },
         maxProperties: MAX_HOST_CWDS,
       },
       placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
@@ -545,7 +546,7 @@ const hostCheckoutSchema = {
     additionalProperties: false,
     properties: {
       hostId: { type: "string", minLength: 1 },
-      cwd: { type: "string", minLength: 1, pattern: "^/" },
+      cwd: { type: "string", minLength: 1, pattern: ABSOLUTE_HOST_PATH_PATTERN },
     },
   },
 };
@@ -1175,6 +1176,12 @@ export async function projectsRoute(app: FastifyInstance) {
         gitIdentity,
         allowDuplicate,
       } = request.body;
+      const badCwd = Object.entries(hostCwds ?? {}).find(([, c]) => !isStorablePath(c));
+      if (badCwd) {
+        return reply.badRequest(
+          `hostCwds path for ${badCwd[0]} must be an absolute path without '..' segments`,
+        );
+      }
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
         return reply.badRequest(unknownHostMessage(app, unknownHost));
@@ -1568,6 +1575,12 @@ export async function projectsRoute(app: FastifyInstance) {
           : acceptsMessagesFromList;
       if (effectiveMessages === "listed" && (effectiveMessagesList ?? []).length === 0) {
         return reply.badRequest("'listed' needs at least one project in acceptsMessagesFromList");
+      }
+      const badCwd = Object.entries(hostCwds ?? {}).find(([, c]) => !isStorablePath(c));
+      if (badCwd) {
+        return reply.badRequest(
+          `hostCwds path for ${badCwd[0]} must be an absolute path without '..' segments`,
+        );
       }
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {

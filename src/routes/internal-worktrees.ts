@@ -23,6 +23,7 @@ import {
 import { deleteBranch } from "../services/git-branch-delete.js";
 import {
   runGenerationTurnInScratchWorktree,
+  snapshotCitedPathExistence,
   UnsupportedGenerationAgentError,
   GenerationWorktreeError,
   GenerationSpawnError,
@@ -139,6 +140,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       try {
+        let citedPaths: Array<{ path: string; exists: boolean }> | undefined;
         const stdout = await runGenerationTurnInScratchWorktree({
           cwd: resolvedCwd,
           slug,
@@ -152,6 +154,12 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
           // posture) — a caller choosing what executes here would defeat
           // the sandboxing this handler's own spawn step applies.
           sandbox: app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED,
+          // Issue #2932 — snapshot cited paths while the worktree still
+          // exists. The primary's checkout may be behind the ref the agent
+          // read, so existsSync there reports files the agent really saw.
+          onBeforeTeardown: (worktreePath, turnStdout) => {
+            citedPaths = snapshotCitedPathExistence(worktreePath, turnStdout);
+          },
         });
         // Issue #1144, #1159 — surface whether the turn actually ran inside
         // a bwrap sandbox. Same logic as generateScaffoldContent's own
@@ -161,7 +169,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         const sandboxed = sandboxRequested && (await isSandboxCapable());
         // Issue #2554 — runGenerationTurnInScratchWorktree wraps every turn in
         // the read canary (a failed canary throws), so reaching here means it ran.
-        return { outcome: "ok", stdout, sandboxed, canary: true };
+        return { outcome: "ok", stdout, sandboxed, canary: true, citedPaths };
       } catch (err) {
         if (err instanceof UnsupportedGenerationAgentError) {
           return { outcome: "unsupported-agent", detail: err.message };

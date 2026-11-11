@@ -13,9 +13,13 @@ export function FolderPicker({
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const selectRef = useRef<HTMLButtonElement>(null);
+  const focusAfterNavigation = useRef(false);
   const [path, setPath] = useState(initialPath);
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -23,7 +27,7 @@ export function FolderPicker({
 
   useEffect(() => {
     let cancelled = false;
-    api.listDirectories(path).then(
+    api.listDirectories(path, { hidden: showHidden }).then(
       (result) => {
         if (!cancelled) setListing(result);
       },
@@ -34,9 +38,19 @@ export function FolderPicker({
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, showHidden]);
+
+  useEffect(() => {
+    if (!listing || !focusAfterNavigation.current) return;
+    focusAfterNavigation.current = false;
+    // Leave focus alone if the user moved elsewhere while the listing loaded.
+    if (document.activeElement === closeRef.current) {
+      (listRef.current?.querySelector("button") ?? selectRef.current)?.focus();
+    }
+  }, [listing]);
 
   const navigate = (next: string) => {
+    focusAfterNavigation.current = true;
     closeRef.current?.focus();
     setListing(null);
     setError(null);
@@ -51,6 +65,18 @@ export function FolderPicker({
           Close picker
         </button>
       </div>
+      <label className="create-modal-field-hint">
+        <input
+          type="checkbox"
+          checked={showHidden}
+          onChange={(event) => {
+            setListing(null);
+            setError(null);
+            setShowHidden(event.target.checked);
+          }}
+        />{" "}
+        Show hidden folders
+      </label>
       {error ? (
         <p className="create-modal-field-hint error" role="alert">
           {error}
@@ -59,7 +85,7 @@ export function FolderPicker({
         <p role="status">Loading folders…</p>
       ) : (
         <>
-          <ul className="folder-picker-list" aria-label="Folders">
+          <ul ref={listRef} className="folder-picker-list" aria-label="Folders">
             {listing.parent && (
               <li>
                 <button type="button" onClick={() => navigate(listing.parent!)}>
@@ -85,6 +111,7 @@ export function FolderPicker({
             </p>
           )}
           <button
+            ref={selectRef}
             type="button"
             className="create-modal-dir-confirm-btn"
             onClick={() => onSelect(listing.path)}
@@ -94,5 +121,23 @@ export function FolderPicker({
         </>
       )}
     </section>
+  );
+}
+
+export function BrowseButton({ canBrowse, onClick }: { canBrowse: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="create-modal-browse-btn"
+      onClick={onClick}
+      disabled={!canBrowse}
+      title={
+        canBrowse
+          ? "Browse folders on this machine"
+          : "Folder browsing is not available for remote hosts yet"
+      }
+    >
+      Browse…
+    </button>
   );
 }

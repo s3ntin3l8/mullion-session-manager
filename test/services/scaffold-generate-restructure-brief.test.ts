@@ -28,7 +28,7 @@ describe("buildGenerationPrompt — instruction-file scope and context budget", 
     const p = buildGenerationPrompt({ ...baseOpts, existingInstructions: "restructure" });
     expect(p).toContain("every line costs every session");
     expect(p).toContain("cannot get from the repo itself");
-    expect(p).toContain("command lists a help target prints");
+    expect(p).toContain("commands table or list");
     expect(p).toContain("Anything needed on every change stays in AGENTS.md");
     expect(p).toContain("one-line pointer left in AGENTS.md saying when to read it");
     expect(p).toContain("never append a duplicate");

@@ -159,7 +159,7 @@ describe("ProjectSetupPanel", () => {
       await user.click(screen.getByRole("button", { name: /^Generate with / }));
       expect(await screen.findByText(/without a sandbox/)).toBeInTheDocument();
       expect(screen.getByText(/may not have read this repo/)).toBeInTheDocument();
-      expect(screen.getByText(/3 of 8 cited paths do not exist here/)).toBeInTheDocument();
+      expect(screen.getByText(/3 of 8 checked paths do not exist here/)).toBeInTheDocument();
     });
 
     describe.each([
@@ -314,11 +314,13 @@ describe("ProjectSetupPanel", () => {
               excerpt: "comment @bot Review",
               kind: "contradicts",
               note: "re-review by @mention is forbidden",
+              disposition: "dropped-obsolete",
             },
           ],
           droppedConflictLines: 2,
         });
         expect(screen.getByText(/1 passage outside Mullion/)).toBeInTheDocument();
+        expect(screen.getByText(/dropped-obsolete/)).toBeInTheDocument();
         expect(screen.getByText(/comment @bot Review/)).toBeInTheDocument();
         expect(
           screen.getByText(/2 more lines from the agent could not be read/),

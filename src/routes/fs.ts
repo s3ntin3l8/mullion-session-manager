@@ -11,6 +11,7 @@ export async function fsRoute(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { path: string; hidden?: string } }>(
     "/api/fs/dirs",
     {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       schema: {
         querystring: {
           type: "object",

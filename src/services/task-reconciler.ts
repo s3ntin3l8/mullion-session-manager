@@ -9,6 +9,11 @@ import type { SessionStatus } from "../shared/types.js";
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import {
+  healUntrackedLocalSession,
+  TASK_REVIEW_STATUS,
+  TASK_WORKER_STATUSES,
+} from "./session-adopt.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
 // attemptAutoRebase's stale-attempt-termination branch below for why this
@@ -3898,7 +3903,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
     .from(tasks)
     .innerJoin(sessions, eq(tasks.reviewSessionId, sessions.id))
     .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(eq(tasks.status, "reviewing"))
+    .where(eq(tasks.status, TASK_REVIEW_STATUS))
     .all();
   pruneLateFindingsCaches(
     new Set(
@@ -3951,6 +3956,25 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
 
       for (const row of hostRows) {
         const { task, session, project } = row;
+
+        // #2929 — a local null is "not adopted yet". Adopt before ingesting.
+        // Unverifiable retries until the findings grace has elapsed, then
+        // the inconclusive path below runs (same bound main already had).
+        if (
+          await healUntrackedLocalSession(
+            app,
+            hostId,
+            String(session.id),
+            liveMap,
+            idleThresholdMs,
+            backend,
+            {
+              pastDeadline: now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS,
+            },
+          )
+        ) {
+          continue;
+        }
 
         // Every row here has a review session — the query inner-joins
         // `sessions` on `tasks.reviewSessionId`. That matters: unlike the bare
@@ -4818,7 +4842,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
     .from(tasks)
     .innerJoin(sessions, eq(tasks.sessionId, sessions.id))
     .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(inArray(tasks.status, ["claimed", "in_progress"]))
+    .where(inArray(tasks.status, [...TASK_WORKER_STATUSES]))
     .all();
   // `if (rows.length > 0) { ... }`, NOT an early `return` — processPendingReviewSpawns
   // below must run every tick regardless of whether anything is
@@ -4864,6 +4888,27 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           const { task, session, project } = row;
           const now = new Date();
 
+          // #2929 — null means not adopted yet. Adopt before the budget check
+          // so a finished worker is salvaged. An unverifiable scope retries
+          // next tick unless the budget has already expired.
+          if (
+            await healUntrackedLocalSession(
+              app,
+              hostId,
+              String(session.id),
+              liveMap,
+              idleThresholdMs,
+              backend,
+              {
+                pastDeadline:
+                  budgetMinutes > 0 &&
+                  now > new Date(task.claimedAt!.getTime() + budgetMinutes * 60_000),
+              },
+            )
+          ) {
+            continue;
+          }
+
           // Budget check first — an expired task is failed regardless of
           // what its session is currently doing. 0 = unlimited (opt out).
           if (budgetMinutes > 0) {
@@ -4901,7 +4946,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   (await resolveCommitsPastBase(app, task, hostId)).state === "ahead";
               }
             }
-            if (now > deadline && !salvage) {
+            // #2930 — a worker inside rate-limit grace is not failed for the
+            // budget. Parking it until the provider reset is #2940, not this.
+            if (
+              now > deadline &&
+              !salvage &&
+              !isTaskInRateLimitGrace(task, resolvedTaskMaster.rateLimitGraceMinutes)
+            ) {
               const updated = app.db
                 .update(tasks)
                 .set({

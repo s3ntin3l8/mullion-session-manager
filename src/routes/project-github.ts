@@ -54,9 +54,13 @@ import {
   detectReleaseWorkflow,
   invalidateReleaseWorkflowCache,
   dispatchWorkflow,
+  listHeldRuns,
+  approveRun,
+  findReleasePullRequest,
   getCachedReleasePullRequestStatus,
   GitHubWriteScopeError,
   invalidateReleaseCache,
+  getPullRequestByNumber,
   mergePullRequest,
   updatePullRequestBranch,
 } from "../services/github-write.js";
@@ -85,6 +89,7 @@ import type {
   ProjectReleaseStatus,
   ReleaseDetectionResult,
   ReleasePullRequestStatus,
+  ReleaseApproveRunsResult,
   ReleaseRunResult,
 } from "../shared/types.js";
 
@@ -1191,6 +1196,97 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
           "release-please run failed",
         );
         const result: ReleaseRunResult = { dispatched: false, reason, detail };
+        return result;
+      }
+    },
+  );
+
+  // Approves the release PR's held workflow runs (the "Approve runs" button).
+  // A PR opened by github-actions[bot] has its CI held at `action_required`
+  // under the repo's "approve outside collaborators" policy; nothing starts
+  // until someone approves each run. Same 200-with-reason contract as /run,
+  // same `actions: write` token.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/release/approve-runs",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "release approve-runs",
+        resolveToken: accountToken,
+        noTokenMessage: NOT_CONNECTED,
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
+      const { owner, repo } = repoRef;
+
+      try {
+        const defaultBranch = await getDefaultBranch(token, owner, repo);
+        const summary = await findReleasePullRequest(token, owner, repo, defaultBranch);
+        if (!summary) {
+          const result: ReleaseApproveRunsResult = { approved: 0, reason: "no-release-pr" };
+          return result;
+        }
+        const full = await getPullRequestByNumber(token, owner, repo, summary.number);
+        const { held } = await listHeldRuns(token, owner, repo, full.headSha);
+        if (held.length === 0) {
+          const result: ReleaseApproveRunsResult = { approved: 0, reason: "no-held-runs" };
+          return result;
+        }
+        // Each run is approved on its own: GitHub 403s an approve for a run
+        // that is no longer waiting (a human or a second resolver got there
+        // first), and one stale run must not skip the rest.
+        let approved = 0;
+        const failures = new Map<number, GitHubApiError>();
+        for (const runId of held) {
+          try {
+            await approveRun(token, owner, repo, runId);
+            approved += 1;
+          } catch (err) {
+            if (!(err instanceof GitHubApiError)) throw err;
+            failures.set(runId, err);
+          }
+        }
+        // Even a partial approval changes what the section should show.
+        invalidateReleaseCache(owner, repo);
+        if (failures.size === 0) {
+          const result: ReleaseApproveRunsResult = { approved };
+          return result;
+        }
+        // Some approve failed. Re-read what is still held: if nothing is, the
+        // failures were raced approvals (already done), not a refusal.
+        const remaining = await listHeldRuns(token, owner, repo, full.headSha).catch((e) => {
+          if (!(e instanceof GitHubApiError)) throw e;
+          return null; // can't tell: report the failure rather than guess
+        });
+        if (remaining !== null && remaining.held.length === 0) {
+          // Every failure was a lost race. Nothing of ours approved anything:
+          // say so rather than claim an approval.
+          const result: ReleaseApproveRunsResult =
+            approved === 0 ? { approved, reason: "no-held-runs" } : { approved };
+          return result;
+        }
+        // Blame a run that is genuinely still held, not a raced 403 on one
+        // that is already approved.
+        const failure =
+          (remaining !== null
+            ? remaining.held.map((id) => failures.get(id)).find((f) => f !== undefined)
+            : undefined) ?? failures.values().next().value!;
+        app.log.warn({ err: failure, owner, repo }, "release approve-runs failed");
+        const result: ReleaseApproveRunsResult = {
+          approved,
+          reason: failure instanceof GitHubWriteScopeError ? "forbidden" : "approve-failed",
+          detail: failure.message,
+        };
+        return result;
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        app.log.warn({ err, owner, repo }, "release approve-runs failed");
+        const result: ReleaseApproveRunsResult = {
+          approved: 0,
+          reason: err instanceof GitHubWriteScopeError ? "forbidden" : "approve-failed",
+          detail: err.message,
+        };
         return result;
       }
     },

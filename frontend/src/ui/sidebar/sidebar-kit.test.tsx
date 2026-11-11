@@ -31,6 +31,14 @@ describe("IconButton", () => {
     expect(onClick).toHaveBeenCalled();
   });
 
+  /** Focus as a keyboard user would. jsdom does match :focus-visible after el.focus(),
+     but fireEvent.focus never moves document.activeElement, so stub the selector. */
+  function keyboardFocus(el: HTMLElement) {
+    const orig = el.matches.bind(el);
+    vi.spyOn(el, "matches").mockImplementation((sel) => sel === ":focus-visible" || orig(sel));
+    fireEvent.focus(el);
+  }
+
   describe("tooltip", () => {
     it("shows on focus immediately and hides on blur", () => {
       render(
@@ -40,11 +48,29 @@ describe("IconButton", () => {
       );
       const btn = screen.getByRole("button", { name: "Fetch" });
       expect(screen.queryByRole("tooltip")).toBeNull();
-      fireEvent.focus(btn);
+      keyboardFocus(btn);
       expect(screen.getByRole("tooltip")).toHaveTextContent("Fetch");
       expect(btn.getAttribute("aria-describedby")).toBe(screen.getByRole("tooltip").id);
       fireEvent.blur(btn);
       expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("does not open for script-driven focus that is not :focus-visible", () => {
+      render(
+        <IconButton label="Fetch">
+          <i />
+        </IconButton>,
+      );
+      const btn = screen.getByRole("button", { name: "Fetch" });
+      const matches = vi
+        .spyOn(btn, "matches")
+        .mockImplementation((sel) => sel !== ":focus-visible");
+      fireEvent.focus(btn);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      matches.mockImplementation(() => true);
+      fireEvent.blur(btn);
+      fireEvent.focus(btn);
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Fetch");
     });
 
     it("carries the theme classes, since it portals outside .cmux-root", () => {
@@ -53,7 +79,7 @@ describe("IconButton", () => {
           <i />
         </IconButton>,
       );
-      fireEvent.focus(screen.getByRole("button", { name: "Fetch" }));
+      keyboardFocus(screen.getByRole("button", { name: "Fetch" }));
       expect(screen.getByRole("tooltip")).toHaveClass("cmux-root");
       expect(screen.getByRole("tooltip")).not.toHaveClass("light");
       unmount();
@@ -66,7 +92,7 @@ describe("IconButton", () => {
             <i />
           </IconButton>,
         );
-        fireEvent.focus(screen.getByRole("button", { name: "Fetch" }));
+        keyboardFocus(screen.getByRole("button", { name: "Fetch" }));
         expect(screen.getByRole("tooltip")).toHaveClass("cmux-root", "light");
       } finally {
         useDashboardStore.setState({ theme: prior });
@@ -79,7 +105,7 @@ describe("IconButton", () => {
           <i />
         </IconButton>,
       );
-      fireEvent.focus(screen.getByRole("button", { name: "Fetch" }));
+      keyboardFocus(screen.getByRole("button", { name: "Fetch" }));
       fireEvent.keyDown(document, { key: "Escape" });
       expect(screen.queryByRole("tooltip")).toBeNull();
     });
@@ -271,6 +297,22 @@ describe("ViewHeader / DetailHeader", () => {
 });
 
 describe("SidebarSection", () => {
+  it("boxes a card section and keeps the default rule section unboxed", () => {
+    const { container } = render(
+      <>
+        <SidebarSection title="Boxed" variant="card">
+          <p>a</p>
+        </SidebarSection>
+        <SidebarSection title="Plain">
+          <p>b</p>
+        </SidebarSection>
+      </>,
+    );
+    const sections = container.querySelectorAll("section");
+    expect(sections[0]).toHaveClass("sb-sec", "sb-sec--card");
+    expect(sections[1]).toHaveClass("sb-sec");
+    expect(sections[1]).not.toHaveClass("sb-sec--card");
+  });
   it("toggles, shows the count and renders the action slot outside the toggle", () => {
     render(
       <SidebarSection title="Branches" count={3} actions={<button>Prune</button>}>

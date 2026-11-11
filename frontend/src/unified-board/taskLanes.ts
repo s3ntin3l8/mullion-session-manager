@@ -108,6 +108,15 @@ export function epicProgress(allTasks: Task[], epicKey: string): EpicProgress | 
   const children = allTasks.filter((t) => epicKeyOf(t) === epicKey);
   if (children.length === 0) return null;
   const first = children[0];
+  // The epic's own counts, fetched by the backend (#2919): authoritative.
+  const fetched = children.find((t) => (t.parentSubIssueTotal ?? 0) > 0);
+  if (fetched) {
+    return {
+      done: fetched.parentSubIssueCompleted ?? 0,
+      total: fetched.parentSubIssueTotal ?? 0,
+      basis: "closed",
+    };
+  }
   const parent = allTasks.find(
     (t) =>
       t.issueNumber === first.parentIssueNumber &&

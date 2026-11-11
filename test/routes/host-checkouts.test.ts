@@ -146,11 +146,120 @@ describe("host checkout detection routes", () => {
     });
   });
 
+  describe("one Windows checkout, several spellings (#2944)", () => {
+    const WIN = "D:\\Projects\\app";
+
+    async function otherProject(name: string, hostCwds?: Record<string, string>) {
+      const cwd = path.join(tmp, name);
+      fs.mkdirSync(cwd, { recursive: true });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name, cwd, ...(hostCwds ? { hostCwds } : {}) },
+      });
+      expect(res.statusCode).toBe(201);
+      return res.json().id as number;
+    }
+
+    it("refuses to attach another spelling of a path another project already owns", async () => {
+      await otherProject("owner", { [macId]: WIN });
+      const attach = (id: number, cwd: string) =>
+        app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/host-checkouts`,
+          payload: { hostId: macId, cwd },
+        });
+
+      for (const spelling of ["D:/Projects/app", "d:\\projects\\app\\"]) {
+        const res = await attach(projectId, spelling);
+        expect(res.statusCode, spelling).toBe(409);
+        expect(res.json().code).toBe("DUPLICATE_PROJECT");
+      }
+    });
+
+    it("re-attaching the same location in another spelling is a no-op that keeps the stored one", async () => {
+      const attach = (cwd: string) =>
+        app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/host-checkouts`,
+          payload: { hostId: macId, cwd },
+        });
+      expect((await attach(WIN)).statusCode).toBe(200);
+      const again = await attach("d:/projects/app");
+      expect(again.statusCode).toBe(200);
+      expect(again.json().hostCwds).toEqual({ [macId]: WIN });
+      // A genuinely different path for the host is still refused.
+      expect((await attach("D:/Projects/other")).statusCode).toBe(409);
+    });
+
+    it("does not suggest a clone that a project already owns under another spelling", async () => {
+      await otherProject("owner", { [macId]: WIN });
+      discovery.set(macId, [
+        {
+          name: "app",
+          cwd: "d:/projects/app",
+          isGitRepo: true,
+          isWorktree: false,
+          origin: "https://github.com/acme/app.git",
+        },
+      ]);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/host-suggestions`,
+      });
+
+      expect(res.json()).toEqual({ hosts: [] });
+    });
+  });
+
   describe("PATCH /api/projects/:id hostCwds bookkeeping", () => {
     async function autoFilled() {
       applySettingsPatch(app, { autoDetectHostCheckouts: true });
       await app.inject({ method: "POST", url: `/api/hosts/${macId}/detect-checkouts` });
     }
+
+    it("accepts a Windows drive path for a host and refuses a traversal one", async () => {
+      const ok = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { hostCwds: { [macId]: "D:\\Projects\\app" } },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().hostCwds).toEqual({ [macId]: "D:\\Projects\\app" });
+
+      const attach = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/host-checkouts`,
+        payload: { hostId: macId, cwd: "D:\\Projects\\app" },
+      });
+      expect(attach.statusCode).toBe(200);
+
+      for (const bad of ["/a/../b", "D:\\a\\..\\b"]) {
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "bad", cwd: tmp, hostCwds: { [macId]: bad } },
+        });
+        expect(created.statusCode, `create ${bad}`).toBe(400);
+      }
+
+      for (const bad of ["/a/../b", "D:\\a\\..\\b"]) {
+        const patched = await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { hostCwds: { [macId]: bad } },
+        });
+        expect(patched.statusCode, bad).toBe(400);
+      }
+
+      const traversal = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/host-checkouts`,
+        payload: { hostId: macId, cwd: "D:\\a\\..\\b" },
+      });
+      expect(traversal.statusCode).toBe(400);
+    });
 
     it("a new project starts with an empty meta", async () => {
       expect((await listed()).hostCwdsMeta).toEqual({ auto: [], declined: [], managed: [] });

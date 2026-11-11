@@ -83,6 +83,24 @@ const renderDetail = (id: number, onBack = vi.fn()) =>
 
 beforeEach(() => vi.restoreAllMocks());
 
+describe("TaskDetailView layout", () => {
+  it("shares the detail inset and boxes the state sections as cards", () => {
+    const t = task({ status: "reviewing" });
+    setTasks([t]);
+    renderDetail(t.id);
+    const root = screen.getByTestId("task-detail-view");
+    expect(root).toHaveClass("sb-detail");
+    const cards = Array.from(root.querySelectorAll("section.sb-sec--card")).map(
+      (el) => el.querySelector(".sb-sec-name")?.textContent,
+    );
+    expect(cards).toEqual(expect.arrayContaining(["Review", "Details"]));
+    const timeline = Array.from(root.querySelectorAll("section.sb-sec")).find(
+      (el) => el.querySelector(".sb-sec-name")?.textContent === "Timeline",
+    );
+    expect(timeline).not.toHaveClass("sb-sec--card");
+  });
+});
+
 describe("TaskDetailView keyboard access", () => {
   it("focuses Back when a task's detail appears, so Enter on a board card does not land nowhere", () => {
     const t = task({ title: "Reach me" });
@@ -181,6 +199,85 @@ describe("TaskDetailView keyboard access in the real right sidebar", () => {
   });
 });
 
+describe("TaskDetailView review reviewer", () => {
+  const sessionsRow = (view: HTMLElement) => within(view).getByText("Sessions").nextElementSibling!;
+  it("shows the Hermes run instead of 'reviewer: none'", () => {
+    const t = task({ status: "reviewing", reviewRunId: "r1", reviewRunIngestedId: null } as never);
+    setTasks([t]);
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("Hermes · running");
+    expect(row.textContent).not.toContain("reviewer: none");
+  });
+  it("says finished and not sent for the other run states", () => {
+    const fin = task({ status: "reviewing", reviewRunId: "r", reviewRunIngestedId: "r" } as never);
+    setTasks([fin]);
+    const { unmount } = renderDetail(fin.id);
+    expect(sessionsRow(screen.getByTestId("task-detail-view")).textContent).toContain("finished");
+    unmount();
+    const unsent = task({ status: "reviewing", reviewRunId: "r", reviewRunUnsent: true } as never);
+    setTasks([unsent]);
+    renderDetail(unsent.id);
+    expect(sessionsRow(screen.getByTestId("task-detail-view")).textContent).toContain("not sent");
+  });
+  it("opens the PR in the GitHub tab when the task has one", async () => {
+    const open = vi.fn();
+    const t = task({
+      status: "reviewing",
+      reviewRunId: "r",
+      reviewRunIngestedId: "r",
+      prNumber: 7,
+    } as never);
+    setTasks([t], { openRightSidebarPr: open });
+    renderDetail(t.id);
+    await userEvent.click(screen.getByRole("button", { name: /Hermes · finished/ }));
+    expect(open).toHaveBeenCalledWith(4, 7, { kind: "task", taskId: t.id });
+  });
+  it("keeps the reviewer session, and shows no Hermes chip, when both a session and a run exist", () => {
+    const t = task({
+      status: "reviewing",
+      reviewSessionId: 55,
+      reviewRunId: "r",
+      reviewRunIngestedId: null,
+    } as never);
+    setTasks([t], {
+      sessions: [{ id: 55, sessionStatus: "idle", sessionStatusDetail: null }] as never,
+    });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(within(row as HTMLElement).getByRole("button", { name: /^reviewer · / })).toBeTruthy();
+    expect(row.textContent).not.toContain("Hermes");
+    expect(row.textContent).not.toContain("reviewer: none");
+  });
+  it("does not claim Hermes reviewed when the reviewer session is no longer in the store", () => {
+    const t = task({
+      status: "reviewing",
+      reviewSessionId: 55,
+      reviewRunId: "r",
+      reviewRunIngestedId: "r",
+    } as never);
+    setTasks([t], { sessions: [] });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("reviewer: ended");
+    expect(row.textContent).not.toContain("Hermes");
+  });
+  it("reads 'worker: ended' when the worker session is no longer in the store", () => {
+    const t = task({ status: "reviewing", sessionId: 41 } as never);
+    setTasks([t], { sessions: [] });
+    renderDetail(t.id);
+    const row = sessionsRow(screen.getByTestId("task-detail-view"));
+    expect(row.textContent).toContain("worker: ended");
+    expect(row.textContent).not.toContain("worker: none");
+  });
+  it("keeps 'reviewer: none' with neither a session nor a run", () => {
+    const t = task({ status: "reviewing" });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.getByText("reviewer: none")).toBeTruthy();
+  });
+});
+
 describe("TaskDetailView", () => {
   it("leads with the status block, then actions, details and the timeline", () => {
     const t = task({ status: "backlog", title: "Parked thing" });
@@ -255,7 +352,7 @@ describe("TaskDetailView", () => {
     });
     const orphan = task({
       parentIssueNumber: 77,
-      parentIssueRepo: "o/r",
+      parentIssueRepo: "elsewhere/repo",
       parentIssueTitle: "Elsewhere epic",
     });
     setTasks([epic, child, orphan]);
@@ -264,8 +361,25 @@ describe("TaskDetailView", () => {
     unmount();
     renderDetail(orphan.id);
     const link = screen.getByRole("link", { name: /#77/ });
-    expect(link.getAttribute("href")).toBe("https://github.com/o/r/issues/77");
+    expect(link.getAttribute("href")).toBe("https://github.com/elsewhere/repo/issues/77");
     expect(screen.getByText("Elsewhere epic")).toBeTruthy();
+  });
+
+  it("opens an epic issue of a tracked repo in the GitHub tab, with Back returning to the task", async () => {
+    const user = userEvent.setup();
+    const openRightSidebarIssue = vi.fn();
+    const child = task({
+      parentIssueNumber: 77,
+      parentIssueRepo: "o/r",
+      parentIssueTitle: "Epic title",
+    });
+    setTasks([child], { openRightSidebarIssue });
+    renderDetail(child.id);
+    await user.click(screen.getByRole("link", { name: /#77/ }));
+    expect(openRightSidebarIssue).toHaveBeenCalledWith(child.projectId, 77, {
+      kind: "task",
+      taskId: child.id,
+    });
   });
 
   it("shows sub-issue progress for an epic and its child tasks", () => {
@@ -317,14 +431,13 @@ describe("TaskDetailView", () => {
     const openRightSidebarPr = vi.fn();
     setTasks([t], { openRightSidebarPr });
     useDashboardStore.setState({
-      sidebarBack: {
-        to: { kind: "task", taskId: t.id },
-        back: { kind: "pr", projectId: 4, number: 33 },
-      },
+      sidebarHistory: [
+        { to: { kind: "task", taskId: t.id }, back: { kind: "pr", projectId: 4, number: 33 } },
+      ],
     });
     renderDetail(t.id, onBack);
     await user.click(screen.getByRole("button", { name: "Back" }));
-    expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33);
+    expect(openRightSidebarPr).toHaveBeenCalledWith(4, 33, null);
     expect(onBack).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalledTimes(1);

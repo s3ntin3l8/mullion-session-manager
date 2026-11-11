@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { isPlainClick } from "../lib/sidebarLinks.js";
 import type { EpicProgress } from "./taskLanes.js";
 
 // The header over one swimlane when the board is grouped (epic #2847, #2841): the epic's
@@ -10,6 +11,7 @@ export function TaskLaneHeader({
   colour,
   progress,
   href,
+  onOpen,
 }: {
   title: string;
   count: number;
@@ -17,6 +19,8 @@ export function TaskLaneHeader({
   progress: EpicProgress | null;
   /** The epic issue on GitHub. */
   href: string | null;
+  /** Opens the epic in the right sidebar; returns false when it can't (then the href is followed). */
+  onOpen?: () => boolean;
 }) {
   const pct =
     progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
@@ -50,7 +54,10 @@ export function TaskLaneHeader({
           href={href}
           target="_blank"
           rel="noreferrer"
-          aria-label="Open epic on GitHub"
+          aria-label="Open epic"
+          onClick={(e) => {
+            if (onOpen && isPlainClick(e) && onOpen()) e.preventDefault();
+          }}
         >
           ↗
         </a>

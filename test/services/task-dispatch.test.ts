@@ -44,8 +44,8 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
-const { enqueueTask, dispatchClaimedTask, retryTask } =
-  await import("../../src/services/task-claim.js");
+const { enqueueTask, dispatchClaimedTask } = await import("../../src/services/task-claim.js");
+const { retryTask } = await import("../helpers/retry-task.js");
 const { dispatchQueuedTasks, resetDispatchBackoffForTests, resetDispatchStateForTests } =
   await import("../../src/services/task-dispatch.js");
 const { tasks, projects, hosts } = await import("../../src/db/schema.js");

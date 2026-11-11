@@ -153,4 +153,20 @@ describe("GET /api/fs/dirs", () => {
     expect(scanned).toBe(10001);
     expect(closed).toBe(true);
   });
+
+  it("limits directory browsing to 60 requests per minute before reading the filesystem", async () => {
+    const browse = () =>
+      app.inject({
+        url: `/api/fs/dirs?path=${encodeURIComponent(join(root, "alpha"))}`,
+        headers,
+        remoteAddress: "192.0.2.60",
+      });
+    for (let i = 0; i < 60; i++) expect((await browse()).statusCode).toBe(200);
+    const reads = vi.mocked(opendir).mock.calls.length;
+    const limited = await browse();
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers["x-ratelimit-limit"]).toBe("60");
+    expect(vi.mocked(opendir).mock.calls.length).toBe(reads);
+    expect((await list(root)).statusCode).toBe(200);
+  });
 });

@@ -919,7 +919,9 @@ different from every other op above — its **three-tier scope story**.
 { "id": 31, "ok": true, "status": 201, "result": { "id": 3, "avdName": "pixel_7", /* ... */ } }
 
 { "id": 32, "op": "device.action", "body": { "deviceId": 3, "action": "screenshot" } }
-{ "id": 32, "ok": true, "status": 200, "result": { "screenshot": "<base64>" } }
+{ "id": 32, "ok": true, "status": 200, "result": { "screenshot": "<base64>", "mimeType": "image/png", "width": 1344, "height": 2992, "nativeWidth": 1344, "nativeHeight": 2992 } }
+// optional "maxWidth": N downscales to a JPEG at most N px wide ("mimeType": "image/jpeg");
+// omitted or 0 = native PNG. MCP use_device defaults it to 720 and returns an image block.
 
 { "id": 33, "op": "device.pair", "body": { "pairingAddress": "192.168.1.5:41235", "pairingCode": "123456" } }
 { "id": 33, "ok": true, "status": 200, "result": { "ok": true } }

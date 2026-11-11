@@ -1398,7 +1398,10 @@ they do not know. So the agent also answers a handshake,
 hostId)` (`src/services/host-agents.ts`) read the cache; the local host is this
   build. **A protocol that has not been read reads as the legacy baseline**
   (`LEGACY_BASELINE`), never as "everything supported", in these helpers and in
-  `requireOperation`, `requireLaunchOptions` and placement alike. Launches and
+  `requireOperation` and `requireLaunchOptions`. Placement is the exception
+  (issue #2931): a candidate whose protocol was never read stays `null` — unknown,
+  not a known lack — so an offline host is held rather than refused. A protocol
+  that was read, including a recorded legacy baseline, is still judged. Launches and
   operations go through `gateOperation` / `gateLaunchOptions`, which first make
   one bounded read (`ensureHostProtocol`: `refreshRemoteHostAgents`, 3 s;
   concurrent gates for a host share it). If the read times out or fails with a
@@ -1448,7 +1451,10 @@ code: "unsupported", missing, updateHint, message}`. The three former ad-hoc 404
   Before Auto placement, `ensureRemoteHostProtocols` reads unknown protocols
   (bounded), but skips hosts already reported offline by the heartbeat, drained
   or parked hosts, and hosts whose bounded read failed within the last 60
-  seconds; skipped hosts read as the legacy baseline for the decision. A host the
+  seconds. A host skipped that way keeps an unread protocol, and placement
+  treats that as unknown — the task is held, not refused for lacking an option
+  the host never had a chance to advertise (issue #2931). The interactive gates
+  still fall back to the legacy baseline when they decide without a reading. A host the
   launch names (a task requirement or a spawn `target` with a `hostId` or a `platform`;
   a host that has not reported its platform counts) is read regardless of that
   memory, so its own launch is never judged on a guess. The
@@ -1520,9 +1526,18 @@ the UI can show them as stale (that UI is issue
 
 **What a host is.** The agent also self-reports its platform
 (`process.platform`) at enrollment and at every renewal, and the primary
-records it in `hosts.platform` — free-form and informational, exactly like
-`bridges.platform`. An agent build that predates the field leaves it null,
-which is a legitimate state, not a defect. Nothing branches on it.
+records it in `hosts.platform` — free-form, like `bridges.platform`. A host
+added by hand never enrolls, so for a row with no platform (null or empty) the
+heartbeat sweep fills it from the capacity report it already receives
+(`fillHostPlatformIfUnset`, issue
+[#2953](https://github.com/s3ntin3l8/mullion-session-manager/issues/2953)):
+only an empty row is written, only for a short lowercase token (the report is
+remote input), and an enrolled agent's own value is never overwritten. An
+agent build that predates the field and has no capacity route leaves it null,
+which is a legitimate state, not a defect. It is not purely informational:
+`resolveExecutionContext` picks the host's path rules (`win32` or POSIX) from
+it, so a Windows host with no platform would resolve a `D:\` checkout with
+POSIX rules.
 
 `GET /api/hosts` carries both: `platform` per host, and `capacity` per host
 (`null` when the host does not report any). The local host's capacity is

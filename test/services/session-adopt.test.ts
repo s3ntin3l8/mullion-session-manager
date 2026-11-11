@@ -5,8 +5,12 @@ import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type * as ChildProcess from "node:child_process";
 import { buildTestApp } from "../helpers/app.js";
-import { hosts, projects, sessions } from "../../src/db/schema.js";
-import { adoptSurvivingSession } from "../../src/services/session-adopt.js";
+import { hosts, projects, sessions, tasks } from "../../src/db/schema.js";
+import {
+  adoptActiveTaskSessions,
+  adoptSurvivingSession,
+} from "../../src/services/session-adopt.js";
+import { reconcileTasks } from "../../src/services/task-reconciler.js";
 import type { SessionLiveness } from "../../src/services/session-process.js";
 
 const ptyMock = plainNodePtyMock();
@@ -226,5 +230,285 @@ describe("adoptSurvivingSession (issue #2271)", () => {
     await adoptSurvivingSession(app, id);
 
     expect(isMasterAliveState).toHaveBeenCalledTimes(2);
+  });
+});
+
+function insertTask(
+  app: App,
+  projectId: number,
+  status: string,
+  fields: Partial<typeof tasks.$inferInsert> = {},
+) {
+  const [task] = app.db
+    .insert(tasks)
+    .values({ projectId, title: "t", status, claimedAt: new Date(), ...fields })
+    .returning()
+    .all();
+  return task;
+}
+
+describe("adoptActiveTaskSessions (issue #2929)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("adopts active local sessions of claimed, in-progress, and reviewing tasks", async () => {
+    const app = await buildTestApp();
+    const claimed = seed(app);
+    const running = seed(app);
+    const worker = seed(app);
+    const review = seed(app);
+    const backlog = seed(app);
+    const killed = seed(app, { status: "killed" });
+    app.db.insert(hosts).values({ id: "readopt-box", name: "readopt-box" }).run();
+    const remote = seed(app, { hostId: "readopt-box" });
+    insertTask(app, claimed.project.id, "claimed", { sessionId: claimed.row.id });
+    insertTask(app, running.project.id, "in_progress", {
+      sessionId: running.row.id,
+      startedAt: new Date(),
+    });
+    insertTask(app, worker.project.id, "reviewing", {
+      sessionId: worker.row.id,
+      reviewSessionId: review.row.id,
+    });
+    insertTask(app, backlog.project.id, "backlog", { sessionId: backlog.row.id });
+    insertTask(app, killed.project.id, "in_progress", { sessionId: killed.row.id });
+    insertTask(app, remote.project.id, "in_progress", { sessionId: remote.row.id });
+    const { getOrCreate } = stubAdoptable(app, "alive");
+
+    await adoptActiveTaskSessions(app);
+
+    const adopted = getOrCreate.mock.calls.map((call) => (call[0] as { id: string }).id);
+    expect(adopted.sort()).toEqual([claimed.id, running.id, worker.id, review.id].sort());
+  });
+});
+
+describe("reconcileTasks re-adopts a local null (issue #2929)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.MULLION_TASK_MASTER_ENABLED;
+    delete process.env.MULLION_TASK_BUDGET_MINUTES;
+    delete process.env.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES;
+  });
+
+  function trackFinished(app: App) {
+    const tracked = new Set<string>();
+    const finishedAt = Date.now();
+    vi.spyOn(app.pty, "get").mockImplementation(((key: string) =>
+      tracked.has(key)
+        ? {
+            isAlive: true,
+            toInfo: () => ({
+              activity: "idle",
+              lastTurnEndedAt: finishedAt,
+              workFinishedAt: finishedAt,
+              outstandingBackgroundTasks: [],
+            }),
+          }
+        : undefined) as unknown as typeof app.pty.get);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("alive");
+    const getOrCreate = vi.spyOn(app.pty, "getOrCreate").mockImplementation(((opts: {
+      id: string;
+    }) => {
+      tracked.add(opts.id);
+      return { spawnOutcome: async () => {} };
+    }) as unknown as typeof app.pty.getOrCreate);
+    return getOrCreate;
+  }
+
+  it("hands a finished turn off once the surviving scope is adopted", async () => {
+    process.env.MULLION_TASK_MASTER_ENABLED = "true";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row, id } = seed(app);
+    const claimedAt = new Date(Date.now() - 60_000);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt,
+      startedAt: claimedAt,
+    });
+    const getOrCreate = trackFinished(app);
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(getOrCreate).toHaveBeenCalledWith(expect.objectContaining({ id }));
+    expect(saved?.status).toBe("reviewing");
+  });
+
+  it("still budget-fails a past-deadline task whose scope is gone", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("dead");
+    const getOrCreate = vi.spyOn(app.pty, "getOrCreate");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("failed");
+    expect(saved?.failureReason).toContain("budget exceeded");
+    expect(getOrCreate).not.toHaveBeenCalled();
+  });
+
+  it("still budget-fails a past-deadline task whose scope cannot be verified", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("unknown");
+    const getOrCreate = vi.spyOn(app.pty, "getOrCreate");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("failed");
+    expect(saved?.failureReason).toContain("budget exceeded");
+    expect(getOrCreate).not.toHaveBeenCalled();
+  });
+
+  it("does not budget-fail a task still inside its budget when the scope cannot be verified", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "60";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("unknown");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("in_progress");
+  });
+
+  it("does not budget-fail a past-deadline task that is inside rate-limit grace (#2930)", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+    process.env.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES = "30";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      lastRateLimitAt: new Date(),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("dead");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("in_progress");
+    const sessionRow = app.db
+      .select()
+      .from(sessions)
+      .all()
+      .find((s) => s.id === row.id);
+    expect(sessionRow?.status).not.toBe("killed");
+  });
+
+  it("still budget-fails a past-deadline task whose rate-limit grace has expired (#2930)", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+    process.env.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES = "30";
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const { project, row } = seed(app);
+    const task = insertTask(app, project.id, "in_progress", {
+      sessionId: row.id,
+      claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      lastRateLimitAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("dead");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("failed");
+    expect(saved?.failureReason).toContain("budget exceeded");
+  });
+
+  it("retries a reviewing session whose scope cannot be verified, without failing it", async () => {
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const worker = seed(app);
+    const review = seed(app);
+    const task = insertTask(app, worker.project.id, "reviewing", {
+      sessionId: worker.row.id,
+      reviewSessionId: review.row.id,
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("unknown");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("reviewing");
+  });
+
+  it("ingests a reviewing session as inconclusive once the findings grace has passed (#2929)", async () => {
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const worker = seed(app);
+    const review = seed(app, { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) });
+    const task = insertTask(app, worker.project.id, "reviewing", {
+      sessionId: worker.row.id,
+      reviewSessionId: review.row.id,
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("unknown");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("reviewing");
+    expect(saved?.lastReviewVerdict).toBe("inconclusive");
   });
 });

@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
 import { goSidebarBack } from "../sidebarBack.js";
+import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
 import { commandToBinary } from "../cliLogos.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
@@ -12,6 +13,7 @@ import { STATUS_PRESENTATION, formatStatusLabel } from "../sessionStatus.js";
 import { useDashboardStore } from "../store/index.js";
 import {
   taskStatusBadge,
+  reviewRunState,
   taskRelations,
   taskRowLabel,
   findTaskForIssue,
@@ -37,9 +39,25 @@ import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 
 const BODY_COLLAPSED_CHARS = 280;
 
-function SessionPill({ role, session }: { role: string; session: Session | undefined }) {
+const HERMES_LABEL = { running: "running", finished: "finished", unsent: "not sent" } as const;
+
+function SessionPill({
+  role,
+  session,
+  ended = false,
+}: {
+  role: string;
+  session: Session | undefined;
+  /** The task names a session that is no longer in the store (the card says "ended"). */
+  ended?: boolean;
+}) {
   const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
-  if (!session) return <span className="sb-dim">{role}: none</span>;
+  if (!session)
+    return (
+      <span className="sb-dim">
+        {role}: {ended ? "ended" : "none"}
+      </span>
+    );
   const presentation = STATUS_PRESENTATION[session.sessionStatus];
   return (
     <StatusChip
@@ -65,7 +83,7 @@ function TaskRef({
   blocker?: TaskBlocker;
   trailing?: ReactNode;
 }) {
-  const selectTask = useDashboardStore((s) => s.selectTask);
+  const openTaskInSidebar = useDashboardStore((s) => s.openRightSidebarTask);
   return (
     <div className="sb-hier-row">
       {task ? (
@@ -73,7 +91,7 @@ function TaskRef({
           type="button"
           className="sb-link"
           title={`Open task: ${task.title}`}
-          onClick={() => selectTask(task.id)}
+          onClick={() => openTaskInSidebar(task.id)}
         >
           {label}
         </button>
@@ -126,7 +144,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
   const prsByProject = useDashboardStore((s) => s.prsByProject);
-  const selectTask = useDashboardStore((s) => s.selectTask);
+  const openTaskInSidebar = useDashboardStore((s) => s.openRightSidebarTask);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
   const [bodyOpen, setBodyOpen] = useState(false);
   // A task is shown from outside the rail (a board card, a notification, a
@@ -164,6 +182,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
   const reviewer =
     task.reviewSessionId !== null ? sessions.find((s) => s.id === task.reviewSessionId) : undefined;
+  const runState = reviewRunState(task);
   const rounds = parseReviewRounds(task.reviewFindings);
   const phaseText = reviewPhaseText(
     task.reviewPhase,
@@ -194,6 +213,12 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       kind: "task",
       taskId: task.id,
     });
+  const epicProject = epicProjectId(allTasks, task);
+  const openEpicIssue = (projectId: number, number: number) =>
+    useDashboardStore.getState().openRightSidebarIssue(projectId, number, {
+      kind: "task",
+      taskId: task.id,
+    });
   const relations = taskRelations(task, allTasks);
   const hasHierarchy =
     task.parentIssueNumber !== null ||
@@ -207,7 +232,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
 
   return (
     <div
-      className="tasks-sidebar-view tasks-detail"
+      className="tasks-sidebar-view tasks-detail sb-detail"
       data-testid="task-detail-view"
       ref={rootRef}
       role="region"
@@ -229,7 +254,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         renderBlocker={(b) => {
           const t = findTaskForIssue(allTasks, b);
           return t ? (
-            <button type="button" className="sb-link" onClick={() => selectTask(t.id)}>
+            <button type="button" className="sb-link" onClick={() => openTaskInSidebar(t.id)}>
               #{b.number}
             </button>
           ) : b.htmlUrl ? (
@@ -243,7 +268,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       />
 
       {showReview && (
-        <SidebarSection title="Review" persistKey="task-detail-review">
+        <SidebarSection title="Review" persistKey="task-detail-review" variant="card">
           <dl className="sb-kv">
             <dt>Verdict</dt>
             <dd>
@@ -283,15 +308,33 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
             </dd>
             <dt>Sessions</dt>
             <dd className="sb-pills">
-              <SessionPill role="worker" session={worker} />
-              <SessionPill role="reviewer" session={reviewer} />
+              <SessionPill role="worker" session={worker} ended={task.sessionId !== null} />
+              {task.reviewSessionId === null && runState !== null ? (
+                <StatusChip
+                  tone={runState === "unsent" ? "warn" : "info"}
+                  onClick={task.prNumber !== null ? openPr : undefined}
+                  title={
+                    task.prNumber !== null
+                      ? "Open the PR's review in the GitHub tab"
+                      : "External review (Hermes)"
+                  }
+                >
+                  Hermes · {HERMES_LABEL[runState]}
+                </StatusChip>
+              ) : (
+                <SessionPill
+                  role="reviewer"
+                  session={reviewer}
+                  ended={task.reviewSessionId !== null}
+                />
+              )}
             </dd>
           </dl>
         </SidebarSection>
       )}
 
       {task.prNumber !== null && (
-        <SidebarSection title="Pull request" persistKey="task-detail-pr">
+        <SidebarSection title="Pull request" persistKey="task-detail-pr" variant="card">
           <div className="sb-pr-line">
             <button
               type="button"
@@ -317,7 +360,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         <TaskActions task={task} />
       </div>
 
-      <SidebarSection title="Details" persistKey="task-detail-details">
+      <SidebarSection title="Details" persistKey="task-detail-details" variant="card">
         <dl className="sb-kv">
           <dt>Project</dt>
           <dd>{projectName}</dd>
@@ -367,6 +410,14 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
                     href={`https://github.com/${task.parentIssueRepo}/issues/${task.parentIssueNumber}`}
                     target="_blank"
                     rel="noreferrer"
+                    // A plain click opens the epic in the GitHub tab (when a project tracks its
+                    // repo); Ctrl/⌘/middle-click keep the real link.
+                    onClick={(e) => {
+                      if (epicProject !== null && isPlainClick(e)) {
+                        e.preventDefault();
+                        openEpicIssue(epicProject, task.parentIssueNumber as number);
+                      }
+                    }}
                   >
                     #{task.parentIssueNumber}
                     <ExternalLinkIcon size={10} aria-hidden="true" />

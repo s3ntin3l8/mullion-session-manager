@@ -23,6 +23,7 @@ import {
 } from "../services/ssh-agent-socket.js";
 import { recordSessionsDir } from "../services/sessions-dir-history.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
+import { adoptActiveTaskSessions } from "../services/session-adopt.js";
 import { detectCodexRateLimits } from "../services/codex-rate-limit.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 import { fitsSunPath, maxSunPathBytes } from "../cli/sun-path.mjs";
@@ -912,6 +913,12 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
         .catch((err) => {
           app.log.error({ err }, "initial orphaned session tmp sweep failed");
         });
+      // #2929 — headless task workers have no browser to re-attach them.
+      // Fire-and-forget, same as the tmp sweep: onReady must not wait on
+      // systemd, and a failure here is retried by the reconciler.
+      void adoptActiveTaskSessions(app).catch((err) => {
+        app.log.error({ err }, "boot adopt of task sessions failed");
+      });
     });
     app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
       armReconcileTimer(intervalSeconds * 1000);

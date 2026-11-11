@@ -82,7 +82,7 @@ describe("CreateProjectModal folder picker", () => {
       const user = userEvent.setup();
       render(<CreateProjectModal onClose={vi.fn()} onCreate={vi.fn()} />);
       await user.click(screen.getByRole("button", { name: "Browse…" }));
-      expect(api.listDirectories).toHaveBeenCalledWith(expected);
+      expect(api.listDirectories).toHaveBeenCalledWith(expected, { hidden: false });
       expect(await screen.findByText(/too large to show every entry/)).toBeVisible();
     } finally {
       useDashboardStore.setState({ settings: previous });
@@ -100,16 +100,18 @@ describe("CreateProjectModal folder picker", () => {
     render(<CreateProjectModal initialPath="/projects" onClose={vi.fn()} onCreate={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Browse…" }));
     expect(await screen.findByRole("region", { name: "Choose repository folder" })).toBeVisible();
-    expect(api.listDirectories).toHaveBeenCalledWith("/projects");
+    expect(api.listDirectories).toHaveBeenCalledWith("/projects", { hidden: false });
     await user.click(await screen.findByRole("button", { name: "my-repo/" }));
     await screen.findByText("No subfolders.");
-    expect(screen.getByRole("button", { name: "Close picker" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /Up one folder/ })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: /Up one folder/ }));
     await user.click(await screen.findByRole("button", { name: "my-repo/" }));
     await screen.findByText("No subfolders.");
     await user.click(screen.getByRole("button", { name: "Select this folder" }));
     expect(screen.getByPlaceholderText("~/code/my-project")).toHaveValue("/projects/my-repo");
     expect(screen.getByPlaceholderText("my-repo")).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("my-repo"), "custom-name");
+    expect(screen.getByPlaceholderText("~/code/my-project")).toHaveValue("/projects/my-repo");
     expect(
       screen.queryByRole("region", { name: "Choose repository folder" }),
     ).not.toBeInTheDocument();
@@ -131,6 +133,31 @@ describe("CreateProjectModal folder picker", () => {
       expect.stringContaining("remote hosts"),
     );
     expect(api.listDirectories).not.toHaveBeenCalled();
+  });
+
+  it("keeps the picker closed after switching away from the local host and back", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listDirectories).mockResolvedValue({
+      path: "/projects",
+      parent: "/",
+      directories: [],
+      truncated: false,
+    });
+    render(
+      <CreateProjectModal
+        hosts={[makeHost({ id: "remote", name: "Remote", isLocal: false })]}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Browse…" }));
+    await screen.findByRole("button", { name: "Select this folder" });
+    await user.selectOptions(fieldSelect("Host"), "remote");
+    await user.selectOptions(fieldSelect("Host"), "local");
+    expect(screen.getByRole("button", { name: "Browse…" })).toBeEnabled();
+    expect(
+      screen.queryByRole("region", { name: "Choose repository folder" }),
+    ).not.toBeInTheDocument();
   });
 
   it.each(["", "/missing"])("shows listing errors for start path %s", async (initialPath) => {
