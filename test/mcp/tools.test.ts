@@ -210,13 +210,21 @@ describe("use_browser and browser_action handlers (Feature 3.7)", () => {
       snapshot: [{ ref: "e1", role: "button", name: "Save" }],
     };
     const browserAction = vi.fn().mockResolvedValue(mockResult);
-    const result = await useBrowserTool.handler({ action: "screenshot" }, { browserAction });
+    const result = (await useBrowserTool.handler(
+      { action: "screenshot" },
+      { browserAction },
+    )) as unknown as {
+      content: Array<{ type: string; mimeType?: string; data?: string; text?: string }>;
+    };
     expect(result.content[0]).toEqual({ type: "image", mimeType: "image/png", data: png });
     expect(result.content[1].text).toContain("1x1 CSS pixels");
     expect(result.content[1].text).toContain("image coordinates equal CSS pixels");
     expect(result.content[1].text).toContain("e1");
     expect(result.content[1].text).not.toContain(png);
-    const alias = await browserActionTool.handler({ action: "screenshot" }, { browserAction });
+    const alias = (await browserActionTool.handler(
+      { action: "screenshot" },
+      { browserAction },
+    )) as unknown as { content: Array<{ type: string }> };
     expect(alias.content[0].type).toBe("image");
   });
 
