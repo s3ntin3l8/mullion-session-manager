@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.3.62](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.61...v0.3.62) (2026-11-11)
+
+
+### Features
+
+* **github:** approve held release-PR workflow runs ([#2951](https://github.com/s3ntin3l8/mullion-session-manager/issues/2951)) ([84bb1d2](https://github.com/s3ntin3l8/mullion-session-manager/commit/84bb1d21fc8cabdfa8eb44170537e0fd9f592291))
+* **projects:** Add project modal fills the path from the base project folder and the project name ([0deed6b](https://github.com/s3ntin3l8/mullion-session-manager/commit/0deed6b02905028514935315d82ff28d029de2f9))
+* **uiux:** boxed GitHub and task detail sections (option B) ([#2959](https://github.com/s3ntin3l8/mullion-session-manager/issues/2959)) ([d132a31](https://github.com/s3ntin3l8/mullion-session-manager/commit/d132a315092293b752c519039db2cc5d620e096d))
+* **uiux:** sidebar history stack and in-sidebar GitHub links ([#2927](https://github.com/s3ntin3l8/mullion-session-manager/issues/2927)) ([d091faf](https://github.com/s3ntin3l8/mullion-session-manager/commit/d091fafdc67c48762e1db6101c721ef33fb88073))
+
+
+### Bug Fixes
+
+* **browser:** return screenshots as MCP image content ([#2965](https://github.com/s3ntin3l8/mullion-session-manager/issues/2965)) ([94eb10e](https://github.com/s3ntin3l8/mullion-session-manager/commit/94eb10e594e6221e0c91044137dbd1a0c73c9401))
+* **deps:** resolve minimatch 11 in both lockfiles (GHSA-g3hv-75wg-m249) ([#2911](https://github.com/s3ntin3l8/mullion-session-manager/issues/2911)) ([d73ed96](https://github.com/s3ntin3l8/mullion-session-manager/commit/d73ed968ee330e902dd43ac7e73dd9fe4be3e115))
+* **git:** Pull reports an orphaned lock file as stale-lock with its path and age ([#2968](https://github.com/s3ntin3l8/mullion-session-manager/issues/2968)) ([ca982cc](https://github.com/s3ntin3l8/mullion-session-manager/commit/ca982ccbe37535f459c1796c93606337665e0e10))
+* **hooks:** accept a string codex_error_info ([#2941](https://github.com/s3ntin3l8/mullion-session-manager/issues/2941)) ([4186e31](https://github.com/s3ntin3l8/mullion-session-manager/commit/4186e31cc4b80d1e98278e7b7717d1d35d18b68d))
+* **hooks:** install with npm ci in the session-start hook ([#2966](https://github.com/s3ntin3l8/mullion-session-manager/issues/2966)) ([4ea8ff2](https://github.com/s3ntin3l8/mullion-session-manager/commit/4ea8ff2dbcb34a2983f2efa2564a67f70c7d72a1))
+* **hooks:** replay a codex completion the restart dropped ([#2955](https://github.com/s3ntin3l8/mullion-session-manager/issues/2955)) ([acd4ed9](https://github.com/s3ntin3l8/mullion-session-manager/commit/acd4ed926c23acca143b40bfe75de521372fc97e)), closes [#2939](https://github.com/s3ntin3l8/mullion-session-manager/issues/2939)
+* **hosts:** accept Windows drive paths for per-host checkouts ([#2936](https://github.com/s3ntin3l8/mullion-session-manager/issues/2936)) ([738d4b9](https://github.com/s3ntin3l8/mullion-session-manager/commit/738d4b99901532fda418690d2c6412d3e78c2523))
+* **hosts:** compare Windows host paths case- and separator-insensitively ([#2957](https://github.com/s3ntin3l8/mullion-session-manager/issues/2957)) ([88a28ab](https://github.com/s3ntin3l8/mullion-session-manager/commit/88a28aba266b3ba5f620041783c61065e223f16e))
+* **hosts:** fill a manually registered host's platform from its capacity report ([#2954](https://github.com/s3ntin3l8/mullion-session-manager/issues/2954)) ([ae88210](https://github.com/s3ntin3l8/mullion-session-manager/commit/ae88210844877f0dd5c0c7e5ba03f4e57e92d9df))
+* **hosts:** hold a task when the host protocol was never read ([#2942](https://github.com/s3ntin3l8/mullion-session-manager/issues/2942)) ([1e3e96d](https://github.com/s3ntin3l8/mullion-session-manager/commit/1e3e96de8b10c6922fbfb804c8a23acc9443bd78))
+* **hosts:** name-match a project whose own path is a Windows drive path ([19e56a3](https://github.com/s3ntin3l8/mullion-session-manager/commit/19e56a3c00e54b4cd33879fc694f04c6f77c1bd2))
+* **projects:** Add project modal's Browse… button does nothing; add a real folder picker ([3a0ee3d](https://github.com/s3ntin3l8/mullion-session-manager/commit/3a0ee3d0c838073738f6a49b8203651a1b84c629))
+* **scaffold:** a deliberate CLAUDE.md drop does not block reduction ([#2946](https://github.com/s3ntin3l8/mullion-session-manager/issues/2946)) ([1e05e63](https://github.com/s3ntin3l8/mullion-session-manager/commit/1e05e63b21d4b6a0c7eaa9cec9e51dec83af3327))
+* **scaffold:** check cited paths against the generation worktree ([#2943](https://github.com/s3ntin3l8/mullion-session-manager/issues/2943)) ([497298a](https://github.com/s3ntin3l8/mullion-session-manager/commit/497298aebd8a75c3d9b5a54821513e6c782b527f))
+* **scaffold:** keep a repo commands table through restructure ([#2949](https://github.com/s3ntin3l8/mullion-session-manager/issues/2949)) ([a437e9d](https://github.com/s3ntin3l8/mullion-session-manager/commit/a437e9da0eb36ed6cd1e72f2697f513e35a41e05))
+* **sessions:** re-adopt task sessions after a restart ([#2945](https://github.com/s3ntin3l8/mullion-session-manager/issues/2945)) ([633aa3e](https://github.com/s3ntin3l8/mullion-session-manager/commit/633aa3e6ee17656d4dc04c6522e3edd3300e12f2))
+* **tasks:** a merged task owes no review post, so the 24h give-up cannot hold it ([#2909](https://github.com/s3ntin3l8/mullion-session-manager/issues/2909)) ([c9e55da](https://github.com/s3ntin3l8/mullion-session-manager/commit/c9e55dacfad70ecbc2569a6b3cb0312e4673f323))
+* **tasks:** card meta row wraps instead of overflowing at narrow board widths ([#2925](https://github.com/s3ntin3l8/mullion-session-manager/issues/2925)) ([ea7b9c3](https://github.com/s3ntin3l8/mullion-session-manager/commit/ea7b9c38465c766815decfdafdc681cd95c6e1f0)), closes [#2917](https://github.com/s3ntin3l8/mullion-session-manager/issues/2917)
+* **tasks:** do not budget-fail a worker inside rate-limit grace ([#2948](https://github.com/s3ntin3l8/mullion-session-manager/issues/2948)) ([d5d39fa](https://github.com/s3ntin3l8/mullion-session-manager/commit/d5d39fa8cfb99884eaa4194c5d7f506094efdee0))
+* **tasks:** epic filter counts the epic's sub-issues and hides closed epics ([#2952](https://github.com/s3ntin3l8/mullion-session-manager/issues/2952)) ([95289ec](https://github.com/s3ntin3l8/mullion-session-manager/commit/95289ec7416eac93df06f79554a2016d9a30a47c)), closes [#2919](https://github.com/s3ntin3l8/mullion-session-manager/issues/2919)
+* **tasks:** finish the reviewRunState lift and guard the Hermes chip on reviewSessionId ([#2950](https://github.com/s3ntin3l8/mullion-session-manager/issues/2950)) ([8b3f07d](https://github.com/s3ntin3l8/mullion-session-manager/commit/8b3f07d06bfa2b0a636e1f1473d4b5cabfbab11f))
+* **tasks:** park a rate-limited task until the provider reset ([#2960](https://github.com/s3ntin3l8/mullion-session-manager/issues/2960)) ([ce7dc6a](https://github.com/s3ntin3l8/mullion-session-manager/commit/ce7dc6ae426c7d66a81a2c29491bd9cf8472e55b)), closes [#2940](https://github.com/s3ntin3l8/mullion-session-manager/issues/2940)
+* **tasks:** queue a retry at capacity instead of refusing it ([#2937](https://github.com/s3ntin3l8/mullion-session-manager/issues/2937)) ([62d01eb](https://github.com/s3ntin3l8/mullion-session-manager/commit/62d01eb56aa6684cab41de3ba24259b8b69fd240))
+* **tasks:** restore agent and model overrides in the task sidebar ([#2964](https://github.com/s3ntin3l8/mullion-session-manager/issues/2964)) ([4739b49](https://github.com/s3ntin3l8/mullion-session-manager/commit/4739b497c5036f640b52daed51a893f7f7c0642b))
+* **tasks:** show the external (Hermes) reviewer in the task Review section ([#2924](https://github.com/s3ntin3l8/mullion-session-manager/issues/2924)) ([feb9eda](https://github.com/s3ntin3l8/mullion-session-manager/commit/feb9edaba6d39422d997b1e536e3c168aa9db346)), closes [#2916](https://github.com/s3ntin3l8/mullion-session-manager/issues/2916)
+* **uiux:** land review follow-ups for the sidebar polish and card overflow PRs ([#2947](https://github.com/s3ntin3l8/mullion-session-manager/issues/2947)) ([49568c4](https://github.com/s3ntin3l8/mullion-session-manager/commit/49568c4e077f509a3bb1a7b48cc40c9267b99c97))
+* **uiux:** sidebar polish — tooltip, section spacing, timeline toolbar ([#2926](https://github.com/s3ntin3l8/mullion-session-manager/issues/2926)) ([4855f12](https://github.com/s3ntin3l8/mullion-session-manager/commit/4855f124b1ddc3927f7937b967838810f5180eb1)), closes [#2915](https://github.com/s3ntin3l8/mullion-session-manager/issues/2915)
+
 ## [0.3.61](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.60...v0.3.61) (2026-11-10)
 
 
