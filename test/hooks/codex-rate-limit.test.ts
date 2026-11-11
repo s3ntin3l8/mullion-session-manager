@@ -250,6 +250,19 @@ describe("parseCodexRateLimitSignal", () => {
     expect(signal!.rateLimited).toBe(false);
   });
 
+  it("marks a v2 completion as followed when turn_started comes next", () => {
+    const signal = parseCodexRateLimitSignal(
+      `${rolloutLine({
+        type: "turn_complete",
+        turn_id: "turn-v2",
+        last_agent_message: "done",
+        completed_at: 1792791560,
+      })}\n${rolloutLine({ type: "turn_started" }, 43)}`,
+    );
+    expect(signal!.followed).toBe(true);
+    expect(signal!.clean).toBe(true);
+  });
+
   it("does not treat a trailing token_count as a new turn", () => {
     const signal = parseCodexRateLimitSignal(
       `${CLEAN_TASK_COMPLETE}\n${rolloutLine({ type: "token_count" }, 43)}`,

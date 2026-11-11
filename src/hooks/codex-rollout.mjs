@@ -106,9 +106,11 @@ const TOO_MANY_REQUESTS = 429;
  */
 const COMPLETED_TAGS = new Set(["task_complete", "turn_complete"]);
 
-/** A later one of these means a new turn started. `token_count` and the
- * other bookkeeping events codex writes after `task_complete` do not. */
-const FOLLOWED_TAGS = new Set(["user_message", "task_started"]);
+/** A later one of these means a new turn started. v2 writes `turn_started`
+ * (alias of `task_started`, same as `turn_complete`). Bookkeeping such as
+ * `token_count` does not: codex writes that after a completion that is
+ * still the last turn. */
+const FOLLOWED_TAGS = new Set(["user_message", "task_started", "turn_started"]);
 
 /**
  * Codex's home directory — the same rule as `resolveCodexHome()` in

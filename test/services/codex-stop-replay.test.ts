@@ -126,6 +126,21 @@ describe("replayDroppedCodexStop (issue #2939)", () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it("does not replay a v2 completion a later turn_started follows", async () => {
+    const claimedAt = new Date((COMPLETED_AT - 60) * 1000);
+    const later = `${JSON.stringify({
+      type: "event_msg",
+      payload: { type: "turn_started" },
+    })}\n`;
+    const { app, id } = await seedRunning(
+      rollout(cleanPayload({ type: "turn_complete" }), later),
+      claimedAt,
+    );
+    const emit = vi.spyOn(app.pty, "emitHookEvent");
+    await replayDroppedCodexStop(app, id);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it("does not turn a rate-limited completion into a finished turn", async () => {
     const claimedAt = new Date((COMPLETED_AT - 60) * 1000);
     const { app, id } = await seedRunning(
