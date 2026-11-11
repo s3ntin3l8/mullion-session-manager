@@ -3957,9 +3957,9 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
       for (const row of hostRows) {
         const { task, session, project } = row;
 
-        // #2929 — a local null is "not adopted yet". Adopt before ingesting
-        // so a review that finished across a restart is still readable.
-        // Unverifiable liveness retries next tick.
+        // #2929 — a local null is "not adopted yet". Adopt before ingesting.
+        // Unverifiable retries until the findings grace has elapsed, then
+        // the inconclusive path below runs (same bound main already had).
         if (
           await healUntrackedLocalSession(
             app,
@@ -3968,6 +3968,9 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             liveMap,
             idleThresholdMs,
             backend,
+            {
+              pastDeadline: now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS,
+            },
           )
         ) {
           continue;
@@ -4896,8 +4899,11 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               liveMap,
               idleThresholdMs,
               backend,
-              budgetMinutes > 0 &&
-                now > new Date(task.claimedAt!.getTime() + budgetMinutes * 60_000),
+              {
+                pastDeadline:
+                  budgetMinutes > 0 &&
+                  now > new Date(task.claimedAt!.getTime() + budgetMinutes * 60_000),
+              },
             )
           ) {
             continue;

@@ -432,4 +432,27 @@ describe("reconcileTasks re-adopts a local null (issue #2929)", () => {
       .find((row) => row.id === task.id);
     expect(saved?.status).toBe("reviewing");
   });
+
+  it("ingests a reviewing session as inconclusive once the findings grace has passed (#2929)", async () => {
+    const app = await buildTestApp();
+    app.db.delete(tasks).run();
+    const worker = seed(app);
+    const review = seed(app, { createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000) });
+    const task = insertTask(app, worker.project.id, "reviewing", {
+      sessionId: worker.row.id,
+      reviewSessionId: review.row.id,
+    });
+    vi.spyOn(app.pty, "get").mockReturnValue(undefined);
+    vi.spyOn(app.pty, "isMasterAliveState").mockResolvedValue("unknown");
+
+    await reconcileTasks(app);
+
+    const saved = app.db
+      .select()
+      .from(tasks)
+      .all()
+      .find((row) => row.id === task.id);
+    expect(saved?.status).toBe("reviewing");
+    expect(saved?.lastReviewVerdict).toBe("inconclusive");
+  });
 });

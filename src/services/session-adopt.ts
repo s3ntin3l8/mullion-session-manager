@@ -236,7 +236,7 @@ export async function healUntrackedLocalSession(
   backend: {
     liveStatus(ids: string[], idleThresholdMs: number): Promise<Record<string, SessionInfo | null>>;
   },
-  pastDeadline = false,
+  opts: { pastDeadline?: boolean } = {},
 ): Promise<boolean> {
   if (hostId !== LOCAL_HOST_ID || liveMap[sessionId] !== null) return false;
   let outcome: AdoptOutcome;
@@ -246,7 +246,7 @@ export async function healUntrackedLocalSession(
     app.log.warn({ err, sessionId }, "task reconcile: session adoption failed");
     return true;
   }
-  if (outcome === "unverifiable") return !pastDeadline;
+  if (outcome === "unverifiable") return opts.pastDeadline !== true;
   if (outcome !== "adopted" && outcome !== "live") return false;
   try {
     const again = await backend.liveStatus([sessionId], idleThresholdMs);
