@@ -31,11 +31,14 @@ export async function fsRoute(app: FastifyInstance): Promise<void> {
       }
 
       try {
-        // This authenticated picker intentionally accepts any absolute directory:
-        // the same API boundary can already launch a session in an arbitrary cwd.
-        // Limiting it to project roots would prevent browsing for new projects.
-        // Resolve symlinks and .. before returning navigation paths, and read no
-        // file data.
+        // CodeQL js/path-injection (alert #517): this API intentionally accepts
+        // any absolute directory behind the same auth gate as session creation,
+        // which can already run a command in an arbitrary cwd. Restricting it to
+        // project roots would prevent browsing for new projects. realpath follows
+        // symlinks and .. with filesystem semantics; the bounded listing below
+        // returns directories only and never reads file contents. This intended
+        // capability needs a GHAS dismissal, not a path-containment guard or an
+        // inline suppression (the CodeQL workflow does not process those).
         const path = await realpath(expanded);
         const directories: { name: string; path: string }[] = [];
         let scanned = 0;
