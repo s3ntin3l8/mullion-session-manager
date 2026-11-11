@@ -7,6 +7,7 @@
 // image, issue #2884), or throws, which server.mjs turns into a tool-level
 // `isError: true` result rather than a protocol-level failure.
 
+import { browserToolResult } from "./browser-screenshot.mjs";
 import { useDevice } from "./device-use.mjs";
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
 import {
@@ -187,8 +188,7 @@ const useBrowser = {
     },
   },
   async handler(args, client) {
-    const result = await client.browserAction(args);
-    return JSON.stringify(result);
+    return browserToolResult(args, await client.browserAction(args));
   },
 };
 

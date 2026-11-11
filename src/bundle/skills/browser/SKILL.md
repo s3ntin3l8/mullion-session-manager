@@ -44,6 +44,11 @@ tools) drives the pane: `navigate`, `snapshot`, `click`, `fill`, `type`,
 [`docs/cli.md`](https://github.com/s3ntin3l8/mullion-session-manager/blob/main/docs/cli.md)'s
 browser table for each action's full argument shape.
 
+`screenshot` over MCP (`use_browser` / `browser_action`) returns an image of
+the viewport — CSS pixels, 1:1 with scroll coordinates, not downscaled — and
+the snapshot as text, not a base64 blob. `mullion browser screenshot --out`
+still writes that same PNG to a file.
+
 ## Capturing a file download
 
 `download` retrieves a file the previewed app triggers a browser download

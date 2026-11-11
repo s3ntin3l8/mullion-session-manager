@@ -301,6 +301,61 @@ describe("mcp/server.mjs (issue #271)", () => {
     }
   });
 
+  it("browser_action screenshot yields an image block, not a base64 text blob (issue #2899)", async () => {
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-browser-shot-"));
+    const sock = path.join(dir, "h.sock");
+    const requests: Array<Record<string, unknown>> = [];
+    const srv = net.createServer((c) => {
+      let buf = "";
+      c.on("data", (d) => {
+        buf += d.toString();
+        let nl;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const msg = JSON.parse(buf.slice(0, nl));
+          buf = buf.slice(nl + 1);
+          if (msg.kind !== "browser_action") continue;
+          requests.push(msg);
+          c.write(
+            `${JSON.stringify({
+              ok: true,
+              url: "http://localhost:5173/",
+              title: "App",
+              screenshot: png,
+              snapshot: [{ ref: "e1", role: "button", name: "Save" }],
+            })}\n`,
+          );
+        }
+      });
+    });
+    await new Promise<void>((r) => srv.listen(sock, r));
+    try {
+      child = spawnServer({ MULLION_HOOK_SOCKET: sock, MULLION_HOOK_TOKEN: "t" });
+      const reader = new ResponseReader(child);
+      send(child, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "browser_action", arguments: { action: "screenshot" } },
+      });
+      const response = await reader.waitForId(1);
+      const result = response.result as {
+        content: Array<{ type: string; mimeType?: string; data?: string; text?: string }>;
+        isError: boolean;
+      };
+      expect(result.isError).toBe(false);
+      expect(result.content[0]).toEqual({ type: "image", mimeType: "image/png", data: png });
+      expect(result.content[1].text).toContain("1x1 CSS pixels");
+      expect(result.content[1].text).toContain("e1");
+      expect(result.content[1].text).not.toContain(png);
+      expect(requests[0]).toMatchObject({ kind: "browser_action", action: "screenshot" });
+    } finally {
+      srv.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("tools/call for an unknown tool returns isError: true, not a protocol error", async () => {
     child = spawnServer();
     const reader = new ResponseReader(child);
