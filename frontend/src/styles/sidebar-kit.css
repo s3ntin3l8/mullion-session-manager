@@ -1150,11 +1150,8 @@ button.sb-chip--label[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 10px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--sidebar-2);
-  margin: 0 var(--sb-inset, 0);
+  padding: 10px var(--rs-pad-x, 12px);
+  border-bottom: 1px solid var(--border-soft);
 }
 .sb-taskstatus-head {
   display: flex;
@@ -1311,7 +1308,8 @@ button.sb-chip--label[aria-pressed="true"] {
   font-size: 0.75rem;
 }
 .sb-actions-block {
-  padding: 0 var(--sb-inset, 0);
+  padding: 8px var(--rs-pad-x, 12px);
+  border-bottom: 1px solid var(--border-soft);
 }
 .sb-body {
   margin-top: 8px;
@@ -1363,6 +1361,10 @@ button.sb-chip--label[aria-pressed="true"] {
   .sb-kv dt {
     display: none;
   }
+  .sb-taskstatus,
+  .sb-actions-block {
+    padding-inline: 8px;
+  }
 }
 
 /* ───────── Detail layout (epic #2922, option B) ─────────
@@ -1381,8 +1383,23 @@ button.sb-chip--label[aria-pressed="true"] {
 }
 .sb-detail > .gh-detail-meta,
 .sb-detail > .gh-detail-actions,
-.sb-detail > .gh-detail-notice {
+.sb-detail > .gh-detail-notice,
+.sb-detail > .gh-composer,
+.sb-detail > [role="alert"],
+.sb-detail > .ui-empty-state-note {
   padding-inline: var(--sb-inset);
+}
+/* The status block is a card here, and the actions block shares the inset. */
+.sb-detail .sb-taskstatus {
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-2);
+  margin: 0 var(--sb-inset);
+}
+.sb-detail .sb-actions-block {
+  padding: 0 var(--sb-inset);
+  border-bottom: 0;
 }
 .sb-detail .sb-sec {
   border-bottom: 0;
