@@ -125,6 +125,8 @@ export function pullReasonMessage(reason: GitPullReason | undefined, detail?: st
       return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
     case "busy":
       return "A git operation is already running for this repository — try again in a moment.";
+    case "stale-lock":
+      return staleLockMessage(detail);
     default: {
       // Compile-time exhaustiveness: a new member of GitPullReason with no
       // case above is an error here. At runtime this is where a reason from
@@ -133,6 +135,10 @@ export function pullReasonMessage(reason: GitPullReason | undefined, detail?: st
       return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
     }
   }
+}
+
+export function staleLockMessage(detail?: string): string {
+  return `A leftover git lock file${detail ? ` (${detail})` : ""} blocks Pull. If no git command is running, delete it.`;
 }
 
 /**

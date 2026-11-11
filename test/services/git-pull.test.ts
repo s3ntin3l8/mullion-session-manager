@@ -214,6 +214,19 @@ describe("runGitPull (issue #745)", () => {
       expect(result).toMatchObject({ pulled: false, reason: "busy" });
       expect(fs.existsSync(lock)).toBe(true);
     }, 20_000);
+
+    it("reports stale-lock, naming the file, when the lock is old", async () => {
+      const lock = cloneBehindUpstream();
+      fs.writeFileSync(lock, "");
+      const old = new Date(Date.now() - 3 * 3600_000);
+      fs.utimesSync(lock, old, old);
+
+      const result = await runGitPull(tmpDir);
+      expect(result).toMatchObject({ pulled: false, reason: "stale-lock" });
+      expect(result.detail).toContain(lock);
+      expect(result.detail).toContain("3 h old");
+      expect(fs.existsSync(lock)).toBe(true);
+    }, 20_000);
   });
 
   it("isLockError recognises index.lock and ref-lock failures, and nothing else", () => {

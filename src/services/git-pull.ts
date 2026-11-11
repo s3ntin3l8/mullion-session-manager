@@ -1,4 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
+import fs from "node:fs";
 import { GIT_NO_AUTO_GC, gitEnv, gitReadOnlyEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 import type { GitPullReason, GitPullResult } from "../shared/types.js";
@@ -111,11 +112,45 @@ async function runGitWithLockRetry(
   return res;
 }
 
+// How old a lock file must be before Pull calls it orphaned. A deliberate
+// heuristic, separate from the ~2.6 s retry budget above: real fetch/merge/commit
+// locks are held for seconds, so anything this old almost certainly belongs to a
+// killed process. The trade-off: an orphaned lock younger than this still
+// reports `busy` until it crosses the threshold.
+export const STALE_LOCK_AGE_MS = 10 * 60_000;
+const LOCK_PATH = /Unable to create '([^']*\.lock)'/;
+
+function formatAge(ms: number): string {
+  const min = Math.floor(ms / 60_000);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return `${h} h`;
+  return `${Math.floor(h / 24)} days`;
+}
+
 // A fresh object per call (a caller may annotate it). The lock stderr goes to
 // the debug log, since the UI's `busy` copy does not render `detail`: an
-// orphaned lock from a killed process stays diagnosable.
-function busyResult(stderr: string): GitPullResult {
+// orphaned lock from a killed process stays diagnosable. A lock file that the
+// stderr names and that is old enough is reported as `stale-lock` with its path
+// and age so the user can remove it; it is never deleted here, since it may
+// still belong to a live process.
+function busyResult(stderr: string, now = Date.now()): GitPullResult {
   console.debug(`git pull: repository lock still held after retries: ${stderr.trim()}`);
+  const lockPath = LOCK_PATH.exec(stderr)?.[1];
+  if (lockPath) {
+    try {
+      const age = now - fs.statSync(lockPath).mtimeMs;
+      if (age > STALE_LOCK_AGE_MS) {
+        return {
+          pulled: false,
+          reason: "stale-lock",
+          detail: `${lockPath} (${formatAge(age)} old)`,
+        };
+      }
+    } catch {
+      // Vanished between the failure and the stat: treat as plain contention.
+    }
+  }
   return {
     pulled: false,
     reason: "busy",
@@ -136,6 +171,7 @@ function busyResult(stderr: string): GitPullResult {
  * - `not-fast-forward`: local branch has diverged from upstream
  * - `already-up-to-date`: behind count is 0 (no-op success)
  * - `busy`: a git lock stayed held after a few retries (try again shortly)
+ * - `stale-lock`: the held lock file is over 10 minutes old (likely orphaned)
  * - `pull-failed`: unexpected fetch or merge error
  */
 export async function runGitPull(cwd: string): Promise<GitPullResult> {

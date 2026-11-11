@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { CreateProjectModal } from "../CreateProjectModal.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
+import { staleLockMessage } from "../git/gitReasons.js";
 import { LOCAL_HOST_ID } from "../api/index.js";
 import type { Host, Project, Session } from "../api/index.js";
 import { HostStatusLabel } from "../HostStatusLabel.js";
@@ -51,6 +52,8 @@ function formatPullReasonMessage(reason: string | undefined, detail?: string): s
     // default branch would say "Pull failed: …", which is the wrong story.
     case "busy":
       return "A git operation is already running for this repository — try again in a moment.";
+    case "stale-lock":
+      return staleLockMessage(detail);
     default:
       return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
   }
