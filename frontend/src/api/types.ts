@@ -2177,7 +2177,7 @@ export interface Task {
   // Why the automatic loop stopped. The review-loop reasons ("cap",
   // "no-progress", "finding-persisted") are only meaningful while the announce
   // stamp above is set; the merge-tied ones ("rebase-exhausted",
-  // "blocked-threads", "pr-closed") are set with mergeError and stand on their own; "review-post-failed" is set without the announce stamp.
+  // "blocked-threads", "pr-closed", "ci-status-stalled") are set with mergeError and stand on their own; "review-post-failed" is set without the announce stamp.
   // See needsHuman.ts.
   needsHumanReason:
     | "cap"
@@ -2187,6 +2187,7 @@ export interface Task {
     | "blocked-threads"
     | "review-post-failed"
     | "pr-closed"
+    | "ci-status-stalled"
     | null;
   worktreePath: string | null;
   branchName: string | null;

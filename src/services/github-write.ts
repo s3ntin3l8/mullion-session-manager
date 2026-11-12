@@ -1155,6 +1155,39 @@ export async function updatePullRequestTitle(
 }
 
 /**
+ * #2904 — re-runs ONE job of a workflow run
+ * (`POST /actions/jobs/:job_id/rerun`). The lever for a coverage upload that
+ * Codecov never turned into a status: re-running the job that uploaded the
+ * coverage makes Codecov reprocess the commit, and the pending status goes
+ * green (that is exactly what a human did by hand on PR #2894).
+ *
+ * Returns `false` when GitHub REFUSES the re-run — 403/404 (a token without
+ * Actions write, a job GitHub will not re-run) and 422 ("cannot be rerun",
+ * which GitHub says of a job that is still running or of a run whose attempt
+ * has already been re-used). A refusal is a definite answer the caller acts
+ * on by SKIPPING that job and trying the next candidate — not an error. A
+ * thrown rate-limit or network error is "could not ask" and propagates.
+ */
+export async function rerunJob(
+  token: string,
+  owner: string,
+  repo: string,
+  jobId: number,
+): Promise<boolean> {
+  try {
+    await githubRequest(token, owner, repo, "POST", `/actions/jobs/${jobId}/rerun`);
+    return true;
+  } catch (err) {
+    if (err instanceof GitHubWriteScopeError) return false;
+    // 422 — "cannot be rerun". GitHub's own wording for a job it will not
+    // re-run (still running, or its attempt already re-used). A refusal, like
+    // the 403 above.
+    if (err instanceof GitHubApiError && err.statusCode === 422) return false;
+    throw err;
+  }
+}
+
+/**
  * Re-runs only the failed (and cancelled/abandoned) jobs of one workflow run
  * (`POST /actions/runs/:id/rerun-failed-jobs`). The answer for a red check that
  * no code change can fix — a lost runner, an abandoned shard — which the red-CI

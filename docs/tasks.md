@@ -572,10 +572,18 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
   hours even without a webhook), or, if the work is abandoned, close the issue and
   archive the task. Reject and Give up do not apply to a `done` task. Only a merge
   clears this reason.
+- `ci-status-stalled` — a check from another CI provider (Codecov's
+  `codecov/patch`) stayed `pending` for over half an hour on a head whose own
+  checks are all green, and Mullion's two attempts at re-uploading the coverage
+  did not settle it. Nothing in the diff can fix it: the provider is the one
+  that stopped reporting. Re-run the coverage upload by hand, or use **Merge
+  now** to override the hold.
 
 The last two are set whatever the task's status (`reviewing` or `done`) and
 clear themselves when the cause goes away: the conflict or the threads are
-gone, the merge error changes, or the PR merges.
+gone, the merge error changes, or the PR merges. `ci-status-stalled` is set on
+a `done` task (it is a merge hold) and clears itself when the status finally
+settles or the PR merges.
 
 ### The Tasks sidebar
 

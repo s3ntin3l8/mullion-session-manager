@@ -169,6 +169,7 @@ import {
 } from "./task-rate-limit-grace.js";
 import { PARKABLE_RATE_LIMIT_STATUSES, parkRateLimitedTask } from "./task-rate-limit-park.js";
 import { holdRedCiWithoutProgress } from "./task-ci-return-hold.js";
+import { holdForStuckCoverageStatus } from "./task-coverage-reupload.js";
 import { ciAllowsAutoApproval } from "./task-ci-approval-gate.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
 export { REBASE_ATTEMPT_STALE_MS };
@@ -1807,13 +1808,21 @@ async function attemptMerge(
                 .map((c) => (c.detail ? `${c.name}: ${c.detail}` : c.name))
                 .join("; ")}. Fix it, or use "Merge now" to override.`
             : "A non-required check is failing or still running";
-        recordMergeError(
-          app,
-          task.id,
-          checkRuns.ok
+        // #2904 — a non-Actions status (codecov's `codecov/patch`) that stays
+        // `pending` on a green head holds the PR forever, and the red-check
+        // path cannot see it (it is pending, not red, and has no workflow run
+        // behind it). This is where the coverage re-upload happens: the
+        // provider reprocesses the commit when the upload job runs again, and
+        // the status settles.
+        const coverage = await holdForStuckCoverageStatus(app, task, {
+          repoRef,
+          headSha: pr.headSha,
+          checkRuns: unstableCheckRuns,
+          fallbackMessage: checkRuns.ok
             ? heldReason
             : `${heldReason} The check list could not be read, so the title-lint self-heal did not run — use "Merge now" to override, or wait for the lookup to answer.`,
-        );
+        });
+        recordMergeError(app, task.id, coverage.message, coverage.reason);
         return;
       }
       case "dirty": {

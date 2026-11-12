@@ -960,19 +960,23 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   of the human's own commit is never read as a stall. A human push
   re-arms the task through the same `reannounceCappedTasksAfterHumanPush` sweep
   as before, which clears the reason with the stamp.
-- **Two merge-tied reasons.** `tasks.needsHumanReason` also takes
+- **Merge-tied reasons.** `tasks.needsHumanReason` also takes
   `rebase-exhausted` (the merge path's `recordMergeError` in
   `task-reconciler.ts` hit `MAX_REBASE_ATTEMPTS` with the PR still dirty) and
   `blocked-threads` (the merge is blocked on unresolved conversations whose
   authors are not Mullion's reviewer logins, i.e. not what
-  `resolveMullionOwnThreadsIfClean` can resolve). Unlike the review-loop
-  reasons they are set together with `mergeError`, on `reviewing` and `done`
-  tasks alike, and do not touch `autoReturnCapAnnouncedAt`; never over an
-  existing review-loop reason. `recordMergeError` clears them whenever it
-  records a different error, and `clearMergeNeedsHumanReason`
-  (`task-merge-human.ts`) clears them wherever `mergeError` is cleared and
-  when a merge is recorded. Reject also resets `rebaseAttempts` to 0, so a
-  worker that failed to rebase can be followed by a fresh auto-rebase.
+  `resolveMullionOwnThreadsIfClean` can resolve). A third, `ci-status-stalled`
+  (#2904), is set when a non-Actions status stayed pending past
+  `COVERAGE_STATUS_STALL_MS` on a green head and the coverage re-uploads ran
+  out of budget — see "A stuck non-Actions status gets its coverage re-uploaded"
+  above. Unlike the review-loop reasons they are set together with `mergeError`,
+  on `reviewing` and `done` tasks alike, and do not touch
+  `autoReturnCapAnnouncedAt`; never over an existing review-loop reason.
+  `recordMergeError` clears them whenever it records a different error, and
+  `clearMergeNeedsHumanReason` (`task-merge-human.ts`) clears them wherever
+  `mergeError` is cleared and when a merge is recorded. Reject also resets
+  `rebaseAttempts` to 0, so a worker that failed to rebase can be followed by
+  a fresh auto-rebase.
 - **Round headings.** Each stored round is `## Round N`, with a parenthetical
   of notes (`retry N`, `re-review after suggestions`, `late verdict — …`) from
   `reviewRoundLabel` (`task-round-label.ts`). A human re-review of a concluded
@@ -1887,6 +1891,31 @@ a fresh push while e2e is still queued. A human clicking Squash-and-merge on
 GitHub at least sees the red X first; "Merge now" is the equivalent override
 here. The flip side: a non-required check that never reports at all leaves a
 PR `unstable` — and therefore never auto-merging — forever.
+
+**A stuck non-Actions status gets its coverage re-uploaded (`#2904`).**
+`codecov/patch` is posted by Codecov's app, not by GitHub Actions: it is a check
+run of its own, so no workflow run of this repository stands behind it — the
+red-check path (below) cannot re-run anything for it, and it is _pending_, not
+red, so that path does not even look at it. When Codecov never resolves it, the
+PR stays `unstable` and the task never merges (the flip side above). The merge
+sweep's `unstable` arm now notices: a status posted by an app other than GitHub
+Actions that has been pending for more than 30 minutes
+(`COVERAGE_STATUS_STALL_MS`) on a head whose Actions checks are all green is
+treated as stalled, and the Actions job that uploaded the coverage is re-run
+(`POST /actions/jobs/:id/rerun`) — Codecov reprocesses the commit and posts the
+status it never did, which is what unblocked PRs #2894 and #2897 by hand on
+2026-11-10. Two guards keep it honest: the head's own workflow runs must all
+have completed first (a status pending because its job is still running is the
+normal state of a CI that has not reported yet, not a stall), and the budget is
+two re-uploads per head, at least 20 minutes apart
+(`tasks.coverageReuploadCount` / `coverageReuploadHeadSha` /
+`coverageReuploadAt`; a new head starts the budget over). After the budget is
+spent and the status is still pending, the task is flagged
+`needsHumanReason: "ci-status-stalled"` — a merge-tied reason, so the card reads
+"needs a human" instead of "still reviewing" — and the merge error names the
+stuck status and says it is a Codecov-side stall. A job GitHub refuses to
+re-run (403/422 "cannot be rerun") is skipped, not an error: the next candidate
+job is tried, and one accepted re-run is enough.
 
 **Exception — PR-title lint self-heals (`#1035`).** A failing **PR-title
 lint** check (e.g. `wagoid/commitlint-github-action` on repos that adopted

@@ -12,12 +12,21 @@ describe("needsHumanText", () => {
     expect(needsHumanText("pr-closed")).toBe(
       "the PR was closed without merging, so nothing landed",
     );
+    // #2904 — the card must not read as "merely reviewing" once the coverage
+    // re-uploads have been spent and the status is still stuck.
+    expect(needsHumanText("ci-status-stalled")).toBe(
+      "a CI status stayed pending after green CI — a Codecov-side stall; re-run the coverage upload",
+    );
   });
 
   it("treats pr-closed as a merge-tied reason, standing on its own", () => {
     expect(isMergeNeedsHumanReason("pr-closed")).toBe(true);
     expect(isMergeNeedsHumanReason("cap")).toBe(false);
     expect(isMergeNeedsHumanReason(null)).toBe(false);
+  });
+
+  it("treats ci-status-stalled as a merge-tied reason, standing on its own", () => {
+    expect(isMergeNeedsHumanReason("ci-status-stalled")).toBe(true);
   });
 
   it("reads a missing reason as the round cap — the original, still most common, case", () => {

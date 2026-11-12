@@ -63,6 +63,7 @@ const taskFixtureProps = {
       "blocked-threads",
       "review-post-failed",
       "pr-closed",
+      "ci-status-stalled",
       null,
     ],
   },

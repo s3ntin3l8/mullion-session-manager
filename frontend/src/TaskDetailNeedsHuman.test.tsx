@@ -41,6 +41,9 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
   it.each([
     ["rebase-exhausted", /Needs a human: auto-rebase gave up, the PR still conflicts with main/],
     ["blocked-threads", /Needs a human: merge blocked on unresolved review conversations/],
+    // #2904 — a stuck non-Actions status must read as a Codecov-side stall, not
+    // as a task that is merely reviewing.
+    ["ci-status-stalled", /Needs a human: a CI status stayed pending after green CI/],
   ] as const)("labels %s", (reason, expected) => {
     tasks = [makeTask({ id: 1, status: "done", needsHumanReason: reason })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
