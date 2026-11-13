@@ -365,6 +365,149 @@
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
       }
+    },
+    {
+      "name": "tablet-workspace",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "wait": 500
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tablet-navigator",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Toggle sidebar\"]"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tablet-tasks-list",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+        },
+        {
+          "waitFor": "text=need you"
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tablet-tasks-detail",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+        },
+        {
+          "waitFor": "text=need you"
+        },
+        {
+          "click": ".tasks-sidebar-view .sb-row-title >> nth=0"
+        },
+        {
+          "waitFor": "[data-testid=\"task-detail-view\"]"
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tablet-tasks-reopen",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+        },
+        {
+          "waitFor": "text=need you"
+        },
+        {
+          "click": ".tasks-sidebar-view .sb-row-title >> nth=0"
+        },
+        {
+          "waitFor": "[data-testid=\"task-detail-view\"]"
+        },
+        {
+          "click": "role=button[name=\"Close sidebar\"]"
+        },
+        {
+          "wait": 400
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+        },
+        {
+          "waitFor": "[data-testid=\"task-detail-view\"]"
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tablet-notifications",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=/Notifications/]"
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
     }
-  ]
+  ],
+  "viewports": {
+    "tablet": {
+      "width": 820,
+      "height": 1180,
+      "scale": 2,
+      "mobile": true
+    },
+    "fold": {
+      "width": 840,
+      "height": 900,
+      "scale": 2,
+      "mobile": true
+    }
+  }
 }
