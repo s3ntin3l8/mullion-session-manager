@@ -71,7 +71,7 @@ describe("RemoteHostClient git read sharing", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("a fresh read always reaches the agent and never poisons the cache", async () => {
+  it("a fresh read always reaches the agent and refreshes the cache", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, status)));
     const c = client();
     await c.resolveGitStatus("/x/y");
@@ -87,10 +87,20 @@ describe("RemoteHostClient git read sharing", () => {
       c.resolveGitDiffStats("/x/y", "AUTO", { fresh: true }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 
-    // A fresh read leaves a cached non-fresh result untouched.
+  it("serves the next cached read from what a fresh read just returned", async () => {
+    const stale = { isRepo: true, status: { branch: "main", files: [], isClean: true } };
+    const dirty = { isRepo: true, status: { branch: "main", files: ["a"], isClean: false } };
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, stale));
+    const c = client();
+    await expect(c.resolveGitStatus("/x/y")).resolves.toEqual(stale);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, dirty));
+    await expect(c.resolveGitStatus("/x/y", { fresh: true })).resolves.toEqual(dirty);
+
     fetchMock.mockClear();
-    await c.resolveGitStatus("/x/y");
+    await expect(c.resolveGitStatus("/x/y")).resolves.toEqual(dirty);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

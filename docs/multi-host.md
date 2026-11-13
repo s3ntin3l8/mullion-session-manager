@@ -1619,7 +1619,8 @@ comes back omitted, so the dashboard keeps its last-known-good). On top of that,
 `RemoteHostClient.resolveGitStatus` / `resolveGitDiffStats` share concurrent
 identical reads and reuse a successful one for 3 s, so several open tabs do not
 multiply the load (#2991). A `fresh` read (the dirty-tree and workflow gates)
-bypasses both: it always reaches the agent and never writes the cache.
+never reads the cache or joins another request, so it always reaches the agent;
+its result then refreshes the cache for the next ordinary read.
 
 A session context that cannot be resolved is never replaced by the project's
 host or cwd:

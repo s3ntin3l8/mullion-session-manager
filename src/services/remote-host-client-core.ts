@@ -566,24 +566,28 @@ export class RemoteHostClient {
   /** Issue #2991: shares one agent round trip between callers asking for the
    * same read — concurrent misses join the in-flight request, and a success is
    * reused for GIT_READ_CACHE_TTL_MS. Failures are never cached. A `fresh`
-   * read goes straight to the agent and neither joins nor writes the cache, so
-   * the dirty-tree and workflow gates can never see a shared or stale result. */
+   * read always goes to the agent and never joins another request or serves
+   * from the cache, so the dirty-tree and workflow gates can never see a
+   * shared or stale result; its success is still written, so it also refreshes
+   * what the next cached caller sees (the local getGitStatus does the same). */
   private sharedGitRead<T>(key: string, fresh: boolean, fetch: () => Promise<T>): Promise<T> {
-    if (fresh) return fetch();
-    const now = Date.now();
+    const remember = (result: T): T => {
+      const ts = Date.now();
+      for (const [k, v] of this.gitReadCache) {
+        if (ts - v.ts >= GIT_READ_CACHE_TTL_MS) this.gitReadCache.delete(k);
+      }
+      this.gitReadCache.set(key, { ts, result });
+      return result;
+    };
+    if (fresh) return fetch().then(remember);
     const hit = this.gitReadCache.get(key);
-    if (hit && now - hit.ts < GIT_READ_CACHE_TTL_MS) return Promise.resolve(hit.result as T);
+    if (hit && Date.now() - hit.ts < GIT_READ_CACHE_TTL_MS) {
+      return Promise.resolve(hit.result as T);
+    }
     const inFlight = this.gitReadInFlight.get(key);
     if (inFlight) return inFlight as Promise<T>;
     const run = fetch()
-      .then((result) => {
-        const ts = Date.now();
-        for (const [k, v] of this.gitReadCache) {
-          if (ts - v.ts >= GIT_READ_CACHE_TTL_MS) this.gitReadCache.delete(k);
-        }
-        this.gitReadCache.set(key, { ts, result });
-        return result;
-      })
+      .then(remember)
       .finally(() => {
         this.gitReadInFlight.delete(key);
       });

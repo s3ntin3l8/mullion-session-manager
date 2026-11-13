@@ -2,6 +2,7 @@
 // (host, cwd) asks the agent once, not once per session — and a dead host is
 // tried once per batch, with every id still omitted.
 
+import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
 import { buildApp } from "../../src/app.js";
@@ -63,6 +64,30 @@ describe("batch git routes: one remote call per (host, cwd)", () => {
         "/remote/a",
         "/remote/b",
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("git-statuses also collapses the project row into its sessions' cwd", async () => {
+    const app = await buildApp();
+    try {
+      const ids = await seed(app, ["/remote/proj", "/remote/proj"]);
+      const projectId = app.db
+        .select({ projectId: sessions.projectId })
+        .from(sessions)
+        .where(eq(sessions.id, ids[0]))
+        .get()!.projectId;
+      const client: Client = { resolveGitStatus: vi.fn().mockResolvedValue(STATUS) };
+      stubClient(client);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-statuses?ids=${projectId}&sessionIds=${ids.join(",")}`,
+      });
+      const body = res.json() as { projects: Record<string, unknown>; sessions: object };
+      expect(Object.keys(body.projects)).toHaveLength(1);
+      expect(Object.keys(body.sessions)).toHaveLength(2);
+      expect(client.resolveGitStatus).toHaveBeenCalledTimes(1);
     } finally {
       await app.close();
     }
