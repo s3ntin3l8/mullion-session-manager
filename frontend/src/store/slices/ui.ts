@@ -40,7 +40,9 @@ import {
 
 // State patch that clears the transient drill-ins when the right sidebar is
 // about to start showing `view` from closed or from another view: the GitHub
-// PR/issue for "github", the selected task for "tasks" (#2973). Already
+// PR/issue for "github", and the selected task on every such change (#2973),
+// so entering Tasks lands on the list and leaving it for another view does
+// not keep a board card ringed for a detail nobody is looking at. Already
 // showing that view: nothing to reset. Callers that open a specific task or
 // PR set it after (or instead of) this patch.
 function sidebarEntryReset(
@@ -52,9 +54,10 @@ function sidebarEntryReset(
   selectedTaskId?: null;
 } {
   if (s.rightSidebarOpen && s.rightSidebarView === view) return {};
-  if (view === "github") return { githubOpenPrByProject: {}, githubOpenIssueByProject: {} };
-  if (view === "tasks") return { selectedTaskId: null };
-  return {};
+  if (view === "github") {
+    return { githubOpenPrByProject: {}, githubOpenIssueByProject: {}, selectedTaskId: null };
+  }
+  return { selectedTaskId: null };
 }
 
 function deriveTerminalPrefs(settings: AppSettings): UiSlice["terminalPrefs"] {

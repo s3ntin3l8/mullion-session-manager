@@ -340,7 +340,17 @@ describe("git deep-link requests", () => {
       openDetail();
       useDashboardStore.getState().toggleRightSidebarView("tasks");
       expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      // Asserted before reopening, so the close-side clear is pinned on its
+      // own and not masked by the reset on the way back in.
+      expect(selected()).toBeNull();
       useDashboardStore.getState().toggleRightSidebar();
+      expect(selected()).toBeNull();
+    });
+
+    it("leaving Tasks for another view drops the detail", () => {
+      openDetail();
+      useDashboardStore.getState().toggleRightSidebarView("git");
+      expect(useDashboardStore.getState().rightSidebarView).toBe("git");
       expect(selected()).toBeNull();
     });
 
