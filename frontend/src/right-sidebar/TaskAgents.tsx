@@ -55,6 +55,7 @@ export function TaskAgents({ task }: { task: Task }) {
   const [open, setOpen] = useState(false);
   const editRef = useRef<HTMLButtonElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   // Edit and Done are separate buttons in separate blocks, so the one that was
   // clicked unmounts: move focus to where the user goes next. Not on mount.
   const toggled = useRef(false);
@@ -66,7 +67,8 @@ export function TaskAgents({ task }: { task: Task }) {
   useEffect(() => {
     if (!toggled.current) return;
     if (unfolded) editorRef.current?.querySelector<HTMLElement>("select, input")?.focus();
-    else editRef.current?.focus();
+    // Edit is gone when the task stopped being editable mid-edit: land on the host.
+    else (editRef.current ?? rootRef.current)?.focus();
   }, [unfolded]);
   // The agent list is only needed once the dropdowns exist.
   useAsyncData(
@@ -129,7 +131,7 @@ export function TaskAgents({ task }: { task: Task }) {
   };
 
   return (
-    <div className="sb-agents">
+    <div className="sb-agents" ref={rootRef} tabIndex={-1}>
       {!unfolded && (
         <dl className="sb-kv">
           <dt>Worker</dt>
@@ -229,6 +231,7 @@ export function TaskAgents({ task }: { task: Task }) {
               type="button"
               className="sb-link"
               aria-expanded
+              aria-controls={EDITOR_ID}
               onClick={() => {
                 toggled.current = true;
                 setOpen(false);

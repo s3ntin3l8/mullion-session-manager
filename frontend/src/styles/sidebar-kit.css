@@ -1467,6 +1467,10 @@ button.sb-chip--label[aria-pressed="true"] {
 .sb-agents {
   margin-top: 4px;
 }
+/* Programmatic focus fallback only; never a tab stop. */
+.sb-agents:focus {
+  outline: none;
+}
 .sb-agent-src {
   font-size: 0.6875rem;
 }

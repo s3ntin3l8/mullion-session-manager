@@ -106,6 +106,14 @@ describe("TaskAgents", () => {
     expect(screen.getByRole("button", { name: "Edit" })).toHaveFocus();
   });
 
+  it("keeps focus inside the panel when the task stops being editable mid-edit", async () => {
+    const user = userEvent.setup();
+    const { container, rerender } = render(<TaskAgents task={task({})} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    rerender(<TaskAgents task={task({ status: "in_progress", agentCommand: "claude" })} />);
+    expect(container.firstElementChild).toHaveFocus();
+  });
+
   it("says Hermes picks its own model instead of a reviewer model field", async () => {
     const user = userEvent.setup();
     render(<TaskAgents task={task({ reviewAgent: "hermes" })} />);
