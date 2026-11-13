@@ -38,18 +38,23 @@ import {
   sameSidebarTarget,
 } from "../sidebarHistory.js";
 
-// State patch that clears the GitHub drill-in when the right sidebar is about
-// to start showing `view` === "github" from closed or from another view.
-// Already showing GitHub: nothing to reset.
-function githubEntryReset(
+// State patch that clears the transient drill-ins when the right sidebar is
+// about to start showing `view` from closed or from another view: the GitHub
+// PR/issue for "github", the selected task for "tasks" (#2973). Already
+// showing that view: nothing to reset. Callers that open a specific task or
+// PR set it after (or instead of) this patch.
+function sidebarEntryReset(
   s: { rightSidebarOpen: boolean; rightSidebarView: string },
   view: string,
 ): {
   githubOpenPrByProject?: Record<number, number | null>;
   githubOpenIssueByProject?: Record<number, number | null>;
+  selectedTaskId?: null;
 } {
-  if (view !== "github" || (s.rightSidebarOpen && s.rightSidebarView === "github")) return {};
-  return { githubOpenPrByProject: {}, githubOpenIssueByProject: {} };
+  if (s.rightSidebarOpen && s.rightSidebarView === view) return {};
+  if (view === "github") return { githubOpenPrByProject: {}, githubOpenIssueByProject: {} };
+  if (view === "tasks") return { selectedTaskId: null };
+  return {};
 }
 
 function deriveTerminalPrefs(settings: AppSettings): UiSlice["terminalPrefs"] {
@@ -360,7 +365,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         rightSidebarView: view,
         rightSidebarOpen: true,
         sidebarHistory: [],
-        ...githubEntryReset(get(), view),
+        ...sidebarEntryReset(get(), view),
       });
     },
 
@@ -373,7 +378,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         rightSidebarView: view,
         rightSidebarOpen: true,
         sidebarHistory: [],
-        ...githubEntryReset(s, view),
+        ...sidebarEntryReset(s, view),
         ...(projectId !== undefined && {
           rightSidebarProjectRequest: {
             projectId,
@@ -465,14 +470,14 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         return;
       }
       writeBool(STORAGE_KEYS.rightSidebarOpen, true);
-      set((s) => ({ rightSidebarOpen: true, ...githubEntryReset(s, s.rightSidebarView) }));
+      set((s) => ({ rightSidebarOpen: true, ...sidebarEntryReset(s, s.rightSidebarView) }));
     },
 
     closeRightSidebar: () => {
       if (!get().rightSidebarOpen) return;
       writeBool(STORAGE_KEYS.rightSidebarOpen, false);
       // A GitHub drill-in is transient, so it is cleared on both edges: on
-      // leaving (here) and on entering the GitHub view (`githubEntryReset`).
+      // leaving (here) and on entering the GitHub view (`sidebarEntryReset`).
       // Leaving alone misses switching to another rail view before closing,
       // and a PR opened from a dock panel while the sidebar is shut; entering
       // alone would leave a stale drill-in sitting in the store. A reopen
@@ -481,6 +486,10 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set({
         rightSidebarOpen: false,
         sidebarHistory: [],
+        // A task detail is transient too (#2973): without this, every way of
+        // closing the drawer left the detail selected, so reopening Tasks
+        // landed on it again and only the Back chevron led to the list.
+        selectedTaskId: null,
         ...(leavingGithub ? { githubOpenPrByProject: {}, githubOpenIssueByProject: {} } : {}),
       });
     },
@@ -561,8 +570,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         ),
         rightSidebarView: "tasks",
         rightSidebarOpen: true,
-        ...githubEntryReset(s, "tasks"),
-      }));
+              }));
     },
 
     setFollowedProjectId: (projectId) => {
