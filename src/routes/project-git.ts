@@ -118,6 +118,19 @@ function createBatchMemo(): <T>(key: string, call: () => Promise<T>) => Promise<
   };
 }
 
+/**
+ * Issue #2991: a host the heartbeat has marked offline (three missed pings) is
+ * not asked for git state by the batch polls — every id of it is omitted, which
+ * the dashboard reads as "keep last-known-good", and it is retried as soon as
+ * the heartbeat sees it again. Only `offline` skips: `degraded` (slow or
+ * saturated) and `pending` (not checked yet) are still polled, so a host that
+ * is merely slow never looks unreachable. The `fresh` gate paths do not go
+ * through here.
+ */
+function isHostOffline(app: FastifyInstance, hostId: string): boolean {
+  return app.hostHeartbeatTracker?.getHealth(hostId)?.status === "offline";
+}
+
 export interface ProjectGitBranchesResult {
   branches: GitBranchInfo[];
   worktrees: GitWorktreeInfo[];
@@ -250,6 +263,10 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               if (failure) problemsResult[project.id] = failure;
             }
           } else {
+            if (isHostOffline(app, project.hostId)) {
+              projectOutcome.failed(project.hostId);
+              continue;
+            }
             try {
               const remoteResult = await memoRemote(
                 `status\0${project.hostId}\0${project.cwd}`,
@@ -298,6 +315,10 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               sessionsResult[target.sessionId] = status;
             }
           } else {
+            if (isHostOffline(app, target.hostId)) {
+              sessionOutcome.failed(target.hostId);
+              continue;
+            }
             try {
               const remoteResult = await memoRemote(`status\0${target.hostId}\0${target.cwd}`, () =>
                 getRemoteHostClient(app, target.hostId).resolveGitStatus(target.cwd),
@@ -382,6 +403,10 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
             result[target.sessionId] = stats;
           }
         } else {
+          if (isHostOffline(app, target.hostId)) {
+            outcome.failed(target.hostId);
+            continue;
+          }
           try {
             const remoteResult = await memoRemote(
               `diff\0${target.hostId}\0${target.cwd}\0${base ?? ""}`,
@@ -466,7 +491,15 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           // roughly double this project's contribution to the batch's
           // total latency for no reason (nothing here depends on the
           // other's result).
+          // Issue #2991: an offline host is not asked by either half — both
+          // omit it, which keeps the dashboard's last-known-good.
+          const hostOffline =
+            project.hostId !== LOCAL_HOST_ID && isHostOffline(app, project.hostId);
           const branchesPromise = (async () => {
+            if (hostOffline) {
+              refsOutcome.failed(project.hostId);
+              return;
+            }
             // No `detail` param, same as the background poll path already
             // documented on the per-project route's own comment (the
             // Source Control's own on-demand fetch is what opts into the
@@ -495,6 +528,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           // (viaRemote's own doc comment), so this still needs no
           // try/catch — just a three-way branch instead of a collapsed one.
           const prsPromise = (async () => {
+            if (hostOffline) return;
             const result = await resolveRepoRefResult(app, project);
             if (!result.ok) {
               // Transient (remote host unreachable) — omit, preserving

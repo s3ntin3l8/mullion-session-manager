@@ -735,6 +735,14 @@ export async function projectsRoute(app: FastifyInstance) {
         if (row.hostId === LOCAL_HOST_ID) {
           currentBranch = readGitBranch(row.cwd);
           ruleFiles = listExistingProjectRuleFileNames(row.cwd);
+        } else if (app.hostHeartbeatTracker?.getHealth(row.hostId)?.status === "offline") {
+          // Issue #2991: a host the heartbeat has marked offline is not asked
+          // on every poll (each ask waits out the request timeout and logs a
+          // failure); both fields degrade the same way a failed call would,
+          // and the next poll after it is back fills them in. `degraded` and
+          // `pending` hosts are still asked.
+          currentBranch = null;
+          ruleFiles = [];
         } else {
           // Hermes review, PR #458 — these two used to await in series,
           // doubling this row's own latency even though the outer
