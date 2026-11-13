@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 19</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 20</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 19</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 20</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -2195,7 +2195,7 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          phone, the fold closed
+          phones; a foldable closed; a narrow foldable open in portrait
         </td>
       </tr>
       <tr>
@@ -2235,7 +2235,7 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          about 800 to 1279px
+          about 800 to 1099px
         </td>
         <td
           style="
@@ -2253,7 +2253,37 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          the fold open (840), iPad portrait, iPad landscape
+          wide foldables open, iPad portrait
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          1100 to 1279px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Desktop structure with the left sidebar collapsed by default: rail, grid, docked right
+          sidebar
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          iPad landscape, a small laptop window
         </td>
       </tr>
       <tr>
@@ -2273,7 +2303,7 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          Desktop: rail, left sidebar, grid, docked right sidebar
+          Desktop with the left sidebar open by default
         </td>
         <td
           style="
@@ -2282,25 +2312,237 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          laptop, monitor
+          laptop, monitor, large iPad in landscape
         </td>
       </tr>
     </table>
     <ul class="notes" style="max-width: 860px">
       <li>
-        The layout follows width, not the device or the pointer. Touch only changes target sizes and
-        adds the key bar.
+        The layout follows width, not the device or the pointer. A touch pointer changes four things
+        at any width: targets of 44px and more, the key bar, sheets where a mouse gets a popover,
+        and no hover-only controls. A large iPad in landscape is already past 1280px, so the desktop
+        layout has to work with touch in any case.
       </li>
       <li>
-        <span class="tag open">open</span>An iPad in landscape (1180px) gets two halves of about
-        540px. That is roomy for two sessions but still no grid. The alternative is to let the
-        desktop layout start earlier, at about 1100px.
+        The halves are percentages, not 372px. They hold a 40-column terminal from about 800px of
+        width; below that an open view takes the full width.
+      </li>
+    </ul>
+    <table
+      style="
+        border-collapse: collapse;
+        max-width: 980px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 8px;
+      "
+    >
+      <tr>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Foldable, open
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Reported viewport
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          What it gets
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          How sure
+        </th>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Pixel 10 Pro Fold (the owner's)
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          about 840 × 900
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          two halves of about 372px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          taken from the app's behaviour, not read off the device
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Galaxy Z Fold 7
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          984 × 1092
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          two halves of about 444px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          one third-party spec site
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          iPhone Duo, portrait
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          626 to 669 wide
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          the phone layout
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          derived from the panel resolution; unconfirmed
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          iPhone Duo, landscape
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          890 to 951 wide, 626 to 669 high
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          two halves; the rails must scroll at this height
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          same
+        </td>
+      </tr>
+    </table>
+    <ul class="notes" style="max-width: 860px">
+      <li>
+        So 840 is one device, not a standard: open foldables run from about 630 to about 980. To
+        read the real numbers off a device, open <code>prototype.html#size</code> on it.
       </li>
     </ul>
 
     <h3 style="margin: 22px 0 8px">9.2 · Folding and unfolding</h3>
     <p class="lede">
-      On a foldable the width changes while you work, so the state has to carry over.
+      On a foldable the width changes while you work, so the state has to carry over. Folding never
+      changes which sessions belong to which rail; it only stops showing two things at once.
     </p>
     <table
       style="
@@ -2389,7 +2631,8 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          Session A; B is next in the picker
+          The one you used last (typed in or tapped). The other is one step away in the picker,
+          which lists all sessions in one list
         </td>
         <td
           style="
@@ -2418,7 +2661,7 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          That view, full screen, because it was opened last; back returns to session A
+          That view, full screen, if it was opened or used last; back returns to session A
         </td>
         <td
           style="

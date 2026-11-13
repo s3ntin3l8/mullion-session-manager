@@ -1545,6 +1545,17 @@
       }
       render();
       after();
+      // #size: show the viewport this device reports, to check real foldables against the design.
+      if (flag("size")) {
+        const s = document.createElement("div");
+        s.style.cssText =
+          "position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);z-index:9;background:#d7b06a;color:#111;padding:14px 18px;border-radius:12px;font:600 20px system-ui;text-align:center";
+        const show = () =>
+          (s.innerHTML = `${innerWidth} × ${innerHeight} CSS px<br><small>pixel ratio ${devicePixelRatio} · half = ${Math.round(innerWidth / 2 - 48)}px</small>`);
+        addEventListener("resize", show);
+        show();
+        document.body.append(s);
+      }
     </script>
   </body>
 </html>
