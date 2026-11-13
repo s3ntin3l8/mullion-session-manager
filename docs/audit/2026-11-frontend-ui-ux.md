@@ -117,19 +117,40 @@ flow for the same job.
 
 ## Direction for phone and tablet
 
-Not decided here; each choice is its own issue so a person weighs in before work starts.
+**Product principle (from the owner, after the audit): Tasks is one of the two primary ways
+to use Mullion, and the other is the terminal and workspace.** Today it is not. Tasks is a
+board that is deliberately "not a peer of the workspace" (`App.tsx`, the comment above
+`KanbanBoardOverlay`), reached from a sidebar entry or the palette. On phone it lives inside
+the navigator's Tasks tab, and on tablet the task detail is a drawer over the workspace,
+since #2874 moved it out of the board. Findings 1 to 5 are largely symptoms of that
+mismatch: a primary mode is being served by a secondary surface.
 
-1. **One task-detail surface on compact tiers (#2976).** Recommended first. It is the
-   cheapest change that removes most of the "muddled" feeling: one place, one close
-   model, one back-gesture order, and it also makes the finding 1 fix permanent rather than a
-   patch on one of two surfaces.
-2. **Dock the right sidebar on wide tablets and foldables (#2977).** At 840px a docked 310px
-   sidebar plus the 40px rail still leaves about 490px for the workspace, enough for one
-   terminal pane. It removes the "reading hides the work" problem entirely. It is a bigger
-   change and has its own risks (rotation, fold and unfold, the pane cap), so it should
-   follow the decision above and stay behind the existing layout settings.
+The direction this implies, to be decided and specified in #2976 and #2977:
 
-Quick wins that do not need a decision are findings 1, 2, 3 and 6 (#2973, #2974, #2978).
+1. **Two top-level modes, Tasks and Workspace, switchable from every tier.** One control in
+   the toolbar, always visible, and the same on phone, tablet and desktop. Each mode owns
+   the whole screen and its own navigation; neither is an overlay on the other.
+2. **Task detail is part of the Tasks mode, not a drawer.**
+   - Tablet and desktop: a master-detail layout, the task list beside the detail, so there
+     is nothing to dismiss and nothing that can be closed by accident. Selecting a task is
+     navigation.
+   - Phone: the list, then the detail as a pushed screen, with the system back gesture as
+     the way back.
+3. **The right sidebar goes back to being workspace context** (Git, History, GitHub, Files,
+   Project). Tasks leaves it, which removes the second Tasks entry point and the second
+   task-detail surface (finding 4).
+4. **Cross-links carry the user between modes and back.** A task opens its session or PR in
+   Workspace; a session shows its task; "Back to Tasks" returns to the same task. This is the
+   one part of the design that needs care, because the two modes share objects.
+
+What this does to the findings: 1, 2, 3 and 5 disappear once Tasks is not a drawer; 4 is
+resolved by construction; 6 and 7 are unaffected. The point fixes #2973 and #2974 stay worth
+doing only as a cheap interim (#2973 is a few lines in the store), and should be dropped if the
+redesign lands soon.
+
+Open questions for the owner, in #2976: does the mode switch apply to desktop as well (this
+text assumes yes, so the model is the same on every tier), and what the unread and
+"needs you" signal looks like on the switch when the user is in Workspace mode.
 
 ---
 
@@ -175,7 +196,7 @@ the drawer's X, tap the Tasks rail icon again.
 | #2973 | 1              | fix(uiux): task detail sticks in the tablet sidebar after the drawer closes           |
 | #2974 | 2, 3           | fix(uiux): the floating right sidebar closes on accidental touch on tablet            |
 | #2975 | guardrail      | ci: capture the tablet tier in visual checks                                          |
-| #2976 | 4              | docs(uiux): decide one task-detail surface and one Tasks entry on phone and tablet    |
+| #2976 | 4              | docs(uiux): make Tasks a primary mode beside Workspace, with one task-detail surface  |
 | #2977 | 5              | docs(uiux): decide docked versus floating sidebars on wide tablets and foldables      |
 | #2978 | 6              | fix(uiux): the empty workspace tells touch users to press ⌘K                          |
 | #2886 | 7              | fix(uiux): sidebar workspace rows, right-rail badge labels and heading order fail axe |
