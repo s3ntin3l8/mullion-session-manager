@@ -874,6 +874,8 @@
         <button data-view="git"><i>±</i>Git</button>
         <button data-view="files"><i>▤</i>Files</button>
         <button data-view="device"><i>▯</i>Device</button>
+        <button data-view="browser"><i>◎</i>Browser</button>
+        <button data-view="dock"><i>▤</i>Dock</button>
         <hr class="ws" />
         <span id="rsess" class="ws" style="display: contents"></span>
         <button class="ws" data-add="right"><i>＋</i></button>
@@ -984,6 +986,19 @@
             <div class="box"><b>Pixel 9 emulator</b> · running <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Stop</span></div>
             <div class="devscreen">Pixel 9 screen<br><small>live, touch goes to the device</small></div>
             <div class="box"><b>Pixel Tablet</b> · stopped <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Start</span></div>`;
+        if (state.view === "browser")
+          return `<h3>Browser · ${state.left.split(" · ")[0]}</h3>
+            <div class="box" style="display:flex;gap:8px;align-items:center"><span>←</span><span>→</span><span>⟳</span><span style="flex:1;border:1px solid var(--border);border-radius:7px;padding:6px 10px">localhost:5173/login</span></div>
+            <div class="devscreen" style="border-radius:8px;height:520px">The session's browser<br><small>the page the agent on the left is driving</small></div>
+            <div class="box">Follows the session shown on the left half.</div>`;
+        if (state.view === "dock")
+          return `<h3>Dock · aurora-web</h3>
+            <button class="row"><b style="color:var(--g)">●</b> dev <small>npm run dev · localhost:5173 · running</small></button>
+            <button class="row"><b style="color:var(--dim)">●</b> api <small>npm run api · stopped</small></button>
+            <button class="row"><b style="color:var(--y)">●</b> tests <small>vitest --watch · 1 failing</small></button>
+            <div style="margin:10px 0"><span class="btn ghost">Restart</span><span class="btn ghost">Stop</span><span class="btn ghost">Open in browser</span></div>
+            <div class="peek" style="height:330px;font-size:12px">dev · log (read only)<br><br>VITE v6 ready in 412 ms<br>➜ Local: http://localhost:5173/<br>[hmr] update /src/Login.tsx<br>[hmr] update /src/Login.tsx</div>
+            <div class="box">Shows the monitors of the left session's project. To type into one, open it as a session.</div>`;
         if (state.view !== "tasks")
           return `<h3>${state.view}</h3><div class="box">Placeholder for the ${state.view} view. Tap its rail tab again to close.</div>`;
         if (!state.task)
@@ -1308,6 +1323,8 @@
       const st = location.hash.match(/stack=(\w+)/);
       if (st) state.stack = st[1];
       if (flag("split")) state.right = "claude · orbit-api";
+      const vw = location.hash.match(/view=(\w+)/);
+      if (vw) state.view = vw[1];
       const after = () => {
         if (flag("addsheet")) addSheet("right");
         if (flag("wssheet")) wsSheet();

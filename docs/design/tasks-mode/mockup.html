@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 15</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 16</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 15</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 16</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -995,6 +995,32 @@
           workspaces with activity, and New workspace at the end.
         </figcaption>
       </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#ws&view=browser"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <span class="tag open">proposal</span><b>2f · Browser.</b> A right-rail view, like Device:
+          the browser of the session shown on the left, so you prompt on one half and watch the page
+          on the other.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#ws&view=dock"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <span class="tag open">proposal</span><b>2g · Dock.</b> A right-rail view: the monitors of
+          the left session's project with their state, start and stop, and the selected one's log,
+          read only. Today the Dock does not exist on touch at all.
+        </figcaption>
+      </figure>
     </div>
     <ul class="notes" style="max-width: 860px; margin-top: 24px">
       <li>
@@ -1016,6 +1042,23 @@
         <b>No docked left sidebar on the fold.</b> Its contents are reached from the rail: the
         workspace chip opens the workspace list, "＋" opens the session sheet, and Devices is a
         right-rail view.
+      </li>
+      <li>
+        <span class="tag open">proposal</span><b>One rule for companions on the fold.</b> Anything
+        you look at beside a session is a right-rail view: Tasks, GitHub, Git, Files, Device,
+        Browser, Dock. The left half is always a session. On desktop Browser and Dock stay as they
+        are (a pane in the grid, the bottom dock).
+      </li>
+      <li>
+        <b>Why the Dock log is read only here.</b> The Dock is switched off under a touch pointer
+        today, on purpose: the key bar sends input by session, and cannot tell a session's own pane
+        from a Dock monitor of the same session. A read-only log avoids that; typing into a monitor
+        means opening it as a session.
+      </li>
+      <li>
+        <b>Width check, estimated.</b> A half is 372px. With the default 14px terminal font that is
+        about 40 columns, which is exactly the smallest grid the server allows; below it the app
+        shrinks the font. To be confirmed on the device.
       </li>
       <li>
         <b>Narrow tablets.</b> Where a half would be narrower than about 400px (windows under
@@ -1137,7 +1180,7 @@
               padding: 6px 16px 10px;
             "
           >
-            <div class="hd" style="margin: 12px 0 4px">Devices</div>
+            <div class="hd" style="margin: 12px 0 4px">Beside this session</div>
             <div
               style="
                 display: flex;
@@ -1158,6 +1201,26 @@
               "
             >
               ▯ Pixel Tablet · stopped<span class="grow"></span><span class="pill">Start</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ▤ Dock · aurora-web<span class="grow"></span><span class="pill">1 running</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ◎ Browser · task #7 worker<span class="grow"></span><span class="pill">Open</span>
             </div>
             <div class="hd" style="margin: 16px 0 4px">App</div>
             <div
@@ -1183,8 +1246,10 @@
           <span class="tag rec">decided</span><b>3d · "More" replaces the drawer.</b> The left
           drawer goes away. Its four tabs each have a home: Projects is the session picker (the
           title in the top bar), Tasks is the mode bar, Devices and Settings open from "⋯" at the
-          end of the mode bar, as a bottom sheet with rows at touch size. An open device screen is a
-          pane and stays in the picker's "Open panes".
+          end of the mode bar, as a bottom sheet with rows at touch size. The sheet also gets Dock
+          and Browser (proposal): each opens full screen, the Dock as a list of monitors with a
+          read-only log. An open device or browser screen is a pane and stays in the picker's "Open
+          panes".
         </figcaption>
       </figure>
     </div>
