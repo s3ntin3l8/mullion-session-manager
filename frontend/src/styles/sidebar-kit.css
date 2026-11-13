@@ -1518,7 +1518,6 @@ button.sb-chip--label[aria-pressed="true"] {
 .sb-agent-fld .settings-dropdown select {
   width: 100%;
   min-width: 0;
-  text-overflow: ellipsis;
 }
 .sb-agent-hint {
   margin: 2px 0 0;

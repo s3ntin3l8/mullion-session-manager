@@ -34,7 +34,7 @@ function ModelField({
   sidebar,
 }: {
   label: string;
-  // Accessible name stem; stays unique when the visible label is shortened.
+  // Accessible name; stays unique when the visible label is shortened.
   aria: string;
   cli: ModelCli;
   role: ModelRole;
@@ -94,7 +94,7 @@ function ModelField({
       )}
       {(!withProvider || provider !== null) && (
         <ModelSelect
-          ariaLabel={`${aria} model`}
+          ariaLabel={aria}
           value={value}
           options={options}
           defaultLabel={withProvider && value === null ? "Choose a model…" : defaultLabel(resolved)}
@@ -155,7 +155,7 @@ export function TaskModelControls({
         <ModelField
           key={`model-${workerCli}`}
           label="Model"
-          aria="Model"
+          aria="Worker model"
           cli={workerCli}
           role="implementer"
           value={task.modelOverride ?? null}

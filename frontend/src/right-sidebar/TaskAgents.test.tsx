@@ -94,7 +94,16 @@ describe("TaskAgents", () => {
     expect(screen.getByText("Worker")).toBeInTheDocument();
     expect(screen.getByText("Reviewer")).toBeInTheDocument();
     expect(screen.queryByText("(default)")).toBeNull();
-    expect(screen.getByRole("combobox", { name: "Reviewer model model" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Reviewer model" })).toBeInTheDocument();
+  });
+
+  it("moves keyboard focus into the editor on Edit and back to Edit on Done", async () => {
+    const user = userEvent.setup();
+    render(<TaskAgents task={task({})} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("combobox", { name: "Worker agent" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("button", { name: "Edit" })).toHaveFocus();
   });
 
   it("says Hermes picks its own model instead of a reviewer model field", async () => {
@@ -102,7 +111,7 @@ describe("TaskAgents", () => {
     render(<TaskAgents task={task({ reviewAgent: "hermes" })} />);
     await user.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByText("Hermes picks its own model.")).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Reviewer model model" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Reviewer model" })).toBeNull();
   });
 
   it("shows a failed save inline", async () => {

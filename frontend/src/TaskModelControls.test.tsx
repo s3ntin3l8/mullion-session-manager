@@ -71,11 +71,11 @@ afterEach(cleanup);
 describe("TaskModelControls", () => {
   it("opencode shows a provider dropdown, then a model list filtered by it", async () => {
     const onUpdate = renderControls({ workerAgent: "opencode" });
-    const provider = await screen.findByLabelText("Model provider");
-    expect(screen.queryByLabelText("Model model")).toBeNull();
+    const provider = await screen.findByLabelText("Worker model provider");
+    expect(screen.queryByLabelText("Worker model")).toBeNull();
     await waitFor(() => expect(screen.getByText("anthropic")).toBeTruthy());
     fireEvent.change(provider, { target: { value: "openrouter" } });
-    const model = await screen.findByLabelText("Model model");
+    const model = await screen.findByLabelText("Worker model");
     expect(Array.from(model.querySelectorAll("option")).map((o) => o.value)).toEqual([
       "",
       "openrouter/foo",
@@ -90,7 +90,7 @@ describe("TaskModelControls", () => {
       workerAgent: "opencode",
       t: { modelOverride: "openrouter/bar" },
     });
-    const provider = await screen.findByLabelText("Model provider");
+    const provider = await screen.findByLabelText("Worker model provider");
     expect(screen.getAllByText("Default (openrouter/foo)")).toHaveLength(2);
     expect((provider as HTMLSelectElement).value).toBe("openrouter");
     fireEvent.change(provider, { target: { value: "" } });
@@ -103,8 +103,8 @@ describe("TaskModelControls", () => {
     ["mcode", "minimax/m3", "Default"],
   ])("%s has no provider step, only a model dropdown", async (agent, model, label) => {
     const onUpdate = renderControls({ workerAgent: agent });
-    const select = await screen.findByLabelText("Model model");
-    expect(screen.queryByLabelText("Model provider")).toBeNull();
+    const select = await screen.findByLabelText("Worker model");
+    expect(screen.queryByLabelText("Worker model provider")).toBeNull();
     expect(screen.getByText(label)).toBeTruthy();
     await screen.findByText(model);
     fireEvent.change(select, { target: { value: model } });
@@ -113,26 +113,26 @@ describe("TaskModelControls", () => {
 
   it("claude offers Custom… and a small-model control; codex has no small model", async () => {
     renderControls({ workerAgent: "claude" });
-    expect(await screen.findByLabelText("Small model model")).toBeTruthy();
+    expect(await screen.findByLabelText("Small model")).toBeTruthy();
     expect(screen.getAllByText("Custom…", { selector: "option" }).length).toBeGreaterThan(0);
     cleanup();
     renderControls({ workerAgent: "codex" });
-    await screen.findByLabelText("Model model");
-    expect(screen.queryByLabelText("Small model model")).toBeNull();
+    await screen.findByLabelText("Worker model");
+    expect(screen.queryByLabelText("Small model")).toBeNull();
   });
 
   it("shows the reviewer model only for a CLI review agent", async () => {
     renderControls({ workerAgent: "claude", reviewerAgent: "codex" });
-    expect(await screen.findByLabelText("Reviewer model model")).toBeTruthy();
+    expect(await screen.findByLabelText("Reviewer model")).toBeTruthy();
     cleanup();
     renderControls({ workerAgent: "claude", reviewerAgent: null });
-    await screen.findByLabelText("Model model");
-    expect(screen.queryByLabelText("Reviewer model model")).toBeNull();
+    await screen.findByLabelText("Worker model");
+    expect(screen.queryByLabelText("Reviewer model")).toBeNull();
   });
 
   it("renders nothing for an agent with no model concept", () => {
     renderControls({ workerAgent: "gemini" });
-    expect(screen.queryByLabelText("Model model")).toBeNull();
+    expect(screen.queryByLabelText("Worker model")).toBeNull();
   });
 
   it("surfaces a refused save", async () => {
@@ -146,10 +146,27 @@ describe("TaskModelControls", () => {
         onUpdate={onUpdate}
       />,
     );
-    const select = await screen.findByLabelText("Model model");
+    const select = await screen.findByLabelText("Worker model");
     await screen.findByText("gpt-5-mini");
     fireEvent.change(select, { target: { value: "gpt-5-mini" } });
     expect(await screen.findByText("model must be provider/model")).toBeTruthy();
+  });
+
+  it("section limits the fields to one role", () => {
+    renderControls({ workerAgent: "claude", reviewerAgent: "codex", section: "reviewer" });
+    expect(screen.getByRole("combobox", { name: "Reviewer model" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Worker model" })).toBeNull();
+  });
+
+  it("the sidebar variant shortens the labels", () => {
+    renderControls({
+      workerAgent: "claude",
+      reviewerAgent: "codex",
+      section: "worker",
+      variant: "sidebar",
+    });
+    expect(screen.getByText("Small")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Reviewer model" })).toBeNull();
   });
 });
 
@@ -168,20 +185,5 @@ describe("resolvedDefaultModel", () => {
     expect(resolvedDefaultModel("codex", "reviewer", null, settings)).toBe("gpt-5");
     expect(resolvedDefaultModel("codex", "small", null, settings)).toBeNull();
     expect(resolvedDefaultModel("codex", "implementer", null, null)).toBeNull();
-  });
-
-  it("section limits the fields to one role, and the sidebar variant shortens labels", () => {
-    renderControls({ workerAgent: "claude", reviewerAgent: "codex", section: "reviewer" });
-    expect(screen.getByRole("combobox", { name: "Reviewer model model" })).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Model model" })).toBeNull();
-    cleanup();
-    renderControls({
-      workerAgent: "claude",
-      reviewerAgent: "codex",
-      section: "worker",
-      variant: "sidebar",
-    });
-    expect(screen.getByText("Small")).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Reviewer model model" })).toBeNull();
   });
 });

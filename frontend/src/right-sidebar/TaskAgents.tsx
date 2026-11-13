@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, normalizeAgentId } from "../api/index.js";
 import type { Launcher, Task } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
@@ -23,6 +23,7 @@ import { Dropdown } from "../ui/primitives.js";
 // the user asks for them. Editable in the same statuses as before.
 
 const UNSET_AGENT = "";
+const EDITOR_ID = "sb-agent-editor";
 
 type Source = "task" | "issue" | "default";
 
@@ -52,11 +53,21 @@ export function TaskAgents({ task }: { task: Task }) {
   const projects = useDashboardStore((s) => s.projects);
   const updateTask = useDashboardStore((s) => s.updateTask);
   const [open, setOpen] = useState(false);
+  const editRef = useRef<HTMLButtonElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  // Edit and Done are separate buttons in separate blocks, so the one that was
+  // clicked unmounts: move focus to where the user goes next. Not on mount.
+  const toggled = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
 
   const editable = isAgentConfigEditable(task);
   const unfolded = open && editable;
+  useEffect(() => {
+    if (!toggled.current) return;
+    if (unfolded) editorRef.current?.querySelector<HTMLElement>("select, input")?.focus();
+    else editRef.current?.focus();
+  }, [unfolded]);
   // The agent list is only needed once the dropdowns exist.
   useAsyncData(
     () => api.listProjectActions(task.projectId),
@@ -129,9 +140,14 @@ export function TaskAgents({ task }: { task: Task }) {
             {editable && (
               <button
                 type="button"
+                ref={editRef}
                 className="sb-link sb-agent-edit"
                 aria-expanded={false}
-                onClick={() => setOpen(true)}
+                aria-controls={EDITOR_ID}
+                onClick={() => {
+                  toggled.current = true;
+                  setOpen(true);
+                }}
               >
                 Edit
               </button>
@@ -151,7 +167,7 @@ export function TaskAgents({ task }: { task: Task }) {
         </p>
       )}
       {unfolded && (
-        <div className="sb-agent-editor">
+        <div className="sb-agent-editor" id={EDITOR_ID} ref={editorRef}>
           <div className="sb-agent-grp">Worker</div>
           <div className="sb-agent-fld">
             <span className="sb-agent-lbl">Agent</span>
@@ -209,7 +225,15 @@ export function TaskAgents({ task }: { task: Task }) {
           )}
           {error && <ErrorText>{error}</ErrorText>}
           <div className="sb-agent-done">
-            <button type="button" className="sb-link" aria-expanded onClick={() => setOpen(false)}>
+            <button
+              type="button"
+              className="sb-link"
+              aria-expanded
+              onClick={() => {
+                toggled.current = true;
+                setOpen(false);
+              }}
+            >
               Done
             </button>
           </div>
