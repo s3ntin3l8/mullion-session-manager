@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 16</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 17</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 16</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 17</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -1003,9 +1003,9 @@
           ></iframe>
         </div>
         <figcaption>
-          <span class="tag open">proposal</span><b>2f · Browser.</b> A right-rail view, like Device:
-          the browser of the session shown on the left, so you prompt on one half and watch the page
-          on the other.
+          <span class="tag rec">decided</span><b>2f · Browser.</b> A right-rail view, like Device:
+          the browser of the session shown on the left. The page fills the whole half; only the
+          address bar sits above it.
         </figcaption>
       </figure>
       <figure>
@@ -1016,9 +1016,11 @@
           ></iframe>
         </div>
         <figcaption>
-          <span class="tag open">proposal</span><b>2g · Dock.</b> A right-rail view: the monitors of
-          the left session's project with their state, start and stop, and the selected one's log,
-          read only. Today the Dock does not exist on touch at all.
+          <span class="tag open">proposal</span><b>2g · Dock.</b> A right-rail view of the left
+          session's project. One section per source: Commands (from dock.json) and one per Compose
+          stack, so a dev and a prod stack stay apart under their own names. Tap a row to select it;
+          its actions and log show below. A stack's own actions (restart, apply, pull and restart,
+          rebuild and restart, stop) open from "⋯" on its heading as a sheet.
         </figcaption>
       </figure>
     </div>
@@ -1048,6 +1050,13 @@
         you look at beside a session is a right-rail view: Tasks, GitHub, Git, Files, Device,
         Browser, Dock. The left half is always a session. On desktop Browser and Dock stay as they
         are (a pane in the grid, the bottom dock).
+      </li>
+      <li>
+        <b>Dock actions on touch.</b> What sits in hover menus and small kebabs today becomes
+        visible buttons for the selected row (restart, stop or start, branch for a command, check
+        for update for a service), and a sheet with 52px rows for the stack-wide ones. The image tag
+        stays on the row and marks an available update. The Dock's GitHub row and browser shortcut
+        are dropped here because GitHub and Browser are rail views of their own.
       </li>
       <li>
         <b>Why the Dock log is read only here.</b> The Dock is switched off under a touch pointer

@@ -723,6 +723,117 @@
       #sheet .srow small {
         color: var(--dim);
       }
+      #side.browser {
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .urlbar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--chrome);
+      }
+      .urlbar span {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+      }
+      .urlbar b {
+        flex: 1;
+        min-width: 0;
+        font-weight: 400;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 9px 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .page {
+        flex: 1;
+        background: #f4f4f1;
+        color: #555;
+        display: grid;
+        place-content: center;
+        text-align: center;
+      }
+      #side.dock {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .dlist {
+        flex: 0 1 auto;
+        overflow-y: auto;
+        max-height: 48%;
+      }
+      .dh {
+        display: flex;
+        align-items: center;
+        min-height: 40px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+      }
+      .dh span {
+        flex: 1;
+      }
+      .dh button {
+        width: 48px;
+        height: 40px;
+        font-size: 18px;
+        color: var(--muted);
+      }
+      .drow {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 52px;
+        text-align: left;
+        padding: 0 8px;
+        border-radius: 8px;
+      }
+      .drow.on {
+        background: #202023;
+        box-shadow: inset 3px 0 0 var(--g);
+      }
+      .drow span {
+        flex: 1;
+        min-width: 0;
+      }
+      .drow small {
+        display: block;
+        color: var(--dim);
+      }
+      .drow em {
+        font-style: normal;
+        font-size: 11px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 2px 6px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .dact {
+        flex: none;
+        padding: 10px 0 4px;
+      }
+      .dlog {
+        flex: 1;
+        min-height: 0;
+        font-size: 12px;
+        margin: 0;
+      }
       .devscreen {
         height: 420px;
         border: 1px solid var(--border);
@@ -987,18 +1098,64 @@
             <div class="devscreen">Pixel 9 screen<br><small>live, touch goes to the device</small></div>
             <div class="box"><b>Pixel Tablet</b> · stopped <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Start</span></div>`;
         if (state.view === "browser")
-          return `<h3>Browser · ${state.left.split(" · ")[0]}</h3>
-            <div class="box" style="display:flex;gap:8px;align-items:center"><span>←</span><span>→</span><span>⟳</span><span style="flex:1;border:1px solid var(--border);border-radius:7px;padding:6px 10px">localhost:5173/login</span></div>
-            <div class="devscreen" style="border-radius:8px;height:520px">The session's browser<br><small>the page the agent on the left is driving</small></div>
-            <div class="box">Follows the session shown on the left half.</div>`;
-        if (state.view === "dock")
-          return `<h3>Dock · aurora-web</h3>
-            <button class="row"><b style="color:var(--g)">●</b> dev <small>npm run dev · localhost:5173 · running</small></button>
-            <button class="row"><b style="color:var(--dim)">●</b> api <small>npm run api · stopped</small></button>
-            <button class="row"><b style="color:var(--y)">●</b> tests <small>vitest --watch · 1 failing</small></button>
-            <div style="margin:10px 0"><span class="btn ghost">Restart</span><span class="btn ghost">Stop</span><span class="btn ghost">Open in browser</span></div>
-            <div class="peek" style="height:330px;font-size:12px">dev · log (read only)<br><br>VITE v6 ready in 412 ms<br>➜ Local: http://localhost:5173/<br>[hmr] update /src/Login.tsx<br>[hmr] update /src/Login.tsx</div>
-            <div class="box">Shows the monitors of the left session's project. To type into one, open it as a session.</div>`;
+          return `<div class="urlbar"><span>←</span><span>→</span><span>⟳</span><b>localhost:5173/login</b></div>
+            <div class="page">The session's browser<br><small>the page the agent on the left is driving</small></div>`;
+        if (state.view === "dock") {
+          // [id, name, detail, dot colour, image pill]
+          const groups = [
+            [
+              "Commands",
+              "",
+              [
+                ["dev", "dev", "npm run dev · :5173 · running", "var(--g)", ""],
+                ["tests", "tests", "vitest --watch · 1 failing", "var(--y)", ""],
+              ],
+            ],
+            [
+              "Stack · aurora-dev",
+              "stack",
+              [
+                ["api", "api", "running", "var(--g)", "local build"],
+                ["db", "db", "running", "var(--g)", "postgres:16"],
+              ],
+            ],
+            [
+              "Stack · aurora-prod",
+              "stack",
+              [
+                ["web", "web", "running", "var(--g)", "1.4.2 · update"],
+                ["worker", "worker", "exited (1)", "var(--r, #e5575a)", "1.4.2"],
+              ],
+            ],
+          ];
+          const all = groups.flatMap((g) => g[2].map((m) => [...m, g[0], g[1]]));
+          const sel = all.find((m) => m[5] + m[0] === dockSel) || all[0];
+          const isStack = sel[6] === "stack";
+          return (
+            `<h3>Dock · aurora-web</h3><div class="dlist">` +
+            groups
+              .map(
+                (g) =>
+                  `<div class="dh"><span>${g[0]}</span>${g[1] ? `<button data-dockmenu="${g[0]}" aria-label="Stack actions">⋯</button>` : ""}</div>` +
+                  g[2]
+                    .map(
+                      (m) =>
+                        `<button class="drow${g[0] + m[0] === sel[5] + sel[0] ? " on" : ""}" data-dock="${g[0] + m[0]}"><b style="color:${m[3]}">●</b><span>${m[1]}<small>${m[2]}</small></span>${m[4] ? `<em>${m[4]}</em>` : ""}</button>`,
+                    )
+                    .join(""),
+              )
+              .join("") +
+            `</div><div class="dact">` +
+            (isStack
+              ? `<span class="btn ghost">Restart</span><span class="btn ghost">Stop</span><span class="btn ghost">Check for update</span>`
+              : `<span class="btn ghost">Restart</span><span class="btn ghost">Stop</span><span class="btn ghost">Branch ▾</span>`) +
+            `</div><div class="peek dlog">${sel[1]} · log (read only)<br><br>${
+              isStack
+                ? "listening on :8080<br>GET /health 200<br>GET /health 200"
+                : "VITE v6 ready in 412 ms<br>➜ Local: http://localhost:5173/<br>[hmr] update /src/Login.tsx"
+            }</div>`
+          );
+        }
         if (state.view !== "tasks")
           return `<h3>${state.view}</h3><div class="box">Placeholder for the ${state.view} view. Tap its rail tab again to close.</div>`;
         if (!state.task)
@@ -1025,6 +1182,7 @@
       sheet.id = "sheet";
       $("#body").append(sheet);
       // The launcher: the same choices as the desktop launcher, laid out for touch.
+      let dockSel = "";
       let addTab = "new";
       let agent = "claude";
       let skipOverride = null;
@@ -1161,6 +1319,7 @@
           c.classList.toggle("sel", !!state.task && c.dataset.task === state.task[0]),
         );
         $("#side").innerHTML = open ? sideHtml() : "";
+        $("#side").className = state.view || "";
         // Keep the tapped card in view when the layout changes under it.
         const sel = $(".card.sel");
         if (sel) {
@@ -1226,6 +1385,24 @@
           closeMenu();
         } else if (t.dataset.add) {
           addSheet(t.dataset.add);
+          return;
+        } else if (t.dataset.dock) {
+          dockSel = t.dataset.dock;
+        } else if (t.dataset.dockmenu) {
+          // Stack-wide actions, as a sheet over the right half with rows at touch size.
+          sheet.innerHTML =
+            `<div class="sh"><b>${t.dataset.dockmenu}</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+            [
+              "Restart stack",
+              "Apply compose changes",
+              "Pull and restart",
+              "Rebuild and restart",
+              "Stop stack",
+            ]
+              .map((x) => `<button class="opt" data-put="noop|"><span>${x}</span></button>`)
+              .join("");
+          sheet.className = "right";
+          sheet.style.display = "block";
           return;
         } else if (t.dataset.agent) {
           // Selecting an agent shows its options; nothing launches until "Launch".
