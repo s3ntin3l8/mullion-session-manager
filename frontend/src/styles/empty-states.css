@@ -3338,7 +3338,7 @@ button.github-panel-row.gh-issue-row {
 /* #2998 — code-scanning alert detail under the "needs a human" line. */
 .blocking-alert {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .blocking-alert-snippet {
   margin: 6px 0;
