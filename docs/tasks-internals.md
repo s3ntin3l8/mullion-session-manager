@@ -974,7 +974,19 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   on every call (null unless the reason is `blocked-threads` and the thread list
   was complete), the clear helpers null it, and the frontend reads it only
   while the reason is set (`MergeBlockedThreadsDetail`), so a missing detail
-  falls back to the generic text. A third, `ci-status-stalled`
+  falls back to the generic text. `GET /api/tasks/:id/blocking-alerts`
+  (#2998, `routes/tasks.ts`, `services/code-scanning.ts`) is the read-only
+  detail behind it: 404 unless the reason is `blocked-threads` and the stored
+  detail holds an alert number, and it only ever fetches those stored numbers.
+  Per alert it returns the trimmed alert, a snippet (flagged lines ±3, max 30,
+  read at the alert's own `most_recent_instance.commit_sha`, as the task row
+  stores no commit of its own), prior same-rule dismissals (client-side
+  filtered over at most five pages, cached five minutes per repo) and
+  `canDismiss`, computed from the human account token (`getToken`) and its
+  stored classic scopes only, never an App token (no `security_events`
+  permission); a fine-grained PAT stores no scopes and counts as unknown/ok. A
+  failure on one alert degrades that entry to `{error}`. Only GETs are made.
+  `BlockingAlertDetail` renders it in `TaskDetail`. A third, `ci-status-stalled`
   (#2904), is set when a non-Actions status stayed pending past
   `COVERAGE_STATUS_STALL_MS` on a green head and the coverage re-uploads ran
   out of budget — see "A stuck non-Actions status gets its coverage re-uploaded"

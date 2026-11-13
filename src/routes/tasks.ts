@@ -51,7 +51,13 @@ import { readLiveWorkerState } from "../services/task-reseed.js";
 import { deleteTaskBranch, type TaskBranchDelete } from "../services/task-branch-delete.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
 import { isOutcomeUnknown, unknownOutcomeText } from "../services/remote-host-errors.js";
-import { resolveGitHubToken } from "../services/github-integration.js";
+import { resolveGitHubToken, getToken, getIntegration } from "../services/github-integration.js";
+import {
+  computeCanDismiss,
+  fetchAlertSnippet,
+  fetchCodeScanningAlert,
+  fetchPriorDismissals,
+} from "../services/code-scanning.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { removeLabel } from "../services/github-write.js";
 import { isPullRequestMerged } from "../services/github-merged-prs.js";
@@ -323,6 +329,85 @@ export async function tasksRoute(app: FastifyInstance) {
     const row = selectTaskRow(taskId);
     if (!row) return reply.notFound();
     return row;
+  });
+
+  // #2998 — read-only detail for the code-scanning alert(s) a done task's PR
+  // is blocked on. Only alert numbers stored on the task
+  // (`mergeBlockedThreads`) are ever fetched, never a caller-supplied number,
+  // and only with the human account token (an App token has no
+  // `security_events` permission). A failure on one alert degrades that entry.
+  app.get<{ Params: { id: string } }>("/api/tasks/:id/blocking-alerts", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const row = selectTaskRow(taskId);
+    if (!row) return reply.notFound();
+    let numbers: number[] = [];
+    if (row.needsHumanReason === "blocked-threads" && row.mergeBlockedThreads) {
+      try {
+        const parsed = JSON.parse(row.mergeBlockedThreads) as {
+          threads?: { alert?: { number?: number | null } | null }[];
+        };
+        numbers = (parsed.threads ?? [])
+          .map((t) => t.alert?.number)
+          .filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0);
+      } catch {
+        numbers = [];
+      }
+    }
+    numbers = [...new Set(numbers)];
+    if (numbers.length === 0) return reply.notFound("No blocking code-scanning alert on this task");
+
+    const project = getProjectOr404(row.projectId);
+    const ref = project ? await resolveRepoRef(app, project) : null;
+    if (!ref) return reply.badGateway("Could not resolve the project's GitHub repo");
+
+    const token = getToken(app);
+    const scopes = getIntegration(app).scopes;
+    const alerts = await Promise.all(
+      numbers.map(async (number) => {
+        if (!token) {
+          return {
+            number,
+            error: "No GitHub account connected",
+            canDismiss: computeCanDismiss(null, scopes, null),
+          };
+        }
+        try {
+          const alert = await fetchCodeScanningAlert(token, ref, number);
+          const loc = alert.location;
+          const [snippet, priorDismissals] = await Promise.all([
+            loc && alert.commitSha
+              ? fetchAlertSnippet(
+                  token,
+                  ref,
+                  loc.path,
+                  alert.commitSha,
+                  loc.startLine,
+                  loc.endLine,
+                ).catch(() => null)
+              : null,
+            fetchPriorDismissals(token, ref, alert.rule.id, loc?.path ?? null, number).catch(
+              () => null,
+            ),
+          ]);
+          return {
+            number,
+            alert,
+            snippet,
+            priorDismissals,
+            canDismiss: computeCanDismiss(token, scopes, null),
+          };
+        } catch (err) {
+          app.log.warn({ err, taskId, alert: number }, "blocking-alerts: alert fetch failed");
+          return {
+            number,
+            error: err instanceof Error ? err.message : "Could not load the alert",
+            canDismiss: computeCanDismiss(token, scopes, err),
+          };
+        }
+      }),
+    );
+    return { alerts };
   });
 
   function getProjectOr404(projectId: number) {
