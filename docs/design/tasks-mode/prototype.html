@@ -663,6 +663,36 @@
         background: var(--g);
         margin-right: 8px;
       }
+      #sheet .tile {
+        position: relative;
+      }
+      #sheet .tile.on {
+        border-color: var(--g);
+        box-shadow: 0 0 0 1px var(--g);
+      }
+      #sheet .flag {
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        font-style: normal;
+        font-size: 11px;
+        color: var(--y);
+      }
+      #sheet .sw.on {
+        border-color: var(--g);
+        background: var(--accent-fill);
+      }
+      #sheet .sw.on::after {
+        left: 19px;
+        background: #fff;
+      }
+      #sheet .chev {
+        color: var(--muted);
+        padding: 0 6px;
+      }
+      #sheet .snew {
+        margin-top: 10px;
+      }
       #sheet .mh {
         padding: 16px 0 4px;
         font-size: 11px;
@@ -981,29 +1011,45 @@
       $("#body").append(sheet);
       // The launcher: the same choices as the desktop launcher, laid out for touch.
       let addTab = "new";
+      let agent = "claude";
+      let skipOverride = null;
       function addSheet(side) {
         const other = SESS.filter((x) => onRight(x[0]) !== (side === "right"));
         const act = side === "right" ? "mvr" : "mvl";
         const row = (x, a) =>
           `<button class="srow" data-put="${a}|${x[0]}"><i>${x[1]}</i><span><b>${x[0].split(" · ")[0]}</b><small>${x[0].split(" · ")[1] || ""}</small></span></button>`;
-        const tile = (g, n) => `<button class="tile" data-put="noop|"><i>${g}</i>${n}</button>`;
+        // [glyph, name, skip-permissions on in settings, models]
+        const AGENTS = [
+          ["✳", "claude", 1, "Default (opusplan)"],
+          ["◇", "codex", 1, "Default (gpt-5)"],
+          ["▮", "opencode", 1, "Default"],
+          ["△", "agy", 1, "Default"],
+          ["π", "pi", 0, "Default"],
+          ["♪", "mcode", 0, "Default"],
+        ];
+        const cur = AGENTS.find((a) => a[1] === agent);
+        const skip = skipOverride ?? !!cur[2];
+        const tile = (a) =>
+          `<button class="tile${a[1] === agent ? " on" : ""}" data-agent="${a[1]}"><i>${a[0]}</i>${a[1]}${
+            a[2] ? '<em class="flag" title="Skips permission prompts (from settings)">⚠</em>' : ""
+          }</button>`;
         const fresh =
           `<div class="mh">Where</div>` +
           `<div class="where"><button data-put="keep|">▣ mullion-session-manager ▾</button><button data-put="keep|">this server ▾</button></div>` +
           `<button class="opt" data-put="keep|"><span>Isolate in a new worktree</span><i class="sw"></i></button>` +
-          `<button class="opt" data-put="keep|"><span>Skip permission prompts<small>agents only</small></span><i class="sw"></i></button>` +
-          `<div class="mh">Agents</div><div class="tiles">` +
-          [
-            ["✳", "claude"],
-            ["◇", "codex"],
-            ["▮", "opencode"],
-            ["△", "agy"],
-            ["π", "pi"],
-            ["♪", "mcode"],
-          ]
-            .map((x) => tile(...x))
-            .join("") +
-          `</div><div class="mh">Shells and scripts</div>` +
+          `<div class="mh">Agent</div><div class="tiles">` +
+          AGENTS.map(tile).join("") +
+          `</div>` +
+          `<button class="opt" data-put="keep|"><span>Model<small>${cur[3]}</small></span><b class="chev">▾</b></button>` +
+          `<button class="opt" data-skip><span>Skip permission prompts<small>${
+            skipOverride === null
+              ? cur[2]
+                ? "on in settings for " + agent
+                : "off in settings for " + agent
+              : "overridden for this session"
+          }</small></span><i class="sw${skip ? " on" : ""}"></i></button>` +
+          `<button class="snew" data-put="noop|">Launch ${agent}</button>` +
+          `<div class="mh">Shells and scripts · tap to launch</div>` +
           [
             ["bash", "›", ""],
             ["zsh", "›", ""],
@@ -1165,6 +1211,17 @@
           closeMenu();
         } else if (t.dataset.add) {
           addSheet(t.dataset.add);
+          return;
+        } else if (t.dataset.agent) {
+          // Selecting an agent shows its options; nothing launches until "Launch".
+          agent = t.dataset.agent;
+          skipOverride = null;
+          addSheet(sheet.className);
+          return;
+        } else if (t.dataset.skip !== undefined) {
+          const base = ["claude", "codex", "opencode", "agy"].includes(agent);
+          skipOverride = !(skipOverride ?? base);
+          addSheet(sheet.className);
           return;
         } else if (t.dataset.tab) {
           addTab = t.dataset.tab;

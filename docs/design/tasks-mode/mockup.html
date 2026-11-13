@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 13</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 14</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 13</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 14</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -910,10 +910,10 @@
         today, and a task from the board.
       </li>
       <li>
-        <b>Devices</b> are a view in the right sidebar on desktop and fold, beside Git and GitHub:
-        the list with start and stop, and the screen. On the fold the screen shows in the view, on
-        the right half. On desktop "Open in grid" turns it into a pane you can place anywhere, as
-        today. The left sidebar's Devices section goes, so there is one home.
+        <span class="tag rec">decided</span><b>Devices</b> are a view in the right sidebar on
+        desktop and fold, beside Git and GitHub: the list with start and stop. On the fold the
+        screen shows in the view, on the right half. On desktop a device's screen opens from the
+        list as a pane in the grid. The left sidebar's Devices section goes, so there is one home.
       </li>
       <li>
         <b>Where the top bar's controls go.</b> Board toggle: the mode switch. Sidebar toggle: the
@@ -1827,10 +1827,11 @@
     </ul>
     <h2>8 · New session: the launcher <span class="tag open">proposal</span></h2>
     <p class="lede">
-      "＋" opens a launcher that only launches. Today the same dialog also runs commands and holds
-      navigation entries, and the list of launchers starts below the fold. The proposal splits the
-      two: ⌘K stays the command palette (commands, and launchers by typing), and "＋" opens this.
-      Desktop and touch show the same choices in the same order.
+      "＋" opens a launcher that only launches; ⌘K stays the command palette (commands, and
+      launchers by typing). Choosing an agent selects it and shows its options in place: the model
+      and the skip-permissions override. Today those appear only while hovering a row, which does
+      not work on touch and is fiddly with a mouse. Desktop and touch show the same choices in the
+      same order.
     </p>
     <div class="row">
       <figure>
@@ -1838,10 +1839,6 @@
           <div style="display: flex; align-items: center; margin-bottom: 12px">
             <b style="font-size: 16px">New session</b><span class="grow"></span
             ><span class="pill">esc</span>
-          </div>
-          <div class="seg" style="display: flex; margin-bottom: 14px">
-            <span class="on" style="flex: 1; justify-content: center">New session</span
-            ><span style="flex: 1; justify-content: center">Open existing</span>
           </div>
           <div class="hd">Where</div>
           <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 14px">
@@ -1856,67 +1853,67 @@
                   height: 16px;
                   border-radius: 8px;
                   border: 1.5px solid var(--dim);
+                  vertical-align: middle;
                 "
               ></i
             ></span>
           </div>
-          <div class="hd">
-            Agents
-            <span style="float: right; text-transform: none; letter-spacing: 0; font-weight: 400"
-              >Skip permission prompts
-              <i
-                style="
-                  display: inline-block;
-                  width: 30px;
-                  height: 16px;
-                  border-radius: 8px;
-                  border: 1.5px solid var(--dim);
-                "
-              ></i
-            ></span>
-          </div>
+          <div class="hd">Agent</div>
           <div
             style="
               display: grid;
               grid-template-columns: repeat(6, 1fr);
               gap: 8px;
-              margin-bottom: 14px;
+              margin-bottom: 10px;
             "
           >
             <span
               style="
+                position: relative;
                 border: 1px solid var(--g);
                 border-radius: 9px;
                 padding: 12px 6px;
                 text-align: center;
               "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
               ><b style="font-size: 18px">✳</b><br />claude</span
             ><span
               style="
+                position: relative;
                 border: 1px solid var(--border);
                 border-radius: 9px;
                 padding: 12px 6px;
                 text-align: center;
               "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
               ><b style="font-size: 18px">◇</b><br />codex</span
             ><span
               style="
+                position: relative;
                 border: 1px solid var(--border);
                 border-radius: 9px;
                 padding: 12px 6px;
                 text-align: center;
               "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
               ><b style="font-size: 18px">▮</b><br />opencode</span
             ><span
               style="
+                position: relative;
                 border: 1px solid var(--border);
                 border-radius: 9px;
                 padding: 12px 6px;
                 text-align: center;
               "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
               ><b style="font-size: 18px">△</b><br />agy</span
             ><span
               style="
+                position: relative;
                 border: 1px solid var(--border);
                 border-radius: 9px;
                 padding: 12px 6px;
@@ -1925,6 +1922,7 @@
               ><b style="font-size: 18px">π</b><br />pi</span
             ><span
               style="
+                position: relative;
                 border: 1px solid var(--border);
                 border-radius: 9px;
                 padding: 12px 6px;
@@ -1932,6 +1930,35 @@
               "
               ><b style="font-size: 18px">♪</b><br />mcode</span
             >
+          </div>
+          <div
+            style="
+              display: flex;
+              gap: 12px;
+              align-items: center;
+              margin-bottom: 14px;
+              padding: 8px 10px;
+              border: 1px solid var(--border-soft);
+              border-radius: 8px;
+            "
+          >
+            <span style="color: var(--muted)">Model</span
+            ><span class="pill" style="color: var(--fg)">Default (opusplan) ▾</span
+            ><span class="grow"></span>
+            <span style="color: var(--muted)"
+              >Skip permission prompts <small style="color: var(--y)">on in settings</small>
+              <i
+                style="
+                  display: inline-block;
+                  width: 30px;
+                  height: 16px;
+                  border-radius: 8px;
+                  border: 1.5px solid var(--g);
+                  background: var(--accent-fill);
+                  vertical-align: middle;
+                "
+              ></i
+            ></span>
           </div>
           <div class="hd">Shells and scripts</div>
           <div
@@ -1971,10 +1998,11 @@
           </div>
         </div>
         <figcaption>
-          <b>8a · Desktop.</b> One short dialog. "Where" is a single row: project, host, worktree
-          switch. Agents are tiles, shells and scripts a list under them. "Skip permission prompts"
-          is one switch for the launch, not a badge on every agent row. Typing filters tiles and
-          rows; Enter launches the highlighted one.
+          <b>8a · Desktop.</b> "Where" is a single row: project, host, worktree switch. Agents are
+          tiles; a small ⚠ marks the ones that skip permission prompts by your settings. The row
+          under the tiles belongs to the selected agent: its model list, and the skip-permissions
+          switch, which starts at the settings value and overrides it for this session only. Shells
+          and scripts have no options and launch on click. Typing filters; Enter launches.
         </figcaption>
       </figure>
       <figure>
@@ -1986,26 +2014,28 @@
         </div>
         <figcaption>
           <b>8b · Fold.</b> The same launcher as a sheet over the half the session will land on,
-          with 48px targets and larger. On the phone it is the same sheet at full width.
+          with targets of 48px and more: tap an agent, adjust model or permissions if needed, tap
+          Launch. Here the sheet has a second tab, Open existing, because the fold has no left
+          sidebar to pick a session from. On the phone it is the same sheet at full width.
         </figcaption>
       </figure>
     </div>
     <ul class="notes" style="max-width: 860px; margin-top: 24px">
       <li>
-        <b>What I think is wrong with today's dialog</b> (my reading, to be confirmed): it mixes
-        three jobs (run a command, navigate, launch a session); the launch target takes a large
-        block at the top, with empty space under it; the launchers come last and need scrolling;
-        each row repeats its name as its description; and the "skip perms" badges do not say whether
-        they are a state or a button.
+        <b>"Open existing" is touch-only.</b> On desktop, sessions are listed under their projects
+        in the left sidebar, as today, so the desktop launcher has no such tab. On fold and phone
+        the tab is that same list (by project, the project named under each title), since there is
+        no sidebar to show it.
       </li>
       <li>
-        <b>"Open existing"</b> is the second tab: search, then sessions by project with the project
-        under each title. On the fold it lists the other half's sessions first.
+        <b>Skip permissions</b> keeps today's model: a per-agent setting, shown as the flag on the
+        tile, plus a per-launch override, the switch.
       </li>
       <li>
-        <b>Not drawn:</b> launcher-specific options beyond skip-permissions (model, agent
-        arguments), and where "recent" launches would go.
+        <b>One more step than today for an agent:</b> select, then Launch (or Enter, or double
+        click). That step is what makes the model and the override reachable without hovering.
       </li>
+      <li><b>Not drawn:</b> a "recent launches" row, and agent arguments beyond the model.</li>
     </ul>
   </body>
 </html>
