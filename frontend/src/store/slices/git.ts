@@ -20,10 +20,15 @@ import type { DashboardState, GitSlice } from "../types.js";
 // of each starting its own fetch batch, removes the race entirely rather
 // than just narrowing it.
 let gitStatusesRefreshInFlight: Promise<void> | null = null;
+// Issue #2991: whether the running batch above already covers exited sessions.
+// An `includeExited` call that finds an active-only batch running must not
+// join it (its exited ids would silently never be fetched), so it chains after.
+let gitStatusesInFlightIncludesExited = false;
 // Same dedup shape as gitStatusesRefreshInFlight above, for the diff-stats
 // batch (issue #202) — a distinct endpoint/cache, so it needs its own guard
 // rather than sharing that one.
 let gitDiffStatsRefreshInFlight: Promise<void> | null = null;
+let gitDiffStatsInFlightIncludesExited = false;
 // Same dedup shape again, for the slower-cadence branches/worktrees + PR
 // list refresh (issue #202) — see refreshGitRefs's own doc comment for why
 // this runs on a different cadence than the two above.
@@ -39,6 +44,19 @@ let gitRefsRefreshInFlight: Promise<void> | null = null;
 // wins over anything scoped queued alongside it, since it already needs
 // every project.
 let gitRefsRequeue: { scoped: boolean; ids: Set<number> } | null = null;
+
+// Issue #2991: a refresh that has nothing to request (only exited sessions are
+// listed, on an active-only tick) still has to forget sessions that were killed
+// or removed. Returns a pruned copy of `map`, or null when nothing was stale —
+// so the common case sets no state and re-renders nothing.
+function prunedTo<T>(map: Record<number, T>, listedIds: number[]): Record<number, T> | null {
+  const keep = new Set(listedIds);
+  const keys = Object.keys(map);
+  if (keys.every((k) => keep.has(Number(k)))) return null;
+  return Object.fromEntries(
+    keys.filter((k) => keep.has(Number(k))).map((k) => [k, map[Number(k)]]),
+  );
+}
 
 export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (set, get) => ({
   gitStatuses: {},
@@ -66,8 +84,19 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   // scoped to visible (non-killed, terminal-kind) sessions, same filter
   // Sidebar.tsx itself applies — and merges it into `sessionGitStatuses`
   // with the identical last-known-good/pruning behavior as `gitStatuses`.
-  refreshGitStatuses: () => {
-    if (gitStatusesRefreshInFlight) return gitStatusesRefreshInFlight;
+  //
+  // Issue #2991: by default only ACTIVE sessions are requested. An exited
+  // session's checkout rarely changes, but it stayed in every 4 s batch until
+  // it was killed, so one exited session on a remote host cost the agent a git
+  // call per tick for nothing. `includeExited` (the slow ~60 s cadence in
+  // startLiveRefresh) refreshes them too; between those, their last value is
+  // kept, not dropped.
+  refreshGitStatuses: (opts) => {
+    const includeExited = opts?.includeExited === true;
+    if (gitStatusesRefreshInFlight) {
+      if (!includeExited || gitStatusesInFlightIncludesExited) return gitStatusesRefreshInFlight;
+      return gitStatusesRefreshInFlight.then(() => get().refreshGitStatuses(opts));
+    }
 
     const run = async () => {
       const projectIds = get().projects.map((p) => p.id);
@@ -75,11 +104,21 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
       // own session-row filter — deliberately NOT further narrowed by
       // hideEndedSessions, which is a display-only toggle a user can flip
       // back on without this data needing a fresh fetch first.
-      const sessionIds = get()
-        .sessions.filter((s) => s.kind === "terminal" && s.status !== "killed")
+      const listed = get().sessions.filter((s) => s.kind === "terminal" && s.status !== "killed");
+      const listedIds = listed.map((s) => s.id);
+      const sessionIds = listed
+        .filter((s) => includeExited || s.status === "active")
         .map((s) => s.id);
-      if (projectIds.length === 0 && sessionIds.length === 0) {
+      if (projectIds.length === 0 && listedIds.length === 0) {
         set({ gitStatuses: {}, gitProblems: {}, sessionGitStatuses: {} });
+        return;
+      }
+      // No projects and, on this active-only tick, no active sessions: nothing
+      // to ask for (a parameterless request would just be wasted), but a killed
+      // session's last value must still go.
+      if (projectIds.length === 0 && sessionIds.length === 0) {
+        const pruned = prunedTo(get().sessionGitStatuses, listedIds);
+        if (pruned) set({ sessionGitStatuses: pruned });
         return;
       }
 
@@ -92,7 +131,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
           },
           sessionGitStatuses: {
             ...Object.fromEntries(
-              sessionIds.map((id) => [id, get().sessionGitStatuses[id] ?? null]),
+              listedIds.map((id) => [id, get().sessionGitStatuses[id] ?? null]),
             ),
             ...result.sessions,
           },
@@ -105,8 +144,10 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
       }
     };
 
+    gitStatusesInFlightIncludesExited = includeExited;
     gitStatusesRefreshInFlight = run().finally(() => {
       gitStatusesRefreshInFlight = null;
+      gitStatusesInFlightIncludesExited = false;
     });
     return gitStatusesRefreshInFlight;
   },
@@ -114,15 +155,31 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   // Batch diff-stats fetch (issue #202, greenfield) — same shape/dedup/
   // last-known-good pattern as refreshGitStatuses above, but its own
   // separate endpoint/cache and in-flight guard (gitDiffStatsRefreshInFlight).
-  refreshGitDiffStats: () => {
-    if (gitDiffStatsRefreshInFlight) return gitDiffStatsRefreshInFlight;
+  // Active sessions only unless `includeExited` — see refreshGitStatuses above
+  // (issue #2991).
+  refreshGitDiffStats: (opts) => {
+    const includeExited = opts?.includeExited === true;
+    if (gitDiffStatsRefreshInFlight) {
+      if (!includeExited || gitDiffStatsInFlightIncludesExited) return gitDiffStatsRefreshInFlight;
+      return gitDiffStatsRefreshInFlight.then(() => get().refreshGitDiffStats(opts));
+    }
 
     const run = async () => {
-      const sessionIds = get()
-        .sessions.filter((s) => s.kind === "terminal" && s.status !== "killed")
+      const listed = get().sessions.filter((s) => s.kind === "terminal" && s.status !== "killed");
+      const listedIds = listed.map((s) => s.id);
+      const sessionIds = listed
+        .filter((s) => includeExited || s.status === "active")
         .map((s) => s.id);
-      if (sessionIds.length === 0) {
+      if (listedIds.length === 0) {
         set({ gitDiffStats: {} });
+        return;
+      }
+      // Only exited sessions are listed and this is the fast, active-only
+      // tick: nothing to ask for, and their last stats stay. Anything killed
+      // since is still dropped.
+      if (sessionIds.length === 0) {
+        const pruned = prunedTo(get().gitDiffStats, listedIds);
+        if (pruned) set({ gitDiffStats: pruned });
         return;
       }
 
@@ -130,7 +187,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
         const stats = await api.getSessionGitDiffStats(sessionIds);
         set({
           gitDiffStats: {
-            ...Object.fromEntries(sessionIds.map((id) => [id, get().gitDiffStats[id] ?? null])),
+            ...Object.fromEntries(listedIds.map((id) => [id, get().gitDiffStats[id] ?? null])),
             ...stats,
           },
         });
@@ -139,8 +196,10 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
       }
     };
 
+    gitDiffStatsInFlightIncludesExited = includeExited;
     gitDiffStatsRefreshInFlight = run().finally(() => {
       gitDiffStatsRefreshInFlight = null;
+      gitDiffStatsInFlightIncludesExited = false;
     });
     return gitDiffStatsRefreshInFlight;
   },

@@ -296,10 +296,11 @@ export interface GitSlice {
   // (computed server-side by the GitHub poller). `undefined` covers both "not
   // known yet" and "no CI signal"; the right-sidebar GitHub rail badge reads it.
   defaultBranchCiByProject: Record<number, NonNullable<GitHubCiStatus> | undefined>;
-  refreshGitStatuses: () => Promise<void>;
+  // `includeExited` also requests exited sessions (the slow cadence, #2991).
+  refreshGitStatuses: (opts?: { includeExited?: boolean }) => Promise<void>;
   // Issue #202's other two git-refresh actions — see their own
   // implementations for the cadence each runs on.
-  refreshGitDiffStats: () => Promise<void>;
+  refreshGitDiffStats: (opts?: { includeExited?: boolean }) => Promise<void>;
   // `projectIds` omitted refreshes every project (and prunes ones that no
   // longer exist); passed, it scopes the refetch to just those — see this
   // action's own implementation in slices/git.ts for why.

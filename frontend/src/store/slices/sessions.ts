@@ -430,11 +430,14 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
       void get()
         .refreshSessions()
         .catch(() => {});
+      // Issue #2991: exited sessions' git state moves rarely, so it is only
+      // requested on the first tick and then on the slow ~60 s cadence.
+      const includeExited = tickCount % GIT_REFS_REFRESH_EVERY_N_TICKS === 0;
       void get()
-        .refreshGitStatuses()
+        .refreshGitStatuses({ includeExited })
         .catch(() => {});
       void get()
-        .refreshGitDiffStats()
+        .refreshGitDiffStats({ includeExited })
         .catch(() => {});
       tickCount++;
       if (tickCount % GIT_REFS_REFRESH_EVERY_N_TICKS === 0) {
