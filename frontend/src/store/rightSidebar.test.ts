@@ -324,6 +324,70 @@ describe("git deep-link requests", () => {
     expect(s.githubOpenIssueByProject[5]).toBe(17);
   });
 
+  describe("task detail reset (#2973)", () => {
+    const openDetail = () => useDashboardStore.getState().openRightSidebarTask(7);
+    const selected = () => useDashboardStore.getState().selectedTaskId;
+
+    it("open a task, close, reopen via the rail icon lands on the list", () => {
+      openDetail();
+      useDashboardStore.getState().closeRightSidebar();
+      expect(selected()).toBeNull();
+      useDashboardStore.getState().toggleRightSidebarView("tasks");
+      expect(selected()).toBeNull();
+    });
+
+    it("toggling the active Tasks view closed drops the detail", () => {
+      openDetail();
+      useDashboardStore.getState().toggleRightSidebarView("tasks");
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      // Asserted before reopening, so the close-side clear is pinned on its
+      // own and not masked by the reset on the way back in.
+      expect(selected()).toBeNull();
+      useDashboardStore.getState().toggleRightSidebar();
+      expect(selected()).toBeNull();
+    });
+
+    it("leaving Tasks for another view drops the detail", () => {
+      openDetail();
+      useDashboardStore.getState().toggleRightSidebarView("git");
+      expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+      expect(selected()).toBeNull();
+    });
+
+    it("open a task, switch to Git, switch back lands on the list", () => {
+      openDetail();
+      useDashboardStore.getState().toggleRightSidebarView("git");
+      useDashboardStore.getState().toggleRightSidebarView("tasks");
+      expect(selected()).toBeNull();
+      openDetail();
+      useDashboardStore.getState().openRightSidebarView("git");
+      useDashboardStore.getState().openRightSidebarView("tasks");
+      expect(selected()).toBeNull();
+    });
+
+    it("a task selected while the sidebar is closed is cleared on reopen", () => {
+      useDashboardStore.setState({ rightSidebarView: "tasks", selectedTaskId: 7 });
+      useDashboardStore.getState().toggleRightSidebar();
+      expect(selected()).toBeNull();
+    });
+
+    it("re-showing the Tasks view that is already open keeps the detail", () => {
+      openDetail();
+      useDashboardStore.getState().openRightSidebarView("tasks");
+      expect(selected()).toBe(7);
+    });
+
+    it("openRightSidebarTask lands on the task from closed and from another view", () => {
+      openDetail();
+      useDashboardStore.getState().closeRightSidebar();
+      useDashboardStore.getState().openRightSidebarTask(8);
+      expect(selected()).toBe(8);
+      useDashboardStore.getState().openRightSidebarView("git");
+      useDashboardStore.getState().openRightSidebarTask(9);
+      expect(selected()).toBe(9);
+    });
+  });
+
   describe("GitHub drill-in reset", () => {
     const drill = () => {
       const st = useDashboardStore.getState();
