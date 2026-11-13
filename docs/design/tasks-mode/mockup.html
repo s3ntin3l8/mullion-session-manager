@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 4</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 5</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 4</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 5</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -482,49 +482,38 @@
       <span class="tag open">open</span> marks a choice that needs your decision.
     </p>
 
-    <p class="lede" style="border: 1px solid var(--y); border-radius: 8px; padding: 10px 12px">
-      <b>Rev 4 note.</b> Task detail is decided as option A (section 6): it lives in the right
-      sidebar in both modes, and the sidebar never floats. Frames 1a, 1b and 2b below still show the
-      earlier panel-plus-glance idea and will be redrawn once the fold question in section 7 is
-      settled. Sections 3, 4, 6 and 7 are current.
-    </p>
-
     <h2>1 · Desktop</h2>
     <div class="row">
       <figure>
         <div class="dev desktop">
           <div class="tb">
-            <span class="ic"></span>
-            <span class="seg"
+            <span class="ic"></span
+            ><span class="seg"
               ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
-            >
-            <span class="grow"></span>
-            <span class="pill">Run command… ⌘K</span><span class="ic"></span
-            ><span class="ic"></span>
+            ><span class="grow"></span><span class="pill">Run command… ⌘K</span
+            ><span class="ic"></span><span class="ic"></span>
           </div>
           <div class="body">
             <div class="left">
               <div class="hd">Workspaces</div>
               Default<br /><br />
               <div class="hd">Projects</div>
-              aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #10 worker<br />orbit-api
+              aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api
             </div>
             <div class="main">
               <div class="grid2">
                 <div class="term">
                   <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
                 </div>
-                <div class="term"><b>task #10 worker</b><br />Running the suite…<br />…</div>
+                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
               </div>
             </div>
             <div class="rs">
               <div class="hd">Tasks · 3 need you</div>
-              <div class="card sel">
-                #7 Fix focus loss in the login form
-                <span class="need">Approved, needs your approval</span>
-                <div style="margin-top: 8px">
-                  <span class="btn">Approve</span><span class="btn ghost">Open in Tasks</span>
-                </div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
               </div>
               <div class="card">
                 #9 Dark mode: low contrast<span class="fail">merge failed</span>
@@ -533,61 +522,66 @@
                 #12 Rework settings layout<span class="fail">budget used up</span>
               </div>
               <div class="card">#10 Add rate limiting<small>running</small></div>
+              <div class="card">#11 Document cookie lifetime<small>ready</small></div>
             </div>
             <div class="rail">
-              <span class="ic"></span><span class="ic"></span><span class="ic"></span
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
               ><span class="ic"></span>
             </div>
           </div>
         </div>
         <figcaption>
-          <b>1a · Workspace mode.</b> The mode switch sits at the left of the toolbar. Its Tasks
-          half shows a count only for tasks that need you. The right sidebar keeps a Tasks glance:
-          tapping a row expands it in place to the status, the next step and the main action. "Open
-          in Tasks" switches mode with that task selected.
+          <b>1a · Workspace mode.</b> The mode switch sits at the left of the toolbar; its Tasks
+          half counts only tasks that need you. The right sidebar is always docked, never floating.
+          A rail tab opens its view, and tapping the open view's tab closes the sidebar. Its Tasks
+          view is the same list and detail as in Tasks mode.
         </figcaption>
       </figure>
       <figure>
         <div class="dev desktop">
           <div class="tb">
-            <span class="ic"></span>
-            <span class="seg"
+            <span class="ic"></span
+            ><span class="seg"
               ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
-            >
-            <span class="grow"></span>
-            <span class="pill">Run command… ⌘K</span><span class="ic"></span
-            ><span class="ic"></span>
+            ><span class="grow"></span><span class="pill">Run command… ⌘K</span
+            ><span class="ic"></span><span class="ic"></span>
           </div>
           <div class="body">
             <div class="main">
               <div class="filters">
-                <span class="pill">All projects ▾</span><span class="pill">All 14</span
+                <span class="pill">All projects ▾</span
                 ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
                 ><span class="pill">Running 2</span><span class="grow"></span
-                ><span class="btn">+ New task</span>
+                ><span class="btn">+ New</span>
               </div>
               <div class="lanes">
                 <div class="lane">
                   <div class="hd">Backlog 6</div>
                   <div class="card">Add dark mode toggle<small>aurora-web</small></div>
                   <div class="card">Fix flaky reconciler test<small>aurora-web</small></div>
+                  <div class="card">Document webhook retry<small>aurora-web</small></div>
                 </div>
                 <div class="lane">
                   <div class="hd">Ready 2</div>
                   <div class="card">Speed up orders query<small>orbit-api</small></div>
+                  <div class="card">Document cookie lifetime<small>#11</small></div>
                 </div>
                 <div class="lane">
                   <div class="hd">In progress 2</div>
                   <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
+                  <div class="card">Orders list is slow<small>#3 · PR #5</small></div>
                 </div>
                 <div class="lane">
                   <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
                   <div class="card sel">
                     Fix focus loss in the login form<span class="need">needs your approval</span>
                   </div>
                 </div>
                 <div class="lane">
                   <div class="hd">Done 1 · Failed 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
                   <div class="card">
                     Rework settings layout<span class="fail">budget used up</span>
                   </div>
@@ -595,8 +589,8 @@
               </div>
               <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
             </div>
-            <div class="detail">
-              <h3>#7 Fix focus loss in the login form</h3>
+            <div class="rs" style="width: 360px">
+              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
               <div class="box">
                 <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
               </div>
@@ -607,22 +601,21 @@
               <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
               <span class="btn ghost">Open session in Workspace</span>
               <div class="box" style="margin-top: 10px">
-                <b>Timeline</b> · claimed · PR #14 opened · review…
+                <b>Details</b> · aurora-web · issue #7 · PR #14
               </div>
+              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
             </div>
             <div class="rail">
-              <span class="ic"></span><span class="ic"></span><span class="ic"></span
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
               ><span class="ic"></span>
             </div>
           </div>
         </div>
         <figcaption>
-          <b>1b · Tasks mode.</b> The board owns the screen. Selecting a card opens the detail as a
-          panel beside the board: wider than the sidebar, no close-by-accident, and selecting
-          another card just swaps it. The worker terminal is a read-only peek; anything more is
-          "Open session in Workspace". The left sidebar and the Dock are hidden here
-          <span class="tag open">open</span> (they are workspace tools; today the Dock still shows
-          under the board).
+          <b>1b · Tasks mode, task selected.</b> The board owns the screen; the left sidebar and the
+          Dock are hidden. Selecting a card shows the task in the right sidebar, the one task-detail
+          surface. Close the sidebar with its rail tab and the board takes the full width.
         </figcaption>
       </figure>
     </div>
@@ -632,11 +625,10 @@
       <figure>
         <div class="dev fold">
           <div class="tb">
-            <span class="ic"></span>
-            <span class="seg"
+            <span class="ic"></span
+            ><span class="seg"
               ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
-            >
-            <span class="grow"></span><span class="ic"></span><span class="ic"></span>
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
           </div>
           <div class="filters">
             <span class="pill">All projects ▾</span
@@ -661,15 +653,17 @@
                 <div class="lane">
                   <div class="hd">In progress 2</div>
                   <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
+                  <div class="card">Orders list is slow<small>#3 · PR #5</small></div>
                 </div>
                 <div class="lane">
                   <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
                   <div class="card">
-                    Fix focus loss<span class="need">needs your approval</span>
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
                   </div>
                 </div>
               </div>
-              <div class="adhoc">▸ Ad-hoc sessions · 8 · 1 needs you</div>
+              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
             </div>
             <div class="rail">
               <span class="ic"></span><span class="ic"></span><span class="ic"></span
@@ -678,23 +672,31 @@
           </div>
         </div>
         <figcaption>
-          <b>2a · Tasks mode, board.</b> Lanes keep their desktop width and scroll sideways; about
-          three and a half fit, and the cut-off lane shows there is more. "Needs me" is one tap in
-          the filter row.
+          <b>2a · Tasks mode, sidebar closed.</b> The desktop board: lanes keep their width and
+          scroll sideways; about three and a half fit, and the cut-off lane shows there is more.
         </figcaption>
       </figure>
       <figure>
         <div class="dev fold">
           <div class="tb">
-            <span class="ic"></span>
-            <span class="seg"
+            <span class="ic"></span
+            ><span class="seg"
               ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
-            >
-            <span class="grow"></span><span class="ic"></span><span class="ic"></span>
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
           </div>
           <div class="body">
             <div class="main">
+              <div class="filters">
+                <span class="pill">All projects ▾</span
+                ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
+                ><span class="grow"></span><span class="btn">+ New</span>
+              </div>
               <div class="lanes">
+                <div class="lane">
+                  <div class="hd">In progress 2</div>
+                  <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
+                  <div class="card">Orders list is slow<small>#3 · PR #5</small></div>
+                </div>
                 <div class="lane">
                   <div class="hd">Reviewing 2</div>
                   <div class="card">Cache the session lookup<small>PR #17</small></div>
@@ -702,44 +704,161 @@
                     Fix focus loss in the login form<span class="need">needs your approval</span>
                   </div>
                 </div>
-                <div class="lane">
-                  <div class="hd">Done 1</div>
-                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
-                </div>
               </div>
+              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
             </div>
-            <div class="detail">
-              <h3>← #7 Fix focus loss in the login form</h3>
-              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
-              <div style="margin-bottom: 12px">
+            <div class="rs" style="width: 396px">
+              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
+              <div class="box">
+                <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
+              </div>
+              <div style="margin-bottom: 10px">
                 <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
               </div>
               <div class="box"><b>Review</b> · verdict approved · round 2</div>
               <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
               <span class="btn ghost">Open session in Workspace</span>
-              <div class="box" style="margin-top: 12px">
+              <div class="box" style="margin-top: 10px">
                 <b>Details</b> · aurora-web · issue #7 · PR #14
               </div>
-              <div class="box"><b>Timeline</b> · claimed · PR opened · review…</div>
+              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
             </div>
           </div>
         </div>
         <figcaption>
-          <b>2b · Tasks mode, task open.</b> The detail takes the right half as a real panel, not a
-          drawer: nothing dims, no swipe closes it, and the board stays usable beside it. The ←
-          arrow or the system back gesture returns to the full board. The right rail hides while a
-          task is open <span class="tag open">open</span>.
+          <b>2b · Task open, lanes kept.</b> Half and half. The sidebar docks on the right half; the
+          board keeps its columns on the left, where fewer than two fit, so reaching another status
+          means scrolling sideways inside a narrow strip.
         </figcaption>
       </figure>
       <figure>
         <div class="dev fold">
           <div class="tb">
-            <span class="ic"></span>
-            <span class="seg"
+            <span class="ic"></span
+            ><span class="seg"
+              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="filters">
+                <span class="pill">All projects ▾</span
+                ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
+                ><span class="grow"></span><span class="btn">+ New</span>
+              </div>
+              <div style="flex: 1; padding: 0 12px; overflow: hidden">
+                <div
+                  class="hd"
+                  style="
+                    margin-top: 12px;
+                    padding: 6px 0;
+                    border-bottom: 1px solid var(--border-soft);
+                  "
+                >
+                  ▾ Reviewing 2 <i style="color: var(--y)">●</i>
+                </div>
+                <div class="card">Cache the session lookup<small>aurora-web · PR #17</small></div>
+                <div class="card sel">
+                  Fix focus loss in the login form<small>aurora-web · PR #14</small
+                  ><span class="need">needs your approval</span>
+                </div>
+                <div
+                  class="hd"
+                  style="
+                    margin-top: 12px;
+                    padding: 6px 0;
+                    border-bottom: 1px solid var(--border-soft);
+                  "
+                >
+                  ▾ In progress 2
+                </div>
+                <div class="card">
+                  Add rate limiting to the login route<small>aurora-web · #10 · PR #12</small>
+                </div>
+                <div class="card">
+                  Orders list is slow with &gt;10k rows<small>orbit-api · #3 · PR #5</small>
+                </div>
+                <div
+                  class="hd"
+                  style="
+                    margin-top: 12px;
+                    padding: 6px 0;
+                    border-bottom: 1px solid var(--border-soft);
+                  "
+                >
+                  ▾ Ready 2
+                </div>
+                <div class="card">Speed up orders query with an index<small>orbit-api</small></div>
+                <div class="card">
+                  Document the session cookie lifetime<small>aurora-web · #11</small>
+                </div>
+                <div
+                  class="hd"
+                  style="
+                    margin-top: 12px;
+                    padding: 6px 0;
+                    border-bottom: 1px solid var(--border-soft);
+                  "
+                >
+                  ▸ Backlog 6
+                </div>
+                <div
+                  class="hd"
+                  style="
+                    margin-top: 12px;
+                    padding: 6px 0;
+                    border-bottom: 1px solid var(--border-soft);
+                  "
+                >
+                  ▸ Done 1 · Failed 1 <i style="color: var(--y)">●</i>
+                </div>
+              </div>
+              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
+            </div>
+            <div class="rs" style="width: 396px">
+              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
+              <div class="box">
+                <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
+              </div>
+              <div style="margin-bottom: 10px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 10px">
+                <b>Details</b> · aurora-web · issue #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag open">idea</span><b>2b′ · Task open, statuses stacked.</b> The same board
+          redrawn as a vertical list: one section per status, cards at full width, every status
+          reachable by scrolling down. Sections collapse; a dot marks the ones holding a task that
+          needs you. Open questions: the order of the sections (drawn here with the active ones
+          first), and whether the board switches to this only while the sidebar is open or always on
+          the fold.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
               ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
-            >
-            <span class="back">← #7 Fix focus loss</span>
-            <span class="grow"></span><span class="ic"></span><span class="ic"></span>
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
           </div>
           <div class="body">
             <div class="main">
@@ -752,16 +871,34 @@
                 ><span>↓</span><span>🎤</span><span>⋮</span>
               </div>
             </div>
+            <div class="rs" style="width: 396px">
+              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
+              <div class="box">
+                <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
+              </div>
+              <div style="margin-bottom: 10px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 10px">
+                <b>Details</b> · aurora-web · issue #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
+            </div>
             <div class="rail">
-              <span class="ic"></span><span class="ic"></span><span class="ic"></span
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
               ><span class="ic"></span>
             </div>
           </div>
         </div>
         <figcaption>
-          <b>2c · Workspace mode, arrived from a task.</b> "Open session in Workspace" lands on the
-          worker's terminal. A "← #7" chip next to the switch returns to exactly that task; it
-          disappears once you navigate elsewhere. The switch still shows the needs-you count.
+          <b>2c · Workspace mode, after "Open session in Workspace".</b> The mode changes and the
+          worker's terminal takes the left half. The sidebar is the same in both modes, so the task
+          you came from is still open beside the terminal; no separate "back to task" control is
+          needed here.
         </figcaption>
       </figure>
     </div>
@@ -998,12 +1135,17 @@
       </ul>
       <ul class="notes">
         <li>
-          <span class="tag open">open</span><b>The sidebar on the fold and on tablets:</b> section
-          7.
+          <span class="tag rec">decided</span
+          ><b>The fold docks the sidebar half and half;</b> narrower windows open it full width
+          (section 7).
         </li>
         <li>
-          <b>Cross-links:</b> task → "Open session in Workspace" → "← #7" chip back to the same
-          task.
+          <span class="tag open">idea</span><b>Stacked statuses on the fold</b> instead of lanes
+          (frame 2b′).
+        </li>
+        <li>
+          <b>Cross-links:</b> "Open session in Workspace" switches mode; the task stays open in the
+          sidebar. On phone, the system back gesture returns to the task.
         </li>
         <li>
           <b>Phone navigator:</b> its Tasks tab goes; the rest needs its own rethink, not designed
@@ -1319,7 +1461,7 @@
     </ul>
     <h2>
       7 · The sidebar on the fold: is there something better than docking?
-      <span class="tag open">open</span>
+      <span class="tag rec">decided: 1</span>
     </h2>
     <p class="lede">
       On desktop the sidebar is always docked. The fold has 840px, so the question is what an open
