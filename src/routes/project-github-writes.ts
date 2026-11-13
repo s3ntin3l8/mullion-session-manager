@@ -58,7 +58,7 @@ const writeRateLimit = { rateLimit: { max: 20, timeWindow: "1 minute" } };
  * lacks permission comes back as HTTP 200 with an `errors` array, so "not
  * accessible" in the message is a scope problem too, not a 502.
  */
-function replyWriteError(reply: FastifyReply, err: unknown, what: string): FastifyReply {
+export function replyWriteError(reply: FastifyReply, err: unknown, what: string): FastifyReply {
   if (!(err instanceof GitHubApiError)) throw err;
   // A GraphQL error on an HTTP 200 (`githubGraphQL` throws those with the
   // response's own status) — as opposed to a malformed answer with no data.

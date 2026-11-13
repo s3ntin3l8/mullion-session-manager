@@ -2115,3 +2115,36 @@ export const pushSubscriptions = sqliteTable(
   },
   (table) => [uniqueIndex("push_subscriptions_endpoint_unique").on(table.endpoint)],
 );
+
+// #2999 — the audit trail for a code-scanning alert dismissed from a blocked
+// task (POST /api/tasks/:id/blocking-alerts/:alertNumber/dismiss). Tasks have
+// no other audit table. A row is written after GitHub accepted the PATCH, so
+// it records a dismissal that really happened; `threadResolved` is false when
+// the thread reply or resolve that follows failed (the dismissal stands).
+// `fetchPriorDismissals` merges these in, so a dismissal on a still-unmerged
+// PR branch shows up as prior art before GitHub's own list would.
+export const codeScanningDismissals = sqliteTable(
+  "code_scanning_dismissals",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: integer("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    repo: text("repo").notNull(), // owner/repo
+    prNumber: integer("pr_number").notNull(),
+    alertNumber: integer("alert_number").notNull(),
+    ruleId: text("rule_id").notNull(),
+    path: text("path"),
+    reason: text("reason").notNull(),
+    comment: text("comment").notNull(),
+    dismissedBy: text("dismissed_by"),
+    threadResolved: integer("thread_resolved", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    index("code_scanning_dismissals_task_idx").on(table.taskId),
+    index("code_scanning_dismissals_rule_idx").on(table.repo, table.ruleId),
+  ],
+);

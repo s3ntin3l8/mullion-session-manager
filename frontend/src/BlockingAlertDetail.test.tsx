@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BlockingAlertDetail } from "./BlockingAlertDetail.js";
 import type { BlockingAlertsResponse } from "./api/blocking-alerts-types.js";
 
 const getBlockingAlerts = vi.fn();
+const dismissBlockingAlert = vi.fn();
 vi.mock("./api/index.js", () => ({
-  api: { getBlockingAlerts: (id: number) => getBlockingAlerts(id) },
+  api: {
+    getBlockingAlerts: (id: number) => getBlockingAlerts(id),
+    dismissBlockingAlert: (...a: unknown[]) => dismissBlockingAlert(...a),
+  },
 }));
 
 const raw = JSON.stringify({
@@ -24,6 +28,7 @@ const raw = JSON.stringify({
 
 const payload = (canDismiss: BlockingAlertsResponse["alerts"][number]["canDismiss"]) =>
   ({
+    dismissals: [],
     alerts: [
       {
         number: 7,
@@ -63,7 +68,10 @@ const payload = (canDismiss: BlockingAlertsResponse["alerts"][number]["canDismis
   }) as BlockingAlertsResponse;
 
 describe("BlockingAlertDetail", () => {
-  beforeEach(() => getBlockingAlerts.mockReset());
+  beforeEach(() => {
+    getBlockingAlerts.mockReset();
+    dismissBlockingAlert.mockReset();
+  });
 
   it("renders rule, snippet with flagged lines and prior dismissals", async () => {
     getBlockingAlerts.mockResolvedValue(payload({ ok: true }));
@@ -106,8 +114,104 @@ describe("BlockingAlertDetail", () => {
   it("renders an errored entry's message", async () => {
     getBlockingAlerts.mockResolvedValue({
       alerts: [{ number: 7, error: "boom", canDismiss: { ok: true } }],
+      dismissals: [],
     });
     render(<BlockingAlertDetail taskId={3} raw={raw} />);
     expect(await screen.findByText(/Alert #7: details unavailable \(boom\)/)).toBeInTheDocument();
+  });
+
+  describe("dismiss (#2999)", () => {
+    async function openConfirm() {
+      getBlockingAlerts.mockResolvedValue(payload({ ok: true }));
+      render(<BlockingAlertDetail taskId={3} raw={raw} />);
+      fireEvent.click(await screen.findByTestId("blocking-alert-dismiss"));
+    }
+    const confirm = () => screen.getByTestId("blocking-alert-dismiss-confirm");
+
+    it("restates the rule and location; confirm needs a non-empty comment of at most 280", async () => {
+      await openConfirm();
+      expect(screen.getByTestId("blocking-alert-dismiss-form")).toHaveTextContent(
+        "js/path-injection at src/routes/fs.ts:10",
+      );
+      expect(screen.getByLabelText("Dismissal reason")).toHaveValue("false positive");
+      expect(confirm()).toBeDisabled();
+      const box = screen.getByLabelText("Dismissal comment");
+      fireEvent.change(box, { target: { value: "   " } });
+      expect(confirm()).toBeDisabled();
+      fireEvent.change(box, { target: { value: "x".repeat(281) } });
+      expect(confirm()).toBeDisabled();
+      expect(screen.getByTestId("blocking-alert-counter")).toHaveTextContent("281/280");
+      fireEvent.change(box, { target: { value: "x".repeat(280) } });
+      expect(confirm()).toBeEnabled();
+    });
+
+    it("hides the button, keeping the reason, when canDismiss is not ok", async () => {
+      getBlockingAlerts.mockResolvedValue(payload({ ok: false, reason: "Missing scope." }));
+      render(<BlockingAlertDetail taskId={3} raw={raw} />);
+      expect(await screen.findByTestId("blocking-alert-note")).toHaveTextContent("Missing scope.");
+      expect(screen.queryByTestId("blocking-alert-dismiss")).toBeNull();
+    });
+
+    it("posts the trimmed comment and shows the audit line afterwards", async () => {
+      dismissBlockingAlert.mockResolvedValue({
+        dismissed: true,
+        threadResolved: true,
+        dismissal: {
+          alertNumber: 7,
+          ruleId: "js/path-injection",
+          path: "src/routes/fs.ts",
+          reason: "won't fix",
+          comment: "ok",
+          dismissedBy: "me",
+          threadResolved: true,
+          createdAt: "2026-01-02T03:04:05Z",
+        },
+      });
+      await openConfirm();
+      fireEvent.change(screen.getByLabelText("Dismissal reason"), {
+        target: { value: "won't fix" },
+      });
+      fireEvent.change(screen.getByLabelText("Dismissal comment"), { target: { value: " ok " } });
+      fireEvent.click(confirm());
+      expect(await screen.findByTestId("blocking-alert-audit")).toHaveTextContent(
+        /^Dismissed #7 as won't fix by me, /,
+      );
+      expect(dismissBlockingAlert).toHaveBeenCalledWith(3, 7, {
+        reason: "won't fix",
+        comment: "ok",
+      });
+      expect(screen.queryByTestId("blocking-alert-dismiss")).toBeNull();
+    });
+
+    it("keeps the confirm open and shows the error when the dismissal fails", async () => {
+      dismissBlockingAlert.mockRejectedValue(new Error("nope"));
+      await openConfirm();
+      fireEvent.change(screen.getByLabelText("Dismissal comment"), { target: { value: "c" } });
+      fireEvent.click(confirm());
+      expect(await screen.findByText("Failed to dismiss the alert")).toBeInTheDocument();
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      expect(screen.queryByTestId("blocking-alert-audit")).toBeNull();
+    });
+
+    it("shows audit lines the GET returns on a reload", async () => {
+      const p = payload({ ok: true });
+      p.dismissals = [
+        {
+          alertNumber: 5,
+          ruleId: "r",
+          path: null,
+          reason: "false positive",
+          comment: "c",
+          dismissedBy: "me",
+          threadResolved: false,
+          createdAt: "2026-01-02T03:04:05Z",
+        },
+      ];
+      getBlockingAlerts.mockResolvedValue(p);
+      render(<BlockingAlertDetail taskId={3} raw={raw} />);
+      expect(await screen.findByTestId("blocking-alert-audit")).toHaveTextContent(
+        /Dismissed #5 as false positive by me, .*thread left open/,
+      );
+    });
   });
 });

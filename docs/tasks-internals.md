@@ -985,8 +985,32 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   `canDismiss`, computed from the human account token (`getToken`) and its
   stored classic scopes only, never an App token (no `security_events`
   permission); a fine-grained PAT stores no scopes and counts as unknown/ok. A
-  failure on one alert degrades that entry to `{error}`. Only GETs are made.
-  `BlockingAlertDetail` renders it in `TaskDetail`. A third, `ci-status-stalled`
+  failure on one alert degrades that entry to `{error}`. The GET makes only
+  GETs, and also returns the task's audit lines (`dismissals`; it answers 200
+  with `alerts: []` while only audit lines remain, so one survives a reload).
+  `BlockingAlertDetail` renders it in `TaskDetail`.
+
+  **Dismiss (#2999)** is `POST /api/tasks/:id/blocking-alerts/:alertNumber/dismiss`
+  (`routes/task-blocking-alert-dismiss.ts`), body `{reason, comment}` (comment
+  trimmed, required, at most 280). Preconditions: Task Master enabled, task
+  `done` with a `prNumber`, `needsHumanReason === "blocked-threads"`, and a
+  connected human account. It **re-checks before writing**, never trusting the
+  stored snapshot: `fetchPullRequestReviewThreads` + `foreignOpenThreads`, and
+  `:alertNumber` must match (`ALERT_URL_RE`) the first comment of an open foreign
+  thread on this task's PR, and the alert GET must say `open`; otherwise 409
+  `alert-not-blocking` and no PATCH. Then `PATCH /code-scanning/alerts/{n}` with
+  the human token only (`getToken`; no GitHub App fallback, an App has no
+  `security_events` write), errors mapped through `replyWriteError` (a 403 gives
+  the permission message). Then `replyToReviewThread` and `resolveReviewThread`
+  on that thread; a failure there (a failed reply skips the resolve) answers 200
+  with `threadResolved: false` and a `warning`, the dismissal standing. The audit
+  row goes into `code_scanning_dismissals` (the only audit table tasks have;
+  `fetchPriorDismissals` merges its rows in as prior art), and the merge is
+  reopened as `POST /api/tasks/:id/merge` does (`mergeRequestedAt`,
+  `clearedFor`, `resetMergeBackoff`). If another thread still blocks, the next
+  attempt sets `blocked-threads` again. **Human-only by construction:** dashboard
+  REST only, no control-socket op, MCP tool or CLI command; a test fails if any
+  of them mentions `blocking-alerts`. A third, `ci-status-stalled`
   (#2904), is set when a non-Actions status stayed pending past
   `COVERAGE_STATUS_STALL_MS` on a green head and the coverage re-uploads ran
   out of budget — see "A stuck non-Actions status gets its coverage re-uploaded"
@@ -998,6 +1022,7 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   `mergeError` is cleared and when a merge is recorded. Reject also resets
   `rebaseAttempts` to 0, so a worker that failed to rebase can be followed by
   a fresh auto-rebase.
+
 - **Round headings.** Each stored round is `## Round N`, with a parenthetical
   of notes (`retry N`, `re-review after suggestions`, `late verdict — …`) from
   `reviewRoundLabel` (`task-round-label.ts`). A human re-review of a concluded

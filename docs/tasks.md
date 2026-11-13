@@ -579,7 +579,17 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
   it) so a repeat false positive is recognisable without leaving Mullion. If
   the connected GitHub account could not later dismiss alerts (none connected,
   or a classic token without `repo`/`security_events`), a note says why.
-  Read-only: Mullion never dismisses an alert here.
+  A **Dismiss…** button (shown while the account could dismiss; otherwise the
+  note says why) opens an inline confirm that restates the rule and location and
+  asks for a reason (`false positive`, `won't fix` or `used in tests`) and a
+  required comment of at most 280 characters. Confirming re-reads the PR's
+  threads and the alert on GitHub, dismisses only that alert (a different alert
+  of the same rule is never touched), replies to and resolves its thread, records
+  an audit line ("Dismissed #520 as false positive by <login>, <time>") and
+  re-arms the merge. It is a human action in the dashboard only: no agent, CLI
+  or MCP tool can dismiss an alert, and it uses your connected GitHub account,
+  never the GitHub App. If the reply or resolve fails the dismissal still
+  stands, and the audit line says the thread was left open.
 - `pr-closed` — an approved task's PR was closed without merging, so nothing
   landed. The issue stays open (a comment says why, and `mullion-done` is
   removed). Reopen the PR and use **Merge now** (a hand-merge is noticed within

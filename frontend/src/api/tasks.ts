@@ -2,7 +2,11 @@
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
 import type { Task, ClearDoneResult } from "./types.js";
-import type { BlockingAlertsResponse } from "./blocking-alerts-types.js";
+import type {
+  BlockingAlertDismissReason,
+  BlockingAlertsResponse,
+  DismissBlockingAlertResponse,
+} from "./blocking-alerts-types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
 
 export const tasksApi = {
@@ -168,4 +172,16 @@ export const tasksApi = {
   // `blocked-threads` with a stored alert number.
   getBlockingAlerts: (id: number) =>
     request<BlockingAlertsResponse>(`/api/tasks/${id}/blocking-alerts`),
+  // #2999 — human-only: dismisses the alert, replies to and resolves its
+  // thread, and reopens the merge. 409 `alert-not-blocking` when the alert is
+  // no longer what the task is blocked on.
+  dismissBlockingAlert: (
+    id: number,
+    alertNumber: number,
+    body: { reason: BlockingAlertDismissReason; comment: string },
+  ) =>
+    request<DismissBlockingAlertResponse>(
+      `/api/tasks/${id}/blocking-alerts/${alertNumber}/dismiss`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 };
