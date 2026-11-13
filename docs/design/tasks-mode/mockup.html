@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 17</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 18</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 17</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 18</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -1005,7 +1005,9 @@
         <figcaption>
           <span class="tag rec">decided</span><b>2f · Browser.</b> A right-rail view, like Device:
           the browser of the session shown on the left. The page fills the whole half; only the
-          address bar sits above it.
+          address bar sits above it. "▾" beside the address opens a quick pick: what is running for
+          this project now (Dock commands and Compose services with a port), then saved pages and
+          recent ones (proposal, #3003).
         </figcaption>
       </figure>
       <figure>
@@ -1016,7 +1018,7 @@
           ></iframe>
         </div>
         <figcaption>
-          <span class="tag open">proposal</span><b>2g · Dock.</b> A right-rail view of the left
+          <span class="tag rec">decided</span><b>2g · Dock.</b> A right-rail view of the left
           session's project. One section per source: Commands (from dock.json) and one per Compose
           stack, so a dev and a prod stack stay apart under their own names. Tap a row to select it;
           its actions and log show below. A stack's own actions (restart, apply, pull and restart,
@@ -1046,10 +1048,10 @@
         right-rail view.
       </li>
       <li>
-        <span class="tag open">proposal</span><b>One rule for companions on the fold.</b> Anything
-        you look at beside a session is a right-rail view: Tasks, GitHub, Git, Files, Device,
-        Browser, Dock. The left half is always a session. On desktop Browser and Dock stay as they
-        are (a pane in the grid, the bottom dock).
+        <span class="tag rec">decided</span><b>One rule for companions on the fold.</b> Anything you
+        look at beside a session is a right-rail view: Tasks, GitHub, Git, Files, Device, Browser,
+        Dock. The left half is always a session. On desktop Browser and Dock stay as they are (a
+        pane in the grid, the bottom dock).
       </li>
       <li>
         <b>Dock actions on touch.</b> What sits in hover menus and small kebabs today becomes
@@ -1065,9 +1067,10 @@
         means opening it as a session.
       </li>
       <li>
-        <b>Width check, estimated.</b> A half is 372px. With the default 14px terminal font that is
-        about 40 columns, which is exactly the smallest grid the server allows; below it the app
-        shrinks the font. To be confirmed on the device.
+        <b>Checked by the owner on the fold</b> (in the prototype): rail reach, the board switching
+        between lanes and stacked, the long press and the sheets are fine, and two sessions side by
+        side are readable in today's app. Real terminal behaviour, the on-screen keyboard and
+        performance can only be checked in the implementation.
       </li>
       <li>
         <b>Narrow tablets.</b> Where a half would be narrower than about 400px (windows under

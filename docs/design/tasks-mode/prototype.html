@@ -745,6 +745,13 @@
         place-items: center;
         color: var(--muted);
       }
+      .urlbar button {
+        width: 44px;
+        height: 44px;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
       .urlbar b {
         flex: 1;
         min-width: 0;
@@ -1098,7 +1105,7 @@
             <div class="devscreen">Pixel 9 screen<br><small>live, touch goes to the device</small></div>
             <div class="box"><b>Pixel Tablet</b> · stopped <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Start</span></div>`;
         if (state.view === "browser")
-          return `<div class="urlbar"><span>←</span><span>→</span><span>⟳</span><b>localhost:5173/login</b></div>
+          return `<div class="urlbar"><span>←</span><span>→</span><span>⟳</span><b>${browserUrl}</b><button data-urls aria-label="Running services and saved pages">▾</button></div>
             <div class="page">The session's browser<br><small>the page the agent on the left is driving</small></div>`;
         if (state.view === "dock") {
           // [id, name, detail, dot colour, image pill]
@@ -1183,6 +1190,7 @@
       $("#body").append(sheet);
       // The launcher: the same choices as the desktop launcher, laid out for touch.
       let dockSel = "";
+      let browserUrl = "localhost:5173/login";
       let addTab = "new";
       let agent = "claude";
       let skipOverride = null;
@@ -1386,6 +1394,26 @@
         } else if (t.dataset.add) {
           addSheet(t.dataset.add);
           return;
+        } else if (t.dataset.urls !== undefined) {
+          // Quick pick: what is running for this project right now, then saved pages.
+          const row = (dot, name, url, sub) =>
+            `<button class="srow" data-goto="${url}"><i style="color:${dot}">●</i><span><b>${name}</b><small>${url}${sub ? " · " + sub : ""}</small></span></button>`;
+          sheet.innerHTML =
+            `<div class="sh"><b>Open in browser</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+            `<div class="mh">Running now · aurora-web</div>` +
+            row("var(--g)", "dev", "localhost:5173", "Dock command") +
+            row("var(--g)", "api", "localhost:8080", "aurora-dev") +
+            row("var(--g)", "web", "localhost:3000", "aurora-prod") +
+            `<div class="mh">Saved for this project</div>` +
+            row("var(--dim)", "Storybook", "localhost:6006", "") +
+            row("var(--dim)", "Staging", "staging.aurora.example", "") +
+            `<div class="mh">Recent</div>` +
+            row("var(--dim)", "Login page", "localhost:5173/login", "");
+          sheet.className = "right";
+          sheet.style.display = "block";
+          return;
+        } else if (t.dataset.goto) {
+          browserUrl = t.dataset.goto;
         } else if (t.dataset.dock) {
           dockSel = t.dataset.dock;
         } else if (t.dataset.dockmenu) {
