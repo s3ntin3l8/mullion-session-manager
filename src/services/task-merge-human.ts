@@ -175,14 +175,6 @@ export async function foreignOpenThreads(
   );
 }
 
-/** Is any unresolved thread one Mullion did not open? */
-export async function hasForeignOpenThread(
-  result: PrReviewThreadsResult,
-  resolveMullionLogins: (viewerLogin: string | null) => Promise<ReadonlySet<string>>,
-): Promise<boolean> {
-  return (await foreignOpenThreads(result, resolveMullionLogins)).length > 0;
-}
-
 /** The merge-error message for a blocked PR's thread list, plus the capped
  * summary of the foreign open threads (null when there are none). Null result:
  * nothing unresolved, so the caller's generic message stands. */

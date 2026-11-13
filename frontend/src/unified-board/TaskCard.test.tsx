@@ -1207,7 +1207,7 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
 
-  it("names the blocking threads and links the code-scanning alert", () => {
+  it("names the blocking threads and links the code-scanning alert", async () => {
     tasks = [
       makeTask({
         id: 1,
@@ -1236,6 +1236,11 @@ describe("UnifiedBoard task columns", () => {
       "https://github.com/o/r/security/code-scanning/520",
     );
     expect(screen.getByText("and 1 more")).toBeInTheDocument();
+    // Following a link out must not also open the task drawer.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: "alert" }));
+    await user.click(screen.getByRole("link", { name: /github-advanced-security at/ }));
+    expect(openRightSidebarTask).not.toHaveBeenCalled();
   });
 
   it("names a human's blocking thread without an alert link", () => {

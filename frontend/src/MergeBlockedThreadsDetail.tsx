@@ -1,9 +1,14 @@
+import type { MouseEvent } from "react";
 import {
   blockedThreadText,
   parseMergeBlockedThreads,
   safeGithubUrl,
   type MergeBlockedThreadsInfo,
 } from "./needsHuman.js";
+
+/** On a task card a click bubbles to the card and opens the task drawer;
+ * following a link out must not do that too. */
+const stopCardClick = (e: MouseEvent) => e.stopPropagation();
 
 /** The open threads blocking a merge, linking each thread and its alert.
  * Renders nothing when the detail is unavailable, so the generic text stands. */
@@ -19,7 +24,7 @@ export function MergeBlockedThreadsDetail({ raw }: { raw: string | null | undefi
         return (
           <li key={i}>
             {threadUrl ? (
-              <a href={threadUrl} target="_blank" rel="noreferrer">
+              <a href={threadUrl} target="_blank" rel="noreferrer" onClick={stopCardClick}>
                 {blockedThreadText(t)}
               </a>
             ) : (
@@ -28,7 +33,7 @@ export function MergeBlockedThreadsDetail({ raw }: { raw: string | null | undefi
             {alertUrl && (
               <>
                 {" "}
-                <a href={alertUrl} target="_blank" rel="noreferrer">
+                <a href={alertUrl} target="_blank" rel="noreferrer" onClick={stopCardClick}>
                   alert
                 </a>
               </>
