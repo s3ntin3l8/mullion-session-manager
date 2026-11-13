@@ -151,6 +151,13 @@ export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
 // host its own HTTP round trip.
 const LIVE_STATUS_CACHE_TTL_MS = 1_500;
 
+// Issue #2991 — the dashboard's git-status / git-diff batches ask the agent for
+// the same (cwd[, base]) once per session and once per open tab. A successful
+// read is shared for this long, and concurrent misses join one request. Kept
+// under the dashboard's 4 s live-refresh tick so a single tab still sees a new
+// read every tick; `fresh` reads (the push / workflow gates) bypass it.
+const GIT_READ_CACHE_TTL_MS = 3_000;
+
 // Issue #2255 — GET /api/sessions awaits every host's bulk live status, and a
 // host that does not answer cost it the full request timeout on EVERY poll
 // (and the pane of a just-created session waited behind two of those). Once a
@@ -310,6 +317,9 @@ export class RemoteHostClient {
   // requests landing in the same tick, before either has populated
   // liveStatusCache) share one HTTP call instead of each firing their own.
   private liveStatusInFlight = new Map<string, Promise<Record<string, SessionInfo | null>>>();
+  // Issue #2991: shared git-status / git-diff reads, keyed by call + cwd[+ base].
+  private gitReadCache = new Map<string, { ts: number; result: unknown }>();
+  private gitReadInFlight = new Map<string, Promise<unknown>>();
   // Set while the host is not answering live-status calls (#2255).
   private liveStatusDown: {
     error: HostUnreachableError;
@@ -548,7 +558,41 @@ export class RemoteHostClient {
    * (see the route's own comment). Every existing caller (sidebar
    * polls) omits it and keeps the cached read, at the default timeout. */
   resolveGitStatus(cwd: string, opts?: { fresh?: boolean }): Promise<GitStatusResult> {
-    return git.resolveGitStatus(this.gitRequest, cwd, opts);
+    return this.sharedGitRead(`status\0${cwd}`, opts?.fresh === true, () =>
+      git.resolveGitStatus(this.gitRequest, cwd, opts),
+    );
+  }
+
+  /** Issue #2991: shares one agent round trip between callers asking for the
+   * same read — concurrent misses join the in-flight request, and a success is
+   * reused for GIT_READ_CACHE_TTL_MS. Failures are never cached. A `fresh`
+   * read always goes to the agent and never joins another request or serves
+   * from the cache, so the dirty-tree and workflow gates can never see a
+   * shared or stale result; its success is still written, so it also refreshes
+   * what the next cached caller sees (the local getGitStatus does the same). */
+  private sharedGitRead<T>(key: string, fresh: boolean, fetch: () => Promise<T>): Promise<T> {
+    const remember = (result: T): T => {
+      const ts = Date.now();
+      for (const [k, v] of this.gitReadCache) {
+        if (ts - v.ts >= GIT_READ_CACHE_TTL_MS) this.gitReadCache.delete(k);
+      }
+      this.gitReadCache.set(key, { ts, result });
+      return result;
+    };
+    if (fresh) return fetch().then(remember);
+    const hit = this.gitReadCache.get(key);
+    if (hit && Date.now() - hit.ts < GIT_READ_CACHE_TTL_MS) {
+      return Promise.resolve(hit.result as T);
+    }
+    const inFlight = this.gitReadInFlight.get(key);
+    if (inFlight) return inFlight as Promise<T>;
+    const run = fetch()
+      .then(remember)
+      .finally(() => {
+        this.gitReadInFlight.delete(key);
+      });
+    this.gitReadInFlight.set(key, run);
+    return run;
   }
 
   /** Local branches + worktrees (issue #162), plus remote-tracking branches
@@ -756,7 +800,9 @@ export class RemoteHostClient {
     baseRef?: string,
     opts: { fresh?: boolean } = {},
   ): Promise<{ isRepo: boolean; stats: GitDiffStats | null; baseResolved?: boolean }> {
-    return git.resolveGitDiffStats(this.gitRequest, cwd, baseRef, opts);
+    return this.sharedGitRead(`diff\0${cwd}\0${baseRef ?? ""}`, opts.fresh === true, () =>
+      git.resolveGitDiffStats(this.gitRequest, cwd, baseRef, opts),
+    );
   }
 
   /** Per-file unified diff (issue #262) for a remote-hosted session's cwd —

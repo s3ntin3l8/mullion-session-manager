@@ -96,6 +96,28 @@ function parseIdListParam(param: string | undefined): number[] {
 // default (no remote, or the fallback chain bottomed out at "HEAD" — see
 // resolveDefaultBaseRefForPicker). Either way callers fall back to the
 // current branch.
+/**
+ * Issue #2991: one batch request often names many entries that resolve to the
+ * same remote (host, cwd) — ten sessions on one checkout, plus the project row.
+ * Each entry used to cost its own agent round trip. This memoizes the call for
+ * the lifetime of ONE request, failures included, so a dead host is also tried
+ * once per batch rather than once per entry (each entry still reaches its own
+ * catch, so omission and logging are unchanged). It is deliberately not shared
+ * across requests: the remote client's own short cache does that, and its
+ * `fresh` bypass stays intact.
+ */
+function createBatchMemo(): <T>(key: string, call: () => Promise<T>) => Promise<T> {
+  const calls = new Map<string, Promise<unknown>>();
+  return <T>(key: string, call: () => Promise<T>): Promise<T> => {
+    let p = calls.get(key);
+    if (!p) {
+      p = call();
+      calls.set(key, p);
+    }
+    return p as Promise<T>;
+  };
+}
+
 export interface ProjectGitBranchesResult {
   branches: GitBranchInfo[];
   worktrees: GitWorktreeInfo[];
@@ -204,6 +226,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
       const ids = parseIdListParam(request.query.ids);
       const sessionIds = parseIdListParam(request.query.sessionIds);
 
+      const memoRemote = createBatchMemo();
       const projectsResult: Record<string, GitStatus | null> = {};
       const projectOutcome = new HostOutcomes();
       const problemsResult: Record<string, GitStatusFailure> = {};
@@ -228,8 +251,9 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
             }
           } else {
             try {
-              const remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(
-                project.cwd,
+              const remoteResult = await memoRemote(
+                `status\0${project.hostId}\0${project.cwd}`,
+                () => getRemoteHostClient(app, project.hostId).resolveGitStatus(project.cwd),
               );
               projectOutcome.ok(project.hostId);
               if (!remoteResult.isRepo) {
@@ -275,8 +299,8 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
             }
           } else {
             try {
-              const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitStatus(
-                target.cwd,
+              const remoteResult = await memoRemote(`status\0${target.hostId}\0${target.cwd}`, () =>
+                getRemoteHostClient(app, target.hostId).resolveGitStatus(target.cwd),
               );
               sessionOutcome.ok(target.hostId);
               if (!remoteResult.isRepo) {
@@ -338,6 +362,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
       const result: Record<string, GitDiffStats | null> = {};
       if (sessionIds.length === 0) return result;
 
+      const memoRemote = createBatchMemo();
       const outcome = new HostOutcomes();
       const targets = await resolveSessionCwdTargets(app, sessionIds);
       for (const target of targets) {
@@ -358,9 +383,9 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           }
         } else {
           try {
-            const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitDiffStats(
-              target.cwd,
-              base,
+            const remoteResult = await memoRemote(
+              `diff\0${target.hostId}\0${target.cwd}\0${base ?? ""}`,
+              () => getRemoteHostClient(app, target.hostId).resolveGitDiffStats(target.cwd, base),
             );
             outcome.ok(target.hostId);
             if (!remoteResult.isRepo) {
