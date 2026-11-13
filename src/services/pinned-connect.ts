@@ -60,7 +60,7 @@ export class SsrfBlockedError extends Error {
     super(
       `blocked by SSRF guard: ${hostname} resolves to ${address}, ` +
         `which is not permitted under this policy ` +
-        `(allowLoopback=${policy.allowLoopback}, allowPrivate=${policy.allowPrivate})`,
+        `(allowLoopback=${policy.allowLoopback}, allowPrivate=${policy.allowPrivate}, allowSharedNat=${policy.allowSharedNat === true})`,
     );
     this.name = "SsrfBlockedError";
   }
@@ -147,10 +147,10 @@ export function createPinnedLookup(
 }
 
 function policyKey(policy: UrlGuardPolicy): string {
-  return `${policy.allowLoopback}:${policy.allowPrivate}`;
+  return `${policy.allowLoopback}:${policy.allowPrivate}:${policy.allowSharedNat === true}`;
 }
 
-// Memoized per policy (four possible combinations, two used in practice) so
+// Memoized per policy (a handful of combinations, three used in practice) so
 // every host shares one connection pool per trust level rather than building a
 // fresh agent — and its own pool — on every request.
 const dispatchers = new Map<string, UndiciAgent>();

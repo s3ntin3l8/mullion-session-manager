@@ -22,7 +22,7 @@ import {
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
-import { isAllowedHttpUrl } from "../services/url-guard.js";
+import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
@@ -107,8 +107,8 @@ const updateHostSchema = {
 // See services/url-guard.ts for the shared classification logic this
 // policy sits on top of — issue #28 phase 5's external-preview validation
 // uses the same logic with the opposite allowLoopback/allowPrivate policy.
-function isValidHttpUrl(value: string): boolean {
-  return isAllowedHttpUrl(value, { allowLoopback: true, allowPrivate: true });
+function isValidHttpUrl(value: string, allowSharedNat: boolean): boolean {
+  return isAllowedHttpUrl(value, hostUrlPolicy(allowSharedNat));
 }
 
 // A changed baseUrl/token means the old health verdict no longer means
@@ -265,7 +265,10 @@ export async function hostsRoute(app: FastifyInstance) {
     { schema: createHostSchema },
     async (request, reply) => {
       const { name, baseUrl } = request.body;
-      if (baseUrl !== undefined && !isValidHttpUrl(baseUrl)) {
+      if (
+        baseUrl !== undefined &&
+        !isValidHttpUrl(baseUrl, app.config.MULLION_ALLOW_TAILNET_HOSTS)
+      ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
       // A caller-supplied token (manual / ansible-provisioned agent) is
@@ -320,7 +323,10 @@ export async function hostsRoute(app: FastifyInstance) {
           return reply.badRequest("the local host cannot be edited");
         }
       }
-      if (request.body.baseUrl !== undefined && !isValidHttpUrl(request.body.baseUrl)) {
+      if (
+        request.body.baseUrl !== undefined &&
+        !isValidHttpUrl(request.body.baseUrl, app.config.MULLION_ALLOW_TAILNET_HOSTS)
+      ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
       const updated = updateHost(app, id, request.body);

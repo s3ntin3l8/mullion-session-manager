@@ -246,6 +246,30 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     }
   });
 
+  it("registers a tailnet 100.x baseUrl only with MULLION_ALLOW_TAILNET_HOSTS; IMDS stays blocked", async () => {
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+    const register = (app: Awaited<ReturnType<typeof buildApp>>, baseUrl: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: { token: "fleet-wide-secret", baseUrl, hostname: "ts-box" },
+      });
+    try {
+      let app = await buildApp();
+      expect((await register(app, "http://100.101.102.103:4000")).statusCode).toBe(400);
+      await app.close();
+
+      process.env.MULLION_ALLOW_TAILNET_HOSTS = "true";
+      app = await buildApp();
+      expect((await register(app, "http://100.101.102.103:4000")).statusCode).toBe(200);
+      expect((await register(app, "http://169.254.169.254")).statusCode).toBe(400);
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ENROLLMENT_SECRET;
+      delete process.env.MULLION_ALLOW_TAILNET_HOSTS;
+    }
+  });
+
   // Issue #213 cross-host capture — proves the wiring (this route calls the
   // decorator with the freshly-issued hostId), not
   // remote-event-subscriber.ts's own reconcile behavior (already covered by

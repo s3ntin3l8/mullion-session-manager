@@ -26,10 +26,10 @@ function ipv4Octets(hostname: string): IPv4Octets | null {
   return octets as IPv4Octets;
 }
 
-function isLinkLocalOrSharedNatIPv4(octets: IPv4Octets): boolean {
+function isLinkLocalOrSharedNatIPv4(octets: IPv4Octets, allowSharedNat: boolean): boolean {
   const [a, b] = octets;
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local, cloud IMDS)
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (RFC 6598 shared NAT)
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local, cloud IMDS): never allowed
+  if (!allowSharedNat && a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (RFC 6598 shared NAT)
   return false;
 }
 
@@ -106,10 +106,21 @@ function ipv6EmbeddedIPv4Octets(addr: string): IPv4Octets | null {
 export interface UrlGuardPolicy {
   allowLoopback: boolean;
   allowPrivate: boolean;
+  // Opt-in (MULLION_ALLOW_TAILNET_HOSTS): permit 100.64.0.0/10, the range
+  // Tailscale assigns tailnet IPv4 addresses from. Link-local/IMDS stays
+  // blocked either way. Absent means false.
+  allowSharedNat?: boolean;
+}
+
+// The policy for a host baseUrl (hosts.ts, enrollment.ts, host-pairing.ts and
+// remote-host-transport.ts's connect time): loopback and private ranges are
+// the normal deployment shape. `allowSharedNat` is MULLION_ALLOW_TAILNET_HOSTS.
+export function hostUrlPolicy(allowSharedNat: boolean): UrlGuardPolicy {
+  return { allowLoopback: true, allowPrivate: true, allowSharedNat };
 }
 
 function isBlockedIPv4(octets: IPv4Octets, policy: UrlGuardPolicy): boolean {
-  if (isLinkLocalOrSharedNatIPv4(octets)) return true;
+  if (isLinkLocalOrSharedNatIPv4(octets, policy.allowSharedNat === true)) return true;
   if (!policy.allowLoopback && isLoopbackIPv4(octets)) return true;
   if (!policy.allowPrivate && isPrivateIPv4(octets)) return true;
   return false;

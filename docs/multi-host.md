@@ -1017,7 +1017,7 @@ Registering a host (`POST`/`PATCH /api/hosts`) is an admin-only, authenticated
 config action — the same trust level as editing `PROJECTS_ROOTS` — not user
 input crossing a privilege boundary. The base URL is checked against obvious
 credential-leak targets (link-local addresses, cloud instance metadata
-endpoints like `169.254.169.254`, RFC 6598 shared-NAT space, and their
+endpoints like `169.254.169.254`, RFC 6598 shared-NAT space unless opted in below, and their
 IPv6/IPv4-mapped equivalents) both when it is registered **and** every time a
 connection to it is opened.
 
@@ -1039,6 +1039,21 @@ request signature: a base URL pointed at a metadata endpoint would hand those
 credentials straight to it. Beyond that, treat host registration as
 trusted-admin-only (it already effectively is) rather than exposing it to
 anyone you wouldn't also hand a bearer token with shell access.
+
+### Hosts reachable only over a tailnet (`MULLION_ALLOW_TAILNET_HOSTS`)
+
+Tailscale assigns its IPv4 addresses from `100.64.0.0/10`, the RFC 6598
+shared-NAT range, so by default a host stored as `http://100.x.y.z:PORT` (or a
+MagicDNS name that resolves there) is refused. Set
+`MULLION_ALLOW_TAILNET_HOSTS=true` on the primary to allow that one range. It
+applies everywhere the guard runs: host create/update, self-registration,
+pairing, and connect time on the resolved address. It is **off by default**,
+because shared-NAT ranges on some clouds can reach internal services; only turn
+it on if your agents really sit on a tailnet. Tailscale's IPv6 range
+(`fd7a:115c:a1e0::/48`) is already treated as private and needs no setting.
+Link-local and cloud metadata (`169.254.0.0/16`) stay blocked either way.
+Agents that open the outbound channel don't need this; the in-app browser
+WebSocket and legacy agents still dial the stored address.
 
 When the guard does fire it is logged as a distinct reason rather than a
 generic connection failure — a host that goes unreachable because it was
