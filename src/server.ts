@@ -1,8 +1,12 @@
+import { installWindowsHideDefault } from "./services/windows-hide-children.js";
 import { buildApp } from "./app.js";
 import { getCachedAgents } from "./services/agent-detect.js";
 import { setUserShellEnvLogger } from "./services/user-shell-env.js";
 
 async function start() {
+  // Before anything spawns: no flashing console windows from the console-less
+  // Windows agent.
+  installWindowsHideDefault();
   const app = await buildApp();
 
   // Close the server (and DB via the onClose hook) on termination signals.

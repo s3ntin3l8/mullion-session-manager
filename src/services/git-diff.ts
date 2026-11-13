@@ -140,10 +140,25 @@ function parseWorkflowFiles(output: string): string[] {
  *   3. `git rev-parse --verify origin/master` — legacy convention fallback
  *   4. `null` — no remote tracking data at all
  *
- * Only called when the route receives the `base=AUTO` sentinel — not on
- * every diff-stats tick. Caching is unnecessary: the diff-stats endpoint
- * itself has a 5s TTL, so this runs at most once per tick per cwd. */
+ * Called on every `base=AUTO` request, BEFORE getDiffStats' own cache is
+ * consulted, and it costs 1-3 synchronous git spawns that block the event
+ * loop (and, on a console-less Windows agent, used to flash a window each).
+ * A fast-polling primary made that ~1 req/s, so the answer is cached per cwd
+ * for BASE_REF_CACHE_TTL_MS: the remote HEAD essentially never changes. */
+const BASE_REF_CACHE_TTL_MS = 30_000;
+const baseRefCache = new Map<string, { ts: number; ref: string }>();
+
 export function getDefaultBaseRef(cwd: string): string | null {
+  const hit = baseRefCache.get(cwd);
+  if (hit && Date.now() - hit.ts < BASE_REF_CACHE_TTL_MS) return hit.ref;
+  const ref = resolveDefaultBaseRef(cwd);
+  // Only a resolved ref is cached: a null (no remote refs yet) must flip as soon
+  // as a fetch lands, since the workflow gate reads it as "base unresolved".
+  if (ref !== null) baseRefCache.set(cwd, { ts: Date.now(), ref });
+  return ref;
+}
+
+function resolveDefaultBaseRef(cwd: string): string | null {
   if (!isGitRepo(cwd)) return null;
 
   const tryRef = (ref: string): string | null => {
@@ -404,4 +419,5 @@ export function clearGitDiffStatsCacheForTests(): void {
   cache.clear();
   inFlight.clear();
   fileDiffInFlight.clear();
+  baseRefCache.clear();
 }

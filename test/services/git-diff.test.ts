@@ -267,6 +267,24 @@ describe("getDefaultBaseRef", () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-default-ref-"));
+    clearGitDiffStatsCacheForTests();
+  });
+
+  it("caches a resolved ref (no re-spawn) but not a null", () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    expect(getDefaultBaseRef(tmpDir)).toBeNull();
+    const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-remote-"));
+    execFileSync("git", ["init", "--bare", remoteDir], { stdio: "pipe", env: gitEnv() });
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main", "--no-verify"]);
+    // null was not cached: the ref appears as soon as it exists.
+    expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
+    // Resolved ref is served from cache even after the remote ref is gone.
+    git(tmpDir, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
+    fs.rmSync(remoteDir, { recursive: true, force: true });
   });
 
   afterEach(() => {
