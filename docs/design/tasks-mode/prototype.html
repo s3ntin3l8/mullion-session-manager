@@ -465,6 +465,32 @@
       #rrail .sess.on {
         box-shadow: inset -3px 0 0 var(--g);
       }
+      .rail button.gdots {
+        min-height: 26px;
+        flex-direction: row;
+        gap: 4px;
+      }
+      .gdots b {
+        width: 7px;
+        height: 7px;
+        border-radius: 2px;
+        opacity: 0.55;
+        position: relative;
+      }
+      .gdots b.cur {
+        opacity: 1;
+        outline: 1.5px solid #fff;
+        outline-offset: 1px;
+      }
+      .gdots u {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--g);
+      }
       .rail button.onr {
         color: #fff;
         box-shadow: inset -3px 0 0 var(--g);
@@ -575,11 +601,14 @@
         <button class="ws wsp on" data-wsp>
           <i style="border-color: #3b82f6; color: #3b82f6">M</i><span>Mullion</span>
         </button>
+        <button class="ws gdots" data-wsp aria-label="Workspace groups">
+          <b style="background: #3b82f6" class="cur"></b><b style="background: #a16207"></b
+          ><b style="background: #c2410c"><u></u></b><b style="background: #8a8a94"></b>
+        </button>
         <hr class="ws" />
         <span id="lsess" class="ws" style="display: contents"></span>
-        <button class="ws" data-all><i>⋯</i>All 8</button>
+        <button class="ws" data-add="left"><i>＋</i></button>
         <span class="grow"></span>
-        <button data-new><i>＋</i>New</button>
         <button><i>⌕</i>Cmd</button>
         <button><i>🔔</i></button>
         <button><i>⚙</i></button>
@@ -607,11 +636,13 @@
       <div id="menu"></div>
 
       <nav id="rrail" class="rail">
-        <span id="rsess" class="ws" style="display: contents"></span>
         <button data-view="tasks"><i>☑</i>Tasks</button>
         <button data-view="github"><i>⎇</i>GitHub</button>
         <button data-view="git"><i>±</i>Git</button>
         <button data-view="files"><i>▤</i>Files</button>
+        <hr class="ws" />
+        <span id="rsess" class="ws" style="display: contents"></span>
+        <button class="ws" data-add="right"><i>＋</i></button>
       </nav>
     </div>
 
@@ -750,8 +781,7 @@
           .map(sessBtn)
           .join("");
         const rs = SESS.filter((x) => onRight(x[0]));
-        $("#rsess").innerHTML =
-          rs.map(sessBtn).join("") + `<button class="ws" data-addr><i>＋</i>Session</button><hr />`;
+        $("#rsess").innerHTML = rs.map(sessBtn).join("");
         const canSplit = SESS.filter((x) => !onRight(x[0])).length > 1;
         $("#term").innerHTML =
           `<div class="ph"><b>${state.left}</b>` +
@@ -843,12 +873,18 @@
             if (state.right === s) state.right = null;
           }
           closeMenu();
-        } else if (t.dataset.addr !== undefined) {
-          // Pick a session to show on the right half.
-          const rest = SESS.filter((x) => !onRight(x[0]));
+        } else if (t.dataset.add) {
+          // "+" under a rail's sessions means the same on both sides: add a session to this half.
+          const here = t.dataset.add;
+          const other = SESS.filter((x) => onRight(x[0]) !== (here === "right"));
+          const act = here === "right" ? "mvr" : "mvl";
           menu.innerHTML =
-            `<div class="mh">Show on the right half</div>` +
-            rest.map((x) => `<button data-put="mvr|${x[0]}">${x[1]} ${x[0]}</button>`).join("");
+            `<button data-put="noop|">New session</button>` +
+            `<button data-put="noop|">Open another session…</button>` +
+            (other.length
+              ? `<div class="mh">From the ${here === "right" ? "left" : "right"} half</div>`
+              : "") +
+            other.map((x) => `<button data-put="${act}|${x[0]}">${x[1]} ${x[0]}</button>`).join("");
           showMenu(t);
           return;
         } else if (t.dataset.wsp !== undefined) {

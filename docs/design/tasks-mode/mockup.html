@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 10</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 11</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 10</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 11</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -484,10 +484,11 @@
 
     <h2>1 · Desktop <span class="tag rec">approved</span></h2>
     <p class="lede">
-      No top bar. A thin left rail is the global navigation: the mode switch, one chip naming the
-      current workspace, and New, the command box, the bell and settings at the bottom. The left
-      sidebar stays what it is today (workspace tree, projects, sessions, devices), open by default,
-      and only in Workspace mode. The right sidebar is the same in both modes and always docked.
+      No top bar. A thin left rail is the global navigation: the mode switch, a chip naming the
+      current workspace with one colour square per workspace group under it, and the command box,
+      the bell and settings at the bottom. The left sidebar stays what it is today (workspace tree,
+      projects, sessions, devices), open by default, and only in Workspace mode. The right sidebar
+      is the same in both modes and always docked.
     </p>
     <div class="row">
       <figure>
@@ -527,22 +528,69 @@
                     place-items: center;
                     width: 24px;
                     height: 24px;
-                    border: 1.5px solid var(--g);
+                    border: 1.5px solid #3b82f6;
                     border-radius: 6px;
-                    color: var(--g);
+                    color: #3b82f6;
                   "
                   >M</b
                 ><br />Mullion</span
+              ><span
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  gap: 7px;
+                  padding: 6px 0;
+                "
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #3b82f6;
+                    outline: 1.5px solid #fff;
+                    outline-offset: 1px;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #a16207;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #c2410c;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #8a8a94;
+                    opacity: 0.6;
+                  "
+                ></i></span
               ><span class="grow"></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">＋</b><br />New</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
                 ><b style="font-size: 15px">⌕</b><br />⌘K</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">🔔</b><br /></span
+                ><b style="font-size: 15px">🔔</b></span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⚙</b><br
-              /></span>
+                ><b style="font-size: 15px">⚙</b></span
+              >
             </div>
             <div class="left" style="width: 210px">
               <div class="hd">Workspaces <span style="float: right">«</span></div>
@@ -552,7 +600,9 @@
               <i style="color: #a16207">■</i>
               Homelab<br />&nbsp;&nbsp;Landing<br />&nbsp;&nbsp;Management<br />▸
               <i style="color: #c2410c">■</i> Personal Finance<br />branchDAM<br />harmonize
-              <div class="hd" style="margin-top: 14px">Projects</div>
+              <div class="hd" style="margin-top: 14px">
+                Projects <span style="float: right">＋</span>
+              </div>
               aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api<br />&nbsp;&nbsp;●
               claude · orders
               <i style="color: var(--y)">●</i>
@@ -588,9 +638,10 @@
         </div>
         <figcaption>
           <b>1a · Workspace mode, sidebar open (the default).</b> The left sidebar is unchanged:
-          workspace groups and workspaces with their names, then projects, sessions and devices. The
-          rail beside it carries what the top bar carried, plus a chip for the current workspace.
-          "«" collapses the sidebar.
+          workspace groups and workspaces with their names, then projects, sessions and devices. In
+          the rail, the chip names the workspace you are in; each square under it is a group in its
+          own colour (grey for ungrouped), the current one outlined. Clicking a square scrolls the
+          sidebar to that group and unfolds it. Nothing is filtered.
         </figcaption>
       </figure>
       <figure>
@@ -630,12 +681,61 @@
                     place-items: center;
                     width: 24px;
                     height: 24px;
-                    border: 1.5px solid var(--g);
+                    border: 1.5px solid #3b82f6;
                     border-radius: 6px;
-                    color: var(--g);
+                    color: #3b82f6;
                   "
                   >M</b
                 ><br />Mullion</span
+              ><span
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  gap: 7px;
+                  padding: 6px 0;
+                "
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #3b82f6;
+                    outline: 1.5px solid #fff;
+                    outline-offset: 1px;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #a16207;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #c2410c;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #8a8a94;
+                    opacity: 0.6;
+                  "
+                ></i></span
               ><span
                 style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
               ></span
@@ -656,17 +756,15 @@
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
                 ><b style="font-size: 15px">▯</b><br />Pixel</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⋯</b><br />All 8</span
+                ><b style="font-size: 15px">＋</b></span
               ><span class="grow"></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">＋</b><br />New</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
                 ><b style="font-size: 15px">⌕</b><br />⌘K</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">🔔</b><br /></span
+                ><b style="font-size: 15px">🔔</b></span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⚙</b><br
-              /></span>
+                ><b style="font-size: 15px">⚙</b></span
+              >
             </div>
             <div class="main">
               <div class="grid2">
@@ -696,11 +794,10 @@
           </div>
         </div>
         <figcaption>
-          <b>1b · Workspace mode, sidebar collapsed.</b> The workspace chip keeps your bearing: the
-          group's colour and the workspace's name, and a tap opens the full workspace list. Below it
-          the panes open in that workspace, a device screen among them; "All" opens the sidebar as a
-          picker. This is the fold's rail (frame 2c), so the fold is desktop with the sidebar
-          collapsed, not a separate design.
+          <b>1b · Workspace mode, sidebar collapsed.</b> Chip and squares keep your bearing; with
+          the sidebar gone, a square opens the workspace list at that group. Below them the panes
+          open in the workspace, and directly under those a "＋" that adds one more: a new session,
+          or another existing one. This is the fold's left rail (frame 2c).
         </figcaption>
       </figure>
       <figure>
@@ -732,20 +829,18 @@
                 ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
               ><span class="grow"></span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">＋</b><br />New</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
                 ><b style="font-size: 15px">⌕</b><br />⌘K</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">🔔</b><br /></span
+                ><b style="font-size: 15px">🔔</b></span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⚙</b><br
-              /></span>
+                ><b style="font-size: 15px">⚙</b></span
+              >
             </div>
             <div class="main">
               <div class="filters">
                 <span class="pill">All projects ▾</span
                 ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
-                ><span class="grow"></span>
+                ><span class="grow"></span><span class="btn">+ New</span>
               </div>
               <div class="lanes">
                 <div class="lane">
@@ -794,9 +889,9 @@
           </div>
         </div>
         <figcaption>
-          <b>1c · Tasks mode.</b> The rail holds only the mode switch and the bottom cluster. The
-          board shows every lane at this width, so it needs no status entries in the rail and no
-          panel. "New" here offers a task first.
+          <b>1c · Tasks mode.</b> The rail holds only the mode switch and the bottom cluster; tasks
+          are not tied to a workspace, so the chip is not shown. A new task starts from the board's
+          own "+ New".
         </figcaption>
       </figure>
     </div>
@@ -804,27 +899,27 @@
       <li>
         <b>Why the rail does not list the workspaces.</b> With around eleven workspaces in three
         groups the list would fill the rail, and initials cannot tell Mullion from Management. The
-        names stay in the sidebar, where they are readable. The rail shows only the one you are in.
+        names stay in the sidebar, where they are readable.
       </li>
       <li>
-        <b>One "New" button.</b> It opens a short menu: session, task, workspace, workspace group.
-        The first entry follows the mode (session in Workspace, task in Tasks). One plus in a 52px
-        rail instead of one per section.
+        <span class="tag open">idea</span><b>Group squares.</b> They show which groups exist and
+        which one you are in, and jump to a group without hiding the others. On the fold the squares
+        are too small to tap one by one, so the row as a whole opens the workspace list.
       </li>
       <li>
-        <b>Workspace groups</b> stay in the sidebar as they are. When the sidebar is collapsed (and
-        on the fold) the workspace chip opens the same grouped list as a picker, and the chip takes
-        the group's colour.
+        <b>"＋" means "add a session here"</b> and always sits directly under a list of sessions.
+        There is no global New button: a workspace or a group is created in the workspace list, as
+        today, and a task from the board.
       </li>
       <li>
-        <b>Devices.</b> A device screen is a pane, so an open one sits in the rail beside the
-        sessions. The Devices list (start, stop, open) lives in the panel, and in the "All" picker
-        when the panel is collapsed.
+        <b>Devices.</b> An open device screen is a pane beside the terminals, as it is today, so it
+        appears among the open panes with its own mark. It is not a session: no agent, no needs-you
+        state. The Devices list (start, stop, open) stays in the sidebar.
       </li>
       <li>
         <b>Where the top bar's controls go.</b> Board toggle: the mode switch. Sidebar toggle: the
-        panel's "«". New, command box, bell, settings: the rail's bottom cluster. Theme: into
-        settings. The phone keeps its own bar.
+        sidebar's "«". Command box, bell, settings: the rail's bottom cluster. New session: the "＋"
+        under the sessions. Theme: into settings. The phone keeps its own bar.
       </li>
     </ul>
 
@@ -882,9 +977,9 @@
         </div>
         <figcaption>
           <b>2d · Workspace mode, two sessions.</b> At most two, one per half. A session on the
-          right half is listed in the right rail above the sidebar views and toggles like them. "＋
-          Session" in the right rail picks one; each pane's header has a button that moves it to the
-          other half.
+          right half is listed in the right rail below the sidebar views and toggles like them. Each
+          pane's header has a button that moves it to the other half. The "＋" under a rail's
+          sessions adds a session to that half.
         </figcaption>
       </figure>
     </div>
@@ -899,9 +994,10 @@
         desktop is not edited.
       </li>
       <li>
-        <b>Moving a session between halves</b> has three routes: "＋ Session" in the right rail, the
-        button in a pane's header, and a long press on a rail entry as a shortcut. Dragging is not
-        offered.
+        <b>Moving a session between halves:</b> the button in the pane's header. The "＋" under each
+        rail's sessions means the same on both sides, add a session to this half (new, another
+        existing one, or one from the other half). A long press on a rail entry is a shortcut.
+        Dragging is not offered.
       </li>
       <li>
         <b>Narrow tablets.</b> Where a half would be narrower than about 400px (windows under
@@ -1119,7 +1215,7 @@
         </li>
         <li>
           <span class="tag rec">decided</span><b>No top bar on desktop and fold.</b> A thin left
-          rail holds the mode switch, the workspace chip, New, command box, bell and settings.
+          rail holds the mode switch, the workspace chip, command box, bell and settings.
         </li>
         <li>
           <span class="tag rec">decided</span><b>The left sidebar</b> keeps the workspace tree,
@@ -1158,8 +1254,8 @@
           strip under the board.
         </li>
         <li>
-          <span class="tag open">open</span><b>Workspace groups in the rail.</b> One chip for the
-          current workspace (drawn), or one chip per group that filters the sidebar.
+          <span class="tag open">open</span><b>Workspace groups in the rail:</b> colour squares
+          under the workspace chip that jump to a group (frames 1a, 1b).
         </li>
         <li>
           <b>Phone navigator:</b> its Tasks tab goes; the rest needs its own rethink, not designed
