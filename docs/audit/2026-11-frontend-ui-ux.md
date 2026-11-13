@@ -121,7 +121,7 @@ flow for the same job.
 
 **Product principle (from the owner, after the audit): Tasks is one of the two primary ways
 to use Mullion, and the other is the terminal and workspace.** Today it is not. Tasks is a
-board that is deliberately "not a peer of the workspace" (`App.tsx`, the comment above
+board that is deliberately "a top-level destination, not a workspace view mode" (`App.tsx`, the comment above
 `KanbanBoardOverlay`), reached from a sidebar entry or the palette. On phone it lives inside
 the navigator's Tasks tab, and on tablet the task detail is a drawer over the workspace,
 since #2874 moved it out of the board. Findings 1 to 5 are largely symptoms of that
@@ -213,15 +213,15 @@ the drawer's X, tap the Tasks rail icon again.
 
 ## Deferred backlog
 
-| Issue | Finding        | Title                                                                                 |
-| ----- | -------------- | ------------------------------------------------------------------------------------- |
-| #2973 | 1              | fix(uiux): task detail sticks in the tablet sidebar after the drawer closes           |
-| #2985 | direction      | docs(uiux): rework the notification bell: fewer, sectioned, in a bigger view          |
-| #2974 | 2, 3           | fix(uiux): the floating right sidebar closes on accidental touch on tablet            |
-| #2975 | guardrail      | ci: capture the tablet tier in visual checks                                          |
-| #2976 | 4              | docs(uiux): make Tasks a primary mode beside Workspace, with one task-detail surface  |
-| #2977 | 5              | docs(uiux): decide docked versus floating sidebars on wide tablets and foldables      |
-| #2978 | 6              | fix(uiux): the empty workspace tells touch users to press ⌘K                          |
-| #2886 | 7              | fix(uiux): sidebar workspace rows, right-rail badge labels and heading order fail axe |
-| #2979 | 8, 9           | fix(uiux): tablet task detail header depends on :has() and truncates the title        |
-| #2980 | usability pass | docs(uiux): finish the phone and tablet usability walkthroughs on a device            |
+| Issue | Finding        | Severity | Title                                                                                                |
+| ----- | -------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| #2886 | 7              | P2       | fix(uiux): sidebar workspace rows, right-rail badge labels and heading order fail axe on every scene |
+| #2973 | 1              | P1       | fix(uiux): task detail sticks in the tablet sidebar after the drawer closes (fixed in #2986)         |
+| #2974 | 2, 3           | P2       | fix(uiux): the floating right sidebar closes on accidental touch on tablet                           |
+| #2975 | guardrail      | n/a      | ci: capture the tablet tier in visual checks                                                         |
+| #2976 | 4              | P2       | docs(uiux): make Tasks a primary mode beside Workspace, with one task-detail surface                 |
+| #2977 | 5              | P2       | docs(uiux): decide docked versus floating sidebars on wide tablets and foldables                     |
+| #2978 | 6              | P2       | fix(uiux): the empty workspace tells touch users to press ⌘K                                         |
+| #2979 | 8, 9           | P3       | fix(uiux): tablet task detail header depends on :has() and truncates the title                       |
+| #2980 | usability pass | n/a      | docs(uiux): finish the phone and tablet usability walkthroughs on a device                           |
+| #2985 | direction      | n/a      | docs(uiux): rework the notification bell: fewer, sectioned, in a bigger view                         |
