@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.63](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.62...v0.3.63) (2026-11-13)
+
+
+### Features
+
+* **hosts:** opt-in to allow Tailscale 100.64.0.0/10 host URLs ([#3000](https://github.com/s3ntin3l8/mullion-session-manager/issues/3000)) ([ec264e3](https://github.com/s3ntin3l8/mullion-session-manager/commit/ec264e312cbf02454e96a859a3396e7c3870e69f)), closes [#2970](https://github.com/s3ntin3l8/mullion-session-manager/issues/2970)
+* **projects:** Add project folder picker works for remote hosts ([6cb9a19](https://github.com/s3ntin3l8/mullion-session-manager/commit/6cb9a19b037970070256ef2d17c93af858014735))
+* **tasks:** dismiss a blocking code-scanning alert from the task, with an audit line ([46e2561](https://github.com/s3ntin3l8/mullion-session-manager/commit/46e25614da5420b1595408dd4fea1c7dc140db87))
+* **tasks:** show a blocking code-scanning alert's rule, code and past dismissals on the task ([155233e](https://github.com/s3ntin3l8/mullion-session-manager/commit/155233efd0ebc5ca29d888e19034a9b555bff5dd))
+
+
+### Bug Fixes
+
+* **hosts:** dedupe remote git-status/git-diff reads on the primary ([#2992](https://github.com/s3ntin3l8/mullion-session-manager/issues/2992)) ([3bd617c](https://github.com/s3ntin3l8/mullion-session-manager/commit/3bd617cf93de84ba282857bf57191d397c48a791))
+* **hosts:** skip offline hosts in git batch polling ([#2994](https://github.com/s3ntin3l8/mullion-session-manager/issues/2994)) ([716bd30](https://github.com/s3ntin3l8/mullion-session-manager/commit/716bd30ce7246249813c1e023d769bcd2b8ed169))
+* **sessions:** poll exited sessions' git state on the slow cadence ([#2993](https://github.com/s3ntin3l8/mullion-session-manager/issues/2993)) ([5111081](https://github.com/s3ntin3l8/mullion-session-manager/commit/511108144271864d2f40179080234a1461503b9a))
+* **tasks:** re-upload coverage when a non-Actions status stays pending after green CI ([5fcdef6](https://github.com/s3ntin3l8/mullion-session-manager/commit/5fcdef6d395282a43657b5a84be345dde867978a))
+* **tasks:** say which review thread blocks a done task's merge, including code-scanning alerts ([fbe9a3a](https://github.com/s3ntin3l8/mullion-session-manager/commit/fbe9a3a40e505c41851b436a318a012cabdb9367))
+* **tasks:** tidy the task sidebar's agent and model editor ([#2984](https://github.com/s3ntin3l8/mullion-session-manager/issues/2984)) ([ce45134](https://github.com/s3ntin3l8/mullion-session-manager/commit/ce45134871c2673e800d81367f4a488ead4c8701))
+* **uiux:** reopening the Tasks sidebar lands on the list, not a stale detail ([#2986](https://github.com/s3ntin3l8/mullion-session-manager/issues/2986)) ([7fc6b4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/7fc6b4aead33f272c9c56182b3822398c44e3d02))
+* **windows:** hide child consoles and cache the AUTO base ref ([#2990](https://github.com/s3ntin3l8/mullion-session-manager/issues/2990)) ([888e1ca](https://github.com/s3ntin3l8/mullion-session-manager/commit/888e1ca9120e8b5b4c901636675dee777b68c6a6))
+
 ## [0.3.62](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.61...v0.3.62) (2026-11-11)
 
 
