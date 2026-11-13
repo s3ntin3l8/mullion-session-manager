@@ -1,0 +1,2813 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 23</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
+      :root {
+        --bg: #0a0a0a;
+        --sidebar: #161617;
+        --chrome: #1c1c1e;
+        --surface: #1e1e21;
+        --fg: #ededed;
+        --muted: #9b9ba5;
+        --dim: #8a8a94;
+        --g: #5ec27a;
+        --r: #e5575a;
+        --y: #d7b06a;
+        --b: #5c9bf5;
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --accent-fill: #0a7a53;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+        background: #09090a;
+        color: var(--fg);
+        font:
+          14px/1.45 system-ui,
+          sans-serif;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 17px;
+        margin: 56px 0 4px;
+        padding-top: 20px;
+        border-top: 1px solid var(--border-soft);
+      }
+      p.lede {
+        color: var(--muted);
+        max-width: 860px;
+        margin: 4px 0 18px;
+      }
+      .row {
+        display: flex;
+        gap: 28px;
+        flex-wrap: wrap;
+        align-items: flex-start;
+      }
+      figure {
+        margin: 0;
+        /* A frame wider than the screen scrolls inside its figure, not the page. */
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      figcaption {
+        color: var(--muted);
+        font-size: 13px;
+        max-width: 420px;
+        margin-top: 8px;
+      }
+      figcaption b {
+        color: var(--fg);
+      }
+      .notes {
+        max-width: 420px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .notes li {
+        margin-bottom: 6px;
+      }
+      .notes b {
+        color: var(--fg);
+      }
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        padding: 1px 7px;
+        border-radius: 9px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        margin-right: 6px;
+      }
+      .tag.rec {
+        border-color: var(--g);
+        color: var(--g);
+      }
+      .tag.open {
+        border-color: var(--y);
+        color: var(--y);
+      }
+
+      /* Device frames, drawn at real CSS-pixel size and scaled down. */
+      .dev {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+      }
+      .desktop {
+        width: 1280px;
+        height: 760px;
+        zoom: 0.72;
+      }
+      .fold {
+        width: 851px;
+        height: 780px;
+        zoom: 0.56;
+        font-size: 15px;
+      }
+      .phone {
+        width: 390px;
+        height: 800px;
+        zoom: 0.7;
+        font-size: 15px;
+        border-radius: 22px;
+      }
+
+      /* Shell pieces */
+      .tb {
+        height: 44px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        background: var(--chrome);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .fold .tb,
+      .phone .tb {
+        height: 52px;
+      }
+      .ic {
+        width: 22px;
+        height: 22px;
+        border: 1.5px solid var(--dim);
+        border-radius: 5px;
+        flex: none;
+        opacity: 0.7;
+      }
+      .fold .ic,
+      .phone .ic {
+        width: 30px;
+        height: 30px;
+      }
+      .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        flex: none;
+      }
+      .seg span {
+        padding: 5px 14px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .fold .seg span,
+      .phone .seg span {
+        padding: 9px 16px;
+      }
+      .seg .on {
+        background: var(--accent-fill);
+        color: #fff;
+        font-weight: 600;
+      }
+      .dot {
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        border-radius: 9px;
+        background: var(--y);
+        color: #111;
+        font-size: 11px;
+        font-weight: 700;
+        display: inline-grid;
+        place-items: center;
+      }
+      .pill {
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 4px 10px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .body {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+      .left {
+        width: 230px;
+        flex: none;
+        background: var(--sidebar);
+        border-right: 1px solid var(--border-soft);
+        padding: 10px;
+        color: var(--muted);
+      }
+      .rail {
+        width: 40px;
+        flex: none;
+        background: var(--sidebar);
+        border-left: 1px solid var(--border-soft);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding-top: 10px;
+      }
+      .fold .rail {
+        width: 48px;
+      }
+      .rs {
+        width: 300px;
+        flex: none;
+        background: var(--sidebar);
+        border-left: 1px solid var(--border-soft);
+        padding: 10px;
+        overflow: hidden;
+      }
+      .main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .hd {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+        margin: 4px 0 8px;
+      }
+      .term {
+        flex: 1;
+        margin: 8px;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 10px;
+        font-family: ui-monospace, monospace;
+        color: var(--muted);
+        font-size: 12px;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .term b {
+        color: var(--fg);
+        font-weight: 500;
+      }
+      .grid2 {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+
+      /* Board */
+      .filters {
+        display: flex;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border-soft);
+        flex: none;
+        align-items: center;
+        overflow: hidden;
+      }
+      .lanes {
+        flex: 1;
+        display: flex;
+        gap: 10px;
+        padding: 10px;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .lane {
+        flex: 1;
+        min-width: 150px;
+      }
+      .fold .lane {
+        flex: none;
+        width: 230px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 8px 9px;
+        margin-bottom: 8px;
+      }
+      .card small {
+        display: block;
+        color: var(--dim);
+        margin-top: 3px;
+      }
+      .card.sel {
+        border-color: var(--g);
+        box-shadow: 0 0 0 1px var(--g);
+      }
+      .need {
+        color: var(--y);
+        font-weight: 600;
+        display: block;
+        margin-top: 4px;
+      }
+      .fail {
+        color: var(--r);
+        display: block;
+        margin-top: 4px;
+      }
+      .adhoc {
+        flex: none;
+        border-top: 1px solid var(--border-soft);
+        padding: 9px 12px;
+        color: var(--muted);
+      }
+
+      /* Task detail panel */
+      .detail {
+        width: 400px;
+        flex: none;
+        border-left: 1px solid var(--border);
+        background: var(--sidebar);
+        padding: 12px;
+        overflow: hidden;
+      }
+      .fold .detail {
+        width: 420px;
+      }
+      .phone .detail {
+        width: auto;
+        flex: 1;
+        border: 0;
+      }
+      .detail h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+      .box {
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 9px;
+        margin-bottom: 9px;
+        color: var(--muted);
+      }
+      .box b {
+        color: var(--fg);
+      }
+      .btn {
+        display: inline-block;
+        background: var(--accent-fill);
+        color: #fff;
+        border-radius: 7px;
+        padding: 6px 12px;
+        font-weight: 600;
+        margin-right: 6px;
+      }
+      .btn.ghost {
+        background: none;
+        border: 1px solid var(--border);
+        color: var(--fg);
+        font-weight: 400;
+      }
+      .fold .btn,
+      .phone .btn {
+        padding: 11px 16px;
+      }
+      .peek {
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 8px;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 9px;
+      }
+      .kb {
+        height: 52px;
+        flex: none;
+        display: flex;
+        border-top: 1px solid var(--border-soft);
+        background: var(--chrome);
+      }
+      .kb span {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        border-right: 1px solid var(--border-soft);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .kb .mode {
+        flex: 1.6;
+        color: var(--fg);
+        font-weight: 600;
+        gap: 5px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      .bb {
+        height: 58px;
+        flex: none;
+        display: flex;
+        border-top: 1px solid var(--border-soft);
+        background: var(--chrome);
+      }
+      .bb span {
+        flex: 1;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+      }
+      .bb .on {
+        color: #fff;
+        font-weight: 700;
+        box-shadow: inset 0 3px 0 var(--g);
+      }
+      .strip {
+        display: flex;
+        flex: none;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .strip span {
+        flex: 1;
+        text-align: center;
+        padding: 11px 2px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .strip .on {
+        color: #fff;
+        font-weight: 700;
+        box-shadow: inset 0 -3px 0 var(--g);
+      }
+      .back {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--y);
+        color: var(--y);
+        border-radius: 7px;
+        padding: 4px 10px;
+        white-space: nowrap;
+      }
+      .ell {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 23</h1>
+    <p class="lede">
+      Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
+      as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
+      wireframes: they show layout and flow, not final visuals. Each frame is drawn at its real size
+      (desktop 1280, fold 851×780, phone 390) and scaled down.
+      <span class="tag rec">recommended</span> marks the option I would pick;
+      <span class="tag open">open</span> marks a choice that needs your decision.
+    </p>
+
+    <h2>1 · Desktop <span class="tag rec">approved</span></h2>
+    <p class="lede">
+      No top bar. A thin left rail is the global navigation: the mode switch, a chip naming the
+      current workspace with one colour square per workspace group under it, and the command box,
+      the bell and settings at the bottom. The left sidebar stays what it is today (workspace tree,
+      projects, sessions), open by default, and only in Workspace mode. The right sidebar is the
+      same in both modes and always docked.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev desktop">
+          <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 2px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid #3b82f6;
+                    border-radius: 6px;
+                    color: #3b82f6;
+                  "
+                  >M</b
+                ><br />Mullion</span
+              ><span
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  gap: 7px;
+                  padding: 6px 0;
+                "
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #3b82f6;
+                    outline: 1.5px solid #fff;
+                    outline-offset: 1px;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #a16207;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #c2410c;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #8a8a94;
+                    opacity: 0.6;
+                  "
+                ></i></span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⌕</b><br />⌘K</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b></span
+              >
+            </div>
+            <div class="left" style="width: 210px">
+              <div class="hd">Workspaces <span style="float: right">«</span></div>
+              ▾ <i style="color: #3b82f6">■</i> AI Usage<br />&nbsp;&nbsp;<b style="color: var(--g)"
+                >Mullion</b
+              ><br />&nbsp;&nbsp;Runway<br />▾
+              <i style="color: #a16207">■</i>
+              Homelab<br />&nbsp;&nbsp;Landing<br />&nbsp;&nbsp;Management<br />▸
+              <i style="color: #c2410c">■</i> Personal Finance<br />branchDAM<br />harmonize
+              <div class="hd" style="margin-top: 14px">
+                Projects <span style="float: right">＋</span>
+              </div>
+              aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api<br />&nbsp;&nbsp;●
+              claude · orders
+              <i style="color: var(--y)">●</i>
+            </div>
+            <div class="main">
+              <div class="grid2">
+                <div class="term">
+                  <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+                </div>
+                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
+              </div>
+            </div>
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>1a · Workspace mode, sidebar open (the default).</b> The left sidebar is unchanged:
+          workspace groups and workspaces with their names, then projects and sessions. In the rail,
+          the chip names the workspace you are in; each square under it is a group in its own colour
+          (grey for ungrouped), the current one outlined. Chip and squares are one target that opens
+          the workspace list.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev desktop">
+          <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 2px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid #3b82f6;
+                    border-radius: 6px;
+                    color: #3b82f6;
+                  "
+                  >M</b
+                ><br />Mullion</span
+              ><span
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  gap: 7px;
+                  padding: 6px 0;
+                "
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #3b82f6;
+                    outline: 1.5px solid #fff;
+                    outline-offset: 1px;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #a16207;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #c2410c;
+                    opacity: 0.6;
+                  "
+                ></i
+                ><i
+                  style="
+                    display: block;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 3px;
+                    background: #8a8a94;
+                    opacity: 0.6;
+                  "
+                ></i></span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">◆</b><br />login</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">✳</b><br />#7</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">◇</b> <i style="color: var(--y)">●</i><br />orbit</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">▯</b><br />Pixel</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">＋</b></span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⌕</b><br />⌘K</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b></span
+              >
+            </div>
+            <div class="main">
+              <div class="grid2">
+                <div class="term">
+                  <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+                </div>
+                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
+              </div>
+            </div>
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>1b · Workspace mode, sidebar collapsed.</b> Chip and squares keep your bearing; they
+          are one target that opens the workspace list. Below them the panes open in the workspace,
+          and directly under those a "＋" that adds one more: a new session, or another existing
+          one. This is the fold's left rail (frame 2c).
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev desktop">
+          <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 2px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⌕</b><br />⌘K</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b></span
+              >
+            </div>
+            <div class="main">
+              <div class="filters">
+                <span class="pill">All projects ▾</span
+                ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
+                ><span class="grow"></span><span class="btn">+ New</span>
+              </div>
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Backlog 6</div>
+                  <div class="card">Add dark mode toggle<small>aurora-web</small></div>
+                  <div class="card">Fix flaky reconciler test<small>aurora-web</small></div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Ready 2</div>
+                  <div class="card">Speed up orders query<small>orbit-api</small></div>
+                </div>
+                <div class="lane">
+                  <div class="hd">In progress 2</div>
+                  <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1 · Failed 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
+            </div>
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>1c · Tasks mode.</b> The rail holds only the mode switch and the bottom cluster; tasks
+          are not tied to a workspace, so the chip is not shown. A new task starts from the board's
+          own "+ New".
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why the rail does not list the workspaces.</b> With around eleven workspaces in three
+        groups the list would fill the rail, and initials cannot tell Mullion from Management. The
+        names stay in the sidebar, where they are readable.
+      </li>
+      <li>
+        <span class="tag rec">decided</span><b>Group squares.</b> They show which groups exist and
+        which one you are in. Chip and squares are one target: it opens the workspace list. On the
+        fold that list is a sheet over the left half with rows at touch size (frame 2e).
+      </li>
+      <li>
+        <b>"＋" means "add a session here"</b> and always sits directly under a list of sessions.
+        There is no global New button: a workspace or a group is created in the workspace list, as
+        today, and a task from the board.
+      </li>
+      <li>
+        <span class="tag rec">decided</span><b>Devices</b> are a view in the right sidebar on
+        desktop and fold, beside Git and GitHub: the list with start and stop. On the fold the
+        screen shows in the view, on the right half. On desktop a device's screen opens from the
+        list as a pane in the grid. The left sidebar's Devices section goes, so there is one home.
+      </li>
+      <li>
+        <b>Where the top bar's controls go.</b> Board toggle: the mode switch. Sidebar toggle: the
+        sidebar's "«". Command box, bell, settings: the rail's bottom cluster. New session: the "＋"
+        under the sessions. Theme: into settings. The phone keeps its own bar.
+      </li>
+    </ul>
+
+    <h2>
+      2 · Fold (851 wide, as measured on the Pixel 10 Pro Fold)
+      <span class="tag rec">approved</span>
+    </h2>
+    <p class="lede">
+      A rail on each half: rail, pane, pane, rail, each pane half of what is left, so the seam sits
+      on the hinge. On this device a pane is about 378px. The left rail chooses what the left half
+      shows, the right rail what the right half shows. It is the desktop layout with the left
+      sidebar collapsed. These frames are the live prototype and can be tapped;
+      <a href="prototype.html" style="color: var(--g)">open it full size</a> on the device.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev fold">
+          <iframe src="prototype.html" style="width: 100%; height: 100%; border: 0"></iframe>
+        </div>
+        <figcaption>
+          <b>2a · Tasks mode, sidebar closed.</b> The board as lanes, scrolling sideways. Left rail:
+          mode switch (the dot is the needs-you signal), then one entry per status with its count,
+          which jumps to that status.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe src="prototype.html#task" style="width: 100%; height: 100%; border: 0"></iframe>
+        </div>
+        <figcaption>
+          <b>2b · Task open.</b> The sidebar docks on the right half and the board stacks its
+          statuses, active ones first, with Backlog and Done collapsed. The tapped card is kept in
+          view while the layout changes. Closing the sidebar returns to lanes.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#task&ws"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <b>2c · Workspace mode, after "Open session in Workspace".</b> The worker's terminal takes
+          the left half; the task stays open on the right. Left rail: mode switch, the workspace
+          chip, then the panes open in that workspace.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#ws&rsright"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <b>2d · Workspace mode, two sessions.</b> At most two, one per half. A session on the
+          right half is listed in the right rail below the sidebar views and toggles like them. Each
+          pane's header has a button that moves it to the other half. The "＋" under a rail's
+          sessions opens a sheet over that half (new session, search, sessions by project) with rows
+          at touch size.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#ws&wssheet"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <b>2e · Switching workspace.</b> Tapping the chip (with its squares) opens the workspace
+          list as a sheet over the left half: search, groups in their colours, 56px rows, a dot on
+          workspaces with activity, and New workspace at the end.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#ws&view=browser"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <span class="tag rec">decided</span><b>2f · Browser.</b> A right-rail view, like Device:
+          the browser of the session shown on the left. The page fills the whole half; only the
+          address bar sits above it. "▾" beside the address opens a quick pick: what is running for
+          this project now (Dock commands and Compose services with a port), then saved pages and
+          recent ones (proposal, #3003).
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#ws&view=dock"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <span class="tag rec">decided</span><b>2g · Dock.</b> A right-rail view of the left
+          session's project. One section per source: Commands (from dock.json) and one per Compose
+          stack, so a dev and a prod stack stay apart under their own names. Tap a row to select it;
+          its actions and log show below. A stack's own actions (restart, apply, pull and restart,
+          rebuild and restart, stop) open from "⋯" on its heading as a sheet.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why rails.</b> Both sit under the thumbs when the fold is held with two hands; a top bar
+        is the hardest place to reach. Dropping the 52px top bar gives about three more terminal
+        rows. The cost is 24px of pane width, about three terminal columns.
+      </li>
+      <li>
+        <b>Which sessions show</b> is remembered per device. The workspace layout shared with
+        desktop is not edited.
+      </li>
+      <li>
+        <b>Moving a session between halves:</b> the button in the pane's header. The "＋" under each
+        rail's sessions means the same on both sides, add a session to this half (new, another
+        existing one, or one from the other half). A long press on a rail entry is a shortcut.
+        Dragging is not offered.
+      </li>
+      <li>
+        <b>No docked left sidebar on the fold.</b> Its contents are reached from the rail: the
+        workspace chip opens the workspace list, "＋" opens the session sheet, and Devices is a
+        right-rail view.
+      </li>
+      <li>
+        <span class="tag rec">decided</span><b>One rule for companions on the fold.</b> Anything you
+        look at beside a session is a right-rail view: Tasks, GitHub, Git, Files, Device, Browser,
+        Dock. The left half is always a session. On desktop Browser and Dock stay as they are (a
+        pane in the grid, the bottom dock).
+      </li>
+      <li>
+        <b>Dock actions on touch.</b> What sits in hover menus and small kebabs today becomes
+        visible buttons for the selected row (restart, stop or start, branch for a command, check
+        for update for a service), and a sheet with 52px rows for the stack-wide ones. The image tag
+        stays on the row and marks an available update. The Dock's GitHub row and browser shortcut
+        are dropped here because GitHub and Browser are rail views of their own.
+      </li>
+      <li>
+        <b>Why the Dock log is read only here.</b> The Dock is switched off under a touch pointer
+        today, on purpose: the key bar sends input by session, and cannot tell a session's own pane
+        from a Dock monitor of the same session. A read-only log avoids that; typing into a monitor
+        means opening it as a session.
+      </li>
+      <li>
+        <b>Checked by the owner on the fold</b> (in the prototype): rail reach, the board switching
+        between lanes and stacked, the long press and the sheets are fine, and two sessions side by
+        side are readable in today's app. Real terminal behaviour, the on-screen keyboard and
+        performance can only be checked in the implementation.
+      </li>
+      <li>
+        <b>Narrow tablets.</b> Where a half would be narrower than about 400px (windows under
+        roughly 800px) an open sidebar view takes the full width instead (section 7).
+      </li>
+    </ul>
+
+    <h2>3 · Phone</h2>
+    <div class="row">
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <b>Tasks</b><span class="grow"></span><span class="pill">All projects ▾</span
+            ><span class="ic"></span>
+          </div>
+          <div class="filters">
+            <span class="pill" style="color: var(--y); border-color: var(--y)">Needs you 3</span
+            ><span class="pill">Running 2</span><span class="grow"></span
+            ><span class="btn">+ New</span>
+          </div>
+          <div class="strip">
+            <span>Backlog 6</span><span>Ready 2</span
+            ><span class="on">Active 4 <i style="color: var(--y)">●</i></span
+            ><span>Done 2 <i style="color: var(--y)">●</i></span>
+          </div>
+          <div class="main" style="padding: 10px">
+            <div class="hd">Reviewing 2</div>
+            <div class="card">
+              #7 Fix focus loss in the login form<small>aurora-web · PR #14</small
+              ><span class="need">Approved, needs your approval</span>
+            </div>
+            <div class="card">Cache the session lookup<small>PR #17</small></div>
+            <div class="hd">In progress 2</div>
+            <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
+            <div style="color: var(--dim); text-align: center; margin-top: 14px">
+              swipe ← → between lanes
+            </div>
+          </div>
+          <div class="adhoc">▸ Ad-hoc sessions · 8 · 1 needs you</div>
+          <div class="bb">
+            <span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span
+            ><span style="flex: 0 0 56px">⋯</span>
+          </div>
+        </div>
+        <figcaption>
+          <b>3a · Tasks mode.</b> One lane at a time. The lane strip always names the lane on screen
+          (underlined) and shows every lane's count, so you know where you are and what is
+          elsewhere. Lanes are status only. "Needs you" is a filter chip; a dot marks every lane
+          that holds such a task, and the board opens on the first of them.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span>←</span><b class="ell grow">#7 Fix focus loss in the login form</b>
+          </div>
+          <div class="detail">
+            <div class="box">
+              <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
+            </div>
+            <div class="box"><b>Review</b> · verdict approved · round 2</div>
+            <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+            <span class="btn ghost">Open session in Workspace</span>
+            <div class="box" style="margin-top: 12px">
+              <b>Details</b> · aurora-web · issue #7 · PR #14
+            </div>
+            <div class="box"><b>Timeline</b> · claimed · PR opened · review…</div>
+          </div>
+          <div style="padding: 10px 12px; border-top: 1px solid var(--border-soft)">
+            <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+          </div>
+        </div>
+        <figcaption>
+          <b>3b · Task detail.</b> A full screen pushed over the board. Back is the ← arrow and the
+          system back gesture; there is no drawer to close. The main actions sit at the bottom, in
+          thumb reach.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="pill grow ell">● task #7 worker ▾</span><span class="ic"></span>
+          </div>
+          <div class="main">
+            <div class="term" style="font-size: 14px">
+              <b>task #7 worker</b><br /><br />✓ 12 passed<br />Pushed 2 commits.<br /><br />&gt; ▯
+            </div>
+          </div>
+          <div class="kb">
+            <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+            ><span>↓</span><span>🎤</span><span>⋮</span>
+          </div>
+          <div class="bb">
+            <span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span
+            ><span style="flex: 0 0 56px">⋯</span>
+          </div>
+        </div>
+        <figcaption>
+          <b>3c · Workspace mode.</b> The terminal and its key bar, as today, with the mode bar
+          under it (option B, chosen; see section 4).
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="pill grow ell">● task #7 worker ▾</span><span class="ic"></span>
+          </div>
+          <div class="main">
+            <div class="term" style="font-size: 14px; opacity: 0.35">
+              <b>task #7 worker</b><br /><br />✓ 12 passed<br />&gt; ▯
+            </div>
+          </div>
+          <div
+            style="
+              flex: none;
+              background: var(--chrome);
+              border-top: 1px solid var(--border);
+              border-radius: 16px 16px 0 0;
+              padding: 6px 16px 10px;
+            "
+          >
+            <div class="hd" style="margin: 12px 0 4px">Beside this session</div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ▯ Pixel 9 emulator · running<span class="grow"></span><span class="pill">Open</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+                color: var(--muted);
+              "
+            >
+              ▯ Pixel Tablet · stopped<span class="grow"></span><span class="pill">Start</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ▤ Dock · aurora-web<span class="grow"></span><span class="pill">1 running</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ◎ Browser · task #7 worker<span class="grow"></span><span class="pill">Open</span>
+            </div>
+            <div class="hd" style="margin: 16px 0 4px">App</div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ⚙ Settings
+            </div>
+            <div style="display: flex; align-items: center; min-height: 52px">
+              ◐ Theme<span class="grow"></span><span class="pill">Dark</span>
+            </div>
+          </div>
+          <div class="bb">
+            <span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span
+            ><span style="flex: 0 0 56px; color: #fff">⋯</span>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag rec">decided</span><b>3d · "More" replaces the drawer.</b> The left
+          drawer goes away. Its four tabs each have a home: Projects is the session picker (the
+          title in the top bar), Tasks is the mode bar, Devices and Settings open from "⋯" at the
+          end of the mode bar, as a bottom sheet with rows at touch size. The sheet also gets Dock
+          and Browser (proposal): each opens full screen, the Dock as a list of monitors with a
+          read-only log. An open device or browser screen is a pane and stays in the picker's "Open
+          panes".
+        </figcaption>
+      </figure>
+    </div>
+
+    <h2>4 · Phone: where the mode switch goes <span class="tag rec">decided: B</span></h2>
+    <p class="lede">
+      A bottom bar is the natural place for a two-way switch on a phone, but in Workspace mode the
+      bottom edge belongs to the terminal key bar. Three ways to resolve it. All frames show
+      Workspace mode with a terminal, the case where they differ; in Tasks mode there is no key bar,
+      so every option can use the bottom bar of frame 3a.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="seg"
+              ><span class="on">Work</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="pill grow ell">● worker ▾</span><span class="ic"></span>
+          </div>
+          <div class="main"><div class="term" style="font-size: 14px">&gt; ▯</div></div>
+          <div class="kb">
+            <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+            ><span>↓</span><span>🎤</span><span>⋮</span>
+          </div>
+        </div>
+        <figcaption>
+          <b>A · In the top toolbar.</b> Same place as on the fold and desktop, in both modes; the
+          key bar is untouched. Costs: the top of the screen is the hardest thumb reach, and the
+          session picker loses about a third of its width.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="ic"></span><span class="pill grow ell">● task #7 worker ▾</span
+            ><span class="ic"></span>
+          </div>
+          <div class="main"><div class="term" style="font-size: 14px">&gt; ▯</div></div>
+          <div class="kb">
+            <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+            ><span>↓</span><span>🎤</span><span>⋮</span>
+          </div>
+          <div class="bb">
+            <span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag rec">chosen</span><b>B · A bottom bar under the key bar.</b> The switch
+          is full width, never moves and is always in thumb reach, the same bar in both modes. Costs
+          to design around: the terminal loses about 58px of height in Workspace mode, and two
+          stacked bars invite mis-taps, so the two need a clear visual gap or divider.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="ic"></span><span class="pill grow ell">● task #7 worker ▾</span
+            ><span class="ic"></span>
+          </div>
+          <div class="main"><div class="term" style="font-size: 14px">&gt; ▯</div></div>
+          <div class="kb">
+            <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+            ><span>↓</span><span>🎤</span><span>⋮</span>
+          </div>
+          <div
+            style="
+              height: 290px;
+              flex: none;
+              background: #2a2a2e;
+              display: grid;
+              place-items: center;
+              color: var(--dim);
+            "
+          >
+            on-screen keyboard
+          </div>
+        </div>
+        <figcaption>
+          <b>B, keyboard open.</b> The mode bar hides while the on-screen keyboard is up, so typing
+          keeps today's terminal height and the key bar stays directly above the keys. It returns
+          when the keyboard closes. <span class="tag rec">decided</span>
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="ic"></span><span class="pill grow ell">● task #7 worker ▾</span
+            ><span class="ic"></span>
+          </div>
+          <div class="main"><div class="term" style="font-size: 14px">&gt; ▯</div></div>
+          <div class="kb">
+            <span class="mode">Tasks <i class="dot">3</i></span
+            ><span>Esc</span><span>Tab</span><span>Ctrl</span><span>↑</span><span>↓</span
+            ><span>⋮</span>
+          </div>
+        </div>
+        <figcaption>
+          <b>C · The key bar carries it.</b> In Tasks mode the bottom bar of 3a; in Workspace mode
+          the key bar's first slot is a "Tasks" key with the needs-you count. Bottom-left in both
+          modes, no extra row, no lost terminal height. Costs: one or two keys move into the ⋮
+          overflow (⇧Tab and the mic here), and the switch looks different in each mode.
+        </figcaption>
+      </figure>
+    </div>
+
+    <h2>5 · Decisions so far, and what is still open</h2>
+    <div class="row">
+      <ul class="notes">
+        <li>
+          <span class="tag rec">decided</span><b>Task detail lives in the right sidebar</b> in both
+          modes.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>The right sidebar never floats.</b> Always docked;
+          tapping the open view's tab closes it.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>No top bar on desktop and fold.</b> A thin left
+          rail holds the mode switch, the workspace chip, command box, bell and settings.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>The left sidebar</b> keeps the workspace tree,
+          projects and sessions, and shows only in Workspace mode. The Dock is hidden in Tasks mode.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Fold:</b> a rail on each half, the sidebar docked
+          half and half; narrower windows open it full width.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Fold board:</b> lanes while the sidebar is closed,
+          stacked statuses (active first) while it is open.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Fold sessions:</b> at most two, one per half; the
+          right one is listed in the right rail.
+        </li>
+      </ul>
+      <ul class="notes">
+        <li>
+          <span class="tag rec">decided</span><b>Phone mode switch:</b> the full-width bottom bar,
+          hidden while the on-screen keyboard is up.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>"Needs you" on phone</b> is a filter chip, not a
+          lane; lanes that hold such a task get a dot.
+        </li>
+        <li><span class="tag rec">decided</span><b>Needs-you only</b> on the mode switch.</li>
+        <li>
+          <span class="tag rec">decided</span><b>Approve from the sidebar</b> sits behind a confirm
+          step.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Ad-hoc sessions stay as they are:</b> one collapsed
+          strip under the board.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Workspace groups in the rail:</b> colour squares
+          under the workspace chip, one target with it.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Launcher:</b> "＋" opens a dedicated launcher
+          (section 8); ⌘K stays the command palette.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Devices:</b> a right-sidebar view on desktop and
+          fold.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Phone drawer removed:</b> Devices and Settings move
+          to "⋯" on the mode bar (frame 3d).
+        </li>
+        <li><b>The bell</b> is unchanged here; its rework is #2985.</li>
+      </ul>
+    </div>
+
+    <h2>6 · Where task detail lives: three options <span class="tag rec">decided: A</span></h2>
+    <p class="lede">
+      <span class="tag">history</span>Drawn before the top bar was replaced by the left rail
+      (sections 1 and 2). The decision recorded here still holds; the top bar in these frames does
+      not.
+    </p>
+    <p class="lede">
+      The earlier task redesign deliberately merged every task detail into the right sidebar, to
+      remove redundancy. Sections 1 to 3 above (option B here) split it again: a panel in Tasks mode
+      and a glance in the sidebar. These are the alternatives, drawn on the fold where it matters
+      most. Top row: Tasks mode with a task open. Bottom row: the same task reached from Workspace
+      mode.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <h3>← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag rec">recommended</span
+          ><b>A · The sidebar is the detail, in both modes.</b>
+          Keeps the merge. Selecting a card shows the task in the right sidebar's Tasks view, the
+          same component as today. The change is that in Tasks mode the sidebar is
+          <b>docked</b> beside the board on the fold, not floating: nothing dims, no swipe or
+          outside tap closes it.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="detail">
+              <h3>← #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>B · A panel in Tasks mode, a glance in the sidebar</b> (sections 1 to 3). The panel can
+          be wider and the sidebar stays free for the task's Git, PR and files. Cost: two renderings
+          of a task again, and the glance's expanded row is a second, smaller detail.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="detail">
+              <h3>← #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>C · A panel in Tasks mode, a plain list in the sidebar.</b> Same panel as B. The
+          sidebar's Tasks view never shows a detail: rows only, each with its one main action, and a
+          tap goes to Tasks mode. One detail surface, but leaving Workspace to read a task.
+        </figcaption>
+      </figure>
+    </div>
+    <div class="row" style="margin-top: 28px">
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <h3>← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>A in Workspace mode.</b> The identical detail, in the same place. On the fold the
+          sidebar floats here as today (or docks, if #2977 decides so). You read and approve without
+          leaving your terminal.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card sel">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+                <div style="margin-top: 10px">
+                  <span class="btn">Approve</span><span class="btn ghost">Open in Tasks</span>
+                </div>
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">
+                #12 Rework settings layout<span class="fail">budget used up</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>B in Workspace mode.</b> The glance: a row expands to status and the main action. For
+          the review, the timeline or the worker peek you switch to Tasks mode.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+                <div style="margin-top: 10px"><span class="btn">Approve</span></div>
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+                <div style="margin-top: 10px"><span class="btn ghost">Retry</span></div>
+              </div>
+              <div class="card">
+                #12 Rework settings layout<span class="fail">budget used up</span>
+                <div style="margin-top: 10px"><span class="btn ghost">Retry</span></div>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>C in Workspace mode.</b> Rows with their one action, nothing expands. Tapping a row's
+          title opens Tasks mode on that task.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why A.</b> It keeps the single task-detail surface the earlier redesign built, it keeps
+        the sidebar identical in both modes, and it is the smallest change: on desktop, board plus
+        sidebar detail is what exists today. The reported problems came from the drawer
+        <i>floating</i> and from the stale selection, not from the detail living in the sidebar.
+      </li>
+      <li>
+        <b>What A gives up.</b> The detail is a sidebar-width column (resizable, but not a wide
+        panel), and it replaces the Git and GitHub views while shown instead of sitting beside them;
+        the existing task ↔ PR links cover that hop. On the fold, board plus docked sidebar leaves
+        room for about two lanes.
+      </li>
+      <li>
+        <b>Phone is the same in all three:</b> no sidebar there, so the detail is a full screen.
+      </li>
+    </ul>
+    <h2>
+      7 · The sidebar on the fold: is there something better than docking?
+      <span class="tag rec">decided: 1</span>
+    </h2>
+    <p class="lede">
+      <span class="tag">history</span>Drawn before the top bar was replaced by the left rail
+      (sections 1 and 2). The decision recorded here still holds; the top bar in these frames does
+      not.
+    </p>
+    <p class="lede">
+      On desktop the sidebar is always docked. The fold has 840px, so the question is what an open
+      sidebar does to the terminal in Workspace mode. Three ways, none of them the old
+      dim-and-dismiss drawer.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br /><br />Looking at
+                the test file.<br />Found it: a race on the mock clock.<br />Running the suite…<br />✓
+                12 passed<br /><br />&gt; ▯
+              </div>
+              <div class="kb">
+                <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+                ><span>↓</span><span>🎤</span><span>⋮</span>
+              </div>
+            </div>
+            <div class="rs" style="width: 396px">
+              <h3 style="margin: 0 0 10px; font-size: 16px">← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="box"><b>Details</b> · aurora-web · #7 · PR #14</div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag rec">recommended</span><b>1 · Docked, half and half.</b> The same model
+          as desktop: the sidebar takes the right half, the workspace the left. The terminal narrows
+          to about 46 columns while the sidebar is open (what a phone shows today) and returns to
+          full width when it closes.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body" style="position: relative">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br /><br />Looking at
+                the test file.<br />Found it: a race on the mock clock.<br />Running the suite…<br />✓
+                12 passed<br /><br />&gt; ▯
+              </div>
+              <div class="kb">
+                <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+                ><span>↓</span><span>🎤</span><span>⋮</span>
+              </div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+            <div
+              class="rs"
+              style="
+                width: 396px;
+                position: absolute;
+                right: 48px;
+                top: 0;
+                bottom: 0;
+                box-shadow: -8px 0 24px #000a;
+              "
+            >
+              <h3 style="margin: 0 0 10px; font-size: 16px">← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="box"><b>Details</b> · aurora-web · #7 · PR #14</div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>2 · Laid over the workspace, but not dismissable by accident.</b> The sidebar covers
+          the right half without dimming; only its rail tab closes it. The terminal keeps its full
+          width and never reflows, but its right half is hidden while you read.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="rs" style="flex: 1; width: auto; border: 0">
+              <h3 style="margin: 0 0 10px; font-size: 16px">← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="box"><b>Details</b> · aurora-web · #7 · PR #14</div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>3 · Full width.</b> An open sidebar view replaces the workspace entirely, as on a
+          phone. Most room for the task; the terminal is gone while it is open, which wastes what
+          the fold is for.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why 1.</b> One behaviour on desktop and fold, the terminal and the task visible together,
+        and no layer that can be dismissed by accident. Its cost is that the terminal reflows each
+        time the sidebar opens or closes, exactly as it does on desktop when you toggle the pinned
+        sidebar.
+      </li>
+      <li>
+        <b>A rule for narrower tablets.</b> Docking needs room. Where the workspace would be left
+        with less than about 400px (windows narrower than roughly 800px), the sidebar opens full
+        width as in 3 instead. So there are two behaviours in total, docked or full width, and
+        floating is gone everywhere.
+      </li>
+      <li>
+        <b>In Tasks mode</b> there is no terminal to reflow, so 1 simply shows two lanes beside the
+        task (section 6, option A).
+      </li>
+    </ul>
+    <h2>8 · New session: the launcher <span class="tag rec">approved</span></h2>
+    <p class="lede">
+      "＋" opens a launcher that only launches; ⌘K stays the command palette (commands, and
+      launchers by typing). Choosing an agent selects it and shows its options in place: the model
+      and the skip-permissions override. Today those appear only while hovering a row, which does
+      not work on touch and is fiddly with a mouse. Desktop and touch show the same choices in the
+      same order.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev" style="width: 600px; padding: 16px; zoom: 0.8">
+          <div style="display: flex; align-items: center; margin-bottom: 12px">
+            <b style="font-size: 16px">New session</b><span class="grow"></span
+            ><span class="pill">esc</span>
+          </div>
+          <div class="hd">Where</div>
+          <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 14px">
+            <span class="pill" style="color: var(--fg)">▣ mullion-session-manager ▾</span
+            ><span class="pill">this server ▾</span><span class="grow"></span>
+            <span style="color: var(--muted)"
+              >New worktree
+              <i
+                style="
+                  display: inline-block;
+                  width: 30px;
+                  height: 16px;
+                  border-radius: 8px;
+                  border: 1.5px solid var(--dim);
+                  vertical-align: middle;
+                "
+              ></i
+            ></span>
+          </div>
+          <div class="hd">Agent</div>
+          <div
+            style="
+              display: grid;
+              grid-template-columns: repeat(6, 1fr);
+              gap: 8px;
+              margin-bottom: 10px;
+            "
+          >
+            <span
+              style="
+                position: relative;
+                border: 1px solid var(--g);
+                border-radius: 9px;
+                padding: 12px 6px;
+                text-align: center;
+              "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
+              ><b style="font-size: 18px">✳</b><br />claude</span
+            ><span
+              style="
+                position: relative;
+                border: 1px solid var(--border);
+                border-radius: 9px;
+                padding: 12px 6px;
+                text-align: center;
+              "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
+              ><b style="font-size: 18px">◇</b><br />codex</span
+            ><span
+              style="
+                position: relative;
+                border: 1px solid var(--border);
+                border-radius: 9px;
+                padding: 12px 6px;
+                text-align: center;
+              "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
+              ><b style="font-size: 18px">▮</b><br />opencode</span
+            ><span
+              style="
+                position: relative;
+                border: 1px solid var(--border);
+                border-radius: 9px;
+                padding: 12px 6px;
+                text-align: center;
+              "
+              ><i style="position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--y)"
+                >⚠</i
+              ><b style="font-size: 18px">△</b><br />agy</span
+            ><span
+              style="
+                position: relative;
+                border: 1px solid var(--border);
+                border-radius: 9px;
+                padding: 12px 6px;
+                text-align: center;
+              "
+              ><b style="font-size: 18px">π</b><br />pi</span
+            ><span
+              style="
+                position: relative;
+                border: 1px solid var(--border);
+                border-radius: 9px;
+                padding: 12px 6px;
+                text-align: center;
+              "
+              ><b style="font-size: 18px">♪</b><br />mcode</span
+            >
+          </div>
+          <div
+            style="
+              display: flex;
+              gap: 12px;
+              align-items: center;
+              margin-bottom: 14px;
+              padding: 8px 10px;
+              border: 1px solid var(--border-soft);
+              border-radius: 8px;
+            "
+          >
+            <span style="color: var(--muted)">Model</span
+            ><span class="pill" style="color: var(--fg)">Default (opusplan) ▾</span
+            ><span class="grow"></span>
+            <span style="color: var(--muted)"
+              >Skip permission prompts <small style="color: var(--y)">on in settings</small>
+              <i
+                style="
+                  display: inline-block;
+                  width: 30px;
+                  height: 16px;
+                  border-radius: 8px;
+                  border: 1.5px solid var(--g);
+                  background: var(--accent-fill);
+                  vertical-align: middle;
+                "
+              ></i
+            ></span>
+          </div>
+          <div class="hd">Shells and scripts</div>
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              min-height: 38px;
+              border-bottom: 1px solid var(--border-soft);
+            "
+          >
+            › &nbsp;bash<span class="grow"></span><small style="color: var(--dim)"></small>
+          </div>
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              min-height: 38px;
+              border-bottom: 1px solid var(--border-soft);
+            "
+          >
+            › &nbsp;zsh<span class="grow"></span><small style="color: var(--dim)"></small>
+          </div>
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              min-height: 38px;
+              border-bottom: 1px solid var(--border-soft);
+            "
+          >
+            › &nbsp;dev<span class="grow"></span
+            ><small style="color: var(--dim)">npm run dev · package.json</small>
+          </div>
+          <div style="display: flex; align-items: center; margin-top: 14px; color: var(--muted)">
+            ↑↓ ←→ move · type to filter<span class="grow"></span
+            ><span class="btn" style="margin: 0">Launch claude ↵</span>
+          </div>
+        </div>
+        <figcaption>
+          <b>8a · Desktop.</b> "Where" is a single row: project, host, worktree switch. Agents are
+          tiles; a small ⚠ marks the ones that skip permission prompts by your settings. The row
+          under the tiles belongs to the selected agent: its model list, and the skip-permissions
+          switch, which starts at the settings value and overrides it for this session only. Shells
+          and scripts have no options and launch on click. Typing filters; Enter launches.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#ws&addsheet"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <b>8b · Fold.</b> The same launcher as a sheet over the half the session will land on,
+          with targets of 48px and more: tap an agent, adjust model or permissions if needed, tap
+          Launch. Here the sheet has a second tab, Open existing, because the fold has no left
+          sidebar to pick a session from. On the phone it is the same sheet at full width.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>"Open existing" is touch-only.</b> On desktop, sessions are listed under their projects
+        in the left sidebar, as today, so the desktop launcher has no such tab. On fold and phone
+        the tab is that same list (by project, the project named under each title), since there is
+        no sidebar to show it.
+      </li>
+      <li>
+        <b>Skip permissions</b> keeps today's model: a per-agent setting, shown as the flag on the
+        tile, plus a per-launch override, the switch.
+      </li>
+      <li>
+        <b>One more step than today for an agent:</b> select, then Launch (or Enter, or double
+        click). That step is what makes the model and the override reachable without hovering.
+      </li>
+      <li><b>Not drawn:</b> a "recent launches" row, and agent arguments beyond the model.</li>
+    </ul>
+    <h2>9 · Rules that hold the layout together <span class="tag rec">decided</span></h2>
+    <p class="lede">
+      The frames show states. These rules say what happens between them. Confirmed by the owner; 9.6
+      lists what is left for implementation.
+    </p>
+
+    <h3 style="margin: 22px 0 8px">9.1 · Which layout at which width</h3>
+    <table
+      style="
+        border-collapse: collapse;
+        max-width: 980px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 8px;
+      "
+    >
+      <tr>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Width
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Layout
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Examples
+        </th>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          under 700px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Phone: one thing at a time, top bar, key bar, mode bar with ⋯
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          phones; a foldable closed; a narrow foldable open in portrait
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          700 to about 800px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Rails; an open right-rail view takes the full width
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          small tablet in portrait, a narrow window
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          about 800 to 1099px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Rails; two halves; at most two sessions
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          wide foldables open, iPad portrait
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          1100 to 1279px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Desktop structure with the left sidebar collapsed by default: rail, grid, docked right
+          sidebar
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          iPad landscape, a small laptop window
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          1280px and up
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Desktop with the left sidebar open by default
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          laptop, monitor, large iPad in landscape
+        </td>
+      </tr>
+    </table>
+    <ul class="notes" style="max-width: 860px">
+      <li>
+        The layout follows width, not the device or the pointer. A touch pointer changes four things
+        at any width: targets of 44px and more, the key bar, sheets where a mouse gets a popover,
+        and no hover-only controls. A large iPad in landscape is already past 1280px, so the desktop
+        layout has to work with touch in any case.
+      </li>
+      <li>
+        The halves are percentages, not a fixed width. They hold a 40-column terminal from about
+        800px of width; below that an open view takes the full width.
+      </li>
+    </ul>
+    <table
+      style="
+        border-collapse: collapse;
+        max-width: 980px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 8px;
+      "
+    >
+      <tr>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Foldable, open
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Reported viewport
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          What it gets
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          How sure
+        </th>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Pixel 10 Pro Fold (the owner's)
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          851 × 720 and 883 × 689 in Chrome; taller as an installed app
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          two halves of 378 to 394px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          measured by the owner with prototype.html#size
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Galaxy Z Fold 7
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          984 × 1092
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          two halves of about 444px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          one third-party spec site
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          iPhone Duo, portrait
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          626 to 669 wide
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          the phone layout
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          derived from the panel resolution; unconfirmed
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          iPhone Duo, landscape
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          890 to 951 wide, 626 to 669 high
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          two halves; the rails must scroll at this height
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          same
+        </td>
+      </tr>
+    </table>
+    <ul class="notes" style="max-width: 860px">
+      <li>
+        So one device is not a standard: open foldables run from about 630 to about 990. To read the
+        real numbers off a device, open <code>prototype.html#size</code> on it.
+      </li>
+    </ul>
+
+    <h3 style="margin: 22px 0 8px">9.2 · Folding and unfolding</h3>
+    <p class="lede">
+      On a foldable the width changes while you work, so the state has to carry over. Folding never
+      changes which sessions belong to which rail; it only stops showing two things at once.
+    </p>
+    <table
+      style="
+        border-collapse: collapse;
+        max-width: 980px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 8px;
+      "
+    >
+      <tr>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Unfolded
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          After folding (phone layout)
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          After unfolding again
+        </th>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Workspace, session A on the left, nothing on the right
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Session A
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Unchanged
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Workspace, session A left, session B right
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          The one you used last (typed in or tapped). The other is one step away in the picker,
+          which lists all sessions in one list
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          A left, B right again
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Workspace, session A left, a right-rail view open (task, GitHub, Dock…)
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          That view, full screen, if it was opened or used last; back returns to session A
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          A left, the view right
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Tasks, board with a task open
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          The task, full screen; back returns to the board
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Board left, task right
+        </td>
+      </tr>
+    </table>
+
+    <h3 style="margin: 22px 0 8px">9.3 · The back gesture</h3>
+    <p class="lede">
+      Android's back gesture is the main way out on phone and fold. It closes the topmost thing, in
+      this order, and never leaves the app while something is open.
+    </p>
+    <ul class="notes" style="max-width: 860px">
+      <li><b>1.</b> A sheet (launcher, workspace list, stack actions, quick pick, ⋯).</li>
+      <li>
+        <b>2.</b> A drill-in inside a view (task detail back to the task list, a PR back to the
+        list).
+      </li>
+      <li>
+        <b>3.</b> The right half (the open view or second session), on the fold. On the phone: the
+        full-screen view.
+      </li>
+      <li>
+        <b>4.</b> Tasks mode back to Workspace mode, only if you got there through a cross-link such
+        as "Open session in Workspace" in reverse. Otherwise the mode stays.
+      </li>
+    </ul>
+
+    <h3 style="margin: 22px 0 8px">9.4 · The phone's "⋯" is the phone's right rail</h3>
+    <p class="lede">
+      The phone has no right sidebar today, so GitHub, Git and Files have no home there. With
+      Devices, Dock and Browser already in the ⋯ sheet, the simplest rule is that the sheet lists
+      exactly what the right rail lists, each opening full screen for the current session, plus
+      Settings.
+    </p>
+
+    <h3 style="margin: 22px 0 8px">9.5 · What goes away</h3>
+    <ul class="notes" style="max-width: 860px">
+      <li>The top bar on desktop and tablet, and the board toggle in it.</li>
+      <li>The floating right sidebar, its scrim, the swipe-to-close gesture and the pin option.</li>
+      <li>The floating left navigator on tablet and the drawer on phone.</li>
+      <li>The separate docked task-detail panel on phone and tablet.</li>
+      <li>
+        The Devices section of the left sidebar, and the tablet pane-cap setting (the fold shows at
+        most two).
+      </li>
+      <li>The Dock's "off under touch" rule, replaced by the read-only Dock view.</li>
+    </ul>
+
+    <h3 style="margin: 22px 0 8px">9.6 · Smaller things still to settle during implementation</h3>
+    <ul class="notes" style="max-width: 860px">
+      <li>A keyboard shortcut for the mode switch on desktop.</li>
+      <li>Rail labels are drawn at about 10px; the real icons may need a larger label or none.</li>
+      <li>
+        What tapping an ad-hoc session in the Tasks board's strip does (proposed: switch to
+        Workspace and show it).
+      </li>
+      <li>Empty states: no sessions, no tasks, a workspace with nothing open.</li>
+      <li>
+        The desktop form of the touch sheets (launcher, workspace list, quick pick): popovers.
+      </li>
+    </ul>
+    <h2>10 · Visual upgrade: motion and material <span class="tag rec">feel approved</span></h2>
+    <p class="lede">
+      The current visual language stays the baseline. The upgrade is how things move and how layers
+      sit on each other, applied to the whole app, not only to the new shell. To feel it, open
+      <a href="prototype.html#polish" style="color: var(--g)">prototype.html#polish</a> on the
+      device: the bar at the bottom switches the motion off for comparison and slows it down five
+      times for inspection.
+    </p>
+    <ul class="notes" style="max-width: 860px">
+      <li>
+        <b>Feedback on touch-down.</b> Every control answers the moment it is pressed (a small scale
+        and tint), not on release.
+      </li>
+      <li>
+        <b>Springs, not fixed animations, for anything you can touch.</b> A sheet follows the
+        finger, can be thrown back to its rail, and can be caught and reversed mid-way. One house
+        spring, no bounce, with a response of about 0.36s (the owner asked for a tick slower than
+        the first 0.3s); bounce only after a throw. Layout changes take about 0.3 to 0.5s.
+      </li>
+      <li>
+        <b>Things leave the way they came.</b> A sheet enters from the rail it belongs to and
+        returns there.
+      </li>
+      <li>
+        <b>Continuity when the layout changes.</b> When the board goes from lanes to stacked, each
+        card travels to its new place instead of jumping.
+      </li>
+      <li>
+        <b>Never animate a terminal's size.</b> A half opens at once; only its content fades and
+        settles in. Animating the width would re-flow the terminal on every frame.
+      </li>
+      <li>
+        <b>Material for layers above content.</b> Sheets are translucent with a blur and a soft edge
+        of light; structural chrome (rails, sidebars) stays solid.
+      </li>
+      <li><b>Soft edges, not hard lines,</b> where content scrolls under a header.</li>
+      <li>
+        <b>Settings respected:</b> reduced motion turns travel into short fades; reduced
+        transparency makes sheets solid.
+      </li>
+      <li>
+        <b>What this needs in the app:</b> motion tokens (the app has colour tokens but writes
+        durations per component today), one spring helper, and a pass over the existing surfaces
+        (sidebar views, modals, menus, the board, notifications) as well as the new ones.
+      </li>
+      <li><b>Not shown in the study:</b> haptics, sound, the light theme, and real icons.</li>
+    </ul>
+  </body>
+</html>
