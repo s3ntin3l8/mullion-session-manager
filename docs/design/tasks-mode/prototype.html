@@ -460,12 +460,37 @@
         overflow: hidden;
         box-shadow: 0 8px 24px #000a;
       }
+      #menu {
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+      #menu .mh {
+        padding: 10px 16px 4px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+      }
+      #menu .mh i {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 3px;
+        margin-right: 7px;
+      }
+      .rail button span:not(.pip) {
+        max-width: 46px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       #menu button {
         display: block;
         width: 100%;
         text-align: left;
         padding: 0 16px;
-        min-height: 48px;
+        min-height: 44px;
         border-bottom: 1px solid var(--border-soft);
       }
 
@@ -525,13 +550,6 @@
           ><button data-v="always">always stacked</button></span
         ></span
       >
-      <span
-        >Right-half sessions:
-        <span class="o" data-opt="rs"
-          ><button data-v="left" class="on">marked in left rail</button
-          ><button data-v="right">listed in right rail</button></span
-        ></span
-      >
     </div>
 
     <div id="tb">
@@ -555,10 +573,9 @@
         <button class="tk" data-jump="backlog"><i>6</i>Backlog</button>
         <button class="tk" data-jump="done"><i>2</i>Done<span class="pip"></span></button>
         <!-- Workspace mode: the workspaces, then the sessions open in the current one. -->
-        <button class="ws grp">▾ Acme</button>
-        <button class="ws wsp on"><i>D</i>Default</button>
-        <button class="ws wsp"><i>C</i>Client</button>
-        <button class="ws grp">▸ Home</button>
+        <button class="ws wsp on" data-wsp>
+          <i style="border-color: #3b82f6; color: #3b82f6">M</i><span>Mullion</span>
+        </button>
         <hr class="ws" />
         <span id="lsess" class="ws" style="display: contents"></span>
         <button class="ws" data-all><i>⋯</i>All 8</button>
@@ -659,7 +676,7 @@
         left: "task #7 worker · aurora-web",
         right: null,
         // Brainstorm: sessions assigned to the right half are listed in the right rail instead.
-        rs: "left",
+        rs: "right",
         side: {},
       };
       // Panes open in this workspace. A device screen is a pane like a session.
@@ -668,6 +685,12 @@
         ["claude · orbit-api", "✳", "orbit", 1],
         ["codex · aurora-web", "◇", "aurora"],
         ["Pixel 9 emulator (device)", "▯", "Pixel"],
+      ];
+      const WSPS = [
+        ["AI Usage", "#3b82f6", ["Mullion", "Runway"]],
+        ["Homelab", "#a16207", ["Landing", "Management", "Space Use"]],
+        ["Personal Finance", "#c2410c", ["Pocket", "Investment Ideas", "Real Estate"]],
+        ["", "#8a8a94", ["branchDAM", "harmonize", "Sanctuary"]],
       ];
       const onRight = (s) => state.rs === "right" && state.side[s] === "right";
       const sessBtn = (x) =>
@@ -815,6 +838,21 @@
             if (state.right === s) state.right = null;
           }
           closeMenu();
+        } else if (t.dataset.wsp !== undefined) {
+          // The current workspace is one chip; tapping it opens the full workspace list.
+          menu.innerHTML = WSPS.map(
+            ([g, c, names]) =>
+              (g ? `<div class="mh"><i style="background:${c}"></i>${g}</div>` : "") +
+              names.map((n) => `<button data-pickws="${n}|${c}">${n}</button>`).join(""),
+          ).join("");
+          showMenu(t);
+          return;
+        } else if (t.dataset.pickws) {
+          const [n, c] = t.dataset.pickws.split("|");
+          const chip = $("[data-wsp]");
+          chip.innerHTML = `<i style="border-color:${c};color:${c}">${n[0]}</i><span>${n}</span>`;
+          closeMenu();
+          return;
         } else if (t.dataset.new !== undefined) {
           const items = ["New session", "New task", "New workspace", "New workspace group"];
           if (state.mode === "tasks") items.unshift(items.splice(1, 1)[0]);

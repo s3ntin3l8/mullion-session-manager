@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 8</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 9</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 8</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 9</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -1153,7 +1153,7 @@
         <li>
           <span class="tag open">idea</span><b>A rail on each half of the fold</b> instead of a top
           bar (section 8), with the same left rail on desktop (section 9). If taken: at most two
-          sessions on the fold, one per half.
+          sessions on the fold, one per half, the right one listed in the right rail (decided).
         </li>
         <li>
           <b>Cross-links:</b> "Open session in Workspace" switches mode; the task stays open in the
@@ -1711,10 +1711,11 @@
     <h2>9 · Desktop with the same left rail <span class="tag open">idea</span></h2>
     <p class="lede">
       If the fold gets a left rail, desktop takes it too, so the mode switch sits in one place. The
-      rail is level one (mode, then workspaces); the existing left sidebar becomes level two, the
-      projects, sessions and devices of the selected workspace, and it can collapse. Collapsed, the
-      rail lists the sessions itself, which is exactly the fold layout. New, the command box, the
-      bell and settings sit at the bottom of the rail, so there is no top bar at all.
+      rail is thin, global navigation: the mode switch, one chip naming the current workspace, and
+      New, the command box, the bell and settings at the bottom, so there is no top bar at all. The
+      left sidebar stays what it is today, the full workspace tree with projects, sessions and
+      devices, open by default. Collapsed, the rail lists the sessions itself, which is exactly the
+      fold layout.
     </p>
     <div class="row">
       <figure>
@@ -1747,15 +1748,6 @@
               ><span
                 style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
               ></span
-              ><span
-                style="
-                  font-size: 8px;
-                  letter-spacing: 0.06em;
-                  text-transform: uppercase;
-                  color: var(--dim);
-                  padding-top: 4px;
-                "
-                >▾ Acme</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
                 ><b
                   style="
@@ -1767,30 +1759,8 @@
                     border-radius: 6px;
                     color: var(--g);
                   "
-                  >D</b
-                ><br />Default</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b
-                  style="
-                    display: inline-grid;
-                    place-items: center;
-                    width: 24px;
-                    height: 24px;
-                    border: 1.5px solid var(--dim);
-                    border-radius: 6px;
-                    color: inherit;
-                  "
-                  >C</b
-                ><br />Client</span
-              ><span
-                style="
-                  font-size: 8px;
-                  letter-spacing: 0.06em;
-                  text-transform: uppercase;
-                  color: var(--dim);
-                  padding-top: 4px;
-                "
-                >▸ Home</span
+                  >M</b
+                ><br />Mullion</span
               ><span class="grow"></span
               ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
                 ><b style="font-size: 15px">＋</b><br />New</span
@@ -1803,7 +1773,13 @@
               /></span>
             </div>
             <div class="left" style="width: 210px">
-              <div class="hd">Default <span style="float: right">«</span></div>
+              <div class="hd">Workspaces <span style="float: right">«</span></div>
+              ▾ <i style="color: #3b82f6">■</i> AI Usage<br />&nbsp;&nbsp;<b style="color: var(--g)"
+                >Mullion</b
+              ><br />&nbsp;&nbsp;Runway<br />▾
+              <i style="color: #a16207">■</i>
+              Homelab<br />&nbsp;&nbsp;Landing<br />&nbsp;&nbsp;Management<br />▸
+              <i style="color: #c2410c">■</i> Personal Finance<br />branchDAM<br />harmonize
               <div class="hd" style="margin-top: 14px">Projects</div>
               aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api<br />&nbsp;&nbsp;●
               claude · orders
@@ -1839,10 +1815,10 @@
           </div>
         </div>
         <figcaption>
-          <b>9a · Workspace mode, panel open.</b> Rail: mode switch, then the workspaces inside
-          their groups (a group is a small heading that folds). Panel: the selected workspace's
-          projects and sessions with full names, and the Devices list, as the left sidebar shows
-          them today. "«" collapses it.
+          <b>9a · Workspace mode, sidebar open (the default).</b> The left sidebar is unchanged:
+          workspace groups and workspaces with their names, then projects, sessions and devices. The
+          rail beside it carries what the top bar carried, plus a chip for the current workspace.
+          "«" collapses the sidebar.
         </figcaption>
       </figure>
       <figure>
@@ -1875,15 +1851,6 @@
               ><span
                 style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
               ></span
-              ><span
-                style="
-                  font-size: 8px;
-                  letter-spacing: 0.06em;
-                  text-transform: uppercase;
-                  color: var(--dim);
-                  padding-top: 4px;
-                "
-                >▾ Acme</span
               ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
                 ><b
                   style="
@@ -1895,30 +1862,8 @@
                     border-radius: 6px;
                     color: var(--g);
                   "
-                  >D</b
-                ><br />Default</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b
-                  style="
-                    display: inline-grid;
-                    place-items: center;
-                    width: 24px;
-                    height: 24px;
-                    border: 1.5px solid var(--dim);
-                    border-radius: 6px;
-                    color: inherit;
-                  "
-                  >C</b
-                ><br />Client</span
-              ><span
-                style="
-                  font-size: 8px;
-                  letter-spacing: 0.06em;
-                  text-transform: uppercase;
-                  color: var(--dim);
-                  padding-top: 4px;
-                "
-                >▸ Home</span
+                  >M</b
+                ><br />Mullion</span
               ><span
                 style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
               ></span
@@ -1979,10 +1924,11 @@
           </div>
         </div>
         <figcaption>
-          <b>9b · Workspace mode, panel collapsed.</b> The panes open in the workspace move into the
-          rail in compact form, a device screen among them; "All" opens the panel as a picker
-          (sessions and devices). This is the fold's rail (frame 8c), so the fold is desktop with
-          the panel collapsed, not a separate design.
+          <b>9b · Workspace mode, sidebar collapsed.</b> The workspace chip keeps your bearing: the
+          group's colour and the workspace's name, and a tap opens the full workspace list. Below it
+          the panes open in that workspace, a device screen among them; "All" opens the sidebar as a
+          picker. This is the fold's rail (frame 8c), so the fold is desktop with the sidebar
+          collapsed, not a separate design.
         </figcaption>
       </figure>
       <figure>
@@ -2084,10 +2030,9 @@
     </div>
     <ul class="notes" style="max-width: 860px; margin-top: 24px">
       <li>
-        <b>Why two levels and not "the sidebar is an expanded rail".</b> An expanding rail has to
-        show the same items in both states. Workspaces and sessions are different things, and
-        sessions need the width for their names. Two levels keeps the workspaces always visible and
-        gives sessions the wide panel when there is room.
+        <b>Why the rail does not list the workspaces.</b> With around eleven workspaces in three
+        groups the list would fill the rail, and initials cannot tell Mullion from Management. The
+        names stay in the sidebar, where they are readable. The rail shows only the one you are in.
       </li>
       <li>
         <b>One "New" button.</b> It opens a short menu: session, task, workspace, workspace group.
@@ -2095,9 +2040,9 @@
         rail instead of one per section.
       </li>
       <li>
-        <b>Workspace groups</b> are small folding headings in the rail, sorted as today; ungrouped
-        workspaces follow. The workspace part of the rail scrolls when it gets long. Renaming,
-        reordering and moving between groups stay as they are, on the rail entries.
+        <b>Workspace groups</b> stay in the sidebar as they are. When the sidebar is collapsed (and
+        on the fold) the workspace chip opens the same grouped list as a picker, and the chip takes
+        the group's colour.
       </li>
       <li>
         <b>Devices.</b> A device screen is a pane, so an open one sits in the rail beside the
@@ -2110,11 +2055,11 @@
         settings. The phone keeps its own bar.
       </li>
       <li>
-        <span class="tag open">open</span><b>Fold, Workspace mode: one or two sessions.</b> At most
-        two, one per half, remembered per device. Two variants are in the prototype. (1) All
-        sessions stay in the left rail; a long press sends one to the right half, and tapping it
-        again closes the right half. (2) Sessions assigned to the right half are listed in the right
-        rail above the sidebar views and behave like those tabs: tap shows, tap again hides.
+        <span class="tag rec">decided</span
+        ><b>Fold, Workspace mode: sessions on the right half live in the right rail.</b> At most two
+        sessions show, one per half, remembered per device. A long press moves a session to the
+        other rail. In the right rail a session sits above the sidebar views and behaves like those
+        tabs: tap shows it, tap again hides it.
       </li>
     </ul>
   </body>
