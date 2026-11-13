@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 2</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 3</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 2</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 3</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -954,57 +954,363 @@
       </figure>
     </div>
 
-    <h2>5 · What changes, and what is still open</h2>
+    <h2>5 · Decisions so far, and what is still open</h2>
     <div class="row">
       <ul class="notes">
         <li>
-          <b>One task-detail surface per tier:</b> the panel beside the board (desktop, fold), the
-          pushed screen (phone). The sidebar detail and the docked TaskDetail panel go away.
+          <span class="tag rec">decided</span><b>Phone mode switch:</b> B, the full-width bottom
+          bar.
         </li>
         <li>
-          <b>One sidebar in both modes.</b> Its Tasks view is a glance: rows, status, an in-place
-          expansion with the main action, and "Open in Tasks".
+          <span class="tag rec">decided</span><b>Left sidebar and Dock are hidden in Tasks mode.</b>
         </li>
         <li>
-          <b>Needs-you only</b> on the mode switch. Running and finished tasks never light it.
+          <span class="tag rec">decided</span><b>Approve from the sidebar stays,</b> behind a
+          confirm step like the one for deleting a session.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Ad-hoc sessions stay as they are:</b> one collapsed
+          strip under the board.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Needs-you only</b> on the mode switch. Running and
+          finished tasks never light it.
         </li>
         <li>
           <b>Cross-links:</b> task → "Open session in Workspace" → "← #7" chip back to the same
-          task. PR chips and notifications that name a task open Tasks mode with it selected.
+          task.
         </li>
         <li>
-          <b>Phone navigator:</b> its Tasks tab goes. What remains (Projects, Devices, Settings)
-          needs its own rethink; not designed here.
+          <b>Phone navigator:</b> its Tasks tab goes; the rest needs its own rethink, not designed
+          here.
         </li>
         <li><b>The bell</b> is unchanged here; its rework is #2985.</li>
       </ul>
       <ul class="notes">
         <li>
-          <span class="tag rec">decided</span><b>Phone mode switch:</b> B, the full-width bottom
-          bar. Open detail: it hides while the on-screen keyboard is up.
+          <span class="tag open">open</span><b>Where task detail lives:</b> section 6, options A, B,
+          C.
         </li>
         <li>
-          <span class="tag open">open</span><b>Left sidebar and Dock in Tasks mode</b> on desktop:
-          hidden (as drawn), or kept?
+          <span class="tag open">open</span><b>"Needs you" on phone:</b> frame 3a draws it as a
+          first lane. Proposed instead: keep the lanes pure (status only) and make "Needs you 3" a
+          filter chip above the lane strip; lanes holding such a task get a dot, and the board opens
+          on the first one. Attention first, kanban logic intact.
         </li>
         <li>
-          <span class="tag open">open</span><b>Fold, task open:</b> hide the right rail (as drawn)
-          or keep it, so Git and PR for the task are one tap away?
+          <span class="tag open">open</span><b>Mode bar while the keyboard is up:</b> hidden (as
+          drawn in section 4), or kept at the cost of 58px?
         </li>
         <li>
-          <span class="tag open">open</span><b>"Needs you" as the first lane on phone:</b> it mixes
-          statuses. The alternative is the plain status lanes plus the filter chip, as on desktop.
-        </li>
-        <li>
-          <span class="tag open">open</span><b>Ad-hoc sessions:</b> still one collapsed strip under
-          the board. Tapping one opens it in Workspace. Deeper integration is a later step.
-        </li>
-        <li>
-          <span class="tag open">open</span><b>Approve from the sidebar glance:</b> convenient, but
-          it is an irreversible action on a small surface. Keep it, or make the glance read-only
-          with "Open in Tasks"?
+          <span class="tag open">open</span><b>Fold, task open:</b> the right rail. Moot under
+          option A, where the sidebar is the detail.
         </li>
       </ul>
     </div>
+
+    <h2>6 · Where task detail lives: three options <span class="tag open">open</span></h2>
+    <p class="lede">
+      The earlier task redesign deliberately merged every task detail into the right sidebar, to
+      remove redundancy. Sections 1 to 3 above (option B here) split it again: a panel in Tasks mode
+      and a glance in the sidebar. These are the alternatives, drawn on the fold where it matters
+      most. Top row: Tasks mode with a task open. Bottom row: the same task reached from Workspace
+      mode.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <h3>← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag rec">recommended</span
+          ><b>A · The sidebar is the detail, in both modes.</b>
+          Keeps the merge. Selecting a card shows the task in the right sidebar's Tasks view, the
+          same component as today. The change is that in Tasks mode the sidebar is
+          <b>docked</b> beside the board on the fold, not floating: nothing dims, no swipe or
+          outside tap closes it.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="detail">
+              <h3>← #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>B · A panel in Tasks mode, a glance in the sidebar</b> (sections 1 to 3). The panel can
+          be wider and the sidebar stays free for the task's Git, PR and files. Cost: two renderings
+          of a task again, and the glance's expanded row is a second, smaller detail.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card">Cache the session lookup<small>PR #17</small></div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="detail">
+              <h3>← #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>C · A panel in Tasks mode, a plain list in the sidebar.</b> Same panel as B. The
+          sidebar's Tasks view never shows a detail: rows only, each with its one main action, and a
+          tap goes to Tasks mode. One detail surface, but leaving Workspace to read a task.
+        </figcaption>
+      </figure>
+    </div>
+    <div class="row" style="margin-top: 28px">
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <h3>← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
+              <span class="btn ghost">Open session in Workspace</span>
+              <div class="box" style="margin-top: 12px">
+                <b>Details</b> · aurora-web · #7 · PR #14
+              </div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>A in Workspace mode.</b> The identical detail, in the same place. On the fold the
+          sidebar floats here as today (or docks, if #2977 decides so). You read and approve without
+          leaving your terminal.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card sel">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+                <div style="margin-top: 10px">
+                  <span class="btn">Approve</span><span class="btn ghost">Open in Tasks</span>
+                </div>
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">
+                #12 Rework settings layout<span class="fail">budget used up</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>B in Workspace mode.</b> The glance: a row expands to status and the main action. For
+          the review, the timeline or the worker peek you switch to Tasks mode.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+              </div>
+            </div>
+            <div class="rs" style="width: 380px">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+                <div style="margin-top: 10px"><span class="btn">Approve</span></div>
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+                <div style="margin-top: 10px"><span class="btn ghost">Retry</span></div>
+              </div>
+              <div class="card">
+                #12 Rework settings layout<span class="fail">budget used up</span>
+                <div style="margin-top: 10px"><span class="btn ghost">Retry</span></div>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>C in Workspace mode.</b> Rows with their one action, nothing expands. Tapping a row's
+          title opens Tasks mode on that task.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why A.</b> It keeps the single task-detail surface the earlier redesign built, it keeps
+        the sidebar identical in both modes, and it is the smallest change: on desktop, board plus
+        sidebar detail is what exists today. The reported problems came from the drawer
+        <i>floating</i> and from the stale selection, not from the detail living in the sidebar.
+      </li>
+      <li>
+        <b>What A gives up.</b> The detail is a sidebar-width column (resizable, but not a wide
+        panel), and it replaces the Git and GitHub views while shown instead of sitting beside them;
+        the existing task ↔ PR links cover that hop. On the fold, board plus docked sidebar leaves
+        room for about two lanes.
+      </li>
+      <li>
+        <b>Phone is the same in all three:</b> no sidebar there, so the detail is a full screen.
+      </li>
+    </ul>
   </body>
 </html>
