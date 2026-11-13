@@ -45,6 +45,19 @@ let gitRefsRefreshInFlight: Promise<void> | null = null;
 // every project.
 let gitRefsRequeue: { scoped: boolean; ids: Set<number> } | null = null;
 
+// Issue #2991: a refresh that has nothing to request (only exited sessions are
+// listed, on an active-only tick) still has to forget sessions that were killed
+// or removed. Returns a pruned copy of `map`, or null when nothing was stale —
+// so the common case sets no state and re-renders nothing.
+function prunedTo<T>(map: Record<number, T>, listedIds: number[]): Record<number, T> | null {
+  const keep = new Set(listedIds);
+  const keys = Object.keys(map);
+  if (keys.every((k) => keep.has(Number(k)))) return null;
+  return Object.fromEntries(
+    keys.filter((k) => keep.has(Number(k))).map((k) => [k, map[Number(k)]]),
+  );
+}
+
 export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (set, get) => ({
   gitStatuses: {},
   gitProblems: {},
@@ -98,6 +111,14 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
         .map((s) => s.id);
       if (projectIds.length === 0 && listedIds.length === 0) {
         set({ gitStatuses: {}, gitProblems: {}, sessionGitStatuses: {} });
+        return;
+      }
+      // No projects and, on this active-only tick, no active sessions: nothing
+      // to ask for (a parameterless request would just be wasted), but a killed
+      // session's last value must still go.
+      if (projectIds.length === 0 && sessionIds.length === 0) {
+        const pruned = prunedTo(get().sessionGitStatuses, listedIds);
+        if (pruned) set({ sessionGitStatuses: pruned });
         return;
       }
 
@@ -154,8 +175,13 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
         return;
       }
       // Only exited sessions are listed and this is the fast, active-only
-      // tick: nothing to ask for, and their last stats stay.
-      if (sessionIds.length === 0) return;
+      // tick: nothing to ask for, and their last stats stay. Anything killed
+      // since is still dropped.
+      if (sessionIds.length === 0) {
+        const pruned = prunedTo(get().gitDiffStats, listedIds);
+        if (pruned) set({ gitDiffStats: pruned });
+        return;
+      }
 
       try {
         const stats = await api.getSessionGitDiffStats(sessionIds);

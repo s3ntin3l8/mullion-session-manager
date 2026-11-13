@@ -94,6 +94,27 @@ describe("git refresh scope for exited sessions (#2991)", () => {
     expect(useDashboardStore.getState().gitDiffStats[2]).toBeUndefined();
   });
 
+  it("prunes a killed session even when only exited sessions remain listed", async () => {
+    await useDashboardStore.getState().refreshGitStatuses({ includeExited: true });
+    await useDashboardStore.getState().refreshGitDiffStats({ includeExited: true });
+    // 1 was active, and is now killed; only exited 2 remains.
+    useDashboardStore.setState({ sessions: [{ ...ACTIVE, status: "killed" }, EXITED] });
+    fetchMock.mockClear();
+    await useDashboardStore.getState().refreshGitStatuses();
+    await useDashboardStore.getState().refreshGitDiffStats();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useDashboardStore.getState().sessionGitStatuses[1]).toBeUndefined();
+    expect(useDashboardStore.getState().sessionGitStatuses[2]).toEqual(STATUS);
+    expect(useDashboardStore.getState().gitDiffStats[1]).toBeUndefined();
+    expect(useDashboardStore.getState().gitDiffStats[2]).toEqual(STATS);
+  });
+
+  it("makes no status request when there are no projects and only exited sessions", async () => {
+    useDashboardStore.setState({ sessions: [EXITED] });
+    await useDashboardStore.getState().refreshGitStatuses();
+    expect(urls("/api/projects/git-statuses")).toHaveLength(0);
+  });
+
   it("makes no diff request when only exited sessions are listed", async () => {
     useDashboardStore.setState({ sessions: [EXITED] });
     await useDashboardStore.getState().refreshGitDiffStats();
