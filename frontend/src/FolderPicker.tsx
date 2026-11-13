@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api/index.js";
 import type { DirectoryListing } from "./api/fs.js";
 
-/** Browses the server's filesystem, never the browser's machine. */
+/** Browses a host's filesystem (the primary's unless `hostId` names a remote
+ * host), never the browser's machine. */
 export function FolderPicker({
   initialPath,
+  hostId,
   onSelect,
   onClose,
 }: {
   initialPath: string;
+  hostId?: string;
   onSelect: (path: string) => void;
   onClose: () => void;
 }) {
@@ -27,7 +30,7 @@ export function FolderPicker({
 
   useEffect(() => {
     let cancelled = false;
-    api.listDirectories(path, { hidden: showHidden }).then(
+    api.listDirectories(path, { hidden: showHidden, hostId }).then(
       (result) => {
         if (!cancelled) setListing(result);
       },
@@ -38,7 +41,7 @@ export function FolderPicker({
     return () => {
       cancelled = true;
     };
-  }, [path, showHidden]);
+  }, [path, showHidden, hostId]);
 
   useEffect(() => {
     if (!listing || !focusAfterNavigation.current) return;
@@ -124,18 +127,13 @@ export function FolderPicker({
   );
 }
 
-export function BrowseButton({ canBrowse, onClick }: { canBrowse: boolean; onClick: () => void }) {
+export function BrowseButton({ remote, onClick }: { remote: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       className="create-modal-browse-btn"
       onClick={onClick}
-      disabled={!canBrowse}
-      title={
-        canBrowse
-          ? "Browse folders on this machine"
-          : "Folder browsing is not available for remote hosts yet"
-      }
+      title={remote ? "Browse folders on the selected host" : "Browse folders on this machine"}
     >
       Browse…
     </button>

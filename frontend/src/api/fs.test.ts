@@ -18,5 +18,10 @@ describe("directory listing API", () => {
       "/api/fs/dirs?path=%2Fhome%2Fa%20%26%20b&hidden=1",
       expect.any(Object),
     );
+    await fsApi.listDirectories("/srv", { hostId: "h 1" });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/fs/dirs?path=%2Fsrv&hostId=h%201",
+      expect.any(Object),
+    );
   });
 });

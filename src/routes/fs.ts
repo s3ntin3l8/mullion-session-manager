@@ -1,14 +1,17 @@
-import type { FastifyInstance } from "fastify";
-import { opendir, realpath, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import { FsDirsError, listLocalDirectories } from "../services/fs-dirs.js";
+import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
+import { HostRequestError, getRemoteHostClient } from "../services/remote-host-client.js";
+import { forwardHostRequestError } from "../services/host-error-reply.js";
 
-// Bound both the returned folders and the work done in file-heavy directories.
-const MAX_DIRECTORIES = 1000;
-const MAX_SCANNED_ENTRIES = 10000;
+function replyFsDirsError(reply: FastifyReply, error: FsDirsError) {
+  if (error.statusCode === 404) return reply.notFound(error.message);
+  if (error.statusCode === 403) return reply.forbidden(error.message);
+  return reply.badRequest(error.message);
+}
 
 export async function fsRoute(app: FastifyInstance): Promise<void> {
-  app.get<{ Querystring: { path: string; hidden?: string } }>(
+  app.get<{ Querystring: { path: string; hidden?: string; hostId?: string } }>(
     "/api/fs/dirs",
     {
       config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
@@ -19,64 +22,31 @@ export async function fsRoute(app: FastifyInstance): Promise<void> {
           properties: {
             path: { type: "string", minLength: 1, maxLength: 4096 },
             hidden: { type: "string", enum: ["0", "1"] },
+            hostId: { type: "string", minLength: 1 },
           },
         },
       },
     },
     async (request, reply) => {
-      const input = request.query.path;
-      const expanded =
-        input === "~" ? homedir() : input.startsWith("~/") ? homedir() + input.slice(1) : input;
-      if (!isAbsolute(expanded) || expanded.includes("\0")) {
-        return reply.badRequest("Path must be an absolute path or start with ~/.");
+      const { path, hidden, hostId } = request.query;
+      const showHidden = hidden === "1";
+
+      if (hostId !== undefined && hostId !== LOCAL_HOST_ID) {
+        if (!getHostRow(app, hostId)) return reply.notFound(`Unknown host: ${hostId}`);
+        // The listing is the agent host's own: its filesystem, its home dir.
+        try {
+          return await getRemoteHostClient(app, hostId).listDirectories(path, showHidden);
+        } catch (err) {
+          if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+          app.log.warn({ hostId, err }, "host unreachable, folder listing unavailable");
+          return reply.serviceUnavailable(`Host ${hostId} is unreachable`);
+        }
       }
 
       try {
-        // CodeQL js/path-injection (alert #517): this API intentionally accepts
-        // any absolute directory behind the same auth gate as session creation,
-        // which can already run a command in an arbitrary cwd. Restricting it to
-        // project roots would prevent browsing for new projects. realpath follows
-        // symlinks and .. with filesystem semantics; the bounded listing below
-        // returns directories only and never reads file contents. This intended
-        // capability needs a GHAS dismissal, not a path-containment guard or an
-        // inline suppression (the CodeQL workflow does not process those).
-        const path = await realpath(expanded);
-        const directories: { name: string; path: string }[] = [];
-        let scanned = 0;
-        let truncated = false;
-        const dir = await opendir(path);
-        for await (const entry of dir) {
-          if (++scanned > MAX_SCANNED_ENTRIES || directories.length >= MAX_DIRECTORIES) {
-            truncated = true;
-            break;
-          }
-          if (entry.name.startsWith(".") && request.query.hidden !== "1") continue;
-          const childPath = join(path, entry.name);
-          let isDirectory = entry.isDirectory();
-          if (entry.isSymbolicLink()) {
-            // Follow directory links like normal navigation; broken links and
-            // links to files never become names in the response.
-            isDirectory = await stat(childPath).then(
-              (info) => info.isDirectory(),
-              () => false,
-            );
-          }
-          if (isDirectory) directories.push({ name: entry.name, path: childPath });
-        }
-        directories.sort((a, b) => a.name.localeCompare(b.name));
-        const parent = dirname(path);
-        return { path, parent: parent === path ? null : parent, directories, truncated };
+        return await listLocalDirectories(path, showHidden);
       } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "ENOENT" || code === "ENOTDIR") {
-          return reply.notFound("Directory does not exist.");
-        }
-        if (code === "EACCES" || code === "EPERM") {
-          return reply.forbidden("Directory is not readable.");
-        }
-        if (code === "ELOOP" || code === "ENAMETOOLONG" || code === "EINVAL") {
-          return reply.badRequest("Directory path is invalid.");
-        }
+        if (error instanceof FsDirsError) return replyFsDirsError(reply, error);
         throw error;
       }
     },
