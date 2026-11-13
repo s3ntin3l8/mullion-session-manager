@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 5</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 6</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 5</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 6</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -480,6 +480,8 @@
       (desktop 1280, fold 840×900, phone 390) and scaled down.
       <span class="tag rec">recommended</span> marks the option I would pick;
       <span class="tag open">open</span> marks a choice that needs your decision.
+      <b><a href="prototype.html" style="color: var(--g)">Open the tappable fold prototype</a></b>
+      to try the open questions (stacking, two rails) at real size on the device.
     </p>
 
     <h2>1 · Desktop</h2>
@@ -847,9 +849,9 @@
           <span class="tag open">idea</span><b>2b′ · Task open, statuses stacked.</b> The same board
           redrawn as a vertical list: one section per status, cards at full width, every status
           reachable by scrolling down. Sections collapse; a dot marks the ones holding a task that
-          needs you. Open questions: the order of the sections (drawn here with the active ones
-          first), and whether the board switches to this only while the sidebar is open or always on
-          the fold.
+          needs you. The active statuses come first (decided). Still open: whether the board
+          switches to this only while the sidebar is open or always on the fold; try both in the
+          prototype.
         </figcaption>
       </figure>
       <figure>
@@ -1140,8 +1142,17 @@
           (section 7).
         </li>
         <li>
-          <span class="tag open">idea</span><b>Stacked statuses on the fold</b> instead of lanes
-          (frame 2b′).
+          <span class="tag rec">decided</span><b>Stacked statuses list the active ones first:</b>
+          Reviewing, In progress, Ready, then Backlog and Done collapsed.
+        </li>
+        <li>
+          <span class="tag open">open</span><b>When the fold board stacks:</b> leaning towards only
+          while the sidebar is open (frame 2b′). To be judged in the prototype, because the layout
+          changes under the tapped card.
+        </li>
+        <li>
+          <span class="tag open">idea</span><b>A rail on each half of the fold</b> instead of a top
+          bar (section 8).
         </li>
         <li>
           <b>Cross-links:</b> "Open session in Workspace" switches mode; the task stays open in the
@@ -1615,6 +1626,84 @@
       <li>
         <b>In Tasks mode</b> there is no terminal to reflow, so 1 simply shows two lanes beside the
         task (section 6, option A).
+      </li>
+    </ul>
+
+    <h2>8 · Fold: a rail on each half <span class="tag open">idea</span></h2>
+    <p class="lede">
+      The mode switch and the session switcher move out of the top bar into a thin left rail. Each
+      half of the fold then has one rail on its outer edge and one pane beside it: the left rail
+      chooses what the left half shows, the right rail what the right half shows. The top bar goes
+      away. These frames are the live prototype, so they can be tapped here too.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#rails&bare"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <b>8a · Tasks mode, sidebar closed.</b> Left rail: the mode switch on top (the dot is the
+          needs-you signal), then one entry per status with its count, which jumps to that status
+          and shows which ones hold a task that needs you. Bell and menu at the bottom.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#rails&bare&task"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <b>8b · Task open.</b> Rail 48, pane 372, pane 372, rail 48: the seam between board and
+          task sits on the hinge at 420px. In frame 2b it sits at 396px, beside the hinge. The
+          status entries in the rail answer the stacked list's weak point, a long section pushing
+          the later ones out of sight.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <iframe
+            src="prototype.html#rails&bare&task&ws"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
+        </div>
+        <figcaption>
+          <b>8c · Workspace mode.</b> Below the mode switch the rail lists the open sessions (agent
+          mark, short name, needs-you dot); "All" opens the full session picker that exists today.
+          The task stays open on the right half.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>What it buys.</b> Both rails sit under the thumbs when the fold is held with two hands;
+        the top bar is the hardest place to reach. The 52px top bar goes, which is about three more
+        terminal rows. The seam lands on the hinge.
+      </li>
+      <li>
+        <b>What it costs.</b> The left pane loses 24px against frame 2c (372 instead of 396), about
+        three terminal columns. A 48px rail cannot name a session, only hint at it, so the full
+        picker stays one tap away.
+      </li>
+      <li>
+        <span class="tag open">open</span><b>One session or the grid.</b> With the sidebar open the
+        left half fits one pane, so the rail switches sessions. With the sidebar closed the grid
+        could come back (rail entries focus a pane), or the fold could always show one session per
+        half.
+      </li>
+      <li>
+        <span class="tag open">open</span><b>Desktop.</b> With this, the switch would sit in three
+        places: top bar on desktop, left rail on the fold, bottom bar on the phone. Giving desktop
+        the same left rail brings it back to one pattern (a rail, laid flat on the phone).
+      </li>
+      <li>
+        <b>Against earlier decisions.</b> "Left sidebar hidden in Tasks mode" still holds for the
+        project and session tree; the rail is new, thin chrome that stays. Applies to the tablet
+        tier by width, not to the fold as a device.
       </li>
     </ul>
   </body>

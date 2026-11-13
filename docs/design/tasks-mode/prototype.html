@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Tappable companion to mockup.html for #2976. It exists to try two open questions on a real fold: does the board feel right when it switches from lanes to stacked statuses as the sidebar opens, and does a rail on each half work better than a top bar. Low fidelity, fictional data, no app code. -->
+    <title>Mullion — Tasks mode: tappable fold prototype</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <style>
+      /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
+      :root {
+        --bg: #0e0e0f;
+        --sidebar: #161617;
+        --chrome: #1c1c1e;
+        --fg: #ededed;
+        --muted: #9b9ba5;
+        --dim: #8a8a94;
+        --g: #5ec27a;
+        --y: #d7b06a;
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --accent-fill: #0a7a53;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.4 system-ui,
+          sans-serif;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      button {
+        font: inherit;
+        color: inherit;
+        background: none;
+        border: 0;
+        padding: 0;
+        cursor: pointer;
+      }
+
+      /* Options strip: prototype controls, not part of the design. */
+      #opts {
+        flex: none;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        align-items: center;
+        padding: 6px 10px;
+        background: #26210f;
+        border-bottom: 1px solid #5a4a1c;
+        color: var(--y);
+        font-size: 12px;
+      }
+      #opts b {
+        font-weight: 600;
+      }
+      #opts .o {
+        display: inline-flex;
+        border: 1px solid #5a4a1c;
+        border-radius: 7px;
+        overflow: hidden;
+      }
+      #opts .o button {
+        padding: 7px 10px;
+        min-height: 32px;
+      }
+      #opts .o button.on {
+        background: var(--y);
+        color: #111;
+        font-weight: 600;
+      }
+
+      /* Shell */
+      #tb {
+        flex: none;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        background: var(--chrome);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .rails #tb {
+        display: none;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .seg button {
+        padding: 9px 16px;
+        min-height: 44px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .seg button.on {
+        background: var(--accent-fill);
+        color: #fff;
+        font-weight: 600;
+      }
+      .dot {
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        border-radius: 9px;
+        background: var(--y);
+        color: #111;
+        font-size: 11px;
+        font-weight: 700;
+        display: inline-grid;
+        place-items: center;
+      }
+      .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      #body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+      }
+      .rail {
+        flex: none;
+        width: 48px;
+        background: var(--sidebar);
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #lrail {
+        border-right: 1px solid var(--border-soft);
+        display: none;
+      }
+      .rails #lrail {
+        display: flex;
+      }
+      #rrail {
+        border-left: 1px solid var(--border-soft);
+      }
+      .rail button {
+        min-height: 48px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1px;
+        color: var(--muted);
+        font-size: 9.5px;
+        position: relative;
+      }
+      .rail button i {
+        font-style: normal;
+        font-size: 17px;
+        line-height: 1;
+      }
+      .rail button.on {
+        color: #fff;
+        box-shadow: inset 3px 0 0 var(--g);
+        background: #202023;
+      }
+      #rrail button.on {
+        box-shadow: inset -3px 0 0 var(--g);
+      }
+      .rail hr {
+        width: 28px;
+        border: 0;
+        border-top: 1px solid var(--border-soft);
+        margin: 6px auto;
+      }
+      .rail .pip {
+        position: absolute;
+        top: 6px;
+        right: 7px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--y);
+      }
+      #main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      #side {
+        flex: none;
+        width: 0;
+        overflow: hidden;
+        background: var(--sidebar);
+      }
+      /* Half and half: with a rail on each half the seam sits on the hinge. */
+      .open #side {
+        width: calc(50% - 48px);
+        border-left: 1px solid var(--border-soft);
+        overflow-y: auto;
+        padding: 12px;
+      }
+      .open:not(.rails) #side {
+        width: calc(50% - 24px);
+      }
+
+      /* Tasks mode */
+      #filters {
+        flex: none;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .pill {
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 6px 10px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .btn {
+        display: inline-block;
+        background: var(--accent-fill);
+        color: #fff;
+        border-radius: 7px;
+        padding: 11px 16px;
+        font-weight: 600;
+        margin: 0 6px 6px 0;
+      }
+      .btn.ghost {
+        background: none;
+        border: 1px solid var(--border);
+        font-weight: 400;
+      }
+      #board {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        gap: 10px;
+        padding: 10px 12px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      .lane {
+        flex: none;
+        width: 216px;
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+      }
+      .lane .hd {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+        padding: 8px 0;
+        text-align: left;
+        min-height: 36px;
+      }
+      .lane .hd .car {
+        display: none;
+      }
+      .lane .hd em {
+        font-style: normal;
+        color: var(--y);
+      }
+      .card {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: var(--chrome);
+        padding: 10px;
+        margin-bottom: 8px;
+      }
+      .card small {
+        display: block;
+        color: var(--dim);
+        margin-top: 3px;
+      }
+      .card .need {
+        display: block;
+        color: var(--y);
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .card.sel {
+        border-color: var(--g);
+        box-shadow: 0 0 0 1px var(--g);
+      }
+      /* Stacked statuses: one section per status, active ones first. */
+      .stacked #board {
+        display: block;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .stacked .lane {
+        width: auto;
+        overflow: visible;
+      }
+      .stacked #board {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+      .stacked .lane .hd {
+        border-bottom: 1px solid var(--border-soft);
+        margin: 8px 0;
+        min-height: 44px;
+      }
+      .stacked .lane .hd .car {
+        display: inline;
+      }
+      .stacked .lane.closed .card {
+        display: none;
+      }
+      .stacked .lane[data-k="reviewing"] {
+        order: 1;
+      }
+      .stacked .lane[data-k="progress"] {
+        order: 2;
+      }
+      .stacked .lane[data-k="ready"] {
+        order: 3;
+      }
+      .stacked .lane[data-k="backlog"] {
+        order: 4;
+      }
+      .stacked .lane[data-k="done"] {
+        order: 5;
+      }
+      #adhoc {
+        flex: none;
+        border-top: 1px solid var(--border-soft);
+        padding: 10px 12px;
+        color: var(--muted);
+      }
+
+      /* Workspace mode */
+      #term {
+        flex: 1;
+        min-height: 0;
+        margin: 8px;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 10px;
+        font:
+          14px/1.4 ui-monospace,
+          monospace;
+        color: var(--muted);
+        overflow: hidden;
+        white-space: pre;
+      }
+      #kb {
+        flex: none;
+        height: 52px;
+        display: flex;
+        border-top: 1px solid var(--border-soft);
+        background: var(--chrome);
+      }
+      #kb span {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        border-right: 1px solid var(--border-soft);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .m-tasks .ws,
+      .m-ws .tk {
+        display: none !important;
+      }
+
+      /* Sidebar content */
+      #side h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+      .box {
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 9px;
+        margin-bottom: 9px;
+        color: var(--muted);
+      }
+      .box b {
+        color: var(--fg);
+      }
+      .peek {
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 8px;
+        font:
+          12px ui-monospace,
+          monospace;
+        color: var(--muted);
+        margin-bottom: 9px;
+      }
+      .row {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 12px 4px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .row small {
+        color: var(--dim);
+        display: block;
+      }
+    </style>
+  </head>
+  <body class="m-tasks">
+    <div id="opts">
+      <span><b>Prototype options</b> (not part of the design)</span>
+      <span
+        >Switch:
+        <span class="o" data-opt="rails"
+          ><button data-v="0" class="on">top bar</button><button data-v="1">two rails</button></span
+        ></span
+      >
+      <span
+        >Board:
+        <span class="o" data-opt="stack"
+          ><button data-v="never">lanes</button
+          ><button data-v="open" class="on">stack when sidebar open</button
+          ><button data-v="always">always stacked</button></span
+        ></span
+      >
+    </div>
+
+    <div id="tb">
+      <span class="seg"
+        ><button data-mode="ws">Workspace</button
+        ><button data-mode="tasks" class="on">Tasks <span class="dot">3</span></button></span
+      >
+      <span class="grow"></span>
+      <span class="pill">🔔</span>
+    </div>
+
+    <div id="body">
+      <nav id="lrail" class="rail">
+        <button data-mode="ws"><i>&gt;_</i>Work</button>
+        <button data-mode="tasks" class="on"><i>▦</i>Tasks<span class="pip"></span></button>
+        <hr />
+        <!-- Tasks mode: jump to a status. -->
+        <button class="tk" data-jump="reviewing"><i>2</i>Review<span class="pip"></span></button>
+        <button class="tk" data-jump="progress"><i>2</i>Active</button>
+        <button class="tk" data-jump="ready"><i>2</i>Ready</button>
+        <button class="tk" data-jump="backlog"><i>6</i>Backlog</button>
+        <button class="tk" data-jump="done"><i>2</i>Done<span class="pip"></span></button>
+        <!-- Workspace mode: the open sessions. -->
+        <button class="ws on" data-sess="task #7 worker · aurora-web"><i>◆</i>#7</button>
+        <button class="ws" data-sess="claude · orbit-api">
+          <i>✳</i>orbit<span class="pip"></span>
+        </button>
+        <button class="ws" data-sess="codex · aurora-web"><i>◇</i>aurora</button>
+        <button class="ws" data-sess="(the full session picker would open here)">
+          <i>⋯</i>All 8
+        </button>
+        <span class="grow"></span>
+        <button><i>🔔</i></button>
+        <button><i>☰</i></button>
+      </nav>
+
+      <main id="main">
+        <div id="filters" class="tk">
+          <span class="pill">All projects ▾</span>
+          <span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span>
+          <span class="grow"></span>
+          <span class="btn" style="margin: 0">+ New</span>
+        </div>
+        <div id="board" class="tk"></div>
+        <div id="adhoc" class="tk">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
+        <div id="term" class="ws"></div>
+        <div id="kb" class="ws">
+          <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+          ><span>↓</span><span>🎤</span><span>⋮</span>
+        </div>
+      </main>
+
+      <aside id="side"></aside>
+
+      <nav id="rrail" class="rail">
+        <button data-view="tasks"><i>☑</i>Tasks</button>
+        <button data-view="github"><i>⎇</i>GitHub</button>
+        <button data-view="git"><i>±</i>Git</button>
+        <button data-view="files"><i>▤</i>Files</button>
+      </nav>
+    </div>
+
+    <script>
+      const LANES = [
+        [
+          "backlog",
+          "Backlog",
+          [
+            ["Add dark mode toggle", "aurora-web"],
+            ["Fix flaky reconciler test", "aurora-web"],
+            ["Document webhook retry", "aurora-web"],
+            ["Trim the session payload", "orbit-api"],
+            ["Upgrade the lint config", "aurora-web"],
+            ["Paginate the audit log", "orbit-api"],
+          ],
+        ],
+        [
+          "ready",
+          "Ready",
+          [
+            ["Speed up orders query with an index", "orbit-api"],
+            ["Document the session cookie lifetime", "aurora-web · #11"],
+          ],
+        ],
+        [
+          "progress",
+          "In progress",
+          [
+            ["Add rate limiting to the login route", "aurora-web · #10 · PR #12"],
+            ["Orders list is slow with >10k rows", "orbit-api · #3 · PR #5"],
+          ],
+        ],
+        [
+          "reviewing",
+          "Reviewing",
+          [
+            ["Cache the session lookup", "aurora-web · PR #17"],
+            ["Fix focus loss in the login form", "aurora-web · #7 · PR #14", "needs your approval"],
+          ],
+        ],
+        [
+          "done",
+          "Done · Failed",
+          [
+            ["Remove the legacy flag", "aurora-web · merged"],
+            ["Migrate the orders table", "orbit-api · failed", "failed, needs a decision"],
+          ],
+        ],
+      ];
+      const $ = (s, r = document) => r.querySelector(s);
+      const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+      const state = { mode: "tasks", rails: false, stack: "open", view: null, task: null };
+
+      const board = $("#board");
+      for (const [k, name, cards] of LANES) {
+        const need = cards.some((c) => c[2]);
+        const lane = document.createElement("div");
+        lane.className = "lane" + (k === "backlog" || k === "done" ? " closed" : "");
+        lane.dataset.k = k;
+        lane.innerHTML =
+          `<button class="hd"><span class="car">▾ </span>${name} ${cards.length}${need ? " <em>●</em>" : ""}</button>` +
+          cards
+            .map(
+              (c) =>
+                `<button class="card" data-task="${c[0]}" data-meta="${c[1]}">${c[0]}<small>${c[1]}</small>${
+                  c[2] ? `<span class="need">${c[2]}</span>` : ""
+                }</button>`,
+            )
+            .join("");
+        board.append(lane);
+      }
+
+      function sideHtml() {
+        if (state.view !== "tasks")
+          return `<h3>${state.view}</h3><div class="box">Placeholder for the ${state.view} view. Tap its rail tab again to close.</div>`;
+        if (!state.task)
+          return (
+            `<h3>Tasks</h3>` +
+            LANES.flatMap((l) => l[2])
+              .map(
+                (c) =>
+                  `<button class="row" data-task="${c[0]}" data-meta="${c[1]}">${c[0]}<small>${c[1]}</small></button>`,
+              )
+              .join("")
+          );
+        return `<h3><button data-back>←</button> ${state.task[0]}</h3>
+          <div class="box"><b>Status</b> · ${state.task[1]}</div>
+          <div><span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span></div>
+          <div class="box"><b>Review</b> · verdict approved · round 2</div>
+          <div class="peek">worker session · idle<br>✓ 12 passed · pushed 2 commits</div>
+          <button class="btn ghost" data-open-ws>Open session in Workspace</button>
+          <div class="box" style="margin-top:10px"><b>Details</b> · ${state.task[1]}</div>
+          <div class="box"><b>Timeline</b> · claimed · PR opened · review round 1 · review round 2</div>`;
+      }
+
+      function render() {
+        const open = !!state.view;
+        const stacked = state.stack === "always" || (state.stack === "open" && open);
+        document.body.className =
+          `m-${state.mode}` +
+          (state.rails ? " rails" : "") +
+          (open ? " open" : "") +
+          (stacked ? " stacked" : "");
+        $$("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === state.mode));
+        $$("#rrail button").forEach((b) => b.classList.toggle("on", b.dataset.view === state.view));
+        $$("#opts .o").forEach((o) =>
+          $$("button", o).forEach((b) =>
+            b.classList.toggle(
+              "on",
+              b.dataset.v === String(o.dataset.opt === "rails" ? +state.rails : state.stack),
+            ),
+          ),
+        );
+        $$(".card").forEach((c) =>
+          c.classList.toggle("sel", !!state.task && c.dataset.task === state.task[0]),
+        );
+        $("#side").innerHTML = open ? sideHtml() : "";
+        // Keep the tapped card in view when the layout changes under it.
+        const sel = $(".card.sel");
+        if (sel) {
+          sel.closest(".lane").classList.remove("closed");
+          sel.scrollIntoView({ block: "center", inline: "center" });
+        }
+      }
+
+      $("#term").textContent =
+        "task #7 worker · aurora-web\n\n✓ 12 passed\nPushed 2 commits to PR #14.\n\n> ▯";
+
+      document.addEventListener("click", (e) => {
+        const t = e.target.closest("button");
+        if (!t) return;
+        if (t.dataset.v !== undefined) {
+          const o = t.parentElement.dataset.opt;
+          state[o] = o === "rails" ? t.dataset.v === "1" : t.dataset.v;
+        } else if (t.dataset.mode) state.mode = t.dataset.mode;
+        else if (t.dataset.view) {
+          // Tapping the open view's tab closes the sidebar.
+          if (state.view === t.dataset.view) ((state.view = null), (state.task = null));
+          else ((state.view = t.dataset.view), (state.task = null));
+        } else if (t.dataset.task) {
+          state.task = [t.dataset.task, t.dataset.meta];
+          state.view = "tasks";
+        } else if (t.dataset.back !== undefined) state.task = null;
+        else if (t.dataset.openWs !== undefined) state.mode = "ws";
+        else if (t.dataset.jump) {
+          const lane = $(`.lane[data-k="${t.dataset.jump}"]`);
+          lane.classList.remove("closed");
+          render();
+          lane.scrollIntoView({ block: "start", inline: "start", behavior: "smooth" });
+          return;
+        } else if (t.dataset.sess) {
+          $$("#lrail .ws").forEach((b) => b.classList.toggle("on", b === t));
+          $("#term").textContent = `${t.dataset.sess}\n\n> ▯`;
+          return;
+        } else if (t.classList.contains("hd")) {
+          t.parentElement.classList.toggle("closed");
+          return;
+        }
+        render();
+      });
+      // Deep link, used by mockup.html to embed fixed states: #rails&task&ws&bare&stack=never
+      const flag = (k) => location.hash.slice(1).split("&").includes(k);
+      if (flag("rails")) state.rails = true;
+      if (flag("ws")) state.mode = "ws";
+      if (flag("bare")) $("#opts").style.display = "none";
+      const st = location.hash.match(/stack=(\w+)/);
+      if (st) state.stack = st[1];
+      if (flag("task")) {
+        state.view = "tasks";
+        state.task = ["Fix focus loss in the login form", "aurora-web · #7 · PR #14"];
+      }
+      render();
+    </script>
+  </body>
+</html>
