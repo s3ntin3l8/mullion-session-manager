@@ -1,3 +1,6 @@
+// First on purpose: patches child_process before any module-scope
+// `promisify(execFile)` elsewhere in the graph captures the original.
+import "./services/windows-hide-install.js";
 import { buildApp } from "./app.js";
 import { getCachedAgents } from "./services/agent-detect.js";
 import { setUserShellEnvLogger } from "./services/user-shell-env.js";

@@ -68,7 +68,7 @@ async function readGlobalGitConfig(key: string): Promise<string> {
     const { stdout } = await execFileAsync(
       "git",
       [...GIT_NO_AUTO_GC, "config", "--global", "--get", key],
-      { env: gitEnv(), timeout: 5000 },
+      { env: gitEnv(), timeout: 5000, windowsHide: true },
     );
     return stdout.trim();
   } catch {
