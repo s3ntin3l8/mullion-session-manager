@@ -1,12 +1,11 @@
-import { installWindowsHideDefault } from "./services/windows-hide-children.js";
+// First on purpose: patches child_process before any module-scope
+// `promisify(execFile)` elsewhere in the graph captures the original.
+import "./services/windows-hide-install.js";
 import { buildApp } from "./app.js";
 import { getCachedAgents } from "./services/agent-detect.js";
 import { setUserShellEnvLogger } from "./services/user-shell-env.js";
 
 async function start() {
-  // Before anything spawns: no flashing console windows from the console-less
-  // Windows agent.
-  installWindowsHideDefault();
   const app = await buildApp();
 
   // Close the server (and DB via the onClose hook) on termination signals.

@@ -146,15 +146,39 @@ function parseWorkflowFiles(output: string): string[] {
  * A fast-polling primary made that ~1 req/s, so the answer is cached per cwd
  * for BASE_REF_CACHE_TTL_MS: the remote HEAD essentially never changes. */
 const BASE_REF_CACHE_TTL_MS = 30_000;
-const baseRefCache = new Map<string, { ts: number; ref: string }>();
+// A null (no origin refs yet: local-only repo, or not fetched) is cached only
+// briefly, so it still flips within seconds of a fetch landing (the workflow
+// gate reads null as "base unresolved") while a local-only project polled at
+// ~1 req/s stops paying 3 blocking spawns per request.
+const BASE_REF_NEGATIVE_TTL_MS = 3_000;
+const BASE_REF_CACHE_MAX = 256;
+const baseRefCache = new Map<string, { ts: number; ref: string | null }>();
+
+function baseRefTtl(ref: string | null): number {
+  return ref === null ? BASE_REF_NEGATIVE_TTL_MS : BASE_REF_CACHE_TTL_MS;
+}
 
 export function getDefaultBaseRef(cwd: string): string | null {
   const hit = baseRefCache.get(cwd);
-  if (hit && Date.now() - hit.ts < BASE_REF_CACHE_TTL_MS) return hit.ref;
+  if (hit) {
+    if (Date.now() - hit.ts < baseRefTtl(hit.ref)) return hit.ref;
+    baseRefCache.delete(cwd);
+  }
   const ref = resolveDefaultBaseRef(cwd);
-  // Only a resolved ref is cached: a null (no remote refs yet) must flip as soon
-  // as a fetch lands, since the workflow gate reads it as "base unresolved".
-  if (ref !== null) baseRefCache.set(cwd, { ts: Date.now(), ref });
+  // The key is the raw cwd, including per-task worktree paths that outlive
+  // their worktrees, so bound the map: sweep expired entries, then evict the
+  // oldest if still full.
+  if (baseRefCache.size >= BASE_REF_CACHE_MAX) {
+    const now = Date.now();
+    for (const [key, entry] of baseRefCache) {
+      if (now - entry.ts >= baseRefTtl(entry.ref)) baseRefCache.delete(key);
+    }
+    if (baseRefCache.size >= BASE_REF_CACHE_MAX) {
+      const oldest = baseRefCache.keys().next().value;
+      if (oldest !== undefined) baseRefCache.delete(oldest);
+    }
+  }
+  baseRefCache.set(cwd, { ts: Date.now(), ref });
   return ref;
 }
 

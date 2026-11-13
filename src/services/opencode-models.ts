@@ -56,7 +56,11 @@ function createModelCatalog(config: {
       // `codex debug models` prints ~0.5 MB of JSON, past execFile's 1 MB
       // default headroom for comfort; give every catalog room.
       ((file, args, options) =>
-        execFileP(file, args, { signal: options.signal, maxBuffer: 8 * 1024 * 1024 }));
+        execFileP(file, args, {
+          signal: options.signal,
+          maxBuffer: 8 * 1024 * 1024,
+          windowsHide: true,
+        }));
     const now = opts.now ?? Date.now;
 
     if (cache !== null && now() - cache.fetchedAt < CACHE_TTL_MS) {

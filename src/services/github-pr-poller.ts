@@ -40,6 +40,7 @@ async function checkoutBranch(cwd: string): Promise<string | null> {
       [...GIT_NO_AUTO_GC, "-C", cwd, "symbolic-ref", "--short", "HEAD"],
       {
         timeout: 3_000,
+        windowsHide: true,
         // git honors GIT_DIR/GIT_WORK_TREE before -C, so scrub the ambient env.
         env: gitEnv(),
       },

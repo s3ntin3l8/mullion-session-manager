@@ -62,7 +62,9 @@ async function restrictToCurrentUserWindows(file: string): Promise<void> {
   // Drop inherited ACEs and grant only the current user. Arguments are the
   // path and account name — never the credential.
   const user = os.userInfo().username;
-  await execFileAsync("icacls", [file, "/inheritance:r", "/grant:r", `${user}:F`]);
+  await execFileAsync("icacls", [file, "/inheritance:r", "/grant:r", `${user}:F`], {
+    windowsHide: true,
+  });
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -270,21 +270,43 @@ describe("getDefaultBaseRef", () => {
     clearGitDiffStatsCacheForTests();
   });
 
-  it("caches a resolved ref (no re-spawn) but not a null", () => {
-    initRepo(tmpDir);
-    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
-    commitAll(tmpDir, "initial");
-    expect(getDefaultBaseRef(tmpDir)).toBeNull();
-    const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-remote-"));
-    execFileSync("git", ["init", "--bare", remoteDir], { stdio: "pipe", env: gitEnv() });
-    git(tmpDir, ["remote", "add", "origin", remoteDir]);
-    git(tmpDir, ["push", "origin", "main", "--no-verify"]);
-    // null was not cached: the ref appears as soon as it exists.
-    expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
-    // Resolved ref is served from cache even after the remote ref is gone.
-    git(tmpDir, ["update-ref", "-d", "refs/remotes/origin/main"]);
-    expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
-    fs.rmSync(remoteDir, { recursive: true, force: true });
+  it("caches a resolved ref for 30s and a null only for a few seconds", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      initRepo(tmpDir);
+      fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+      commitAll(tmpDir, "initial");
+      expect(getDefaultBaseRef(tmpDir)).toBeNull();
+      const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-remote-"));
+      execFileSync("git", ["init", "--bare", remoteDir], { stdio: "pipe", env: gitEnv() });
+      git(tmpDir, ["remote", "add", "origin", remoteDir]);
+      git(tmpDir, ["push", "origin", "main", "--no-verify"]);
+      // The null is still cached inside its short window (no re-spawn)...
+      expect(getDefaultBaseRef(tmpDir)).toBeNull();
+      // ...and flips once it lapses.
+      vi.setSystemTime(Date.now() + 4_000);
+      expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
+      // A resolved ref is served from cache even after the remote ref is gone...
+      git(tmpDir, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      vi.setSystemTime(Date.now() + 20_000);
+      expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
+      // ...until its TTL lapses.
+      vi.setSystemTime(Date.now() + 11_000);
+      expect(getDefaultBaseRef(tmpDir)).toBeNull();
+      fs.rmSync(remoteDir, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the cache instead of keeping every cwd forever", () => {
+    // Non-repos resolve to null without spawning git; 300 distinct cwds must
+    // not grow the map past its cap (observable only as "does not throw and
+    // still answers"), and an evicted cwd simply re-resolves.
+    for (let i = 0; i < 300; i++) {
+      expect(getDefaultBaseRef(path.join(tmpDir, `missing-${i}`))).toBeNull();
+    }
+    expect(getDefaultBaseRef(path.join(tmpDir, "missing-0"))).toBeNull();
   });
 
   afterEach(() => {
