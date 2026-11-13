@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 18</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 19</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 18</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 19</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -2120,6 +2120,401 @@
         click). That step is what makes the model and the override reachable without hovering.
       </li>
       <li><b>Not drawn:</b> a "recent launches" row, and agent arguments beyond the model.</li>
+    </ul>
+    <h2>9 · Rules that hold the layout together <span class="tag open">proposal</span></h2>
+    <p class="lede">
+      The frames show states. These rules say what happens between them. None of them was discussed
+      yet; each is a proposal to confirm or change.
+    </p>
+
+    <h3 style="margin: 22px 0 8px">9.1 · Which layout at which width</h3>
+    <table
+      style="
+        border-collapse: collapse;
+        max-width: 980px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 8px;
+      "
+    >
+      <tr>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Width
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Layout
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Examples
+        </th>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          under 700px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Phone: one thing at a time, top bar, key bar, mode bar with ⋯
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          phone, the fold closed
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          700 to about 800px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Rails; an open right-rail view takes the full width
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          small tablet in portrait, a narrow window
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          about 800 to 1279px
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Rails; two halves; at most two sessions
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          the fold open (840), iPad portrait, iPad landscape
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          1280px and up
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Desktop: rail, left sidebar, grid, docked right sidebar
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          laptop, monitor
+        </td>
+      </tr>
+    </table>
+    <ul class="notes" style="max-width: 860px">
+      <li>
+        The layout follows width, not the device or the pointer. Touch only changes target sizes and
+        adds the key bar.
+      </li>
+      <li>
+        <span class="tag open">open</span>An iPad in landscape (1180px) gets two halves of about
+        540px. That is roomy for two sessions but still no grid. The alternative is to let the
+        desktop layout start earlier, at about 1100px.
+      </li>
+    </ul>
+
+    <h3 style="margin: 22px 0 8px">9.2 · Folding and unfolding</h3>
+    <p class="lede">
+      On a foldable the width changes while you work, so the state has to carry over.
+    </p>
+    <table
+      style="
+        border-collapse: collapse;
+        max-width: 980px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 8px;
+      "
+    >
+      <tr>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          Unfolded
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          After folding (phone layout)
+        </th>
+        <th
+          style="
+            text-align: left;
+            padding: 6px 12px 6px 0;
+            color: var(--fg);
+            border-bottom: 1px solid var(--border);
+          "
+        >
+          After unfolding again
+        </th>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Workspace, session A on the left, nothing on the right
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Session A
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Unchanged
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Workspace, session A left, session B right
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Session A; B is next in the picker
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          A left, B right again
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Workspace, session A left, a right-rail view open (task, GitHub, Dock…)
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          That view, full screen, because it was opened last; back returns to session A
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          A left, the view right
+        </td>
+      </tr>
+      <tr>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Tasks, board with a task open
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          The task, full screen; back returns to the board
+        </td>
+        <td
+          style="
+            vertical-align: top;
+            padding: 6px 12px 6px 0;
+            border-bottom: 1px solid var(--border-soft);
+          "
+        >
+          Board left, task right
+        </td>
+      </tr>
+    </table>
+
+    <h3 style="margin: 22px 0 8px">9.3 · The back gesture</h3>
+    <p class="lede">
+      Android's back gesture is the main way out on phone and fold. It closes the topmost thing, in
+      this order, and never leaves the app while something is open.
+    </p>
+    <ul class="notes" style="max-width: 860px">
+      <li><b>1.</b> A sheet (launcher, workspace list, stack actions, quick pick, ⋯).</li>
+      <li>
+        <b>2.</b> A drill-in inside a view (task detail back to the task list, a PR back to the
+        list).
+      </li>
+      <li>
+        <b>3.</b> The right half (the open view or second session), on the fold. On the phone: the
+        full-screen view.
+      </li>
+      <li>
+        <b>4.</b> Tasks mode back to Workspace mode, only if you got there through a cross-link such
+        as "Open session in Workspace" in reverse. Otherwise the mode stays.
+      </li>
+    </ul>
+
+    <h3 style="margin: 22px 0 8px">9.4 · The phone's "⋯" is the phone's right rail</h3>
+    <p class="lede">
+      The phone has no right sidebar today, so GitHub, Git and Files have no home there. With
+      Devices, Dock and Browser already in the ⋯ sheet, the simplest rule is that the sheet lists
+      exactly what the right rail lists, each opening full screen for the current session, plus
+      Settings.
+    </p>
+
+    <h3 style="margin: 22px 0 8px">9.5 · What goes away</h3>
+    <ul class="notes" style="max-width: 860px">
+      <li>The top bar on desktop and tablet, and the board toggle in it.</li>
+      <li>The floating right sidebar, its scrim, the swipe-to-close gesture and the pin option.</li>
+      <li>The floating left navigator on tablet and the drawer on phone.</li>
+      <li>The separate docked task-detail panel on phone and tablet.</li>
+      <li>
+        The Devices section of the left sidebar, and the tablet pane-cap setting (the fold shows at
+        most two).
+      </li>
+      <li>The Dock's "off under touch" rule, replaced by the read-only Dock view.</li>
+    </ul>
+
+    <h3 style="margin: 22px 0 8px">9.6 · Smaller things still to settle during implementation</h3>
+    <ul class="notes" style="max-width: 860px">
+      <li>A keyboard shortcut for the mode switch on desktop.</li>
+      <li>Rail labels are drawn at about 10px; the real icons may need a larger label or none.</li>
+      <li>
+        What tapping an ad-hoc session in the Tasks board's strip does (proposed: switch to
+        Workspace and show it).
+      </li>
+      <li>Empty states: no sessions, no tasks, a workspace with nothing open.</li>
+      <li>
+        The desktop form of the touch sheets (launcher, workspace list, quick pick): popovers.
+      </li>
     </ul>
   </body>
 </html>
