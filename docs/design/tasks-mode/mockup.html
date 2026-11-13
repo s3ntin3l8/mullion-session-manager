@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 20</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 21</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -114,8 +114,8 @@
         zoom: 0.72;
       }
       .fold {
-        width: 840px;
-        height: 900px;
+        width: 851px;
+        height: 780px;
         zoom: 0.56;
         font-size: 15px;
       }
@@ -472,12 +472,12 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 20</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 21</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
       wireframes: they show layout and flow, not final visuals. Each frame is drawn at its real size
-      (desktop 1280, fold 840×900, phone 390) and scaled down.
+      (desktop 1280, fold 851×780, phone 390) and scaled down.
       <span class="tag rec">recommended</span> marks the option I would pick;
       <span class="tag open">open</span> marks a choice that needs your decision.
     </p>
@@ -922,12 +922,15 @@
       </li>
     </ul>
 
-    <h2>2 · Fold (840 × 900, unfolded) <span class="tag rec">approved</span></h2>
+    <h2>
+      2 · Fold (851 wide, as measured on the Pixel 10 Pro Fold)
+      <span class="tag rec">approved</span>
+    </h2>
     <p class="lede">
-      A rail on each half: rail 48, pane 372, pane 372, rail 48, so the seam sits on the hinge at
-      420px. The left rail chooses what the left half shows, the right rail what the right half
-      shows. It is the desktop layout with the left sidebar collapsed. These frames are the live
-      prototype and can be tapped;
+      A rail on each half: rail, pane, pane, rail, each pane half of what is left, so the seam sits
+      on the hinge. On this device a pane is about 378px. The left rail chooses what the left half
+      shows, the right rail what the right half shows. It is the desktop layout with the left
+      sidebar collapsed. These frames are the live prototype and can be tapped;
       <a href="prototype.html" style="color: var(--g)">open it full size</a> on the device.
     </p>
     <div class="row">
@@ -2121,10 +2124,10 @@
       </li>
       <li><b>Not drawn:</b> a "recent launches" row, and agent arguments beyond the model.</li>
     </ul>
-    <h2>9 · Rules that hold the layout together <span class="tag open">proposal</span></h2>
+    <h2>9 · Rules that hold the layout together <span class="tag rec">decided</span></h2>
     <p class="lede">
-      The frames show states. These rules say what happens between them. None of them was discussed
-      yet; each is a proposal to confirm or change.
+      The frames show states. These rules say what happens between them. Confirmed by the owner; 9.6
+      lists what is left for implementation.
     </p>
 
     <h3 style="margin: 22px 0 8px">9.1 · Which layout at which width</h3>
@@ -2324,8 +2327,8 @@
         layout has to work with touch in any case.
       </li>
       <li>
-        The halves are percentages, not 372px. They hold a 40-column terminal from about 800px of
-        width; below that an open view takes the full width.
+        The halves are percentages, not a fixed width. They hold a 40-column terminal from about
+        800px of width; below that an open view takes the full width.
       </li>
     </ul>
     <table
@@ -2396,7 +2399,7 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          about 840 × 900
+          851 × 720 and 883 × 689 in Chrome; taller as an installed app
         </td>
         <td
           style="
@@ -2405,7 +2408,7 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          two halves of about 372px
+          two halves of 378 to 394px
         </td>
         <td
           style="
@@ -2414,7 +2417,7 @@
             border-bottom: 1px solid var(--border-soft);
           "
         >
-          taken from the app's behaviour, not read off the device
+          measured by the owner with prototype.html#size
         </td>
       </tr>
       <tr>
@@ -2534,8 +2537,8 @@
     </table>
     <ul class="notes" style="max-width: 860px">
       <li>
-        So 840 is one device, not a standard: open foldables run from about 630 to about 980. To
-        read the real numbers off a device, open <code>prototype.html#size</code> on it.
+        So one device is not a standard: open foldables run from about 630 to about 980. To read the
+        real numbers off a device, open <code>prototype.html#size</code> on it.
       </li>
     </ul>
 
