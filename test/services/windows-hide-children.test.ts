@@ -140,7 +140,8 @@ describe("installWindowsHideDefault", () => {
       { [promisify.custom]: () => Promise.resolve({}) },
     );
     installWindowsHideDefault("win32", cp);
-    await expect(promisify(cp.execFile)("x", [])).rejects.toMatchObject({
+    const run = promisify(cp.execFile) as (...a: unknown[]) => Promise<unknown>;
+    await expect(run("x", [])).rejects.toMatchObject({
       message: "boom",
       stdout: "o",
       stderr: "e",
