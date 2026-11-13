@@ -1033,7 +1033,8 @@ address that was checked, there is no window in between for the name to move.
 What this deliberately does **not** block: a host on `10.x`, `192.168.x`, or
 loopback. Those are the normal deployment shape for a private fleet, so the
 policy for agent connections permits them — pinning here only ever refuses
-link-local, cloud-metadata, and shared-NAT addresses. That narrow set is the
+link-local, cloud-metadata, and shared-NAT addresses (shared-NAT only while
+`MULLION_ALLOW_TAILNET_HOSTS` is off). That narrow set is the
 one that matters, because every request carries this host's bearer token and
 request signature: a base URL pointed at a metadata endpoint would hand those
 credentials straight to it. Beyond that, treat host registration as
@@ -1051,7 +1052,8 @@ pairing, and connect time on the resolved address. It is **off by default**,
 because shared-NAT ranges on some clouds can reach internal services; only turn
 it on if your agents really sit on a tailnet. Tailscale's IPv6 range
 (`fd7a:115c:a1e0::/48`) is already treated as private and needs no setting.
-Link-local and cloud metadata (`169.254.0.0/16`) stay blocked either way.
+Link-local and cloud metadata (`169.254.0.0/16`, plus Alibaba Cloud's
+`100.100.100.200`, which sits inside the tailnet range) stay blocked either way.
 Agents that open the outbound channel don't need this; the in-app browser
 WebSocket and legacy agents still dial the stored address.
 

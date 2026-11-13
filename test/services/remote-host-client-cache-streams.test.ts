@@ -141,3 +141,29 @@ describe("RemoteHostClient construction sites (#2635)", () => {
     expect(sites).toEqual([]);
   });
 });
+
+// MULLION_ALLOW_TAILNET_HOSTS reaches the transport only through the client
+// the cache builds (remote-host-client-cache.ts); a client built by hand
+// would not catch that wiring being dropped.
+describe("getRemoteHostClient and MULLION_ALLOW_TAILNET_HOSTS", () => {
+  const tailnetClient = async (flag: boolean) => {
+    if (flag) process.env.MULLION_ALLOW_TAILNET_HOSTS = "true";
+    try {
+      const { app } = await setup({ baseUrl: "http://100.101.102.103:4000", channel: "never" });
+      return getRemoteHostClient(app, HOST) as unknown as {
+        transport: { pinnedDispatcher(): unknown };
+      };
+    } finally {
+      delete process.env.MULLION_ALLOW_TAILNET_HOSTS;
+    }
+  };
+
+  it("dials a tailnet baseUrl when the flag is on", async () => {
+    expect((await tailnetClient(true)).transport.pinnedDispatcher()).toBeDefined();
+  });
+
+  it("refuses it when the flag is off", async () => {
+    const client = await tailnetClient(false);
+    expect(() => client.transport.pinnedDispatcher()).toThrow();
+  });
+});

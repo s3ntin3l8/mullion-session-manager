@@ -30,6 +30,10 @@ function isLinkLocalOrSharedNatIPv4(octets: IPv4Octets, allowSharedNat: boolean)
   const [a, b] = octets;
   if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local, cloud IMDS): never allowed
   if (!allowSharedNat && a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (RFC 6598 shared NAT)
+  // Alibaba Cloud's instance metadata service lives inside 100.64.0.0/10, so
+  // opting into the range (Tailscale) must not open it: a single, stable
+  // address, refused exactly like 169.254.169.254.
+  if (a === 100 && b === 100 && octets[2] === 100 && octets[3] === 200) return true;
   return false;
 }
 
@@ -107,8 +111,8 @@ export interface UrlGuardPolicy {
   allowLoopback: boolean;
   allowPrivate: boolean;
   // Opt-in (MULLION_ALLOW_TAILNET_HOSTS): permit 100.64.0.0/10, the range
-  // Tailscale assigns tailnet IPv4 addresses from. Link-local/IMDS stays
-  // blocked either way. Absent means false.
+  // Tailscale assigns tailnet IPv4 addresses from. Link-local/IMDS (including
+  // Alibaba's 100.100.100.200) stays blocked either way. Absent means false.
   allowSharedNat?: boolean;
 }
 

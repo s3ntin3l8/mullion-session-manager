@@ -98,8 +98,9 @@ const updateHostSchema = {
 // dev/test setup this repo's own integration test uses). The accepted
 // trust boundary is: whoever can call POST/PATCH /api/hosts can already
 // point this process's bearer token at any http(s) URL they choose —
-// that's the deploy's admin, not an arbitrary caller. Link-local/shared-NAT
-// ranges are rejected regardless, though: 169.254.169.254 (every major
+// that's the deploy's admin, not an arbitrary caller. Link-local ranges are
+// rejected regardless (shared-NAT too, unless MULLION_ALLOW_TAILNET_HOSTS opts
+// into 100.64.0.0/10; Alibaba's 100.100.100.200 IMDS stays blocked even then), though: 169.254.169.254 (every major
 // cloud's instance metadata service) sits inside 169.254.0.0/16, and a
 // baseUrl pointed at it would make this process hand its own agent bearer
 // token — and any response body — to whatever's listening there, which is

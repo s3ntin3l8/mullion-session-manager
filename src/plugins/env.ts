@@ -129,7 +129,8 @@ export const schema = {
     // for tailnet IPv4 addresses) in host baseUrls — at create/update,
     // register, pair and connect time (resolved IP included). Off by default
     // because shared-NAT ranges on some clouds can reach internal services.
-    // 169.254.0.0/16 (cloud IMDS) stays blocked regardless.
+    // 169.254.0.0/16 (cloud IMDS) and Alibaba's 100.100.100.200 stay blocked
+    // regardless.
     MULLION_ALLOW_TAILNET_HOSTS: {
       type: "boolean",
       default: false,

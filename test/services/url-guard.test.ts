@@ -187,6 +187,14 @@ describe("allowSharedNat (MULLION_ALLOW_TAILNET_HOSTS)", () => {
     expect(isAllowedHttpUrl("http://100.64.0.1", ALLOW_ALL)).toBe(false);
   });
 
+  it("keeps Alibaba's 100.100.100.200 IMDS blocked with the flag on, and the rest of the range open", () => {
+    expect(isAllowedHttpUrl("http://100.100.100.200/latest/meta-data", TAILNET)).toBe(false);
+    expect(isAllowedIpAddress("100.100.100.200", TAILNET)).toBe(false);
+    expect(isAllowedIpAddress("::ffff:100.100.100.200", TAILNET)).toBe(false);
+    expect(isAllowedIpAddress("100.100.100.201", TAILNET)).toBe(true);
+    expect(isAllowedIpAddress("100.100.100.200", ALLOW_ALL)).toBe(false);
+  });
+
   it("keeps link-local/IMDS blocked with the flag on", () => {
     expect(isAllowedHttpUrl("http://169.254.169.254", TAILNET)).toBe(false);
     expect(isAllowedIpAddress("169.254.169.254", TAILNET)).toBe(false);
