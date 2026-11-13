@@ -1383,6 +1383,11 @@ export const tasks = sqliteTable(
     // separate column from githubSyncError, which clearGithubSyncError would
     // otherwise clobber independently of this sweep's own state.
     mergeError: text("merge_error"),
+    // JSON `MergeBlockedThreads` (task-merge-human.ts): which foreign review
+    // threads block the merge, written with `needsHumanReason =
+    // "blocked-threads"`. Only meaningful while that reason is set; null when
+    // the thread list was unavailable (the generic message stands).
+    mergeBlockedThreads: text("merge_blocked_threads"),
     // #758 — how many times the merge sweep has spawned a worker to resolve
     // a real conflict (`dirty` mergeableState) with the base branch. A
     // deliberately SEPARATE counter/cap from `autoReturnRounds` above: this

@@ -1207,6 +1207,56 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
 
+  it("names the blocking threads and links the code-scanning alert", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        needsHumanReason: "blocked-threads",
+        mergeBlockedThreads: JSON.stringify({
+          total: 2,
+          threads: [
+            {
+              author: "github-advanced-security",
+              location: "src/services/fs-dirs.ts:52",
+              excerpt: "Uncontrolled data used in path expression",
+              url: "https://github.com/o/r/pull/1#discussion_r1",
+              alert: { number: 520, url: "https://github.com/o/r/security/code-scanning/520" },
+            },
+          ],
+        }),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(
+      screen.getByText(/github-advanced-security at src\/services\/fs-dirs\.ts:52/),
+    ).toHaveTextContent("(code-scanning alert #520)");
+    expect(screen.getByRole("link", { name: "alert" })).toHaveAttribute(
+      "href",
+      "https://github.com/o/r/security/code-scanning/520",
+    );
+    expect(screen.getByText("and 1 more")).toBeInTheDocument();
+  });
+
+  it("names a human's blocking thread without an alert link", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        needsHumanReason: "blocked-threads",
+        mergeBlockedThreads: JSON.stringify({
+          total: 1,
+          threads: [
+            { author: "alice", location: "b.ts:3", excerpt: "Rename this", url: null, alert: null },
+          ],
+        }),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText("alice at b.ts:3: Rename this")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
   it("renders the review-post-failed block with the sync error while the reason is set", () => {
     tasks = [
       makeTask({

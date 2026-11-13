@@ -173,6 +173,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     issueReviewAgent: null,
     mergeRequestedAt: null,
     mergeError: null,
+    mergeBlockedThreads: null,
     releaseRequestedAt: null,
     releaseError: null,
     rebaseStartedAt: null,

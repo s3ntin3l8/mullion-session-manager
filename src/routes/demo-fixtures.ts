@@ -36,6 +36,7 @@ const TEXT_COLUMNS = [
   "assignee",
   "failureReason",
   "mergeError",
+  "mergeBlockedThreads",
   "releaseError",
   "reviewFindings",
   "lastReviewVerdict",

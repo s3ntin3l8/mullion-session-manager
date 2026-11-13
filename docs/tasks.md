@@ -565,7 +565,13 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
   the budget, so a fresh conflict can be auto-rebased again.
 - `blocked-threads` — the merge is blocked on unresolved review conversations
   that Mullion did not open (a code-scanning bot, a reviewer). Mullion resolves
-  only its own threads, so resolve these on GitHub.
+  only its own threads, so resolve these on GitHub. The card and the task
+  detail name up to three of the open threads — author, `path:line`, the first
+  line of the comment — and link each; a code-scanning annotation
+  (`github-advanced-security`, or a comment linking `/security/code-scanning/<n>`)
+  also shows its alert number and links the alert. When the thread list is
+  unavailable (a fetch failure, or more threads than one page), only the generic
+  line shows.
 - `pr-closed` — an approved task's PR was closed without merging, so nothing
   landed. The issue stays open (a comment says why, and `mullion-done` is
   removed). Reopen the PR and use **Merge now** (a hand-merge is noticed within

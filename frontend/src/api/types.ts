@@ -2240,6 +2240,9 @@ export interface Task {
   // an outstanding merge request AND a recorded error at the same time
   // (the sweep keeps retrying). Null means no known problem.
   mergeError: string | null;
+  // JSON of the foreign review threads blocking the merge (`blocked-threads`
+  // only; parse with parseMergeBlockedThreads). Null when unknown.
+  mergeBlockedThreads?: string | null;
   // When the current auto-rebase attempt started (attemptAutoRebase); null when none is running.
   rebaseStartedAt: string | null;
   // #744 — set once this task's own PR merges, on a project with

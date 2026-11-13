@@ -16,6 +16,7 @@ import {
   needsHumanText,
   reviewPhaseText,
 } from "../needsHuman.js";
+import { MergeBlockedThreadsDetail } from "../MergeBlockedThreadsDetail.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
 import { isPlainClick, openEpicInSidebar } from "../lib/sidebarLinks.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
@@ -552,6 +553,9 @@ export function TaskCard({
           data-testid="merge-needs-human"
         >
           {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
+          {task.needsHumanReason === "blocked-threads" && (
+            <MergeBlockedThreadsDetail raw={task.mergeBlockedThreads} />
+          )}
         </div>
       )}
       {task.status === "reviewing" && task.autoReturnRounds > 0 && !task.approvalState && (
