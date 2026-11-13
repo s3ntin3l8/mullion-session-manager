@@ -5,7 +5,8 @@
 //
 // Every call here is a GET made with the human account token the caller passes
 // in (never a GitHub App token: an App has no `security_events` permission).
-// The dismiss action is a separate issue; nothing in this file writes.
+// The one write is `dismissCodeScanningAlert` (#2999), called only from the
+// human-only dismiss route, with that same human token.
 
 import { githubRequest } from "./github-request.js";
 import { GitHubApiError } from "./github.js";
@@ -191,9 +192,13 @@ export async function fetchPriorDismissals(
   ruleId: string,
   path: string | null,
   excludeNumber?: number,
+  /** Dismissals Mullion itself recorded (`code_scanning_dismissals`): a
+   * dismissal on an unmerged PR branch, or one inside GitHub's list cache
+   * window, still shows as prior art. GitHub's own entry wins on a number. */
+  recorded: PriorDismissal[] = [],
 ): Promise<PriorDismissals> {
   const all = await dismissedAlerts(token, ref);
-  const same = all
+  const fromGitHub = all
     .filter((a) => a.rule?.id === ruleId && a.number !== excludeNumber)
     .map((a) => ({
       number: a.number ?? 0,
@@ -203,6 +208,11 @@ export async function fetchPriorDismissals(
       dismissedBy: a.dismissed_by?.login ?? null,
       url: a.html_url ?? "",
     }));
+  const seen = new Set(fromGitHub.map((d) => d.number));
+  const same = [
+    ...fromGitHub,
+    ...recorded.filter((d) => d.number !== excludeNumber && !seen.has(d.number)),
+  ];
   const onPath = same.filter((d) => path !== null && d.path === path);
   const rest = same.filter((d) => !(path !== null && d.path === path));
   const ordered = [...onPath, ...rest];
@@ -210,6 +220,36 @@ export async function fetchPriorDismissals(
     dismissals: ordered.slice(0, DISMISSALS_MAX_RESULTS),
     otherPathCount: Math.max(0, ordered.length - DISMISSALS_MAX_RESULTS),
   };
+}
+
+export type DismissReason = "false positive" | "won't fix" | "used in tests";
+export const DISMISS_REASONS: readonly DismissReason[] = [
+  "false positive",
+  "won't fix",
+  "used in tests",
+];
+/** GitHub's limit on `dismissed_comment`. */
+export const DISMISS_COMMENT_MAX = 280;
+
+/**
+ * Dismiss one alert. A write: pass the human account token only (never an App
+ * token — an App has no `security_events` write, and a dismissal must be the
+ * human's own act). Throws `GitHubWriteScopeError` on 403/404.
+ */
+export async function dismissCodeScanningAlert(
+  token: string,
+  ref: GitHubRepoRef,
+  n: number,
+  reason: DismissReason,
+  comment: string,
+): Promise<void> {
+  await githubRequest(token, ref.owner, ref.repo, "PATCH", alertPath(n), {
+    state: "dismissed",
+    dismissed_reason: reason,
+    dismissed_comment: comment,
+  });
+  // The cached dismissed-alert pages no longer include this one.
+  dismissalsCache.delete(`${ref.owner}/${ref.repo}`.toLowerCase());
 }
 
 /**

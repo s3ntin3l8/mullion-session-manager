@@ -145,7 +145,8 @@ export interface MergeBlockedThreads {
 
 const MAX_BLOCKED_THREADS = 3;
 const CODE_SCANNING_AUTHOR = "github-advanced-security";
-const ALERT_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/security\/code-scanning\/(\d+)/;
+export const ALERT_URL_RE =
+  /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/security\/code-scanning\/(\d+)/;
 
 function firstLine(body: string): string {
   for (const raw of body.split("\n")) {

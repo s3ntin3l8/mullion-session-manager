@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/index.js";
+import { ApiError } from "./api/client.js";
 import type {
+  BlockingAlertDismissal,
+  BlockingAlertDismissReason,
   BlockingAlertEntry,
   BlockingAlertPriorDismissal,
   BlockingAlertsResponse,
@@ -14,7 +17,131 @@ function priorText(d: BlockingAlertPriorDismissal): string {
   return `#${d.number}${d.path ? ` ${d.path}` : ""}: ${reason}${by}${comment}`;
 }
 
-function Entry({ entry }: { entry: BlockingAlertEntry }) {
+const COMMENT_MAX = 280;
+const REASONS: BlockingAlertDismissReason[] = ["false positive", "won't fix", "used in tests"];
+
+/** Inline confirm (the `notif-gate-*` pattern of DeleteTaskAction): restates
+ * the rule and location, and needs a reason and a comment before it posts. */
+function DismissAction({
+  taskId,
+  number,
+  rule,
+  where,
+  onDismissed,
+}: {
+  taskId: number;
+  number: number;
+  rule: string;
+  where: string | null;
+  onDismissed: (d: BlockingAlertDismissal) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState<BlockingAlertDismissReason>("false positive");
+  const [comment, setComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const trimmed = comment.trim();
+  const valid = trimmed.length > 0 && trimmed.length <= COMMENT_MAX;
+
+  if (!open) {
+    return (
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn notif-gate-deny"
+          data-testid="blocking-alert-dismiss"
+          onClick={() => setOpen(true)}
+        >
+          Dismiss…
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="blocking-alert-dismiss" data-testid="blocking-alert-dismiss-form">
+      <div>
+        {`Dismiss alert #${number} (${rule}${where ? ` at ${where}` : ""}) on GitHub, reply to its thread and resolve it? The merge is then retried.`}
+      </div>
+      <select
+        aria-label="Dismissal reason"
+        value={reason}
+        disabled={submitting}
+        onChange={(e) => setReason(e.target.value as BlockingAlertDismissReason)}
+      >
+        {REASONS.map((r) => (
+          <option key={r} value={r}>
+            {r}
+          </option>
+        ))}
+      </select>
+      <textarea
+        aria-label="Dismissal comment"
+        value={comment}
+        disabled={submitting}
+        rows={3}
+        onChange={(e) => setComment(e.target.value)}
+      />
+      <div
+        className="blocking-alert-note"
+        data-testid="blocking-alert-counter"
+      >{`${trimmed.length}/${COMMENT_MAX}`}</div>
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={() => {
+            setOpen(false);
+            setError(null);
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          className="notif-gate-btn notif-gate-deny-confirm"
+          data-testid="blocking-alert-dismiss-confirm"
+          disabled={!valid || submitting}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              const r = await api.dismissBlockingAlert(taskId, number, {
+                reason,
+                comment: trimmed,
+              });
+              onDismissed(r.dismissal);
+              if (r.warning) setError(r.warning);
+              setOpen(false);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to dismiss the alert");
+            }
+            setSubmitting(false);
+          }}
+        >
+          Confirm dismiss
+        </button>
+      </div>
+      {error && <div className="task-detail-error">{error}</div>}
+    </div>
+  );
+}
+
+function auditText(d: BlockingAlertDismissal): string {
+  const by = d.dismissedBy ? ` by ${d.dismissedBy}` : "";
+  const when = new Date(d.createdAt).toLocaleString();
+  const thread = d.threadResolved ? "" : " (thread left open)";
+  return `Dismissed #${d.alertNumber} as ${d.reason}${by}, ${when}${thread}`;
+}
+
+function Entry({
+  taskId,
+  entry,
+  dismissed,
+  onDismissed,
+}: {
+  taskId: number;
+  entry: BlockingAlertEntry;
+  dismissed: boolean;
+  onDismissed: (d: BlockingAlertDismissal) => void;
+}) {
   if ("error" in entry) {
     return (
       <div className="blocking-alert" data-testid="blocking-alert">
@@ -85,6 +212,15 @@ function Entry({ entry }: { entry: BlockingAlertEntry }) {
           {canDismiss.reason}
         </div>
       )}
+      {canDismiss.ok !== false && !dismissed && (
+        <DismissAction
+          taskId={taskId}
+          number={entry.number}
+          rule={alert.rule.id}
+          where={where}
+          onDismissed={onDismissed}
+        />
+      )}
     </div>
   );
 }
@@ -114,11 +250,28 @@ export function BlockingAlertDetail({
       cancelled = true;
     };
   }, [taskId, raw, hasAlert]);
-  if (!hasAlert || !data) return null;
+  // After a dismissal the task's stored threads clear (`hasAlert` flips), so
+  // the audit line stays on screen from the fetched data, not from `raw`.
+  const dismissals = data?.dismissals ?? [];
+  if (!data || (!hasAlert && dismissals.length === 0)) return null;
+  const onDismissed = (d: BlockingAlertDismissal) =>
+    setData((cur) => (cur ? { ...cur, dismissals: [...cur.dismissals, d] } : cur));
   return (
     <div data-testid="blocking-alerts">
-      {data.alerts.map((e) => (
-        <Entry key={e.number} entry={e} />
+      {hasAlert &&
+        data.alerts.map((e) => (
+          <Entry
+            key={e.number}
+            taskId={taskId}
+            entry={e}
+            dismissed={dismissals.some((d) => d.alertNumber === e.number)}
+            onDismissed={onDismissed}
+          />
+        ))}
+      {dismissals.map((d, i) => (
+        <div key={`${d.alertNumber}-${i}`} data-testid="blocking-alert-audit">
+          {auditText(d)}
+        </div>
       ))}
     </div>
   );

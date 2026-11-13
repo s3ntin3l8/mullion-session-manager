@@ -35,6 +35,25 @@ export type BlockingAlertEntry =
       canDismiss: BlockingAlertCanDismiss;
     }
   | { number: number; error: string; canDismiss: BlockingAlertCanDismiss };
+// #2999 — one audit row: an alert a human dismissed from the task.
+export type BlockingAlertDismissReason = "false positive" | "won't fix" | "used in tests";
+export interface BlockingAlertDismissal {
+  alertNumber: number;
+  ruleId: string;
+  path: string | null;
+  reason: string;
+  comment: string;
+  dismissedBy: string | null;
+  threadResolved: boolean;
+  createdAt: string;
+}
 export interface BlockingAlertsResponse {
   alerts: BlockingAlertEntry[];
+  dismissals: BlockingAlertDismissal[];
+}
+export interface DismissBlockingAlertResponse {
+  dismissed: true;
+  threadResolved: boolean;
+  warning?: string;
+  dismissal: BlockingAlertDismissal;
 }

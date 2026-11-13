@@ -58,6 +58,7 @@ import {
   fetchCodeScanningAlert,
   fetchPriorDismissals,
 } from "../services/code-scanning.js";
+import { listTaskDismissals, recordedPriorDismissals } from "../services/code-scanning-audit.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { removeLabel } from "../services/github-write.js";
 import { isPullRequestMerged } from "../services/github-merged-prs.js";
@@ -355,7 +356,13 @@ export async function tasksRoute(app: FastifyInstance) {
       }
     }
     numbers = [...new Set(numbers)];
-    if (numbers.length === 0) return reply.notFound("No blocking code-scanning alert on this task");
+    // The audit lines (#2999) outlive the block: a task whose only alert was
+    // just dismissed still answers, so the line survives a reload.
+    const dismissals = listTaskDismissals(app, taskId);
+    if (numbers.length === 0 && dismissals.length === 0) {
+      return reply.notFound("No blocking code-scanning alert on this task");
+    }
+    if (numbers.length === 0) return { alerts: [], dismissals };
 
     const project = getProjectOr404(row.projectId);
     const ref = project ? await resolveRepoRef(app, project) : null;
@@ -386,9 +393,14 @@ export async function tasksRoute(app: FastifyInstance) {
                   loc.endLine,
                 ).catch(() => null)
               : null,
-            fetchPriorDismissals(token, ref, alert.rule.id, loc?.path ?? null, number).catch(
-              () => null,
-            ),
+            fetchPriorDismissals(
+              token,
+              ref,
+              alert.rule.id,
+              loc?.path ?? null,
+              number,
+              recordedPriorDismissals(app, `${ref.owner}/${ref.repo}`, alert.rule.id),
+            ).catch(() => null),
           ]);
           return {
             number,
@@ -407,7 +419,7 @@ export async function tasksRoute(app: FastifyInstance) {
         }
       }),
     );
-    return { alerts };
+    return { alerts, dismissals };
   });
 
   function getProjectOr404(projectId: number) {

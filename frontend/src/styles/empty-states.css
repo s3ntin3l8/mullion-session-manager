@@ -3360,3 +3360,16 @@ button.github-panel-row.gh-issue-row {
   opacity: 0.8;
   font-style: italic;
 }
+
+/* #2999 — the inline dismiss confirm under a blocking alert. */
+.blocking-alert-dismiss {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+.blocking-alert-dismiss textarea {
+  width: 100%;
+  font: inherit;
+  resize: vertical;
+}
