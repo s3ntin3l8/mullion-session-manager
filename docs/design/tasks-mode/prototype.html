@@ -8,7 +8,7 @@
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
       :root {
-        --bg: #0e0e0f;
+        --bg: #0a0a0a;
         --sidebar: #161617;
         --chrome: #1c1c1e;
         --fg: #ededed;
@@ -1800,7 +1800,7 @@
         openMenu(b);
       });
 
-      // Deep link, used by mockup.html to embed fixed states: #rails&task&ws&bare&stack=never
+      // Deep link, used by mockup.html to embed fixed states: #ws&task&split&rsright&view=dock&addsheet&wssheet
       const flag = (k) => location.hash.slice(1).split("&").includes(k);
       if (flag("rails")) state.rails = true;
       if (flag("ws")) state.mode = "ws";
@@ -1824,7 +1824,7 @@
       }
       render();
       after();
-      // #size: show the viewport this device reports, to check real foldables against the design.
+      // #polish: the motion study, with a bar to switch it off and to slow it down.
       if (flag("polish")) {
         fx.on = true;
         const bar = document.createElement("div");
@@ -1843,6 +1843,7 @@
         });
         render();
       }
+      // #size: show the viewport this device reports, to check real foldables against the design.
       if (flag("size")) {
         const s = document.createElement("div");
         s.style.cssText =

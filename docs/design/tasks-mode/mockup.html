@@ -8,7 +8,7 @@
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
       :root {
-        --bg: #0e0e0f;
+        --bg: #0a0a0a;
         --sidebar: #161617;
         --chrome: #1c1c1e;
         --surface: #1e1e21;
@@ -59,6 +59,9 @@
       }
       figure {
         margin: 0;
+        /* A frame wider than the screen scrolls inside its figure, not the page. */
+        max-width: 100%;
+        overflow-x: auto;
       }
       figcaption {
         color: var(--muted);
@@ -936,7 +939,7 @@
     <div class="row">
       <figure>
         <div class="dev fold">
-          <iframe src="prototype.html#bare" style="width: 100%; height: 100%; border: 0"></iframe>
+          <iframe src="prototype.html" style="width: 100%; height: 100%; border: 0"></iframe>
         </div>
         <figcaption>
           <b>2a · Tasks mode, sidebar closed.</b> The board as lanes, scrolling sideways. Left rail:
@@ -946,10 +949,7 @@
       </figure>
       <figure>
         <div class="dev fold">
-          <iframe
-            src="prototype.html#bare&task"
-            style="width: 100%; height: 100%; border: 0"
-          ></iframe>
+          <iframe src="prototype.html#task" style="width: 100%; height: 100%; border: 0"></iframe>
         </div>
         <figcaption>
           <b>2b · Task open.</b> The sidebar docks on the right half and the board stacks its
@@ -960,7 +960,7 @@
       <figure>
         <div class="dev fold">
           <iframe
-            src="prototype.html#bare&task&ws"
+            src="prototype.html#task&ws"
             style="width: 100%; height: 100%; border: 0"
           ></iframe>
         </div>
@@ -973,7 +973,7 @@
       <figure>
         <div class="dev fold">
           <iframe
-            src="prototype.html#bare&ws&rsright"
+            src="prototype.html#ws&rsright"
             style="width: 100%; height: 100%; border: 0"
           ></iframe>
         </div>
@@ -2537,7 +2537,7 @@
     </table>
     <ul class="notes" style="max-width: 860px">
       <li>
-        So one device is not a standard: open foldables run from about 630 to about 980. To read the
+        So one device is not a standard: open foldables run from about 630 to about 990. To read the
         real numbers off a device, open <code>prototype.html#size</code> on it.
       </li>
     </ul>
