@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 3</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 4</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 3</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 4</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -480,6 +480,13 @@
       (desktop 1280, fold 840×900, phone 390) and scaled down.
       <span class="tag rec">recommended</span> marks the option I would pick;
       <span class="tag open">open</span> marks a choice that needs your decision.
+    </p>
+
+    <p class="lede" style="border: 1px solid var(--y); border-radius: 8px; padding: 10px 12px">
+      <b>Rev 4 note.</b> Task detail is decided as option A (section 6): it lives in the right
+      sidebar in both modes, and the sidebar never floats. Frames 1a, 1b and 2b below still show the
+      earlier panel-plus-glance idea and will be redrawn once the fold question in section 7 is
+      settled. Sections 3, 4, 6 and 7 are current.
     </p>
 
     <h2>1 · Desktop</h2>
@@ -767,23 +774,25 @@
             <b>Tasks</b><span class="grow"></span><span class="pill">All projects ▾</span
             ><span class="ic"></span>
           </div>
+          <div class="filters">
+            <span class="pill" style="color: var(--y); border-color: var(--y)">Needs you 3</span
+            ><span class="pill">Running 2</span><span class="grow"></span
+            ><span class="btn">+ New</span>
+          </div>
           <div class="strip">
-            <span class="on">Needs you 3</span><span>Backlog 6</span><span>Ready 2</span
-            ><span>Active 4</span><span>Done 2</span>
+            <span>Backlog 6</span><span>Ready 2</span
+            ><span class="on">Active 4 <i style="color: var(--y)">●</i></span
+            ><span>Done 2 <i style="color: var(--y)">●</i></span>
           </div>
           <div class="main" style="padding: 10px">
+            <div class="hd">Reviewing 2</div>
             <div class="card">
               #7 Fix focus loss in the login form<small>aurora-web · PR #14</small
               ><span class="need">Approved, needs your approval</span>
             </div>
-            <div class="card">
-              #9 Dark mode: low contrast<small>aurora-web</small
-              ><span class="fail">merge failed</span>
-            </div>
-            <div class="card">
-              #12 Rework settings layout<small>PR #18</small
-              ><span class="fail">budget used up</span>
-            </div>
+            <div class="card">Cache the session lookup<small>PR #17</small></div>
+            <div class="hd">In progress 2</div>
+            <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
             <div style="color: var(--dim); text-align: center; margin-top: 14px">
               swipe ← → between lanes
             </div>
@@ -796,7 +805,8 @@
         <figcaption>
           <b>3a · Tasks mode.</b> One lane at a time. The lane strip always names the lane on screen
           (underlined) and shows every lane's count, so you know where you are and what is
-          elsewhere. A "Needs you" lane comes first: it is a view across lanes, not a status.
+          elsewhere. Lanes are status only. "Needs you" is a filter chip; a dot marks every lane
+          that holds such a task, and the board opens on the first of them.
         </figcaption>
       </figure>
       <figure>
@@ -928,8 +938,7 @@
         <figcaption>
           <b>B, keyboard open.</b> The mode bar hides while the on-screen keyboard is up, so typing
           keeps today's terminal height and the key bar stays directly above the keys. It returns
-          when the keyboard closes. <span class="tag open">open</span> Confirm this is acceptable:
-          you cannot switch mode mid-typing without closing the keyboard first.
+          when the keyboard closes. <span class="tag rec">decided</span>
         </figcaption>
       </figure>
       <figure>
@@ -958,23 +967,39 @@
     <div class="row">
       <ul class="notes">
         <li>
-          <span class="tag rec">decided</span><b>Phone mode switch:</b> B, the full-width bottom
-          bar.
+          <span class="tag rec">decided</span><b>Task detail lives in the right sidebar</b> in both
+          modes (option A).
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>The right sidebar never floats.</b> The pin option
+          goes away: it is always docked. Tapping a rail tab opens that view; tapping the open
+          view's tab closes the sidebar.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Phone mode switch:</b> the full-width bottom bar.
+          It hides while the on-screen keyboard is up.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>"Needs you" on phone</b> is a filter chip, not a
+          lane; lanes that hold such a task get a dot.
         </li>
         <li>
           <span class="tag rec">decided</span><b>Left sidebar and Dock are hidden in Tasks mode.</b>
         </li>
         <li>
-          <span class="tag rec">decided</span><b>Approve from the sidebar stays,</b> behind a
-          confirm step like the one for deleting a session.
+          <span class="tag rec">decided</span><b>Approve from the sidebar</b> sits behind a confirm
+          step, like deleting a session.
         </li>
         <li>
           <span class="tag rec">decided</span><b>Ad-hoc sessions stay as they are:</b> one collapsed
           strip under the board.
         </li>
+        <li><span class="tag rec">decided</span><b>Needs-you only</b> on the mode switch.</li>
+      </ul>
+      <ul class="notes">
         <li>
-          <span class="tag rec">decided</span><b>Needs-you only</b> on the mode switch. Running and
-          finished tasks never light it.
+          <span class="tag open">open</span><b>The sidebar on the fold and on tablets:</b> section
+          7.
         </li>
         <li>
           <b>Cross-links:</b> task → "Open session in Workspace" → "← #7" chip back to the same
@@ -986,29 +1011,9 @@
         </li>
         <li><b>The bell</b> is unchanged here; its rework is #2985.</li>
       </ul>
-      <ul class="notes">
-        <li>
-          <span class="tag open">open</span><b>Where task detail lives:</b> section 6, options A, B,
-          C.
-        </li>
-        <li>
-          <span class="tag open">open</span><b>"Needs you" on phone:</b> frame 3a draws it as a
-          first lane. Proposed instead: keep the lanes pure (status only) and make "Needs you 3" a
-          filter chip above the lane strip; lanes holding such a task get a dot, and the board opens
-          on the first one. Attention first, kanban logic intact.
-        </li>
-        <li>
-          <span class="tag open">open</span><b>Mode bar while the keyboard is up:</b> hidden (as
-          drawn in section 4), or kept at the cost of 58px?
-        </li>
-        <li>
-          <span class="tag open">open</span><b>Fold, task open:</b> the right rail. Moot under
-          option A, where the sidebar is the detail.
-        </li>
-      </ul>
     </div>
 
-    <h2>6 · Where task detail lives: three options <span class="tag open">open</span></h2>
+    <h2>6 · Where task detail lives: three options <span class="tag rec">decided: A</span></h2>
     <p class="lede">
       The earlier task redesign deliberately merged every task detail into the right sidebar, to
       remove redundancy. Sections 1 to 3 above (option B here) split it again: a panel in Tasks mode
@@ -1310,6 +1315,164 @@
       </li>
       <li>
         <b>Phone is the same in all three:</b> no sidebar there, so the detail is a full screen.
+      </li>
+    </ul>
+    <h2>
+      7 · The sidebar on the fold: is there something better than docking?
+      <span class="tag open">open</span>
+    </h2>
+    <p class="lede">
+      On desktop the sidebar is always docked. The fold has 840px, so the question is what an open
+      sidebar does to the terminal in Workspace mode. Three ways, none of them the old
+      dim-and-dismiss drawer.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br /><br />Looking at
+                the test file.<br />Found it: a race on the mock clock.<br />Running the suite…<br />✓
+                12 passed<br /><br />&gt; ▯
+              </div>
+              <div class="kb">
+                <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+                ><span>↓</span><span>🎤</span><span>⋮</span>
+              </div>
+            </div>
+            <div class="rs" style="width: 396px">
+              <h3 style="margin: 0 0 10px; font-size: 16px">← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="box"><b>Details</b> · aurora-web · #7 · PR #14</div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag rec">recommended</span><b>1 · Docked, half and half.</b> The same model
+          as desktop: the sidebar takes the right half, the workspace the left. The terminal narrows
+          to about 46 columns while the sidebar is open (what a phone shows today) and returns to
+          full width when it closes.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body" style="position: relative">
+            <div class="main">
+              <div class="term" style="font-size: 14px">
+                <b>claude · login fix</b><br />&gt; fix the flaky login test<br /><br />Looking at
+                the test file.<br />Found it: a race on the mock clock.<br />Running the suite…<br />✓
+                12 passed<br /><br />&gt; ▯
+              </div>
+              <div class="kb">
+                <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+                ><span>↓</span><span>🎤</span><span>⋮</span>
+              </div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+            <div
+              class="rs"
+              style="
+                width: 396px;
+                position: absolute;
+                right: 48px;
+                top: 0;
+                bottom: 0;
+                box-shadow: -8px 0 24px #000a;
+              "
+            >
+              <h3 style="margin: 0 0 10px; font-size: 16px">← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="box"><b>Details</b> · aurora-web · #7 · PR #14</div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>2 · Laid over the workspace, but not dismissable by accident.</b> The sidebar covers
+          the right half without dimming; only its rail tab closes it. The terminal keeps its full
+          width and never reflows, but its right half is hidden while you read.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev fold">
+          <div class="tb">
+            <span class="ic"></span
+            ><span class="seg"
+              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
+            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
+          </div>
+          <div class="body">
+            <div class="rs" style="flex: 1; width: auto; border: 0">
+              <h3 style="margin: 0 0 10px; font-size: 16px">← Tasks · #7 Fix focus loss</h3>
+              <div class="box"><b>Reviewing</b> · Next: needs your approval.</div>
+              <div style="margin-bottom: 12px">
+                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              </div>
+              <div class="box"><b>Review</b> · verdict approved · round 2</div>
+              <div class="box"><b>Details</b> · aurora-web · #7 · PR #14</div>
+              <div class="box"><b>Timeline</b> · claimed · PR opened…</div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>3 · Full width.</b> An open sidebar view replaces the workspace entirely, as on a
+          phone. Most room for the task; the terminal is gone while it is open, which wastes what
+          the fold is for.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why 1.</b> One behaviour on desktop and fold, the terminal and the task visible together,
+        and no layer that can be dismissed by accident. Its cost is that the terminal reflows each
+        time the sidebar opens or closes, exactly as it does on desktop when you toggle the pinned
+        sidebar.
+      </li>
+      <li>
+        <b>A rule for narrower tablets.</b> Docking needs room. Where the workspace would be left
+        with less than about 400px (windows narrower than roughly 800px), the sidebar opens full
+        width as in 3 instead. So there are two behaviours in total, docked or full width, and
+        floating is gone everywhere.
+      </li>
+      <li>
+        <b>In Tasks mode</b> there is no terminal to reflow, so 1 simply shows two lanes beside the
+        task (section 6, option A).
       </li>
     </ul>
   </body>
