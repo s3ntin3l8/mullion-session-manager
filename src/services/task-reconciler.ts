@@ -113,7 +113,8 @@ import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
 import {
   CLEARED_MERGE_ERROR,
   mergeRecordedSet,
-  hasForeignOpenThread,
+  describeBlockingThreads,
+  type MergeBlockedThreads,
   recordMergeError,
 } from "./task-merge-human.js";
 import { reseedTaskIfSessionExited, recheckAdoptedSeeds } from "./task-reseed.js";
@@ -1985,7 +1986,7 @@ async function attemptMerge(
             : reviewDecision === "REVIEW_REQUIRED"
               ? "Waiting on a required approving review"
               : "Required checks are red or still pending";
-        let blockedByThreads = false;
+        let blockedDetail: MergeBlockedThreads | null = null;
         if (reviewDecision === null || reviewDecision === "APPROVED") {
           // Self-heals the D1 deadlock — but ONLY when this row's own last
           // ingested verdict is "clean". Independent review, round 2: an
@@ -2024,20 +2025,13 @@ async function attemptMerge(
                 repoRef.repo,
                 task.prNumber,
               ));
-            if (threadsResult.truncated) {
-              message = "Blocked on the PR, but its review threads couldn't be fully enumerated";
-            } else {
-              const unresolvedCount = threadsResult.threads.filter((t) => !t.isResolved).length;
-              if (unresolvedCount > 0) {
-                message = `Blocked on ${unresolvedCount} unresolved review conversation${unresolvedCount === 1 ? "" : "s"}`;
-                // Only threads Mullion did not open need a human: its own are
-                // resolved above when the verdict allows, or belong to the
-                // review loop.
-                blockedByThreads = await hasForeignOpenThread(threadsResult, (viewer) =>
-                  resolveMullionReviewLogins(app, repoRef, viewer),
-                );
-              }
-            }
+            // Only threads Mullion did not open need a human: its own are
+            // resolved above when the verdict allows, or belong to the
+            // review loop.
+            const blocking = await describeBlockingThreads(threadsResult, (viewer) =>
+              resolveMullionReviewLogins(app, repoRef, viewer),
+            );
+            if (blocking) ({ message, detail: blockedDetail } = blocking);
           } catch (err) {
             app.log.warn(
               { err, taskId: task.id, prNumber: task.prNumber },
@@ -2045,7 +2039,13 @@ async function attemptMerge(
             );
           }
         }
-        recordMergeError(app, task.id, message, blockedByThreads ? "blocked-threads" : undefined);
+        recordMergeError(
+          app,
+          task.id,
+          message,
+          blockedDetail ? "blocked-threads" : undefined,
+          blockedDetail,
+        );
         return;
       }
       case "computing": {

@@ -58,3 +58,27 @@ describe("reviewPhaseText", () => {
     );
   });
 });
+
+describe("merge blocked-thread detail", () => {
+  it("falls back to null on absent, malformed or empty detail", async () => {
+    const { parseMergeBlockedThreads } = await import("./needsHuman.js");
+    expect(parseMergeBlockedThreads(null)).toBeNull();
+    expect(parseMergeBlockedThreads("not json")).toBeNull();
+    expect(parseMergeBlockedThreads('{"total":1,"threads":[]}')).toBeNull();
+  });
+
+  it("describes an alert thread and rejects non-GitHub links", async () => {
+    const { blockedThreadText, safeGithubUrl } = await import("./needsHuman.js");
+    expect(
+      blockedThreadText({
+        author: "github-advanced-security",
+        location: "a.ts:1",
+        excerpt: "Path injection",
+        url: null,
+        alert: { number: 5, url: null },
+      }),
+    ).toBe("github-advanced-security at a.ts:1: Path injection (code-scanning alert #5)");
+    expect(safeGithubUrl("javascript:alert(1)")).toBeNull();
+    expect(safeGithubUrl("https://github.com/o/r")).toBe("https://github.com/o/r");
+  });
+});

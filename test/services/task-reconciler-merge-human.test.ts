@@ -244,6 +244,85 @@ describe("#2750 — merges that need a human", () => {
     await app.close();
   });
 
+  it("records the open thread detail for a code-scanning bot thread and a human thread", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+    mockFetchPullRequestReviewThreads.mockResolvedValue({
+      viewerLogin: "mullion-bot",
+      threads: [
+        {
+          id: "codeql",
+          isResolved: false,
+          comments: [
+            {
+              author: "github-advanced-security",
+              createdAt: "2026-08-20T10:00:00Z",
+              path: "src/services/fs-dirs.ts",
+              line: 52,
+              body: "## Uncontrolled data used in path expression\n\nmore\n[Show more details](https://github.com/o/r/security/code-scanning/520)",
+              url: "https://github.com/o/r/pull/1#discussion_r1",
+            },
+          ],
+        },
+        {
+          id: "human",
+          isResolved: false,
+          comments: [
+            {
+              author: "alice",
+              createdAt: "2026-08-20T10:00:00Z",
+              path: "b.ts",
+              line: null,
+              body: "Please rename this",
+            },
+          ],
+        },
+        thread("own", "mullion-bot", false),
+      ],
+      truncated: false,
+    });
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, id);
+    expect(row.needsHumanReason).toBe("blocked-threads");
+    const detail = JSON.parse(row.mergeBlockedThreads!);
+    expect(detail.total).toBe(2);
+    expect(detail.threads[0]).toEqual({
+      author: "github-advanced-security",
+      location: "src/services/fs-dirs.ts:52",
+      excerpt: "Uncontrolled data used in path expression",
+      url: "https://github.com/o/r/pull/1#discussion_r1",
+      alert: { number: 520, url: "https://github.com/o/r/security/code-scanning/520" },
+    });
+    expect(detail.threads[1]).toMatchObject({
+      author: "alice",
+      location: "b.ts",
+      excerpt: "Please rename this",
+      alert: null,
+    });
+    await app.close();
+  });
+
+  it("records no detail (generic message) when the threads were truncated", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));
+    mockFetchPullRequestReviewThreads.mockResolvedValue({
+      viewerLogin: "mullion-bot",
+      threads: [thread("codeql", "github-advanced-security", false)],
+      truncated: true,
+    });
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, id);
+    expect(row.mergeBlockedThreads).toBeNull();
+    expect(row.needsHumanReason).toBeNull();
+    await app.close();
+  });
+
   it("does not flag blocked-threads for Mullion's own unresolved thread", async () => {
     const app = await buildApp();
     const id = await createTask(app);

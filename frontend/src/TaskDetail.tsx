@@ -35,6 +35,7 @@ import {
   needsHumanText,
   reviewPhaseText,
 } from "./needsHuman.js";
+import { MergeBlockedThreadsDetail } from "./MergeBlockedThreadsDetail.js";
 import { describeTaskHost } from "./lib/hostBadge.js";
 import {
   HERMES_REVIEW_OPTION,
@@ -734,6 +735,9 @@ export function TaskDetail({
           data-testid="merge-needs-human"
         >
           {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
+          {task.needsHumanReason === "blocked-threads" && (
+            <MergeBlockedThreadsDetail raw={task.mergeBlockedThreads} />
+          )}
         </div>
       )}
 

@@ -965,7 +965,16 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   `task-reconciler.ts` hit `MAX_REBASE_ATTEMPTS` with the PR still dirty) and
   `blocked-threads` (the merge is blocked on unresolved conversations whose
   authors are not Mullion's reviewer logins, i.e. not what
-  `resolveMullionOwnThreadsIfClean` can resolve). A third, `ci-status-stalled`
+  `resolveMullionOwnThreadsIfClean` can resolve). It also records
+  `tasks.mergeBlockedThreads`, a JSON `MergeBlockedThreads`
+  (`task-merge-human.ts`): the foreign open threads (`foreignOpenThreads`),
+  summarised by `summarizeBlockedThreads` to at most three entries with
+  author, `path:line`, a one-line excerpt, the comment URL and, for a
+  code-scanning thread, the alert number and URL. `recordMergeError` rewrites it
+  on every call (null unless the reason is `blocked-threads` and the thread list
+  was complete), the clear helpers null it, and the frontend reads it only
+  while the reason is set (`MergeBlockedThreadsDetail`), so a missing detail
+  falls back to the generic text. A third, `ci-status-stalled`
   (#2904), is set when a non-Actions status stayed pending past
   `COVERAGE_STATUS_STALL_MS` on a green head and the coverage re-uploads ran
   out of budget — see "A stuck non-Actions status gets its coverage re-uploaded"

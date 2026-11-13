@@ -90,3 +90,46 @@ export function reviewPhaseText(
   }
   return null;
 }
+
+// The foreign review threads blocking a `blocked-threads` merge, as recorded
+// by the reconciler (`MergeBlockedThreads`, services/task-merge-human.ts).
+export interface BlockedThreadInfo {
+  author: string;
+  location: string | null;
+  excerpt: string;
+  url: string | null;
+  alert: { number: number | null; url: string | null } | null;
+}
+export interface MergeBlockedThreadsInfo {
+  total: number;
+  threads: BlockedThreadInfo[];
+}
+
+/** Parse `task.mergeBlockedThreads`; null (generic message) when absent or malformed. */
+export function parseMergeBlockedThreads(
+  raw: string | null | undefined,
+): MergeBlockedThreadsInfo | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as MergeBlockedThreadsInfo;
+    if (!v || !Array.isArray(v.threads) || v.threads.length === 0) return null;
+    return { total: Math.max(v.total || 0, v.threads.length), threads: v.threads };
+  } catch {
+    return null;
+  }
+}
+
+/** One thread as a sentence: "github-advanced-security at src/x.ts:52: Path injection (code-scanning alert #520)". */
+export function blockedThreadText(t: BlockedThreadInfo): string {
+  const where = t.location ? ` at ${t.location}` : "";
+  const what = t.excerpt ? `: ${t.excerpt}` : "";
+  const alert = t.alert
+    ? ` (code-scanning alert${t.alert.number != null ? ` #${t.alert.number}` : ""})`
+    : "";
+  return `${t.author}${where}${what}${alert}`;
+}
+
+/** Only GitHub https links are rendered as anchors. */
+export function safeGithubUrl(url: string | null | undefined): string | null {
+  return url && /^https:\/\/github\.com\//.test(url) ? url : null;
+}

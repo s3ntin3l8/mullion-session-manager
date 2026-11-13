@@ -77,6 +77,7 @@ export type MergeRecordedPatch = ReturnType<typeof mergeRecordedSet<{ archivedAt
 /** The `.set()` fields that clear a merge error and its merge-tied reason. */
 export const CLEARED_MERGE_ERROR = {
   mergeError: null,
+  mergeBlockedThreads: null,
   needsHumanReason: clearMergeNeedsHumanReason,
 };
 
@@ -85,7 +86,7 @@ export const CLEARED_MERGE_ERROR = {
 export function clearedFor(reason: string | null | undefined) {
   return {
     ...(reason === "review-post-failed"
-      ? { mergeError: null, needsHumanReason: null }
+      ? { mergeError: null, mergeBlockedThreads: null, needsHumanReason: null }
       : CLEARED_MERGE_ERROR),
     reviewPostPending: clearReviewPostFailedMarker,
   };
@@ -105,11 +106,16 @@ export function recordMergeError(
   taskId: number,
   message: string,
   needsHumanReason?: MergeNeedsHumanReason,
+  blockedThreads?: MergeBlockedThreads | null,
 ): void {
   app.db
     .update(tasks)
     .set({
       mergeError: message,
+      mergeBlockedThreads:
+        needsHumanReason === "blocked-threads" && blockedThreads
+          ? JSON.stringify(blockedThreads)
+          : null,
       needsHumanReason: needsHumanReason
         ? sql`CASE WHEN needs_human_reason IS NULL OR needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'ci-status-stalled') THEN ${needsHumanReason} ELSE needs_human_reason END`
         : clearMergeNeedsHumanReason,
@@ -118,19 +124,98 @@ export function recordMergeError(
     .run();
 }
 
+/** One foreign open review thread, as shown on the task. */
+export interface BlockedThread {
+  author: string;
+  /** `path:line` of the first comment, when it has a path. */
+  location: string | null;
+  /** First line of the first comment, markdown noise stripped, capped. */
+  excerpt: string;
+  /** The thread's first comment on GitHub. */
+  url: string | null;
+  /** Set when the thread is a code-scanning alert annotation. */
+  alert: { number: number | null; url: string | null } | null;
+}
+
+export interface MergeBlockedThreads {
+  /** How many foreign threads are open (may exceed `threads.length`). */
+  total: number;
+  threads: BlockedThread[];
+}
+
+const MAX_BLOCKED_THREADS = 3;
+const CODE_SCANNING_AUTHOR = "github-advanced-security";
+const ALERT_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/security\/code-scanning\/(\d+)/;
+
+function firstLine(body: string): string {
+  for (const raw of body.split("\n")) {
+    const line = raw
+      .replace(/^[\s#>*_-]+/, "")
+      .replace(/[*_`]+/g, "")
+      .trim();
+    if (line) return line.length > 140 ? `${line.slice(0, 139)}…` : line;
+  }
+  return "";
+}
+
 /**
- * Is any unresolved thread one Mullion did not open (a code-scanning bot, a
- * reviewer)? Classified by author, not by `isResolved` alone, because the
+ * The unresolved threads Mullion did not open (a code-scanning bot, a
+ * reviewer), classified by author rather than `isResolved` alone because the
  * thread snapshot predates Mullion's own resolve pass.
  */
-export async function hasForeignOpenThread(
+export async function foreignOpenThreads(
   result: PrReviewThreadsResult,
   resolveMullionLogins: (viewerLogin: string | null) => Promise<ReadonlySet<string>>,
-): Promise<boolean> {
+): Promise<PrReviewThreadsResult["threads"]> {
   const mullionLogins = await resolveMullionLogins(result.viewerLogin);
-  return result.threads.some(
+  return result.threads.filter(
     (t) =>
       !t.isResolved &&
       !(t.comments.length > 0 && t.comments.every((c) => mullionLogins.has(c.author ?? ""))),
   );
+}
+
+/** The merge-error message for a blocked PR's thread list, plus the capped
+ * summary of the foreign open threads (null when there are none). Null result:
+ * nothing unresolved, so the caller's generic message stands. */
+export async function describeBlockingThreads(
+  result: PrReviewThreadsResult,
+  resolveMullionLogins: (viewerLogin: string | null) => Promise<ReadonlySet<string>>,
+): Promise<{ message: string; detail: MergeBlockedThreads | null } | null> {
+  if (result.truncated) {
+    return {
+      message: "Blocked on the PR, but its review threads couldn't be fully enumerated",
+      detail: null,
+    };
+  }
+  const unresolved = result.threads.filter((t) => !t.isResolved).length;
+  if (unresolved === 0) return null;
+  const foreign = await foreignOpenThreads(result, resolveMullionLogins);
+  return {
+    message: `Blocked on ${unresolved} unresolved review conversation${unresolved === 1 ? "" : "s"}`,
+    detail: foreign.length > 0 ? summarizeBlockedThreads(foreign) : null,
+  };
+}
+
+/** Summarise foreign open threads for the task card (capped). */
+export function summarizeBlockedThreads(
+  threads: PrReviewThreadsResult["threads"],
+): MergeBlockedThreads {
+  return {
+    total: threads.length,
+    threads: threads.slice(0, MAX_BLOCKED_THREADS).map((t) => {
+      const c = t.comments[0];
+      const author = c?.author ?? "unknown";
+      const body = c?.body ?? "";
+      const m = ALERT_URL_RE.exec(body);
+      const isAlert = author.replace(/\[bot\]$/, "") === CODE_SCANNING_AUTHOR || m !== null;
+      return {
+        author,
+        location: c?.path ? (c.line != null ? `${c.path}:${c.line}` : c.path) : null,
+        excerpt: firstLine(body),
+        url: c?.url ?? null,
+        alert: isAlert ? { number: m ? Number(m[1]) : null, url: m ? m[0] : null } : null,
+      };
+    }),
+  };
 }

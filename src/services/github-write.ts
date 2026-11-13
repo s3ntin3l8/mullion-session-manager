@@ -1312,6 +1312,8 @@ export interface PrReviewThreadComment {
   path: string | null;
   line: number | null;
   body: string;
+  /** The comment's permalink on GitHub, when the fetch returned it. */
+  url?: string;
   /** State of the review this comment was posted as part of (APPROVED,
    * CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING), or null when GitHub
    * reports none — a reply in a thread belongs to its own review, so a human
@@ -1399,6 +1401,7 @@ export async function fetchPullRequestReviewThreads(
                 path: string | null;
                 line: number | null;
                 body: string;
+                url: string | null;
                 pullRequestReview: { state: PrReviewState } | null;
               }>;
             };
@@ -1425,6 +1428,7 @@ export async function fetchPullRequestReviewThreads(
                   path
                   line
                   body
+                  url
                   pullRequestReview { state }
                 }
               }
@@ -1465,6 +1469,7 @@ export async function fetchPullRequestReviewThreads(
         path: c.path,
         line: c.line,
         body: c.body,
+        ...(c.url ? { url: c.url } : {}),
         reviewState: c.pullRequestReview?.state ?? null,
       })),
     })),
