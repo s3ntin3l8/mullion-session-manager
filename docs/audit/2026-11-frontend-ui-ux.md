@@ -121,8 +121,9 @@ flow for the same job.
 
 **Product principle (from the owner, after the audit): Tasks is one of the two primary ways
 to use Mullion, and the other is the terminal and workspace.** Today it is not. Tasks is a
-board that is deliberately "a top-level destination, not a workspace view mode" (`App.tsx`, the comment above
-`KanbanBoardOverlay`), reached from a sidebar entry or the palette. On phone it lives inside
+board that is deliberately "a top-level destination, not a workspace view mode" (`App.tsx`,
+the comment above `KanbanBoardOverlay`), which today means a sidebar entry or the palette, not
+a mode of its own. On phone it lives inside
 the navigator's Tasks tab, and on tablet the task detail is a drawer over the workspace,
 since #2874 moved it out of the board. Findings 1 to 5 are largely symptoms of that
 mismatch: a primary mode is being served by a secondary surface.
