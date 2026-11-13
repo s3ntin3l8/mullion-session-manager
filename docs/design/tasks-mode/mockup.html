@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 1</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 2</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 1</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 2</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -838,19 +838,21 @@
             </div>
           </div>
           <div class="kb">
-            <span class="mode">Tasks <i class="dot">3</i></span
-            ><span>Esc</span><span>Tab</span><span>Ctrl</span><span>↑</span><span>↓</span
-            ><span>⋮</span>
+            <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+            ><span>↓</span><span>🎤</span><span>⋮</span>
+          </div>
+          <div class="bb">
+            <span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span>
           </div>
         </div>
         <figcaption>
-          <b>3c · Workspace mode.</b> The terminal and its key bar, as today. See section 4 for
-          where the mode switch goes here: this frame shows option C.
+          <b>3c · Workspace mode.</b> The terminal and its key bar, as today, with the mode bar
+          under it (option B, chosen; see section 4).
         </figcaption>
       </figure>
     </div>
 
-    <h2>4 · Phone: where the mode switch goes <span class="tag open">open</span></h2>
+    <h2>4 · Phone: where the mode switch goes <span class="tag rec">decided: B</span></h2>
     <p class="lede">
       A bottom bar is the natural place for a two-way switch on a phone, but in Workspace mode the
       bottom edge belongs to the terminal key bar. Three ways to resolve it. All frames show
@@ -893,10 +895,41 @@
           </div>
         </div>
         <figcaption>
-          <b>B · A bottom bar under the key bar.</b> The switch never moves and is always in thumb
-          reach. Costs: the terminal loses about 58px of height in Workspace mode, more painful with
-          the keyboard open (the bar could hide while the keyboard is up), and two stacked bars
-          invite mis-taps.
+          <span class="tag rec">chosen</span><b>B · A bottom bar under the key bar.</b> The switch
+          is full width, never moves and is always in thumb reach, the same bar in both modes. Costs
+          to design around: the terminal loses about 58px of height in Workspace mode, and two
+          stacked bars invite mis-taps, so the two need a clear visual gap or divider.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="ic"></span><span class="pill grow ell">● task #7 worker ▾</span
+            ><span class="ic"></span>
+          </div>
+          <div class="main"><div class="term" style="font-size: 14px">&gt; ▯</div></div>
+          <div class="kb">
+            <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+            ><span>↓</span><span>🎤</span><span>⋮</span>
+          </div>
+          <div
+            style="
+              height: 290px;
+              flex: none;
+              background: #2a2a2e;
+              display: grid;
+              place-items: center;
+              color: var(--dim);
+            "
+          >
+            on-screen keyboard
+          </div>
+        </div>
+        <figcaption>
+          <b>B, keyboard open.</b> The mode bar hides while the on-screen keyboard is up, so typing
+          keeps today's terminal height and the key bar stays directly above the keys. It returns
+          when the keyboard closes. <span class="tag open">open</span> Confirm this is acceptable:
+          you cannot switch mode mid-typing without closing the keyboard first.
         </figcaption>
       </figure>
       <figure>
@@ -913,11 +946,10 @@
           </div>
         </div>
         <figcaption>
-          <span class="tag rec">recommended</span><b>C · The key bar carries it.</b> In Tasks mode
-          the bottom bar of 3a; in Workspace mode the key bar's first slot is a "Tasks" key with the
-          needs-you count. Bottom-left in both modes, no extra row, no lost terminal height. Costs:
-          one or two keys move into the ⋮ overflow (⇧Tab and the mic here), and the switch looks
-          different in each mode.
+          <b>C · The key bar carries it.</b> In Tasks mode the bottom bar of 3a; in Workspace mode
+          the key bar's first slot is a "Tasks" key with the needs-you count. Bottom-left in both
+          modes, no extra row, no lost terminal height. Costs: one or two keys move into the ⋮
+          overflow (⇧Tab and the mic here), and the switch looks different in each mode.
         </figcaption>
       </figure>
     </div>
@@ -947,7 +979,10 @@
         <li><b>The bell</b> is unchanged here; its rework is #2985.</li>
       </ul>
       <ul class="notes">
-        <li><span class="tag open">open</span><b>Phone mode switch:</b> A, B or C above.</li>
+        <li>
+          <span class="tag rec">decided</span><b>Phone mode switch:</b> B, the full-width bottom
+          bar. Open detail: it hides while the on-screen keyboard is up.
+        </li>
         <li>
           <span class="tag open">open</span><b>Left sidebar and Dock in Tasks mode</b> on desktop:
           hidden (as drawn), or kept?
