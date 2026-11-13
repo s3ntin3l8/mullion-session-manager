@@ -136,9 +136,13 @@ The direction this implies, to be decided and specified in #2976 and #2977:
      navigation.
    - Phone: the list, then the detail as a pushed screen, with the system back gesture as
      the way back.
-3. **The right sidebar goes back to being workspace context** (Git, History, GitHub, Files,
-   Project). Tasks leaves it, which removes the second Tasks entry point and the second
-   task-detail surface (finding 4).
+3. **The right sidebar is the same in both modes: ambient context, not a mode of its own.**
+   It keeps a Tasks glance (the list, status, "needs you"), so task status stays visible
+   from Workspace, as it is in PRs. Opening a task from the glance goes to Tasks mode with
+   that task selected; the sidebar never renders a second task detail. This keeps one
+   task-detail surface and one Tasks entry per tier (finding 4). Its project follow ("Following
+   the active panel") follows the active pane in Workspace and the selected task's project in
+   Tasks, so Git, GitHub and Files show that task's branch, PR and files beside it.
 4. **Cross-links carry the user between modes and back.** A task opens its session or PR in
    Workspace; a session shows its task; "Back to Tasks" returns to the same task. This is the
    one part of the design that needs care, because the two modes share objects.
@@ -148,57 +152,13 @@ resolved by construction; 6 and 7 are unaffected. The point fixes #2973 and #297
 doing only as a cheap interim (#2973 is a few lines in the store), and should be dropped if the
 redesign lands soon.
 
-Open questions for the owner, in #2976: does the mode switch apply to desktop as well (this
-text assumes yes, so the model is the same on every tier), and what the unread and
-"needs you" signal looks like on the switch when the user is in Workspace mode.
+Decisions from the owner, after the audit:
 
----
-
-## Guardrails
-
-- **Tablet scenes in the visual check** (landed here): `tablet-workspace`,
-  `tablet-navigator`, `tablet-tasks-list`, `tablet-tasks-detail`, `tablet-tasks-reopen` and
-  `tablet-notifications`, each at the `tablet` and `fold` viewports, tagged `check` and
-  `audit`. The check report and `metrics.json` now show axe, overflow and cut-off controls
-  for the tablet tier on every UI pull request. Baselines for the scenes are a follow-up in
-  #2975, so they are not compared pixel-for-pixel yet.
-- **A store test per fixed defect**, starting with finding 1: reopening Tasks after each
-  close path shows the list (in #2973).
-- **A coarse-pointer target-size check** for the right sidebar header and rail (in #2974).
-- **A swipe test** that a drag starting inside scrollable content does not close the panel
-  (in #2974).
-
----
-
-## Evidence
-
-Captures are local and gitignored. To regenerate them, from the repo root (needs Docker):
-
-```bash
-make screenshots-audit AUDIT=2026-11-frontend-ui-ux
-```
-
-It writes `docs/audit/assets/2026-11-frontend-ui-ux/`: one PNG per scene, viewport and
-theme, and `metrics.json`. The tablet scenes are `tablet-*` in `visual/scenes.json`, at the
-`tablet` (820×1180) and `fold` (840×900) viewports defined at the top of that file.
-visual-kit version: `0.4.1` (`visual/Dockerfile`).
-
-The stuck-detail reproduction needs no capture: start `make demo`, put the app in a frame
-about 840px wide (or a window of that width), open the Tasks rail view, tap a task, tap
-the drawer's X, tap the Tasks rail icon again.
-
----
-
-## Deferred backlog
-
-| Issue | Finding        | Title                                                                                 |
-| ----- | -------------- | ------------------------------------------------------------------------------------- |
-| #2973 | 1              | fix(uiux): task detail sticks in the tablet sidebar after the drawer closes           |
-| #2974 | 2, 3           | fix(uiux): the floating right sidebar closes on accidental touch on tablet            |
-| #2975 | guardrail      | ci: capture the tablet tier in visual checks                                          |
-| #2976 | 4              | docs(uiux): make Tasks a primary mode beside Workspace, with one task-detail surface  |
-| #2977 | 5              | docs(uiux): decide docked versus floating sidebars on wide tablets and foldables      |
-| #2978 | 6              | fix(uiux): the empty workspace tells touch users to press ⌘K                          |
-| #2886 | 7              | fix(uiux): sidebar workspace rows, right-rail badge labels and heading order fail axe |
-| #2979 | 8, 9           | fix(uiux): tablet task detail header depends on :has() and truncates the title        |
-| #2980 | usability pass | docs(uiux): finish the phone and tablet usability walkthroughs on a device            |
+- The mode switch applies on desktop too; how it works there is a design question.
+- The bell stays universal. It should be sectioned (manual and tasks) and needs its own rework:
+  the owner does not use it much because it does not give them what they need. What it should
+  give is an open question for the design phase.
+- The Workspace/Tasks switch highlights only for **needs you**, never for in-flight or other
+  non-action statuses.
+- The layout is to be designed before anything is changed: flows, information architecture
+  and wireframes first, then implementation issues written from the design.
