@@ -1491,14 +1491,11 @@ button.sb-chip--label[aria-pressed="true"] {
   font-size: 0.75rem;
 }
 .sb-agent-grp {
-  margin: 10px 0 5px;
+  margin: 12px 0 6px;
   font-size: 0.65625rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--dim);
-}
-.sb-agent-grp:first-child {
-  margin-top: 0;
 }
 .sb-agent-fld {
   display: grid;
