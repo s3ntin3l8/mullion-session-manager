@@ -74,7 +74,7 @@ async function listWorkflowFiles(
   if (hostId === LOCAL_HOST_ID) {
     // No base ref -> no branch diff to inspect (`git diff HEAD` of a clean
     // tree is empty whatever the branch holds), so that is "unknown", not "none".
-    const base = getDefaultBaseRef(cwd);
+    const base = getDefaultBaseRef(cwd, { fresh: true });
     if (base === null) return "no-base";
     const stats = await getDiffStats(cwd, base, { fresh: true });
     return stats?.workflowFiles ?? "host";

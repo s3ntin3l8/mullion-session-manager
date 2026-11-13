@@ -155,7 +155,8 @@ export function registerGitRoutes(app: FastifyInstance): void {
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, stats: null };
       }
-      const autoBase = base === "AUTO" ? getDefaultBaseRef(resolvedCwd) : null;
+      const autoBase =
+        base === "AUTO" ? getDefaultBaseRef(resolvedCwd, { fresh: fresh === "1" }) : null;
       const effectiveBase = base === "AUTO" ? (autoBase ?? undefined) : base;
       const stats = await getDiffStats(resolvedCwd, effectiveBase, { fresh: fresh === "1" });
       // `AUTO` that resolves to nothing falls back to `git diff HEAD`, which is

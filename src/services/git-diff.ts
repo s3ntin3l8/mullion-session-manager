@@ -158,10 +158,11 @@ function baseRefTtl(ref: string | null): number {
   return ref === null ? BASE_REF_NEGATIVE_TTL_MS : BASE_REF_CACHE_TTL_MS;
 }
 
-export function getDefaultBaseRef(cwd: string): string | null {
+export function getDefaultBaseRef(cwd: string, opts: { fresh?: boolean } = {}): string | null {
   const hit = baseRefCache.get(cwd);
   if (hit) {
-    if (Date.now() - hit.ts < baseRefTtl(hit.ref)) return hit.ref;
+    // `fresh` (the push/workflow gates, `?fresh=1`) never reads a cached answer.
+    if (!opts.fresh && Date.now() - hit.ts < baseRefTtl(hit.ref)) return hit.ref;
     baseRefCache.delete(cwd);
   }
   const ref = resolveDefaultBaseRef(cwd);

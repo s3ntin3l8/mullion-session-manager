@@ -35,7 +35,6 @@ import {
   taskCommitTitlePath,
   taskRereviewRequestPath,
 } from "../../src/services/task-prompt.js";
-import { clearGitDiffStatsCacheForTests } from "../../src/services/git-diff.js";
 import { sessionBriefingPath } from "../../src/services/project-briefing.js";
 import { sessionWorkflowConventionsPath } from "../../src/services/workflow-conventions.js";
 
@@ -2087,8 +2086,6 @@ describe("internal routes (agent role, issue #26)", () => {
     // No origin/* ref yet: AUTO resolves to nothing.
     expect((await get("&base=AUTO&fresh=1")).json().baseResolved).toBe(false);
     git("update-ref", "refs/remotes/origin/main", "HEAD");
-    // The base ref is cached per cwd (a null briefly), so forget the "none yet" answer.
-    clearGitDiffStatsCacheForTests();
     expect((await get("&base=AUTO&fresh=1")).json().baseResolved).toBe(true);
     // An explicit base carries no flag: there was nothing to resolve.
     expect((await get("&base=main&fresh=1")).json()).not.toHaveProperty("baseResolved");

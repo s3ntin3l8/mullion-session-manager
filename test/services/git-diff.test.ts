@@ -290,8 +290,16 @@ describe("getDefaultBaseRef", () => {
       git(tmpDir, ["update-ref", "-d", "refs/remotes/origin/main"]);
       vi.setSystemTime(Date.now() + 20_000);
       expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
-      // ...until its TTL lapses.
-      vi.setSystemTime(Date.now() + 11_000);
+      // ...unless the caller asks for a fresh read (the push gates do).
+      expect(getDefaultBaseRef(tmpDir, { fresh: true })).toBeNull();
+      // That fresh read replaced the cached answer (now a null).
+      git(tmpDir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+      expect(getDefaultBaseRef(tmpDir)).toBeNull();
+      vi.setSystemTime(Date.now() + 4_000);
+      expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
+      git(tmpDir, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      // ...otherwise until its TTL lapses.
+      vi.setSystemTime(Date.now() + 31_000);
       expect(getDefaultBaseRef(tmpDir)).toBeNull();
       fs.rmSync(remoteDir, { recursive: true, force: true });
     } finally {
