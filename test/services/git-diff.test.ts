@@ -8,6 +8,7 @@ import {
   getDefaultBaseRef,
   getFileDiff,
   clearGitDiffStatsCacheForTests,
+  baseRefCacheSizeForTests,
 } from "../../src/services/git-diff.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
@@ -308,13 +309,13 @@ describe("getDefaultBaseRef", () => {
   });
 
   it("bounds the cache instead of keeping every cwd forever", () => {
-    // Non-repos resolve to null without spawning git; 300 distinct cwds must
-    // not grow the map past its cap (observable only as "does not throw and
-    // still answers"), and an evicted cwd simply re-resolves.
+    // Non-repos resolve to null without spawning git, but each is still cached.
+    // Without the cap the map would hold all 300.
     for (let i = 0; i < 300; i++) {
       expect(getDefaultBaseRef(path.join(tmpDir, `missing-${i}`))).toBeNull();
     }
-    expect(getDefaultBaseRef(path.join(tmpDir, "missing-0"))).toBeNull();
+    expect(baseRefCacheSizeForTests()).toBeLessThanOrEqual(256);
+    expect(baseRefCacheSizeForTests()).toBeGreaterThan(200);
   });
 
   afterEach(() => {

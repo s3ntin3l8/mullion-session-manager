@@ -439,6 +439,11 @@ export async function getFileDiff(
   return promise;
 }
 
+/** Exported for tests only: how many cwds the base-ref cache holds. */
+export function baseRefCacheSizeForTests(): number {
+  return baseRefCache.size;
+}
+
 /** Exported for tests only — production never needs to clear this. */
 export function clearGitDiffStatsCacheForTests(): void {
   cache.clear();
