@@ -852,6 +852,130 @@
         color: var(--muted);
         margin-bottom: 9px;
       }
+      /* Motion study (#polish): press feedback, material, depth. */
+      #fxbar {
+        position: fixed;
+        left: 50%;
+        bottom: 64px;
+        transform: translateX(-50%);
+        z-index: 9;
+        display: flex;
+        gap: 6px;
+        padding: 6px;
+        border-radius: 12px;
+        background: #26210fee;
+        border: 1px solid #5a4a1c;
+      }
+      #fxbar button {
+        min-height: 40px;
+        padding: 0 12px;
+        border-radius: 8px;
+        color: var(--y);
+        font-size: 13px;
+      }
+      #fxbar button.on {
+        background: var(--y);
+        color: #111;
+        font-weight: 600;
+      }
+      /* Feedback starts on touch-down, not on release. */
+      .polish .rail button,
+      .polish .card,
+      .polish .tile,
+      .polish .srow,
+      .polish .drow,
+      .polish .opt,
+      .polish .snew,
+      .polish .ph button,
+      .polish .btn {
+        transition:
+          transform 110ms ease-out,
+          background-color 160ms ease-out,
+          border-color 160ms ease-out,
+          box-shadow 160ms ease-out;
+      }
+      .polish .rail button:active,
+      .polish .tile:active,
+      .polish .ph button:active {
+        transform: scale(0.92);
+      }
+      .polish .card:active,
+      .polish .srow:active,
+      .polish .drow:active,
+      .polish .opt:active,
+      .polish .snew:active {
+        transform: scale(0.98);
+        background-color: #26262a;
+      }
+      /* The selected rail entry's bar grows in instead of appearing. */
+      .polish .rail button::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        width: 3px;
+        height: 0;
+        border-radius: 0 3px 3px 0;
+        background: var(--g);
+        transform: translateY(-50%);
+        transition: height 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .polish #rrail button::before {
+        left: auto;
+        right: 0;
+        border-radius: 3px 0 0 3px;
+      }
+      .polish .rail button.on,
+      .polish .rail button.onr {
+        box-shadow: none;
+      }
+      .polish .rail button.on::before,
+      .polish .rail button.onr::before {
+        height: 26px;
+      }
+      .polish .rail button.wsp::before {
+        display: none;
+      }
+      /* A sheet is a translucent layer over the half it covers, with a soft edge of light. */
+      .polish #sheet {
+        background: rgba(28, 28, 30, 0.74);
+        -webkit-backdrop-filter: blur(22px) saturate(160%);
+        backdrop-filter: blur(22px) saturate(160%);
+        box-shadow: 0 0 48px rgba(0, 0, 0, 0.55);
+        will-change: transform;
+        touch-action: pan-y;
+      }
+      .polish #sheet.right {
+        border-left: 1px solid rgba(255, 255, 255, 0.09);
+      }
+      .polish #sheet.left {
+        border-right: 1px solid rgba(255, 255, 255, 0.09);
+      }
+      .polish #sheet .sh {
+        cursor: grab;
+      }
+      /* Selection eases in. */
+      .polish .card.sel {
+        box-shadow:
+          0 0 0 1px var(--g),
+          0 6px 20px rgba(94, 194, 122, 0.14);
+      }
+      .polish .sw,
+      .polish .sw::after {
+        transition: all 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      /* Content fades under the board's filter row instead of meeting a hard line. */
+      .polish #board {
+        -webkit-mask-image: linear-gradient(#0000, #000 14px);
+        mask-image: linear-gradient(#0000, #000 14px);
+      }
+      @media (prefers-reduced-transparency: reduce) {
+        .polish #sheet {
+          background: var(--chrome);
+          -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+        }
+      }
       #menu {
         display: none;
         position: fixed;
@@ -1261,7 +1385,7 @@
           `<div class="tabs"><button data-tab="new" class="${addTab === "new" ? "on" : ""}">New session</button><button data-tab="open" class="${addTab === "open" ? "on" : ""}">Open existing</button></div>` +
           (addTab === "new" ? fresh : existing);
         sheet.className = side;
-        sheet.style.display = "block";
+        showSheet();
       }
       function wsSheet() {
         sheet.innerHTML =
@@ -1281,10 +1405,109 @@
           ).join("") +
           `<button class="opt" data-put="noop|"><span>＋ New workspace</span></button>`;
         sheet.className = "left";
-        sheet.style.display = "block";
+        showSheet();
       }
+      // ---- Motion study (#polish). Off by default, so the wireframe frames stay plain. ----
+      const fx = {
+        on: false,
+        slow: 1,
+        reduce: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      };
+      // A critically damped spring on translateX. It always starts from where the element is
+      // now and from its current speed, so it can be interrupted or reversed at any moment.
+      function springX(el, to, v0, done) {
+        cancelAnimationFrame(el._raf);
+        let x = el._x ?? 0;
+        let v = v0 ?? el._v ?? 0;
+        let last = performance.now();
+        const k = ((2 * Math.PI) / 0.3) ** 2;
+        const c = 2 * Math.sqrt(k);
+        const step = (now) => {
+          const dt = Math.min(0.032, (now - last) / 1000) / fx.slow;
+          last = now;
+          v += (-k * (x - to) - c * v) * dt;
+          x += v * dt;
+          if (Math.abs(x - to) < 0.5 && Math.abs(v) < 8) {
+            x = to;
+            v = 0;
+          }
+          el._x = x;
+          el._v = v;
+          el.style.transform = x ? `translateX(${x}px)` : "";
+          if (x === to) return done && done();
+          el._raf = requestAnimationFrame(step);
+        };
+        el._raf = requestAnimationFrame(step);
+      }
+      const sheetOut = () => (sheet.className === "left" ? -1 : 1) * (sheet.offsetWidth + 40);
+      function showSheet() {
+        const wasOpen = sheet.style.display === "block" && !sheet._closing;
+        sheet.style.display = "block";
+        sheet._closing = false;
+        if (!fx.on || wasOpen) return;
+        if (fx.reduce) return void sheet.animate([{ opacity: 0 }, { opacity: 1 }], 150);
+        // Enters from the rail it belongs to.
+        sheet._x = sheet._x || sheetOut();
+        springX(sheet, 0);
+      }
+      function hideSheet(v0) {
+        if (sheet.style.display !== "block") return;
+        const gone = () => {
+          sheet.style.display = "none";
+          sheet.style.transform = "";
+          sheet._x = 0;
+          sheet._closing = false;
+        };
+        if (!fx.on || fx.reduce) return gone();
+        // Leaves the way it came.
+        sheet._closing = true;
+        springX(sheet, sheetOut(), v0, gone);
+      }
+      // The sheet follows the finger and can be thrown back to its rail.
+      let drag = null;
+      sheet.addEventListener("pointerdown", (e) => {
+        if (!fx.on || !e.target.closest(".sh") || e.target.closest("button")) return;
+        sheet.setPointerCapture(e.pointerId);
+        cancelAnimationFrame(sheet._raf);
+        drag = { x0: e.clientX - (sheet._x || 0), pts: [[e.clientX, e.timeStamp]] };
+      });
+      sheet.addEventListener("pointermove", (e) => {
+        if (!drag) return;
+        const dir = sheet.className === "left" ? -1 : 1;
+        let x = e.clientX - drag.x0;
+        // Towards its rail it tracks 1:1; the other way it resists.
+        if (x * dir < 0) x = (x * 0.55 * 300) / (300 + 0.55 * Math.abs(x));
+        sheet._x = x;
+        sheet.style.transform = `translateX(${x}px)`;
+        drag.pts.push([e.clientX, e.timeStamp]);
+        if (drag.pts.length > 5) drag.pts.shift();
+      });
+      const endDrag = (e) => {
+        if (!drag) return;
+        const [a, b] = [drag.pts[0], drag.pts[drag.pts.length - 1]];
+        // A finger that paused before lifting has no speed left to hand over.
+        const still = e.timeStamp - b[1] > 80;
+        const v = !still && b[1] > a[1] ? ((b[0] - a[0]) / (b[1] - a[1])) * 1000 : 0;
+        drag = null;
+        const dir = sheet.className === "left" ? -1 : 1;
+        // Decide from where the throw is heading, not from where the finger stopped.
+        const projected = sheet._x + (((v / 1000) * 0.998) / (1 - 0.998)) * 0.25;
+        if (projected * dir > sheet.offsetWidth / 2) hideSheet(v);
+        else springX(sheet, 0, v);
+      };
+      sheet.addEventListener("pointerup", endDrag);
+      sheet.addEventListener("pointercancel", endDrag);
+      const ease = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+      const play = (el, frames, ms) =>
+        fx.on && el.animate(frames, { duration: (fx.reduce ? 120 : ms) * fx.slow, easing: ease });
+      let prev = {};
+
       function render() {
-        sheet.style.display = "none";
+        hideSheet();
+        // Before the layout changes: where every card is now.
+        const before = new Map(
+          fx.on && !fx.reduce ? $$(".card").map((c) => [c, c.getBoundingClientRect()]) : [],
+        );
         const open = !!state.view;
         const stacked = state.stack === "always" || (state.stack === "open" && open);
         document.body.className =
@@ -1292,7 +1515,8 @@
           (state.rails ? " rails" : "") +
           (open ? " open" : "") +
           (stacked ? " stacked" : "") +
-          (state.mode === "ws" && !open && state.right ? " split" : "");
+          (state.mode === "ws" && !open && state.right ? " split" : "") +
+          (fx.on ? " polish" : "");
         $("#lsess").innerHTML = SESS.filter((x) => !onRight(x[0]))
           .map(sessBtn)
           .join("");
@@ -1328,6 +1552,60 @@
         );
         $("#side").innerHTML = open ? sideHtml() : "";
         $("#side").className = state.view || "";
+        if (fx.on) {
+          // Cards travel to their new place when the board changes shape.
+          for (const [c, a] of before) {
+            const b = c.getBoundingClientRect();
+            if (!a.width || !b.width) {
+              if (b.width) play(c, [{ opacity: 0 }, { opacity: 1 }], 260);
+              continue;
+            }
+            const dx = a.left - b.left;
+            const dy = a.top - b.top;
+            if (dx || dy || a.width !== b.width)
+              play(
+                c,
+                [
+                  {
+                    transform: `translate(${dx}px, ${dy}px) scaleX(${a.width / b.width})`,
+                    transformOrigin: "0 0",
+                  },
+                  { transform: "none", transformOrigin: "0 0" },
+                ],
+                420,
+              );
+          }
+          const view = state.view + "|" + (state.task ? state.task[0] : "");
+          // The half itself snaps (a terminal must not re-flow every frame); its content arrives.
+          if (open && view !== prev.view)
+            play(
+              $("#side"),
+              [
+                { opacity: 0, transform: "translateY(8px) scale(0.985)" },
+                { opacity: 1, transform: "none" },
+              ],
+              260,
+            );
+          if (state.mode !== prev.mode && prev.mode)
+            play(
+              $("#main"),
+              [
+                { opacity: 0, transform: "scale(0.985)" },
+                { opacity: 1, transform: "none" },
+              ],
+              240,
+            );
+          if (state.right && state.right !== prev.right && !open)
+            play(
+              $("#pane2"),
+              [
+                { opacity: 0, transform: "translateX(16px)" },
+                { opacity: 1, transform: "none" },
+              ],
+              260,
+            );
+          prev = { view, mode: state.mode, right: state.right };
+        }
         // Keep the tapped card in view when the layout changes under it.
         const sel = $(".card.sel");
         if (sel) {
@@ -1410,7 +1688,7 @@
             `<div class="mh">Recent</div>` +
             row("var(--dim)", "Login page", "localhost:5173/login", "");
           sheet.className = "right";
-          sheet.style.display = "block";
+          showSheet();
           return;
         } else if (t.dataset.goto) {
           browserUrl = t.dataset.goto;
@@ -1430,7 +1708,7 @@
               .map((x) => `<button class="opt" data-put="noop|"><span>${x}</span></button>`)
               .join("");
           sheet.className = "right";
-          sheet.style.display = "block";
+          showSheet();
           return;
         } else if (t.dataset.agent) {
           // Selecting an agent shows its options; nothing launches until "Launch".
@@ -1457,7 +1735,7 @@
           chip.querySelector("i").style.cssText = `border-color:${c};color:${c}`;
           chip.querySelector("span").textContent = n;
           $$(".gdots b", chip).forEach((b, i) => b.classList.toggle("cur", WSPS[i][1] === c));
-          sheet.style.display = "none";
+          hideSheet();
           closeMenu();
           return;
         } else if (t.dataset.new !== undefined) {
@@ -1546,6 +1824,24 @@
       render();
       after();
       // #size: show the viewport this device reports, to check real foldables against the design.
+      if (flag("polish")) {
+        fx.on = true;
+        const bar = document.createElement("div");
+        bar.id = "fxbar";
+        bar.innerHTML = `<button data-fx="on" class="on">Motion on</button><button data-fx="slow">Slow ×5</button>`;
+        document.body.append(bar);
+        bar.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const b = e.target.closest("button");
+          if (!b) return;
+          if (b.dataset.fx === "on") fx.on = !fx.on;
+          else fx.slow = fx.slow === 1 ? 5 : 1;
+          b.classList.toggle("on", b.dataset.fx === "on" ? fx.on : fx.slow !== 1);
+          b.textContent = b.dataset.fx === "on" ? (fx.on ? "Motion on" : "Motion off") : "Slow ×5";
+          render();
+        });
+        render();
+      }
       if (flag("size")) {
         const s = document.createElement("div");
         s.style.cssText =

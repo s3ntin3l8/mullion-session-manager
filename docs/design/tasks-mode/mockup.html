@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 21</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 22</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 21</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 22</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -2761,6 +2761,52 @@
       <li>
         The desktop form of the touch sheets (launcher, workspace list, quick pick): popovers.
       </li>
+    </ul>
+    <h2>10 · Visual upgrade: motion and material <span class="tag open">study</span></h2>
+    <p class="lede">
+      The current visual language stays the baseline. The upgrade is how things move and how layers
+      sit on each other, applied to the whole app, not only to the new shell. To feel it, open
+      <a href="prototype.html#polish" style="color: var(--g)">prototype.html#polish</a> on the
+      device: the bar at the bottom switches the motion off for comparison and slows it down five
+      times for inspection.
+    </p>
+    <ul class="notes" style="max-width: 860px">
+      <li>
+        <b>Feedback on touch-down.</b> Every control answers the moment it is pressed (a small scale
+        and tint), not on release.
+      </li>
+      <li>
+        <b>Springs, not fixed animations, for anything you can touch.</b> A sheet follows the
+        finger, can be thrown back to its rail, and can be caught and reversed mid-way. One house
+        spring, no bounce; bounce only after a throw.
+      </li>
+      <li>
+        <b>Things leave the way they came.</b> A sheet enters from the rail it belongs to and
+        returns there.
+      </li>
+      <li>
+        <b>Continuity when the layout changes.</b> When the board goes from lanes to stacked, each
+        card travels to its new place instead of jumping.
+      </li>
+      <li>
+        <b>Never animate a terminal's size.</b> A half opens at once; only its content fades and
+        settles in. Animating the width would re-flow the terminal on every frame.
+      </li>
+      <li>
+        <b>Material for layers above content.</b> Sheets are translucent with a blur and a soft edge
+        of light; structural chrome (rails, sidebars) stays solid.
+      </li>
+      <li><b>Soft edges, not hard lines,</b> where content scrolls under a header.</li>
+      <li>
+        <b>Settings respected:</b> reduced motion turns travel into short fades; reduced
+        transparency makes sheets solid.
+      </li>
+      <li>
+        <b>What this needs in the app:</b> motion tokens (the app has colour tokens but writes
+        durations per component today), one spring helper, and a pass over the existing surfaces
+        (sidebar views, modals, menus, the board, notifications) as well as the new ones.
+      </li>
+      <li><b>Not shown in the study:</b> haptics, sound, the light theme, and real icons.</li>
     </ul>
   </body>
 </html>
