@@ -96,7 +96,7 @@ describe("installWindowsHideDefault", () => {
   it("is a no-op off Windows", () => {
     const { cp, seen } = fakeChildProcess();
     expect(installWindowsHideDefault("linux", cp)).toBe(false);
-    cp.spawn("git", ["status"]);
+    cp.spawn("tool", ["status"]);
     expect(seen[0].options).toBeUndefined();
   });
 
@@ -104,9 +104,9 @@ describe("installWindowsHideDefault", () => {
     const { cp, seen } = fakeChildProcess();
     expect(installWindowsHideDefault("win32", cp)).toBe(true);
     expect(installWindowsHideDefault("win32", cp)).toBe(false);
-    cp.spawn("git", ["status"]);
-    cp.spawnSync("git", ["status"], { cwd: "x" });
-    cp.execFileSync("git", ["status"]);
+    cp.spawn("tool", ["status"]);
+    cp.spawnSync("tool", ["status"], { cwd: "x" });
+    cp.execFileSync("tool", ["status"]);
     cp.exec("dir", () => {});
     cp.execSync("dir");
     for (const call of seen) expect(call.options).toMatchObject({ windowsHide: true });
