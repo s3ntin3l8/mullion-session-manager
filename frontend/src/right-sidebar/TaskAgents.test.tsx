@@ -79,11 +79,30 @@ describe("TaskAgents", () => {
     render(<TaskAgents task={task({})} />);
     await user.click(screen.getByRole("button", { name: "Edit" }));
     await screen.findAllByRole("option", { name: "Claude Code" });
-    const [agent, review] = screen.getAllByRole("combobox");
+    const agent = screen.getByRole("combobox", { name: "Worker agent" });
+    const review = screen.getByRole("combobox", { name: "Review agent" });
     await user.selectOptions(agent, "claude");
     expect(updateTask).toHaveBeenCalledWith(1, { agent: "claude" });
     await user.selectOptions(review, "none");
     expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
+  });
+
+  it("groups the editor into Worker and Reviewer and hides the summary rows", async () => {
+    const user = userEvent.setup();
+    render(<TaskAgents task={task({})} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("Worker")).toBeInTheDocument();
+    expect(screen.getByText("Reviewer")).toBeInTheDocument();
+    expect(screen.queryByText("(default)")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Reviewer model model" })).toBeInTheDocument();
+  });
+
+  it("says Hermes picks its own model instead of a reviewer model field", async () => {
+    const user = userEvent.setup();
+    render(<TaskAgents task={task({ reviewAgent: "hermes" })} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("Hermes picks its own model.")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Reviewer model model" })).toBeNull();
   });
 
   it("shows a failed save inline", async () => {

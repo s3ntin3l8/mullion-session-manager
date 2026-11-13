@@ -169,4 +169,19 @@ describe("resolvedDefaultModel", () => {
     expect(resolvedDefaultModel("codex", "small", null, settings)).toBeNull();
     expect(resolvedDefaultModel("codex", "implementer", null, null)).toBeNull();
   });
+
+  it("section limits the fields to one role, and the sidebar variant shortens labels", () => {
+    renderControls({ workerAgent: "claude", reviewerAgent: "codex", section: "reviewer" });
+    expect(screen.getByRole("combobox", { name: "Reviewer model model" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Model model" })).toBeNull();
+    cleanup();
+    renderControls({
+      workerAgent: "claude",
+      reviewerAgent: "codex",
+      section: "worker",
+      variant: "sidebar",
+    });
+    expect(screen.getByText("Small")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Reviewer model model" })).toBeNull();
+  });
 });

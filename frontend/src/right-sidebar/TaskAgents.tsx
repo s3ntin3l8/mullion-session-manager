@@ -13,7 +13,6 @@ import {
 import { useDashboardStore } from "../store/index.js";
 import { TaskModelControls } from "../TaskModelControls.js";
 import { ErrorText } from "../ui/ErrorText.js";
-import { BotIcon } from "../ui/icons.js";
 import { Dropdown } from "../ui/primitives.js";
 
 // The per-task agent and model overrides, back in the task sidebar after the
@@ -120,42 +119,44 @@ export function TaskAgents({ task }: { task: Task }) {
 
   return (
     <div className="sb-agents">
-      <dl className="sb-kv">
-        <dt>Worker</dt>
-        <dd>
-          {workerName}
-          {workerModel ? ` · ${workerModel}` : ""}{" "}
-          <SourceTag source={sourceOf(task.agent, task.issueAgent)} />
-          {editable && (
-            <button
-              type="button"
-              className="sb-link sb-agent-edit"
-              aria-expanded={unfolded}
-              onClick={() => setOpen((v) => !v)}
-            >
-              {unfolded ? "Done" : "Edit"}
-            </button>
-          )}
-        </dd>
-        <dt>Reviewer</dt>
-        <dd>
-          {reviewerName}
-          {reviewerModel ? ` · ${reviewerModel}` : ""}{" "}
-          <SourceTag source={sourceOf(task.reviewAgent, task.issueReviewAgent)} />
-        </dd>
-      </dl>
+      {!unfolded && (
+        <dl className="sb-kv">
+          <dt>Worker</dt>
+          <dd>
+            {workerName}
+            {workerModel ? ` · ${workerModel}` : ""}{" "}
+            <SourceTag source={sourceOf(task.agent, task.issueAgent)} />
+            {editable && (
+              <button
+                type="button"
+                className="sb-link sb-agent-edit"
+                aria-expanded={false}
+                onClick={() => setOpen(true)}
+              >
+                Edit
+              </button>
+            )}
+          </dd>
+          <dt>Reviewer</dt>
+          <dd>
+            {reviewerName}
+            {reviewerModel ? ` · ${reviewerModel}` : ""}{" "}
+            <SourceTag source={sourceOf(task.reviewAgent, task.issueReviewAgent)} />
+          </dd>
+        </dl>
+      )}
       {!editable && (
         <p className="sb-dim sb-agent-lock">
           Locked once a worker has claimed the task. Retry it, or move it to Backlog, to change.
         </p>
       )}
       {unfolded && (
-        <div className="task-detail-agents-config">
-          <div className="task-detail-agent-select">
-            <span className="task-detail-agent-label">
-              <BotIcon size={12} /> Agent:
-            </span>
+        <div className="sb-agent-editor">
+          <div className="sb-agent-grp">Worker</div>
+          <div className="sb-agent-fld">
+            <span className="sb-agent-lbl">Agent</span>
             <Dropdown
+              small
               ariaLabel="Worker agent"
               value={task.agent ?? UNSET_AGENT}
               onChange={(val) => save({ agent: val === UNSET_AGENT ? null : val })}
@@ -165,11 +166,20 @@ export function TaskAgents({ task }: { task: Task }) {
               )}
             />
           </div>
-          <div className="task-detail-agent-select">
-            <span className="task-detail-agent-label">
-              <BotIcon size={12} /> Review agent:
-            </span>
+          <TaskModelControls
+            task={task}
+            workerAgent={workerAgent}
+            reviewerAgent={reviewerAgent}
+            settings={settings}
+            onUpdate={(patch) => updateTask(task.id, patch)}
+            section="worker"
+            variant="sidebar"
+          />
+          <div className="sb-agent-grp">Reviewer</div>
+          <div className="sb-agent-fld">
+            <span className="sb-agent-lbl">Agent</span>
             <Dropdown
+              small
               ariaLabel="Review agent"
               value={task.reviewAgent ?? UNSET_AGENT}
               onChange={(val) => save({ reviewAgent: val === UNSET_AGENT ? null : val })}
@@ -184,14 +194,25 @@ export function TaskAgents({ task }: { task: Task }) {
               )}
             />
           </div>
-          <TaskModelControls
-            task={task}
-            workerAgent={workerAgent}
-            reviewerAgent={reviewerAgent}
-            settings={settings}
-            onUpdate={(patch) => updateTask(task.id, patch)}
-          />
+          {hermes ? (
+            <p className="sb-dim sb-agent-hint">Hermes picks its own model.</p>
+          ) : (
+            <TaskModelControls
+              task={task}
+              workerAgent={workerAgent}
+              reviewerAgent={reviewerAgent}
+              settings={settings}
+              onUpdate={(patch) => updateTask(task.id, patch)}
+              section="reviewer"
+              variant="sidebar"
+            />
+          )}
           {error && <ErrorText>{error}</ErrorText>}
+          <div className="sb-agent-done">
+            <button type="button" className="sb-link" aria-expanded onClick={() => setOpen(false)}>
+              Done
+            </button>
+          </div>
         </div>
       )}
     </div>
