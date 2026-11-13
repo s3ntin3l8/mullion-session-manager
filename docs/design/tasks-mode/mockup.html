@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 9</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 10</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 9</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 10</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -480,27 +480,84 @@
       (desktop 1280, fold 840×900, phone 390) and scaled down.
       <span class="tag rec">recommended</span> marks the option I would pick;
       <span class="tag open">open</span> marks a choice that needs your decision.
-      <b><a href="prototype.html" style="color: var(--g)">Open the tappable fold prototype</a></b>
-      to try the open questions (stacking, two rails) at real size on the device.
     </p>
 
-    <h2>1 · Desktop</h2>
+    <h2>1 · Desktop <span class="tag rec">approved</span></h2>
+    <p class="lede">
+      No top bar. A thin left rail is the global navigation: the mode switch, one chip naming the
+      current workspace, and New, the command box, the bell and settings at the bottom. The left
+      sidebar stays what it is today (workspace tree, projects, sessions, devices), open by default,
+      and only in Workspace mode. The right sidebar is the same in both modes and always docked.
+    </p>
     <div class="row">
       <figure>
         <div class="dev desktop">
-          <div class="tb">
-            <span class="ic"></span
-            ><span class="seg"
-              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
-            ><span class="grow"></span><span class="pill">Run command… ⌘K</span
-            ><span class="ic"></span><span class="ic"></span>
-          </div>
           <div class="body">
-            <div class="left">
-              <div class="hd">Workspaces</div>
-              Default<br /><br />
-              <div class="hd">Projects</div>
-              aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 2px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid var(--g);
+                    border-radius: 6px;
+                    color: var(--g);
+                  "
+                  >M</b
+                ><br />Mullion</span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">＋</b><br />New</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⌕</b><br />⌘K</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b><br /></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b><br
+              /></span>
+            </div>
+            <div class="left" style="width: 210px">
+              <div class="hd">Workspaces <span style="float: right">«</span></div>
+              ▾ <i style="color: #3b82f6">■</i> AI Usage<br />&nbsp;&nbsp;<b style="color: var(--g)"
+                >Mullion</b
+              ><br />&nbsp;&nbsp;Runway<br />▾
+              <i style="color: #a16207">■</i>
+              Homelab<br />&nbsp;&nbsp;Landing<br />&nbsp;&nbsp;Management<br />▸
+              <i style="color: #c2410c">■</i> Personal Finance<br />branchDAM<br />harmonize
+              <div class="hd" style="margin-top: 14px">Projects</div>
+              aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api<br />&nbsp;&nbsp;●
+              claude · orders
+              <i style="color: var(--y)">●</i>
+              <div class="hd" style="margin-top: 14px">Devices</div>
+              ▯ Pixel 9 emulator · running
             </div>
             <div class="main">
               <div class="grid2">
@@ -520,11 +577,7 @@
               <div class="card">
                 #9 Dark mode: low contrast<span class="fail">merge failed</span>
               </div>
-              <div class="card">
-                #12 Rework settings layout<span class="fail">budget used up</span>
-              </div>
               <div class="card">#10 Add rate limiting<small>running</small></div>
-              <div class="card">#11 Document cookie lifetime<small>ready</small></div>
             </div>
             <div class="rail">
               <span class="ic"></span><span class="ic"></span
@@ -534,49 +587,182 @@
           </div>
         </div>
         <figcaption>
-          <b>1a · Workspace mode.</b> The mode switch sits at the left of the toolbar; its Tasks
-          half counts only tasks that need you. The right sidebar is always docked, never floating.
-          A rail tab opens its view, and tapping the open view's tab closes the sidebar. Its Tasks
-          view is the same list and detail as in Tasks mode.
+          <b>1a · Workspace mode, sidebar open (the default).</b> The left sidebar is unchanged:
+          workspace groups and workspaces with their names, then projects, sessions and devices. The
+          rail beside it carries what the top bar carried, plus a chip for the current workspace.
+          "«" collapses the sidebar.
         </figcaption>
       </figure>
       <figure>
         <div class="dev desktop">
-          <div class="tb">
-            <span class="ic"></span
-            ><span class="seg"
-              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
-            ><span class="grow"></span><span class="pill">Run command… ⌘K</span
-            ><span class="ic"></span><span class="ic"></span>
-          </div>
           <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 2px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid var(--g);
+                    border-radius: 6px;
+                    color: var(--g);
+                  "
+                  >M</b
+                ><br />Mullion</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">◆</b><br />login</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">✳</b><br />#7</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">◇</b> <i style="color: var(--y)">●</i><br />orbit</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">▯</b><br />Pixel</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⋯</b><br />All 8</span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">＋</b><br />New</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⌕</b><br />⌘K</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b><br /></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b><br
+              /></span>
+            </div>
+            <div class="main">
+              <div class="grid2">
+                <div class="term">
+                  <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+                </div>
+                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
+              </div>
+            </div>
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>1b · Workspace mode, sidebar collapsed.</b> The workspace chip keeps your bearing: the
+          group's colour and the workspace's name, and a tap opens the full workspace list. Below it
+          the panes open in that workspace, a device screen among them; "All" opens the sidebar as a
+          picker. This is the fold's rail (frame 2c), so the fold is desktop with the sidebar
+          collapsed, not a separate design.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev desktop">
+          <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 2px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 4px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">＋</b><br />New</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⌕</b><br />⌘K</span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b><br /></span
+              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b><br
+              /></span>
+            </div>
             <div class="main">
               <div class="filters">
                 <span class="pill">All projects ▾</span
                 ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
-                ><span class="pill">Running 2</span><span class="grow"></span
-                ><span class="btn">+ New</span>
+                ><span class="grow"></span>
               </div>
               <div class="lanes">
                 <div class="lane">
                   <div class="hd">Backlog 6</div>
                   <div class="card">Add dark mode toggle<small>aurora-web</small></div>
                   <div class="card">Fix flaky reconciler test<small>aurora-web</small></div>
-                  <div class="card">Document webhook retry<small>aurora-web</small></div>
                 </div>
                 <div class="lane">
                   <div class="hd">Ready 2</div>
                   <div class="card">Speed up orders query<small>orbit-api</small></div>
-                  <div class="card">Document cookie lifetime<small>#11</small></div>
                 </div>
                 <div class="lane">
                   <div class="hd">In progress 2</div>
                   <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
-                  <div class="card">Orders list is slow<small>#3 · PR #5</small></div>
                 </div>
                 <div class="lane">
                   <div class="hd">Reviewing 2</div>
-                  <div class="card">Cache the session lookup<small>PR #17</small></div>
                   <div class="card sel">
                     Fix focus loss in the login form<span class="need">needs your approval</span>
                   </div>
@@ -584,28 +770,21 @@
                 <div class="lane">
                   <div class="hd">Done 1 · Failed 1</div>
                   <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
-                  <div class="card">
-                    Rework settings layout<span class="fail">budget used up</span>
-                  </div>
                 </div>
               </div>
               <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
             </div>
-            <div class="rs" style="width: 360px">
-              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
-              <div class="box">
-                <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
               </div>
-              <div style="margin-bottom: 10px">
-                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
               </div>
-              <div class="box"><b>Review</b> · verdict approved · round 2</div>
-              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
-              <span class="btn ghost">Open session in Workspace</span>
-              <div class="box" style="margin-top: 10px">
-                <b>Details</b> · aurora-web · issue #7 · PR #14
-              </div>
-              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
             </div>
             <div class="rail">
               <span class="ic"></span><span class="ic"></span
@@ -615,295 +794,120 @@
           </div>
         </div>
         <figcaption>
-          <b>1b · Tasks mode, task selected.</b> The board owns the screen; the left sidebar and the
-          Dock are hidden. Selecting a card shows the task in the right sidebar, the one task-detail
-          surface. Close the sidebar with its rail tab and the board takes the full width.
+          <b>1c · Tasks mode.</b> The rail holds only the mode switch and the bottom cluster. The
+          board shows every lane at this width, so it needs no status entries in the rail and no
+          panel. "New" here offers a task first.
         </figcaption>
       </figure>
     </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why the rail does not list the workspaces.</b> With around eleven workspaces in three
+        groups the list would fill the rail, and initials cannot tell Mullion from Management. The
+        names stay in the sidebar, where they are readable. The rail shows only the one you are in.
+      </li>
+      <li>
+        <b>One "New" button.</b> It opens a short menu: session, task, workspace, workspace group.
+        The first entry follows the mode (session in Workspace, task in Tasks). One plus in a 52px
+        rail instead of one per section.
+      </li>
+      <li>
+        <b>Workspace groups</b> stay in the sidebar as they are. When the sidebar is collapsed (and
+        on the fold) the workspace chip opens the same grouped list as a picker, and the chip takes
+        the group's colour.
+      </li>
+      <li>
+        <b>Devices.</b> A device screen is a pane, so an open one sits in the rail beside the
+        sessions. The Devices list (start, stop, open) lives in the panel, and in the "All" picker
+        when the panel is collapsed.
+      </li>
+      <li>
+        <b>Where the top bar's controls go.</b> Board toggle: the mode switch. Sidebar toggle: the
+        panel's "«". New, command box, bell, settings: the rail's bottom cluster. Theme: into
+        settings. The phone keeps its own bar.
+      </li>
+    </ul>
 
-    <h2>2 · Fold (840 × 900, unfolded)</h2>
+    <h2>2 · Fold (840 × 900, unfolded) <span class="tag rec">approved</span></h2>
+    <p class="lede">
+      A rail on each half: rail 48, pane 372, pane 372, rail 48, so the seam sits on the hinge at
+      420px. The left rail chooses what the left half shows, the right rail what the right half
+      shows. It is the desktop layout with the left sidebar collapsed. These frames are the live
+      prototype and can be tapped;
+      <a href="prototype.html" style="color: var(--g)">open it full size</a> on the device.
+    </p>
     <div class="row">
       <figure>
         <div class="dev fold">
-          <div class="tb">
-            <span class="ic"></span
-            ><span class="seg"
-              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
-            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
-          </div>
-          <div class="filters">
-            <span class="pill">All projects ▾</span
-            ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
-            ><span class="pill">Running 2</span><span class="grow"></span
-            ><span class="btn">+ New</span>
-          </div>
-          <div class="body">
-            <div class="main">
-              <div class="lanes">
-                <div class="lane">
-                  <div class="hd">Backlog 6</div>
-                  <div class="card">Add dark mode toggle<small>aurora-web</small></div>
-                  <div class="card">Fix flaky reconciler test<small>aurora-web</small></div>
-                  <div class="card">Document webhook retry<small>aurora-web</small></div>
-                </div>
-                <div class="lane">
-                  <div class="hd">Ready 2</div>
-                  <div class="card">Speed up orders query<small>orbit-api</small></div>
-                  <div class="card">Document cookie lifetime<small>#11</small></div>
-                </div>
-                <div class="lane">
-                  <div class="hd">In progress 2</div>
-                  <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
-                  <div class="card">Orders list is slow<small>#3 · PR #5</small></div>
-                </div>
-                <div class="lane">
-                  <div class="hd">Reviewing 2</div>
-                  <div class="card">Cache the session lookup<small>PR #17</small></div>
-                  <div class="card">
-                    Fix focus loss in the login form<span class="need">needs your approval</span>
-                  </div>
-                </div>
-              </div>
-              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
-            </div>
-            <div class="rail">
-              <span class="ic"></span><span class="ic"></span><span class="ic"></span
-              ><span class="ic"></span>
-            </div>
-          </div>
+          <iframe src="prototype.html#bare" style="width: 100%; height: 100%; border: 0"></iframe>
         </div>
         <figcaption>
-          <b>2a · Tasks mode, sidebar closed.</b> The desktop board: lanes keep their width and
-          scroll sideways; about three and a half fit, and the cut-off lane shows there is more.
+          <b>2a · Tasks mode, sidebar closed.</b> The board as lanes, scrolling sideways. Left rail:
+          mode switch (the dot is the needs-you signal), then one entry per status with its count,
+          which jumps to that status.
         </figcaption>
       </figure>
       <figure>
         <div class="dev fold">
-          <div class="tb">
-            <span class="ic"></span
-            ><span class="seg"
-              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
-            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
-          </div>
-          <div class="body">
-            <div class="main">
-              <div class="filters">
-                <span class="pill">All projects ▾</span
-                ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
-                ><span class="grow"></span><span class="btn">+ New</span>
-              </div>
-              <div class="lanes">
-                <div class="lane">
-                  <div class="hd">In progress 2</div>
-                  <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
-                  <div class="card">Orders list is slow<small>#3 · PR #5</small></div>
-                </div>
-                <div class="lane">
-                  <div class="hd">Reviewing 2</div>
-                  <div class="card">Cache the session lookup<small>PR #17</small></div>
-                  <div class="card sel">
-                    Fix focus loss in the login form<span class="need">needs your approval</span>
-                  </div>
-                </div>
-              </div>
-              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
-            </div>
-            <div class="rs" style="width: 396px">
-              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
-              <div class="box">
-                <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
-              </div>
-              <div style="margin-bottom: 10px">
-                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
-              </div>
-              <div class="box"><b>Review</b> · verdict approved · round 2</div>
-              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
-              <span class="btn ghost">Open session in Workspace</span>
-              <div class="box" style="margin-top: 10px">
-                <b>Details</b> · aurora-web · issue #7 · PR #14
-              </div>
-              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
-            </div>
-            <div class="rail">
-              <span class="ic"></span><span class="ic"></span
-              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
-              ><span class="ic"></span>
-            </div>
-          </div>
+          <iframe
+            src="prototype.html#bare&task"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
         </div>
         <figcaption>
-          <b>2b · Task open, lanes kept.</b> Half and half. The sidebar docks on the right half; the
-          board keeps its columns on the left, where fewer than two fit, so reaching another status
-          means scrolling sideways inside a narrow strip.
+          <b>2b · Task open.</b> The sidebar docks on the right half and the board stacks its
+          statuses, active ones first, with Backlog and Done collapsed. The tapped card is kept in
+          view while the layout changes. Closing the sidebar returns to lanes.
         </figcaption>
       </figure>
       <figure>
         <div class="dev fold">
-          <div class="tb">
-            <span class="ic"></span
-            ><span class="seg"
-              ><span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span></span
-            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
-          </div>
-          <div class="body">
-            <div class="main">
-              <div class="filters">
-                <span class="pill">All projects ▾</span
-                ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
-                ><span class="grow"></span><span class="btn">+ New</span>
-              </div>
-              <div style="flex: 1; padding: 0 12px; overflow: hidden">
-                <div
-                  class="hd"
-                  style="
-                    margin-top: 12px;
-                    padding: 6px 0;
-                    border-bottom: 1px solid var(--border-soft);
-                  "
-                >
-                  ▾ Reviewing 2 <i style="color: var(--y)">●</i>
-                </div>
-                <div class="card">Cache the session lookup<small>aurora-web · PR #17</small></div>
-                <div class="card sel">
-                  Fix focus loss in the login form<small>aurora-web · PR #14</small
-                  ><span class="need">needs your approval</span>
-                </div>
-                <div
-                  class="hd"
-                  style="
-                    margin-top: 12px;
-                    padding: 6px 0;
-                    border-bottom: 1px solid var(--border-soft);
-                  "
-                >
-                  ▾ In progress 2
-                </div>
-                <div class="card">
-                  Add rate limiting to the login route<small>aurora-web · #10 · PR #12</small>
-                </div>
-                <div class="card">
-                  Orders list is slow with &gt;10k rows<small>orbit-api · #3 · PR #5</small>
-                </div>
-                <div
-                  class="hd"
-                  style="
-                    margin-top: 12px;
-                    padding: 6px 0;
-                    border-bottom: 1px solid var(--border-soft);
-                  "
-                >
-                  ▾ Ready 2
-                </div>
-                <div class="card">Speed up orders query with an index<small>orbit-api</small></div>
-                <div class="card">
-                  Document the session cookie lifetime<small>aurora-web · #11</small>
-                </div>
-                <div
-                  class="hd"
-                  style="
-                    margin-top: 12px;
-                    padding: 6px 0;
-                    border-bottom: 1px solid var(--border-soft);
-                  "
-                >
-                  ▸ Backlog 6
-                </div>
-                <div
-                  class="hd"
-                  style="
-                    margin-top: 12px;
-                    padding: 6px 0;
-                    border-bottom: 1px solid var(--border-soft);
-                  "
-                >
-                  ▸ Done 1 · Failed 1 <i style="color: var(--y)">●</i>
-                </div>
-              </div>
-              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
-            </div>
-            <div class="rs" style="width: 396px">
-              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
-              <div class="box">
-                <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
-              </div>
-              <div style="margin-bottom: 10px">
-                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
-              </div>
-              <div class="box"><b>Review</b> · verdict approved · round 2</div>
-              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
-              <span class="btn ghost">Open session in Workspace</span>
-              <div class="box" style="margin-top: 10px">
-                <b>Details</b> · aurora-web · issue #7 · PR #14
-              </div>
-              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
-            </div>
-            <div class="rail">
-              <span class="ic"></span><span class="ic"></span
-              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
-              ><span class="ic"></span>
-            </div>
-          </div>
+          <iframe
+            src="prototype.html#bare&task&ws"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
         </div>
         <figcaption>
-          <span class="tag open">idea</span><b>2b′ · Task open, statuses stacked.</b> The same board
-          redrawn as a vertical list: one section per status, cards at full width, every status
-          reachable by scrolling down. Sections collapse; a dot marks the ones holding a task that
-          needs you. The active statuses come first (decided). Still open: whether the board
-          switches to this only while the sidebar is open or always on the fold; try both in the
-          prototype.
+          <b>2c · Workspace mode, after "Open session in Workspace".</b> The worker's terminal takes
+          the left half; the task stays open on the right. Left rail: mode switch, the workspace
+          chip, then the panes open in that workspace.
         </figcaption>
       </figure>
       <figure>
         <div class="dev fold">
-          <div class="tb">
-            <span class="ic"></span
-            ><span class="seg"
-              ><span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span></span
-            ><span class="grow"></span><span class="ic"></span><span class="ic"></span>
-          </div>
-          <div class="body">
-            <div class="main">
-              <div class="term" style="font-size: 14px">
-                <b>task #7 worker · aurora-web</b><br /><br />✓ 12 passed<br />Pushed 2 commits to
-                PR #14.<br /><br />&gt; ▯
-              </div>
-              <div class="kb">
-                <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
-                ><span>↓</span><span>🎤</span><span>⋮</span>
-              </div>
-            </div>
-            <div class="rs" style="width: 396px">
-              <h3 style="margin: 0 0 10px">← Tasks · #7 Fix focus loss in the login form</h3>
-              <div class="box">
-                <b>Reviewing</b> · Next: approved by the reviewer, needs your approval.
-              </div>
-              <div style="margin-bottom: 10px">
-                <span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span>
-              </div>
-              <div class="box"><b>Review</b> · verdict approved · round 2</div>
-              <div class="peek">worker session · idle<br />✓ 12 passed · pushed 2 commits</div>
-              <span class="btn ghost">Open session in Workspace</span>
-              <div class="box" style="margin-top: 10px">
-                <b>Details</b> · aurora-web · issue #7 · PR #14
-              </div>
-              <div class="box"><b>Timeline</b> · claimed · PR #14 opened · review…</div>
-            </div>
-            <div class="rail">
-              <span class="ic"></span><span class="ic"></span
-              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
-              ><span class="ic"></span>
-            </div>
-          </div>
+          <iframe
+            src="prototype.html#bare&ws&rsright"
+            style="width: 100%; height: 100%; border: 0"
+          ></iframe>
         </div>
         <figcaption>
-          <b>2c · Workspace mode, after "Open session in Workspace".</b> The mode changes and the
-          worker's terminal takes the left half. The sidebar is the same in both modes, so the task
-          you came from is still open beside the terminal; no separate "back to task" control is
-          needed here.
+          <b>2d · Workspace mode, two sessions.</b> At most two, one per half. A session on the
+          right half is listed in the right rail above the sidebar views and toggles like them. "＋
+          Session" in the right rail picks one; each pane's header has a button that moves it to the
+          other half.
         </figcaption>
       </figure>
     </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why rails.</b> Both sit under the thumbs when the fold is held with two hands; a top bar
+        is the hardest place to reach. Dropping the 52px top bar gives about three more terminal
+        rows. The cost is 24px of pane width, about three terminal columns.
+      </li>
+      <li>
+        <b>Which sessions show</b> is remembered per device. The workspace layout shared with
+        desktop is not edited.
+      </li>
+      <li>
+        <b>Moving a session between halves</b> has three routes: "＋ Session" in the right rail, the
+        button in a pane's header, and a long press on a rail entry as a shortcut. Dragging is not
+        offered.
+      </li>
+      <li>
+        <b>Narrow tablets.</b> Where a half would be narrower than about 400px (windows under
+        roughly 800px) an open sidebar view takes the full width instead (section 7).
+      </li>
+    </ul>
 
     <h2>3 · Phone</h2>
     <div class="row">
@@ -1107,57 +1111,55 @@
       <ul class="notes">
         <li>
           <span class="tag rec">decided</span><b>Task detail lives in the right sidebar</b> in both
-          modes (option A).
+          modes.
         </li>
         <li>
-          <span class="tag rec">decided</span><b>The right sidebar never floats.</b> The pin option
-          goes away: it is always docked. Tapping a rail tab opens that view; tapping the open
-          view's tab closes the sidebar.
+          <span class="tag rec">decided</span><b>The right sidebar never floats.</b> Always docked;
+          tapping the open view's tab closes it.
         </li>
         <li>
-          <span class="tag rec">decided</span><b>Phone mode switch:</b> the full-width bottom bar.
-          It hides while the on-screen keyboard is up.
+          <span class="tag rec">decided</span><b>No top bar on desktop and fold.</b> A thin left
+          rail holds the mode switch, the workspace chip, New, command box, bell and settings.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>The left sidebar</b> keeps the workspace tree,
+          projects, sessions and devices, and shows only in Workspace mode. The Dock is hidden in
+          Tasks mode.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Fold:</b> a rail on each half, the sidebar docked
+          half and half; narrower windows open it full width.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Fold board:</b> lanes while the sidebar is closed,
+          stacked statuses (active first) while it is open.
+        </li>
+        <li>
+          <span class="tag rec">decided</span><b>Fold sessions:</b> at most two, one per half; the
+          right one is listed in the right rail.
+        </li>
+      </ul>
+      <ul class="notes">
+        <li>
+          <span class="tag rec">decided</span><b>Phone mode switch:</b> the full-width bottom bar,
+          hidden while the on-screen keyboard is up.
         </li>
         <li>
           <span class="tag rec">decided</span><b>"Needs you" on phone</b> is a filter chip, not a
           lane; lanes that hold such a task get a dot.
         </li>
-        <li>
-          <span class="tag rec">decided</span><b>Left sidebar and Dock are hidden in Tasks mode.</b>
-        </li>
+        <li><span class="tag rec">decided</span><b>Needs-you only</b> on the mode switch.</li>
         <li>
           <span class="tag rec">decided</span><b>Approve from the sidebar</b> sits behind a confirm
-          step, like deleting a session.
+          step.
         </li>
         <li>
           <span class="tag rec">decided</span><b>Ad-hoc sessions stay as they are:</b> one collapsed
           strip under the board.
         </li>
-        <li><span class="tag rec">decided</span><b>Needs-you only</b> on the mode switch.</li>
-      </ul>
-      <ul class="notes">
         <li>
-          <span class="tag rec">decided</span
-          ><b>The fold docks the sidebar half and half;</b> narrower windows open it full width
-          (section 7).
-        </li>
-        <li>
-          <span class="tag rec">decided</span><b>Stacked statuses list the active ones first:</b>
-          Reviewing, In progress, Ready, then Backlog and Done collapsed.
-        </li>
-        <li>
-          <span class="tag open">open</span><b>When the fold board stacks:</b> leaning towards only
-          while the sidebar is open (frame 2b′). To be judged in the prototype, because the layout
-          changes under the tapped card.
-        </li>
-        <li>
-          <span class="tag open">idea</span><b>A rail on each half of the fold</b> instead of a top
-          bar (section 8), with the same left rail on desktop (section 9). If taken: at most two
-          sessions on the fold, one per half, the right one listed in the right rail (decided).
-        </li>
-        <li>
-          <b>Cross-links:</b> "Open session in Workspace" switches mode; the task stays open in the
-          sidebar. On phone, the system back gesture returns to the task.
+          <span class="tag open">open</span><b>Workspace groups in the rail.</b> One chip for the
+          current workspace (drawn), or one chip per group that filters the sidebar.
         </li>
         <li>
           <b>Phone navigator:</b> its Tasks tab goes; the rest needs its own rethink, not designed
@@ -1168,6 +1170,11 @@
     </div>
 
     <h2>6 · Where task detail lives: three options <span class="tag rec">decided: A</span></h2>
+    <p class="lede">
+      <span class="tag">history</span>Drawn before the top bar was replaced by the left rail
+      (sections 1 and 2). The decision recorded here still holds; the top bar in these frames does
+      not.
+    </p>
     <p class="lede">
       The earlier task redesign deliberately merged every task detail into the right sidebar, to
       remove redundancy. Sections 1 to 3 above (option B here) split it again: a panel in Tasks mode
@@ -1476,6 +1483,11 @@
       <span class="tag rec">decided: 1</span>
     </h2>
     <p class="lede">
+      <span class="tag">history</span>Drawn before the top bar was replaced by the left rail
+      (sections 1 and 2). The decision recorded here still holds; the top bar in these frames does
+      not.
+    </p>
+    <p class="lede">
       On desktop the sidebar is always docked. The fold has 840px, so the question is what an open
       sidebar does to the terminal in Workspace mode. Three ways, none of them the old
       dim-and-dismiss drawer.
@@ -1627,439 +1639,6 @@
       <li>
         <b>In Tasks mode</b> there is no terminal to reflow, so 1 simply shows two lanes beside the
         task (section 6, option A).
-      </li>
-    </ul>
-
-    <h2>8 · Fold: a rail on each half <span class="tag open">idea</span></h2>
-    <p class="lede">
-      The mode switch and the session switcher move out of the top bar into a thin left rail. Each
-      half of the fold then has one rail on its outer edge and one pane beside it: the left rail
-      chooses what the left half shows, the right rail what the right half shows. The top bar goes
-      away. These frames are the live prototype, so they can be tapped here too.
-    </p>
-    <div class="row">
-      <figure>
-        <div class="dev fold">
-          <iframe
-            src="prototype.html#rails&bare"
-            style="width: 100%; height: 100%; border: 0"
-          ></iframe>
-        </div>
-        <figcaption>
-          <b>8a · Tasks mode, sidebar closed.</b> Left rail: the mode switch on top (the dot is the
-          needs-you signal), then one entry per status with its count, which jumps to that status
-          and shows which ones hold a task that needs you. Bell and menu at the bottom.
-        </figcaption>
-      </figure>
-      <figure>
-        <div class="dev fold">
-          <iframe
-            src="prototype.html#rails&bare&task"
-            style="width: 100%; height: 100%; border: 0"
-          ></iframe>
-        </div>
-        <figcaption>
-          <b>8b · Task open.</b> Rail 48, pane 372, pane 372, rail 48: the seam between board and
-          task sits on the hinge at 420px. In frame 2b it sits at 396px, beside the hinge. The
-          status entries in the rail answer the stacked list's weak point, a long section pushing
-          the later ones out of sight.
-        </figcaption>
-      </figure>
-      <figure>
-        <div class="dev fold">
-          <iframe
-            src="prototype.html#rails&bare&task&ws"
-            style="width: 100%; height: 100%; border: 0"
-          ></iframe>
-        </div>
-        <figcaption>
-          <b>8c · Workspace mode.</b> Below the mode switch the rail lists the open sessions (agent
-          mark, short name, needs-you dot); "All" opens the full session picker that exists today.
-          The task stays open on the right half.
-        </figcaption>
-      </figure>
-    </div>
-    <ul class="notes" style="max-width: 860px; margin-top: 24px">
-      <li>
-        <b>What it buys.</b> Both rails sit under the thumbs when the fold is held with two hands;
-        the top bar is the hardest place to reach. The 52px top bar goes, which is about three more
-        terminal rows. The seam lands on the hinge.
-      </li>
-      <li>
-        <b>What it costs.</b> The left pane loses 24px against frame 2c (372 instead of 396), about
-        three terminal columns. A 48px rail cannot name a session, only hint at it, so the full
-        picker stays one tap away.
-      </li>
-      <li>
-        <span class="tag open">open</span><b>One session or the grid.</b> With the sidebar open the
-        left half fits one pane, so the rail switches sessions. With the sidebar closed the grid
-        could come back (rail entries focus a pane), or the fold could always show one session per
-        half.
-      </li>
-      <li>
-        <span class="tag open">open</span><b>Desktop.</b> With this, the switch would sit in three
-        places: top bar on desktop, left rail on the fold, bottom bar on the phone. Giving desktop
-        the same left rail brings it back to one pattern (a rail, laid flat on the phone).
-      </li>
-      <li>
-        <b>Against earlier decisions.</b> "Left sidebar hidden in Tasks mode" still holds for the
-        project and session tree; the rail is new, thin chrome that stays. Applies to the tablet
-        tier by width, not to the fold as a device.
-      </li>
-    </ul>
-
-    <h2>9 · Desktop with the same left rail <span class="tag open">idea</span></h2>
-    <p class="lede">
-      If the fold gets a left rail, desktop takes it too, so the mode switch sits in one place. The
-      rail is thin, global navigation: the mode switch, one chip naming the current workspace, and
-      New, the command box, the bell and settings at the bottom, so there is no top bar at all. The
-      left sidebar stays what it is today, the full workspace tree with projects, sessions and
-      devices, open by default. Collapsed, the rail lists the sessions itself, which is exactly the
-      fold layout.
-    </p>
-    <div class="row">
-      <figure>
-        <div class="dev desktop">
-          <div class="body">
-            <div
-              class="rail"
-              style="
-                width: 52px;
-                border-left: 0;
-                border-right: 1px solid var(--border-soft);
-                gap: 2px;
-                font-size: 9px;
-                color: var(--muted);
-                text-align: center;
-              "
-            >
-              <span
-                style="
-                  display: block;
-                  width: 100%;
-                  padding: 4px 0;
-                  color: #fff;
-                  box-shadow: inset 3px 0 0 var(--g);
-                  background: #202023;
-                "
-                ><b style="font-size: 15px">&gt;_</b><br />Work</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
-              ><span
-                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
-              ></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
-                ><b
-                  style="
-                    display: inline-grid;
-                    place-items: center;
-                    width: 24px;
-                    height: 24px;
-                    border: 1.5px solid var(--g);
-                    border-radius: 6px;
-                    color: var(--g);
-                  "
-                  >M</b
-                ><br />Mullion</span
-              ><span class="grow"></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">＋</b><br />New</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⌕</b><br />⌘K</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">🔔</b><br /></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⚙</b><br
-              /></span>
-            </div>
-            <div class="left" style="width: 210px">
-              <div class="hd">Workspaces <span style="float: right">«</span></div>
-              ▾ <i style="color: #3b82f6">■</i> AI Usage<br />&nbsp;&nbsp;<b style="color: var(--g)"
-                >Mullion</b
-              ><br />&nbsp;&nbsp;Runway<br />▾
-              <i style="color: #a16207">■</i>
-              Homelab<br />&nbsp;&nbsp;Landing<br />&nbsp;&nbsp;Management<br />▸
-              <i style="color: #c2410c">■</i> Personal Finance<br />branchDAM<br />harmonize
-              <div class="hd" style="margin-top: 14px">Projects</div>
-              aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api<br />&nbsp;&nbsp;●
-              claude · orders
-              <i style="color: var(--y)">●</i>
-              <div class="hd" style="margin-top: 14px">Devices</div>
-              ▯ Pixel 9 emulator · running
-            </div>
-            <div class="main">
-              <div class="grid2">
-                <div class="term">
-                  <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
-                </div>
-                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
-              </div>
-            </div>
-            <div class="rs">
-              <div class="hd">Tasks · 3 need you</div>
-              <div class="card">
-                #7 Fix focus loss in the login form<span class="need"
-                  >Approved, needs your approval</span
-                >
-              </div>
-              <div class="card">
-                #9 Dark mode: low contrast<span class="fail">merge failed</span>
-              </div>
-              <div class="card">#10 Add rate limiting<small>running</small></div>
-            </div>
-            <div class="rail">
-              <span class="ic"></span><span class="ic"></span
-              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
-              ><span class="ic"></span>
-            </div>
-          </div>
-        </div>
-        <figcaption>
-          <b>9a · Workspace mode, sidebar open (the default).</b> The left sidebar is unchanged:
-          workspace groups and workspaces with their names, then projects, sessions and devices. The
-          rail beside it carries what the top bar carried, plus a chip for the current workspace.
-          "«" collapses the sidebar.
-        </figcaption>
-      </figure>
-      <figure>
-        <div class="dev desktop">
-          <div class="body">
-            <div
-              class="rail"
-              style="
-                width: 52px;
-                border-left: 0;
-                border-right: 1px solid var(--border-soft);
-                gap: 2px;
-                font-size: 9px;
-                color: var(--muted);
-                text-align: center;
-              "
-            >
-              <span
-                style="
-                  display: block;
-                  width: 100%;
-                  padding: 4px 0;
-                  color: #fff;
-                  box-shadow: inset 3px 0 0 var(--g);
-                  background: #202023;
-                "
-                ><b style="font-size: 15px">&gt;_</b><br />Work</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
-              ><span
-                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
-              ></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: #fff"
-                ><b
-                  style="
-                    display: inline-grid;
-                    place-items: center;
-                    width: 24px;
-                    height: 24px;
-                    border: 1.5px solid var(--g);
-                    border-radius: 6px;
-                    color: var(--g);
-                  "
-                  >M</b
-                ><br />Mullion</span
-              ><span
-                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
-              ></span
-              ><span
-                style="
-                  display: block;
-                  width: 100%;
-                  padding: 4px 0;
-                  color: #fff;
-                  box-shadow: inset 3px 0 0 var(--g);
-                  background: #202023;
-                "
-                ><b style="font-size: 15px">◆</b><br />login</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">✳</b><br />#7</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">◇</b> <i style="color: var(--y)">●</i><br />orbit</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">▯</b><br />Pixel</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⋯</b><br />All 8</span
-              ><span class="grow"></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">＋</b><br />New</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⌕</b><br />⌘K</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">🔔</b><br /></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⚙</b><br
-              /></span>
-            </div>
-            <div class="main">
-              <div class="grid2">
-                <div class="term">
-                  <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
-                </div>
-                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
-              </div>
-            </div>
-            <div class="rs">
-              <div class="hd">Tasks · 3 need you</div>
-              <div class="card">
-                #7 Fix focus loss in the login form<span class="need"
-                  >Approved, needs your approval</span
-                >
-              </div>
-              <div class="card">
-                #9 Dark mode: low contrast<span class="fail">merge failed</span>
-              </div>
-              <div class="card">#10 Add rate limiting<small>running</small></div>
-            </div>
-            <div class="rail">
-              <span class="ic"></span><span class="ic"></span
-              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
-              ><span class="ic"></span>
-            </div>
-          </div>
-        </div>
-        <figcaption>
-          <b>9b · Workspace mode, sidebar collapsed.</b> The workspace chip keeps your bearing: the
-          group's colour and the workspace's name, and a tap opens the full workspace list. Below it
-          the panes open in that workspace, a device screen among them; "All" opens the sidebar as a
-          picker. This is the fold's rail (frame 8c), so the fold is desktop with the sidebar
-          collapsed, not a separate design.
-        </figcaption>
-      </figure>
-      <figure>
-        <div class="dev desktop">
-          <div class="body">
-            <div
-              class="rail"
-              style="
-                width: 52px;
-                border-left: 0;
-                border-right: 1px solid var(--border-soft);
-                gap: 2px;
-                font-size: 9px;
-                color: var(--muted);
-                text-align: center;
-              "
-            >
-              <span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">&gt;_</b><br />Work</span
-              ><span
-                style="
-                  display: block;
-                  width: 100%;
-                  padding: 4px 0;
-                  color: #fff;
-                  box-shadow: inset 3px 0 0 var(--g);
-                  background: #202023;
-                "
-                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
-              ><span class="grow"></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">＋</b><br />New</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⌕</b><br />⌘K</span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">🔔</b><br /></span
-              ><span style="display: block; width: 100%; padding: 4px 0; color: inherit"
-                ><b style="font-size: 15px">⚙</b><br
-              /></span>
-            </div>
-            <div class="main">
-              <div class="filters">
-                <span class="pill">All projects ▾</span
-                ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
-                ><span class="grow"></span>
-              </div>
-              <div class="lanes">
-                <div class="lane">
-                  <div class="hd">Backlog 6</div>
-                  <div class="card">Add dark mode toggle<small>aurora-web</small></div>
-                  <div class="card">Fix flaky reconciler test<small>aurora-web</small></div>
-                </div>
-                <div class="lane">
-                  <div class="hd">Ready 2</div>
-                  <div class="card">Speed up orders query<small>orbit-api</small></div>
-                </div>
-                <div class="lane">
-                  <div class="hd">In progress 2</div>
-                  <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
-                </div>
-                <div class="lane">
-                  <div class="hd">Reviewing 2</div>
-                  <div class="card sel">
-                    Fix focus loss in the login form<span class="need">needs your approval</span>
-                  </div>
-                </div>
-                <div class="lane">
-                  <div class="hd">Done 1 · Failed 1</div>
-                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
-                </div>
-              </div>
-              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
-            </div>
-            <div class="rs">
-              <div class="hd">Tasks · 3 need you</div>
-              <div class="card">
-                #7 Fix focus loss in the login form<span class="need"
-                  >Approved, needs your approval</span
-                >
-              </div>
-              <div class="card">
-                #9 Dark mode: low contrast<span class="fail">merge failed</span>
-              </div>
-              <div class="card">#10 Add rate limiting<small>running</small></div>
-            </div>
-            <div class="rail">
-              <span class="ic"></span><span class="ic"></span
-              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
-              ><span class="ic"></span>
-            </div>
-          </div>
-        </div>
-        <figcaption>
-          <b>9c · Tasks mode.</b> The rail holds only the mode switch and the bottom cluster. The
-          board shows every lane at this width, so it needs no status entries in the rail and no
-          panel. "New" here offers a task first.
-        </figcaption>
-      </figure>
-    </div>
-    <ul class="notes" style="max-width: 860px; margin-top: 24px">
-      <li>
-        <b>Why the rail does not list the workspaces.</b> With around eleven workspaces in three
-        groups the list would fill the rail, and initials cannot tell Mullion from Management. The
-        names stay in the sidebar, where they are readable. The rail shows only the one you are in.
-      </li>
-      <li>
-        <b>One "New" button.</b> It opens a short menu: session, task, workspace, workspace group.
-        The first entry follows the mode (session in Workspace, task in Tasks). One plus in a 52px
-        rail instead of one per section.
-      </li>
-      <li>
-        <b>Workspace groups</b> stay in the sidebar as they are. When the sidebar is collapsed (and
-        on the fold) the workspace chip opens the same grouped list as a picker, and the chip takes
-        the group's colour.
-      </li>
-      <li>
-        <b>Devices.</b> A device screen is a pane, so an open one sits in the rail beside the
-        sessions. The Devices list (start, stop, open) lives in the panel, and in the "All" picker
-        when the panel is collapsed.
-      </li>
-      <li>
-        <b>Where the top bar's controls go.</b> Board toggle: the mode switch. Sidebar toggle: the
-        panel's "«". New, command box, bell, settings: the rail's bottom cluster. Theme: into
-        settings. The phone keeps its own bar.
-      </li>
-      <li>
-        <span class="tag rec">decided</span
-        ><b>Fold, Workspace mode: sessions on the right half live in the right rail.</b> At most two
-        sessions show, one per half, remembered per device. A long press moves a session to the
-        other rail. In the right rail a session sits above the sidebar views and behaves like those
-        tabs: tap shows it, tap again hides it.
       </li>
     </ul>
   </body>

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <!-- Tappable companion to mockup.html for #2976. It exists to try two open questions on a real fold: does the board feel right when it switches from lanes to stacked statuses as the sidebar opens, and does a rail on each half work better than a top bar. Low fidelity, fictional data, no app code. -->
+    <!-- Tappable companion to mockup.html for #2976: the fold layout (a rail on each half, the board stacking while the sidebar is open, up to two sessions) at real size. mockup.html embeds it for its fold frames. Low fidelity, fictional data, no app code. -->
     <title>Mullion — Tasks mode: tappable fold prototype</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <style>
@@ -404,6 +404,32 @@
         white-space: pre;
         overflow: hidden;
       }
+      .ph {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: system-ui, sans-serif;
+        white-space: normal;
+        margin: -4px -4px 8px;
+      }
+      .ph b {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--fg);
+        font-weight: 500;
+      }
+      .ph button {
+        flex: none;
+        min-height: 36px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
       .split #pane2 {
         display: block;
       }
@@ -534,33 +560,6 @@
     </style>
   </head>
   <body class="m-tasks">
-    <div id="opts">
-      <span><b>Prototype options</b> (not part of the design)</span>
-      <span
-        >Switch:
-        <span class="o" data-opt="rails"
-          ><button data-v="0" class="on">top bar</button><button data-v="1">two rails</button></span
-        ></span
-      >
-      <span
-        >Board:
-        <span class="o" data-opt="stack"
-          ><button data-v="never">lanes</button
-          ><button data-v="open" class="on">stack when sidebar open</button
-          ><button data-v="always">always stacked</button></span
-        ></span
-      >
-    </div>
-
-    <div id="tb">
-      <span class="seg"
-        ><button data-mode="ws">Workspace</button
-        ><button data-mode="tasks" class="on">Tasks <span class="dot">3</span></button></span
-      >
-      <span class="grow"></span>
-      <span class="pill">🔔</span>
-    </div>
-
     <div id="body">
       <nav id="lrail" class="rail">
         <button data-mode="ws"><i>&gt;_</i>Work</button>
@@ -667,7 +666,7 @@
       const $$ = (s, r = document) => [...r.querySelectorAll(s)];
       const state = {
         mode: "tasks",
-        rails: false,
+        rails: true,
         stack: "open",
         view: null,
         task: null,
@@ -751,9 +750,15 @@
           .map(sessBtn)
           .join("");
         const rs = SESS.filter((x) => onRight(x[0]));
-        $("#rsess").innerHTML = rs.map(sessBtn).join("") + (rs.length ? "<hr />" : "");
-        $("#term").textContent = `${state.left}\n\n> ▯`;
-        $("#pane2").textContent = `${state.right}\n\n> ▯`;
+        $("#rsess").innerHTML =
+          rs.map(sessBtn).join("") + `<button class="ws" data-addr><i>＋</i>Session</button><hr />`;
+        const canSplit = SESS.filter((x) => !onRight(x[0])).length > 1;
+        $("#term").innerHTML =
+          `<div class="ph"><b>${state.left}</b>` +
+          (canSplit ? `<button data-put="mvr|${state.left}">To right ⇥</button>` : "") +
+          `</div>\n> ▯`;
+        $("#pane2").innerHTML =
+          `<div class="ph"><b>${state.right}</b><button data-put="mvl|${state.right}">⇤ To left</button></div>\n> ▯`;
         $$("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === state.mode));
         $$("#rrail button").forEach((b) => b.classList.toggle("on", b.dataset.view === state.view));
         $$("#lrail [data-sess]").forEach((b) => {
@@ -838,6 +843,14 @@
             if (state.right === s) state.right = null;
           }
           closeMenu();
+        } else if (t.dataset.addr !== undefined) {
+          // Pick a session to show on the right half.
+          const rest = SESS.filter((x) => !onRight(x[0]));
+          menu.innerHTML =
+            `<div class="mh">Show on the right half</div>` +
+            rest.map((x) => `<button data-put="mvr|${x[0]}">${x[1]} ${x[0]}</button>`).join("");
+          showMenu(t);
+          return;
         } else if (t.dataset.wsp !== undefined) {
           // The current workspace is one chip; tapping it opens the full workspace list.
           menu.innerHTML = WSPS.map(
@@ -918,7 +931,6 @@
       const flag = (k) => location.hash.slice(1).split("&").includes(k);
       if (flag("rails")) state.rails = true;
       if (flag("ws")) state.mode = "ws";
-      if (flag("bare")) $("#opts").style.display = "none";
       const st = location.hash.match(/stack=(\w+)/);
       if (st) state.stack = st[1];
       if (flag("split")) state.right = "claude · orbit-api";
