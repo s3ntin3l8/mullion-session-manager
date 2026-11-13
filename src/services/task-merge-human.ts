@@ -7,7 +7,7 @@ import type { PrReviewThreadsResult } from "./github-write.js";
 // (as opposed to the review-loop reasons `cap` / `no-progress` /
 // `finding-persisted`). They live and die with `tasks.mergeError`: recorded
 // with it, cleared wherever it is cleared, and by a merge.
-export type MergeNeedsHumanReason = "rebase-exhausted" | "blocked-threads";
+export type MergeNeedsHumanReason = "rebase-exhausted" | "blocked-threads" | "ci-status-stalled";
 
 /**
  * A `.set()` value for `tasks.needsHumanReason` that clears a merge-tied
@@ -17,13 +17,13 @@ export type MergeNeedsHumanReason = "rebase-exhausted" | "blocked-threads";
  */
 export const clearMergeNeedsHumanReason = sql<
   string | null
->`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads') THEN NULL ELSE needs_human_reason END`;
+>`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'ci-status-stalled') THEN NULL ELSE needs_human_reason END`;
 
 /** Like clearMergeNeedsHumanReason, for a recorded merge: the PR is merged, so
  * a `review-post-failed` hold (nothing left to hold) is released too. */
 const clearNeedsHumanOnMerge = sql<
   string | null
->`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'review-post-failed', 'pr-closed') THEN NULL ELSE needs_human_reason END`;
+>`CASE WHEN needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'ci-status-stalled', 'review-post-failed', 'pr-closed') THEN NULL ELSE needs_human_reason END`;
 
 /**
  * `tasks.reviewPostPending` value once an approving review's post failed for
@@ -111,7 +111,7 @@ export function recordMergeError(
     .set({
       mergeError: message,
       needsHumanReason: needsHumanReason
-        ? sql`CASE WHEN needs_human_reason IS NULL OR needs_human_reason IN ('rebase-exhausted', 'blocked-threads') THEN ${needsHumanReason} ELSE needs_human_reason END`
+        ? sql`CASE WHEN needs_human_reason IS NULL OR needs_human_reason IN ('rebase-exhausted', 'blocked-threads', 'ci-status-stalled') THEN ${needsHumanReason} ELSE needs_human_reason END`
         : clearMergeNeedsHumanReason,
     })
     .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))

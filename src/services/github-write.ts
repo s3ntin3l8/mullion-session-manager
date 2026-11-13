@@ -1155,6 +1155,40 @@ export async function updatePullRequestTitle(
 }
 
 /**
+ * #2904 — re-runs ONE job of a workflow run
+ * (`POST /actions/jobs/:job_id/rerun`). The lever for a coverage upload that
+ * Codecov never turned into a status: re-running the job that uploaded the
+ * coverage makes Codecov reprocess the commit, and the pending status goes
+ * green (that is exactly what a human did by hand on PR #2894).
+ *
+ * Returns a discriminated answer:
+ * - `"accepted"` — GitHub queued the re-run.
+ * - `"refused"` — 422 ("cannot be rerun", which GitHub says of a job that is
+ *   still running or of a run whose attempt has already been re-used): a
+ *   definite answer about THIS job, so the caller SKIPS it and tries the next.
+ * - `"unauthorized"` — 403/404 (a token without Actions write, or a job the
+ *   token cannot see): also skipped, but kept apart from `"refused"` so the
+ *   caller can tell the human the dispatch token lacks Actions write instead
+ *   of blaming GitHub's per-job rules.
+ * A thrown rate-limit or network error is "could not ask" and propagates.
+ */
+export async function rerunJob(
+  token: string,
+  owner: string,
+  repo: string,
+  jobId: number,
+): Promise<"accepted" | "refused" | "unauthorized"> {
+  try {
+    await githubRequest(token, owner, repo, "POST", `/actions/jobs/${jobId}/rerun`);
+    return "accepted";
+  } catch (err) {
+    if (err instanceof GitHubWriteScopeError) return "unauthorized";
+    if (err instanceof GitHubApiError && err.statusCode === 422) return "refused";
+    throw err;
+  }
+}
+
+/**
  * Re-runs only the failed (and cancelled/abandoned) jobs of one workflow run
  * (`POST /actions/runs/:id/rerun-failed-jobs`). The answer for a red check that
  * no code change can fix — a lost runner, an abandoned shard — which the red-CI

@@ -1198,6 +1198,9 @@ describe("UnifiedBoard task columns", () => {
   it.each([
     ["rebase-exhausted", /Needs a human: auto-rebase gave up, the PR still conflicts with main/],
     ["blocked-threads", /Needs a human: merge blocked on unresolved review conversations/],
+    // #2904 — a stuck non-Actions status must read as a Codecov-side stall, not
+    // as a task that is merely reviewing.
+    ["ci-status-stalled", /Needs a human: a CI status stayed pending after green CI/],
   ] as const)("labels the merge reason %s on a done task", (reason, expected) => {
     tasks = [makeTask({ id: 1, status: "done", needsHumanReason: reason })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

@@ -1218,10 +1218,12 @@ export const tasks = sqliteTable(
     // — the reviewer marked the same earlier finding still open on two
     // consecutive rounds. Only meaningful while the announce stamp is set (a
     // stale value is harmless and the board ignores it), and cleared wherever
-    // that stamp is. Two more reasons are tied to `mergeError` instead and
+    // that stamp is. Three more reasons are tied to `mergeError` instead and
     // do NOT need the stamp: `rebase-exhausted` — the auto-rebase budget is
     // spent and the PR still conflicts; `blocked-threads` — the merge is
-    // blocked on unresolved review conversations Mullion did not open.
+    // blocked on unresolved review conversations Mullion did not open; and
+    // `ci-status-stalled` — a non-Actions status stayed pending on a green
+    // head (see below).
     // `review-post-failed` also needs no stamp: an approving review could not be
     // posted to GitHub; it holds auto-approve and auto-merge and is cleared by the
     // next review ingest.
@@ -1231,6 +1233,12 @@ export const tasks = sqliteTable(
     // (task-pr-closed.ts). Set with a mergeError; only a merge clears it (a
     // re-armed merge sweep that finds the PR still closed must not re-announce,
     // and restores a mergeError that "Merge now" blanked).
+    // `ci-status-stalled` — #2904: a non-Actions status (codecov's
+    // `codecov/patch`) stayed `pending` past the stall window on a head whose
+    // Actions checks are all green, and the coverage upload was re-run twice
+    // without the status ever resolving. Set with a mergeError; it is a
+    // merge-tied reason like the two above it (the merge is what the stall
+    // holds), so it lives and dies with that mergeError.
     needsHumanReason: text("needs_human_reason", {
       enum: [
         "cap",
@@ -1240,6 +1248,7 @@ export const tasks = sqliteTable(
         "blocked-threads",
         "review-post-failed",
         "pr-closed",
+        "ci-status-stalled",
       ],
     }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
@@ -1419,6 +1428,21 @@ export const tasks = sqliteTable(
     // Re-runs of the failed Actions jobs on `ciReturnHeadSha` (capped by
     // MAX_CI_RERUNS_PER_HEAD); reset whenever a new head is returned.
     ciRerunCount: integer("ci_rerun_count").notNull().default(0),
+    // #2904 — the head a coverage RE-UPLOAD was requested for, and how many
+    // were requested on it. A DELIBERATELY separate counter from
+    // `ciRerunCount` above: that one counts re-runs of a RED check on a head
+    // the worker was already returned for, and it is reset to 0 whenever the
+    // worker is returned again — which is not this case at all. Here the
+    // worker is NOT being sent back (nothing in the diff can fix a status
+    // Codecov never posted), so the count has to survive on its own: capped
+    // per head, and a NEW head resets it (the counter belongs to the head
+    // column below, not to the task).
+    coverageReuploadHeadSha: text("coverage_reupload_head_sha"),
+    coverageReuploadCount: integer("coverage_reupload_count").notNull().default(0),
+    // When the last coverage re-upload was REQUESTED on that head (#2904).
+    // Durable, so the "at least 20 minutes apart" spacing survives a restart
+    // instead of being spent again the moment Mullion comes back up.
+    coverageReuploadAt: integer("coverage_reupload_at", { mode: "timestamp" }),
     // A `claimed` row that is a queued RETRY: when a slot frees, the dispatch
     // sweep resumes the preserved branch instead of cutting a fresh worktree.
     resumeQueued: integer("resume_queued", { mode: "boolean" }).notNull().default(false),

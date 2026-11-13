@@ -1057,6 +1057,19 @@ export interface CheckRunResult {
   detail?: string;
   /** Where to read the check's result (`details_url`) — a non-Actions check has no run URL anywhere else. */
   url?: string;
+  /** #2904 — the check's own state: `queued` / `in_progress` / `waiting` / `completed`. A
+   * check with no conclusion and a non-completed status is STILL PENDING — the state a
+   * stuck non-Actions status (codecov's `codecov/patch`) sits in forever. */
+  status?: string | null;
+  /** #2904 — the app that produced the check (`github-actions` for an Actions job,
+   * `codecov` for Codecov's). The one reliable way to tell an Actions check from a
+   * status some other app posted: `details_url` alone cannot say it (CodeQL's URL
+   * names `/runs/<id>`, not `/actions/runs/<id>`). */
+  app?: string | null;
+  /** #2904 — when the check started (ISO 8601). Null for a check that has not started
+   * yet (queued, no runner). This is the "pending since" stamp a stuck status is
+   * measured against. */
+  startedAt?: string | null;
 }
 
 /**
@@ -1142,6 +1155,9 @@ export async function fetchCheckRunsForHead(
     check_runs?: {
       name: string;
       conclusion: string | null;
+      status?: string | null;
+      started_at?: string | null;
+      app?: { slug?: string | null } | null;
       output?: { title?: string | null } | null;
       details_url?: string | null;
     }[];
@@ -1151,6 +1167,12 @@ export async function fetchCheckRunsForHead(
     conclusion: c.conclusion,
     ...(c.output?.title ? { detail: c.output.title } : {}),
     ...(c.details_url ? { url: c.details_url } : {}),
+    // #2904 — the pending-age signal. A stuck non-Actions status is one that has
+    // been running since `started_at`; `app` says who posted it (an Actions job
+    // vs. Codecov).
+    ...(c.status ? { status: c.status } : {}),
+    ...(c.app?.slug ? { app: c.app.slug } : {}),
+    ...(c.started_at ? { startedAt: c.started_at } : {}),
   }));
 }
 
@@ -1401,6 +1423,21 @@ export async function getWorkflowRunJobs(
   repo: string,
   runId: number,
 ): Promise<GitHubJob[]> {
+  return (await getWorkflowRunJobsChecked(token, owner, repo, runId)).jobs;
+}
+
+/**
+ * Same listing as `getWorkflowRunJobs`, but says whether GitHub actually
+ * answered: `ok: false` for a non-2xx response or a thrown request (where
+ * `jobs` is `[]`), `ok: true` for a real answer — including a run with no
+ * jobs. Callers that must tell "no jobs" from "couldn't ask" use this.
+ */
+export async function getWorkflowRunJobsChecked(
+  token: string,
+  owner: string,
+  repo: string,
+  runId: number,
+): Promise<{ ok: boolean; jobs: GitHubJob[] }> {
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -1411,9 +1448,9 @@ export async function getWorkflowRunJobs(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=100`,
       { headers },
     );
-    if (!res.ok) return [];
+    if (!res.ok) return { ok: false, jobs: [] };
     const data = (await res.json()) as GitHubJobsApiResponse;
-    return data.jobs.map((j) => ({
+    const jobs = data.jobs.map((j) => ({
       id: j.id,
       name: j.name,
       status: j.status,
@@ -1429,8 +1466,9 @@ export async function getWorkflowRunJobs(
           number: s.number,
         })) ?? [],
     }));
+    return { ok: true, jobs };
   } catch {
-    return [];
+    return { ok: false, jobs: [] };
   }
 }
 

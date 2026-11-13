@@ -10,14 +10,20 @@ export type NeedsHumanReason =
   | "rebase-exhausted"
   | "blocked-threads"
   | "review-post-failed"
-  | "pr-closed";
+  | "pr-closed"
+  | "ci-status-stalled";
 
 /** The reasons tied to a merge that cannot proceed. Unlike the review-loop
  * reasons they do not depend on the round cap or its announce stamp. */
 export function isMergeNeedsHumanReason(
   reason: NeedsHumanReason | null | undefined,
-): reason is "rebase-exhausted" | "blocked-threads" | "pr-closed" {
-  return reason === "rebase-exhausted" || reason === "blocked-threads" || reason === "pr-closed";
+): reason is "rebase-exhausted" | "blocked-threads" | "pr-closed" | "ci-status-stalled" {
+  return (
+    reason === "rebase-exhausted" ||
+    reason === "blocked-threads" ||
+    reason === "pr-closed" ||
+    reason === "ci-status-stalled"
+  );
 }
 
 export function needsHumanText(reason: NeedsHumanReason | null | undefined): string {
@@ -34,6 +40,12 @@ export function needsHumanText(reason: NeedsHumanReason | null | undefined): str
       return "the PR was closed without merging, so nothing landed";
     case "review-post-failed":
       return "approving review could not be posted to GitHub";
+    // #2904 — a non-Actions status (codecov's `codecov/patch`) stayed pending
+    // on a head whose Actions checks are all green, and re-running the
+    // coverage upload twice did not settle it. Nothing in the diff can fix
+    // it: the provider itself is the one that stopped reporting.
+    case "ci-status-stalled":
+      return "a CI status stayed pending after green CI — a Codecov-side stall; re-run the coverage upload";
     default:
       return "round cap reached";
   }
