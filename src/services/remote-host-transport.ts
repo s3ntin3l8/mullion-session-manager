@@ -11,7 +11,7 @@ import {
 import { channelDownError, requestViaChannel, type HostTransport } from "./agent-channel-tunnel.js";
 import { HostRequestError, HostUnreachableError } from "./remote-host-errors.js";
 import { assertAllowedUrl, getPinnedDispatcher, getPinnedWsAgent } from "./pinned-connect.js";
-import type { UrlGuardPolicy } from "./url-guard.js";
+import { hostUrlPolicy, type UrlGuardPolicy } from "./url-guard.js";
 
 // Split out of remote-host-client.ts (issue #2714, #2404): the transport — how
 // a request to one host is addressed, signed, pinned and answered. It is the
@@ -29,7 +29,6 @@ import type { UrlGuardPolicy } from "./url-guard.js";
 // attaches this host's bearer token and HMAC signature headers, so a baseUrl
 // rebound to an IMDS endpoint would hand those credentials straight to it.
 // Rebinding to 10.x/192.168.x remains permitted, by design.
-const HOST_URL_POLICY: UrlGuardPolicy = { allowLoopback: true, allowPrivate: true };
 
 export type HostCredentials = { token: string; sessionSecret: string | null };
 
@@ -65,6 +64,7 @@ export class RemoteHostTransport {
   // agent-channel-tunnel.ts's resolveHostTransport). Absent for a client built
   // without an app (tests, tools): always inbound.
   readonly resolveTransport?: (operation?: string) => HostTransport;
+  private readonly urlPolicy: UrlGuardPolicy;
 
   constructor(opts: {
     hostId: string;
@@ -73,6 +73,7 @@ export class RemoteHostTransport {
     sessionSecret?: string | null;
     refreshCredentials?: () => HostCredentials | null;
     resolveTransport?: (operation?: string) => HostTransport;
+    allowSharedNat?: boolean;
   }) {
     this.hostId = opts.hostId;
     this.baseUrl = (opts.baseUrl ?? "").replace(/\/+$/, "");
@@ -81,6 +82,7 @@ export class RemoteHostTransport {
     this.sessionSecret = opts.sessionSecret ?? null;
     this.refreshCredentials = opts.refreshCredentials;
     this.resolveTransport = opts.resolveTransport;
+    this.urlPolicy = hostUrlPolicy(opts.allowSharedNat === true);
   }
 
   // Connection-time SSRF pinning (issue #250) — every outbound call, HTTP and
@@ -100,14 +102,14 @@ export class RemoteHostTransport {
 
   pinnedDispatcher(): RequestInit["dispatcher"] {
     this.requireInboundAddress();
-    assertAllowedUrl(this.baseUrl, HOST_URL_POLICY);
-    return getPinnedDispatcher(HOST_URL_POLICY);
+    assertAllowedUrl(this.baseUrl, this.urlPolicy);
+    return getPinnedDispatcher(this.urlPolicy);
   }
 
   pinnedWsOptions() {
     this.requireInboundAddress();
-    assertAllowedUrl(this.baseUrl, HOST_URL_POLICY);
-    return { agent: getPinnedWsAgent(HOST_URL_POLICY, this.wsBaseUrl) };
+    assertAllowedUrl(this.baseUrl, this.urlPolicy);
+    return { agent: getPinnedWsAgent(this.urlPolicy, this.wsBaseUrl) };
   }
 
   /**

@@ -335,6 +335,7 @@ export class RemoteHostClient {
     refreshCredentials?: () => HostCredentials | null;
     resolveTransport?: (operation?: string) => HostTransport;
     channelApp?: FastifyInstance;
+    allowSharedNat?: boolean;
   }) {
     this.hostId = opts.hostId;
     this.transport = new RemoteHostTransport(opts);

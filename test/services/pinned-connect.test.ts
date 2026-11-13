@@ -40,7 +40,7 @@ function fakeResolver(...addresses: string[]): PinnedResolver {
 
 /** Drives a lookup and returns whatever it called back with. */
 function runLookup(
-  policy: { allowLoopback: boolean; allowPrivate: boolean },
+  policy: { allowLoopback: boolean; allowPrivate: boolean; allowSharedNat?: boolean },
   resolver: PinnedResolver,
   options: { all?: boolean } = { all: true },
 ): Promise<{ err: Error | null; address: string | LookupAddress[]; family?: number }> {
@@ -247,5 +247,25 @@ describe("end-to-end through a real fetch (issue #250)", () => {
     expect(getPinnedWsAgent(ALLOW_ALL, "ws://a.example/")).not.toBe(
       getPinnedWsAgent(BLOCK_ALL, "ws://a.example/"),
     );
+  });
+});
+
+describe("createPinnedLookup with allowSharedNat", () => {
+  const TAILNET = { ...ALLOW_ALL, allowSharedNat: true };
+
+  it("accepts a name resolving to a tailnet 100.x address only when opted in", async () => {
+    expect((await runLookup(TAILNET, fakeResolver("100.101.102.103"))).err).toBeNull();
+    expect((await runLookup(ALLOW_ALL, fakeResolver("100.101.102.103"))).err).toBeInstanceOf(
+      SsrfBlockedError,
+    );
+  });
+
+  it("still rejects IMDS, and an answer mixing it with a tailnet address", async () => {
+    expect((await runLookup(TAILNET, fakeResolver("169.254.169.254"))).err).toBeInstanceOf(
+      SsrfBlockedError,
+    );
+    expect(
+      (await runLookup(TAILNET, fakeResolver("100.101.102.103", "169.254.169.254"))).err,
+    ).toBeInstanceOf(SsrfBlockedError);
   });
 });

@@ -413,6 +413,23 @@ describe("host pairing (issue #2449)", () => {
     expect((await redeem(p.code, { capabilities: ["xcode", "docker"] })).statusCode).toBe(200);
   });
 
+  it("redeems with a tailnet 100.x baseUrl only with MULLION_ALLOW_TAILNET_HOSTS; IMDS stays blocked", async () => {
+    const tailnet = { baseUrl: "http://100.101.102.103:4000" };
+    const off = await create();
+    expect((await redeem(off.code, tailnet)).statusCode).toBe(400);
+
+    process.env.MULLION_ALLOW_TAILNET_HOSTS = "true";
+    try {
+      await app.close();
+      app = await buildApp();
+      const on = await create();
+      expect((await redeem(on.code, { baseUrl: "http://169.254.169.254" })).statusCode).toBe(400);
+      expect((await redeem(on.code, tailnet)).statusCode).toBe(200);
+    } finally {
+      delete process.env.MULLION_ALLOW_TAILNET_HOSTS;
+    }
+  });
+
   it("validates the redeem body", async () => {
     const p = await create();
     expect((await redeem(p.code, { baseUrl: "ftp://x" })).statusCode).toBe(400);

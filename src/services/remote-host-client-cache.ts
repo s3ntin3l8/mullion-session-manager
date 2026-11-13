@@ -107,6 +107,7 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
     // Streams ride the outbound channel through this app; without it
     // openStreamOnTransport always answers "inbound" (#2635).
     channelApp: app,
+    allowSharedNat: app.config.MULLION_ALLOW_TAILNET_HOSTS,
     token: credentials.token,
     sessionSecret: credentials.sessionSecret,
     // Only a registered (has-or-had-a-session) host gets a refresh

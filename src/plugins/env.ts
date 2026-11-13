@@ -125,6 +125,16 @@ export const schema = {
       type: "boolean",
       default: false,
     },
+    // Opt-in: accept 100.64.0.0/10 (RFC 6598 shared NAT, which Tailscale uses
+    // for tailnet IPv4 addresses) in host baseUrls — at create/update,
+    // register, pair and connect time (resolved IP included). Off by default
+    // because shared-NAT ranges on some clouds can reach internal services.
+    // 169.254.0.0/16 (cloud IMDS) and Alibaba's 100.100.100.200 stay blocked
+    // regardless.
+    MULLION_ALLOW_TAILNET_HOSTS: {
+      type: "boolean",
+      default: false,
+    },
     // Global (non-per-project) config dir for launcher/dock defaults — see
     // src/services/project-config.ts. Same "~" expansion as PROJECTS_ROOTS.
     // A per-project ".crs/" dir inside a project's own cwd always takes
@@ -1155,6 +1165,7 @@ declare module "fastify" {
       MULLION_AGENT_NAME: string;
       MULLION_ENROLLMENT_SECRET: string;
       MULLION_ENROLLMENT_ALLOWED_CIDRS: string;
+      MULLION_ALLOW_TAILNET_HOSTS: boolean;
       MULLION_AUTH_TOKEN: string;
       MULLION_TRUST_GATEWAY: boolean;
       MULLION_GATEWAY_LOGOUT_URL: string;

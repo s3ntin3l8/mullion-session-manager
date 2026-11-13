@@ -165,3 +165,39 @@ describe("isAllowedIpAddress (connection-time half, issue #250)", () => {
     expect(isAllowedIpAddress("::ffff:a9fe:a9fe", ALLOW_ALL)).toBe(false);
   });
 });
+
+describe("allowSharedNat (MULLION_ALLOW_TAILNET_HOSTS)", () => {
+  const TAILNET = { allowLoopback: true, allowPrivate: true, allowSharedNat: true };
+
+  it("lets 100.64.0.0/10 through for URLs and resolved IPs, edges included", () => {
+    for (const host of ["100.64.0.1", "100.100.0.1", "100.127.255.255"]) {
+      expect(isAllowedHttpUrl(`http://${host}:8080`, TAILNET)).toBe(true);
+      expect(isAllowedIpAddress(host, TAILNET)).toBe(true);
+    }
+    // The IPv4-mapped IPv6 spelling a resolver can return follows the same rule.
+    expect(isAllowedIpAddress("::ffff:100.64.0.1", TAILNET)).toBe(true);
+    expect(isAllowedHttpUrl("http://[::ffff:100.64.0.1]", TAILNET)).toBe(true);
+  });
+
+  it("still blocks 100.64.0.0/10 when the flag is false or absent", () => {
+    expect(isAllowedHttpUrl("http://100.64.0.1", { ...TAILNET, allowSharedNat: false })).toBe(
+      false,
+    );
+    expect(isAllowedIpAddress("100.64.0.1", { ...TAILNET, allowSharedNat: false })).toBe(false);
+    expect(isAllowedHttpUrl("http://100.64.0.1", ALLOW_ALL)).toBe(false);
+  });
+
+  it("keeps Alibaba's 100.100.100.200 IMDS blocked with the flag on, and the rest of the range open", () => {
+    expect(isAllowedHttpUrl("http://100.100.100.200/latest/meta-data", TAILNET)).toBe(false);
+    expect(isAllowedIpAddress("100.100.100.200", TAILNET)).toBe(false);
+    expect(isAllowedIpAddress("::ffff:100.100.100.200", TAILNET)).toBe(false);
+    expect(isAllowedIpAddress("100.100.100.201", TAILNET)).toBe(true);
+    expect(isAllowedIpAddress("100.100.100.200", ALLOW_ALL)).toBe(false);
+  });
+
+  it("keeps link-local/IMDS blocked with the flag on", () => {
+    expect(isAllowedHttpUrl("http://169.254.169.254", TAILNET)).toBe(false);
+    expect(isAllowedIpAddress("169.254.169.254", TAILNET)).toBe(false);
+    expect(isAllowedHttpUrl("http://[::ffff:169.254.169.254]", TAILNET)).toBe(false);
+  });
+});

@@ -11,7 +11,7 @@ import {
   type RegisterAgentInput,
 } from "../services/host-registry.js";
 import { refreshHostProtocolSoon } from "../services/host-agents.js";
-import { isAllowedHttpUrl } from "../services/url-guard.js";
+import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
 
@@ -176,7 +176,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
 
       if (
         baseUrl !== undefined &&
-        !isAllowedHttpUrl(baseUrl, { allowLoopback: true, allowPrivate: true })
+        !isAllowedHttpUrl(baseUrl, hostUrlPolicy(app.config.MULLION_ALLOW_TAILNET_HOSTS))
       ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }

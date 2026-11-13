@@ -7,7 +7,7 @@ import {
   revokeHostPairing,
 } from "../services/host-pairing.js";
 import { refreshHostProtocolSoon } from "../services/host-agents.js";
-import { isAllowedHttpUrl } from "../services/url-guard.js";
+import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { requestScheme } from "../services/request-scheme.js";
 import { createFailureRateLimiter } from "../services/failure-rate-limiter.js";
 import {
@@ -166,7 +166,10 @@ export async function hostPairingRoute(app: FastifyInstance) {
       const { code, requestId, hostname, name, baseUrl, platform, capabilities } = request.body;
       // A malformed code can never match; reject before touching the table.
       if (!PAIRING_CODE_PATTERN.test(code)) return reply.unauthorized("invalid pairing code");
-      if (baseUrl && !isAllowedHttpUrl(baseUrl, { allowLoopback: true, allowPrivate: true })) {
+      if (
+        baseUrl &&
+        !isAllowedHttpUrl(baseUrl, hostUrlPolicy(app.config.MULLION_ALLOW_TAILNET_HOSTS))
+      ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
       const result = redeemHostPairingCode(app, code, {

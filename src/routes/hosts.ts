@@ -22,7 +22,7 @@ import {
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
-import { isAllowedHttpUrl } from "../services/url-guard.js";
+import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
@@ -98,8 +98,9 @@ const updateHostSchema = {
 // dev/test setup this repo's own integration test uses). The accepted
 // trust boundary is: whoever can call POST/PATCH /api/hosts can already
 // point this process's bearer token at any http(s) URL they choose —
-// that's the deploy's admin, not an arbitrary caller. Link-local/shared-NAT
-// ranges are rejected regardless, though: 169.254.169.254 (every major
+// that's the deploy's admin, not an arbitrary caller. Link-local ranges are
+// rejected regardless (shared-NAT too, unless MULLION_ALLOW_TAILNET_HOSTS opts
+// into 100.64.0.0/10; Alibaba's 100.100.100.200 IMDS stays blocked even then), though: 169.254.169.254 (every major
 // cloud's instance metadata service) sits inside 169.254.0.0/16, and a
 // baseUrl pointed at it would make this process hand its own agent bearer
 // token — and any response body — to whatever's listening there, which is
@@ -107,8 +108,8 @@ const updateHostSchema = {
 // See services/url-guard.ts for the shared classification logic this
 // policy sits on top of — issue #28 phase 5's external-preview validation
 // uses the same logic with the opposite allowLoopback/allowPrivate policy.
-function isValidHttpUrl(value: string): boolean {
-  return isAllowedHttpUrl(value, { allowLoopback: true, allowPrivate: true });
+function isValidHttpUrl(value: string, allowSharedNat: boolean): boolean {
+  return isAllowedHttpUrl(value, hostUrlPolicy(allowSharedNat));
 }
 
 // A changed baseUrl/token means the old health verdict no longer means
@@ -265,7 +266,10 @@ export async function hostsRoute(app: FastifyInstance) {
     { schema: createHostSchema },
     async (request, reply) => {
       const { name, baseUrl } = request.body;
-      if (baseUrl !== undefined && !isValidHttpUrl(baseUrl)) {
+      if (
+        baseUrl !== undefined &&
+        !isValidHttpUrl(baseUrl, app.config.MULLION_ALLOW_TAILNET_HOSTS)
+      ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
       // A caller-supplied token (manual / ansible-provisioned agent) is
@@ -320,7 +324,10 @@ export async function hostsRoute(app: FastifyInstance) {
           return reply.badRequest("the local host cannot be edited");
         }
       }
-      if (request.body.baseUrl !== undefined && !isValidHttpUrl(request.body.baseUrl)) {
+      if (
+        request.body.baseUrl !== undefined &&
+        !isValidHttpUrl(request.body.baseUrl, app.config.MULLION_ALLOW_TAILNET_HOSTS)
+      ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
       const updated = updateHost(app, id, request.body);
