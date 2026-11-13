@@ -465,10 +465,15 @@
       #rrail .sess.on {
         box-shadow: inset -3px 0 0 var(--g);
       }
-      .rail button.gdots {
-        min-height: 26px;
-        flex-direction: row;
+      .rail .gdots {
+        display: flex;
         gap: 4px;
+        margin-top: 6px;
+        max-width: none;
+        overflow: visible;
+      }
+      .rail button.wsp {
+        padding: 6px 0 8px;
       }
       .gdots b {
         width: 7px;
@@ -556,6 +561,107 @@
         border: 1px solid var(--border);
         border-radius: 9px;
         color: var(--dim);
+      }
+      #sheet .tabs {
+        display: flex;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        overflow: hidden;
+        margin-bottom: 4px;
+      }
+      #sheet .tabs button {
+        flex: 1;
+        min-height: 48px;
+        color: var(--muted);
+      }
+      #sheet .tabs .on {
+        background: var(--accent-fill);
+        color: #fff;
+        font-weight: 600;
+      }
+      #sheet .where {
+        display: flex;
+        gap: 8px;
+      }
+      #sheet .where button {
+        flex: 1;
+        min-width: 0;
+        min-height: 48px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: left;
+      }
+      #sheet .opt {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        min-height: 52px;
+        text-align: left;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      #sheet .opt span {
+        flex: 1;
+      }
+      #sheet .opt small {
+        display: block;
+        color: var(--dim);
+      }
+      #sheet .sw {
+        width: 40px;
+        height: 24px;
+        border-radius: 12px;
+        border: 1.5px solid var(--dim);
+        position: relative;
+      }
+      #sheet .sw::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        background: var(--dim);
+      }
+      #sheet .tiles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      #sheet .tile {
+        min-height: 72px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+      }
+      #sheet .tile i {
+        font-style: normal;
+        font-size: 20px;
+      }
+      #sheet .mh i {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 3px;
+        margin-right: 7px;
+      }
+      #sheet .srow span {
+        flex: 1;
+      }
+      #sheet .act {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--g);
+        margin-right: 8px;
       }
       #sheet .mh {
         padding: 16px 0 4px;
@@ -695,12 +801,12 @@
         <button class="tk" data-jump="backlog"><i>6</i>Backlog</button>
         <button class="tk" data-jump="done"><i>2</i>Done<span class="pip"></span></button>
         <!-- Workspace mode: the workspaces, then the sessions open in the current one. -->
-        <button class="ws wsp on" data-wsp>
+        <button class="ws wsp on" data-wsp aria-label="Workspace Mullion. Switch workspace">
           <i style="border-color: #3b82f6; color: #3b82f6">M</i><span>Mullion</span>
-        </button>
-        <button class="ws gdots" data-wsp aria-label="Workspace groups">
-          <b style="background: #3b82f6" class="cur"></b><b style="background: #a16207"></b
-          ><b style="background: #c2410c"><u></u></b><b style="background: #8a8a94"></b>
+          <span class="gdots"
+            ><b style="background: #3b82f6" class="cur"></b><b style="background: #a16207"></b
+            ><b style="background: #c2410c"><u></u></b><b style="background: #8a8a94"></b
+          ></span>
         </button>
         <hr class="ws" />
         <span id="lsess" class="ws" style="display: contents"></span>
@@ -873,6 +979,83 @@
       const sheet = document.createElement("div");
       sheet.id = "sheet";
       $("#body").append(sheet);
+      // The launcher: the same choices as the desktop launcher, laid out for touch.
+      let addTab = "new";
+      function addSheet(side) {
+        const other = SESS.filter((x) => onRight(x[0]) !== (side === "right"));
+        const act = side === "right" ? "mvr" : "mvl";
+        const row = (x, a) =>
+          `<button class="srow" data-put="${a}|${x[0]}"><i>${x[1]}</i><span><b>${x[0].split(" · ")[0]}</b><small>${x[0].split(" · ")[1] || ""}</small></span></button>`;
+        const tile = (g, n) => `<button class="tile" data-put="noop|"><i>${g}</i>${n}</button>`;
+        const fresh =
+          `<div class="mh">Where</div>` +
+          `<div class="where"><button data-put="keep|">▣ mullion-session-manager ▾</button><button data-put="keep|">this server ▾</button></div>` +
+          `<button class="opt" data-put="keep|"><span>Isolate in a new worktree</span><i class="sw"></i></button>` +
+          `<button class="opt" data-put="keep|"><span>Skip permission prompts<small>agents only</small></span><i class="sw"></i></button>` +
+          `<div class="mh">Agents</div><div class="tiles">` +
+          [
+            ["✳", "claude"],
+            ["◇", "codex"],
+            ["▮", "opencode"],
+            ["△", "agy"],
+            ["π", "pi"],
+            ["♪", "mcode"],
+          ]
+            .map((x) => tile(...x))
+            .join("") +
+          `</div><div class="mh">Shells and scripts</div>` +
+          [
+            ["bash", "›", ""],
+            ["zsh", "›", ""],
+            ["dev", "›", "npm run dev · package.json"],
+          ]
+            .map(
+              (x) =>
+                `<button class="srow" data-put="noop|"><i>${x[1]}</i><span><b>${x[0]}</b><small>${x[2]}</small></span></button>`,
+            )
+            .join("");
+        const existing =
+          `<div class="sfind">Search sessions…</div>` +
+          (other.length
+            ? `<div class="mh">On the ${side === "right" ? "left" : "right"} half</div>`
+            : "") +
+          other.map((x) => row(x, act)).join("") +
+          `<div class="mh">Mullion · not open</div>` +
+          [
+            ["claude · docs cleanup", "✳"],
+            ["codex · flaky test", "◇"],
+          ]
+            .map((x) => row(x, "noop"))
+            .join("") +
+          `<div class="mh">Runway · not open</div>` +
+          [["claude · importer", "✳"]].map((x) => row(x, "noop")).join("");
+        sheet.innerHTML =
+          `<div class="sh"><b>Add to the ${side} half</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+          `<div class="tabs"><button data-tab="new" class="${addTab === "new" ? "on" : ""}">New session</button><button data-tab="open" class="${addTab === "open" ? "on" : ""}">Open existing</button></div>` +
+          (addTab === "new" ? fresh : existing);
+        sheet.className = side;
+        sheet.style.display = "block";
+      }
+      function wsSheet() {
+        sheet.innerHTML =
+          `<div class="sh"><b>Workspaces</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+          `<div class="sfind">Search workspaces…</div>` +
+          WSPS.map(
+            ([g, c, names]) =>
+              `<div class="mh"><i style="background:${c}"></i>${g || "Ungrouped"}</div>` +
+              names
+                .map(
+                  (n) =>
+                    `<button class="srow" data-pickws="${n}|${c}"><i style="color:${c}">▦</i><span><b>${n}</b></span>${
+                      n === "Runway" || n === "Pocket" ? '<em class="act"></em>' : ""
+                    }</button>`,
+                )
+                .join(""),
+          ).join("") +
+          `<button class="opt" data-put="noop|"><span>＋ New workspace</span></button>`;
+        sheet.className = "left";
+        sheet.style.display = "block";
+      }
       function render() {
         sheet.style.display = "none";
         const open = !!state.view;
@@ -961,6 +1144,7 @@
           } else state.left = s;
         } else if (t.dataset.put) {
           const [act, s] = t.dataset.put.split("|");
+          if (act === "keep") return;
           if (act === "close") state.right = null;
           else if (act === "left") {
             if (state.right === s) state.right = null;
@@ -980,46 +1164,23 @@
           }
           closeMenu();
         } else if (t.dataset.add) {
-          // "+" under a rail's sessions means the same on both sides: add a session to this half.
-          const here = t.dataset.add;
-          const other = SESS.filter((x) => onRight(x[0]) !== (here === "right"));
-          const act = here === "right" ? "mvr" : "mvl";
-          const side = here === "right" ? "right" : "left";
-          const row = (x, a) =>
-            `<button class="srow" data-put="${a}|${x[0]}"><i>${x[1]}</i><span><b>${x[0].split(" · ")[0]}</b><small>${x[0].split(" · ")[1] || ""}</small></span></button>`;
-          sheet.innerHTML =
-            `<div class="sh"><b>Add to the ${side} half</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
-            `<button class="snew" data-put="noop|">＋ New session</button>` +
-            `<div class="sfind">Search sessions…</div>` +
-            (other.length
-              ? `<div class="mh">On the ${side === "right" ? "left" : "right"} half</div>`
-              : "") +
-            other.map((x) => row(x, act)).join("") +
-            `<div class="mh">Mullion · not open</div>` +
-            [
-              ["claude · docs cleanup", "✳"],
-              ["codex · flaky test", "◇"],
-            ]
-              .map((x) => row(x, "noop"))
-              .join("") +
-            `<div class="mh">Runway · not open</div>` +
-            [["claude · importer", "✳"]].map((x) => row(x, "noop")).join("");
-          sheet.className = side;
-          sheet.style.display = "block";
+          addSheet(t.dataset.add);
+          return;
+        } else if (t.dataset.tab) {
+          addTab = t.dataset.tab;
+          addSheet(sheet.className);
           return;
         } else if (t.dataset.wsp !== undefined) {
-          // The current workspace is one chip; tapping it opens the full workspace list.
-          menu.innerHTML = WSPS.map(
-            ([g, c, names]) =>
-              (g ? `<div class="mh"><i style="background:${c}"></i>${g}</div>` : "") +
-              names.map((n) => `<button data-pickws="${n}|${c}">${n}</button>`).join(""),
-          ).join("");
-          showMenu(t);
+          wsSheet();
           return;
         } else if (t.dataset.pickws) {
           const [n, c] = t.dataset.pickws.split("|");
           const chip = $("[data-wsp]");
-          chip.innerHTML = `<i style="border-color:${c};color:${c}">${n[0]}</i><span>${n}</span>`;
+          chip.querySelector("i").textContent = n[0];
+          chip.querySelector("i").style.cssText = `border-color:${c};color:${c}`;
+          chip.querySelector("span").textContent = n;
+          $$(".gdots b", chip).forEach((b, i) => b.classList.toggle("cur", WSPS[i][1] === c));
+          sheet.style.display = "none";
           closeMenu();
           return;
         } else if (t.dataset.new !== undefined) {
@@ -1090,6 +1251,10 @@
       const st = location.hash.match(/stack=(\w+)/);
       if (st) state.stack = st[1];
       if (flag("split")) state.right = "claude · orbit-api";
+      const after = () => {
+        if (flag("addsheet")) addSheet("right");
+        if (flag("wssheet")) wsSheet();
+      };
       if (flag("rsright")) {
         state.rs = "right";
         state.side["claude · orbit-api"] = "right";
@@ -1100,6 +1265,7 @@
         state.task = ["Fix focus loss in the login form", "aurora-web · #7 · PR #14"];
       }
       render();
+      after();
     </script>
   </body>
 </html>
