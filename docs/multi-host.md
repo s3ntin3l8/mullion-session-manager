@@ -1614,7 +1614,7 @@ use the same resolver, so they agree with the single-session routes.
 
 The batch routes ask a remote agent **once per `(host, cwd[, base])`**, not once
 per id: ten sessions on one checkout cost one `git-status` and one `git-diff`
-round trip, and an unreachable host is tried once per batch (every id still
+round trip, and a host that is not `offline` but does not answer is tried once per batch (every id still
 comes back omitted, so the dashboard keeps its last-known-good). On top of that,
 `RemoteHostClient.resolveGitStatus` / `resolveGitDiffStats` share concurrent
 identical reads and reuse a successful one for 3 s, so several open tabs do not
@@ -1622,8 +1622,9 @@ multiply the load (#2991). A `fresh` read (the dirty-tree and workflow gates)
 never reads the cache or joins another request, so it always reaches the agent;
 its result then refreshes the cache for the next ordinary read.
 
-A host the heartbeat has marked **offline** is not asked at all by these batch
-routes or by `GET /api/projects`' per-project `currentBranch` / `ruleFiles`
+Related, though not session-scoped: a host the heartbeat has marked **offline** is
+not asked at all by these batch routes (`git-statuses`, `git-diff-stats` and
+`git-refs`) or by `GET /api/projects`' per-project `currentBranch` / `ruleFiles`
 lookups: its ids are omitted (the dashboard keeps last-known-good) and it is
 polled again as soon as the heartbeat sees it. Only `offline` skips; `degraded`
 (slow or saturated) and `pending` (not yet checked) hosts are still polled, so a

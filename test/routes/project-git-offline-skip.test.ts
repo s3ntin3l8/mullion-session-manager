@@ -103,6 +103,55 @@ describe("batch git polls skip an offline host (#2991)", () => {
     }
   });
 
+  it("a degraded host (one or two missed pings) is still asked", async () => {
+    const app = await buildApp();
+    try {
+      const { hostId, sessionId } = await seed(app);
+      app.hostHeartbeatTracker?.recordFailure(hostId);
+      expect(app.hostHeartbeatTracker?.getHealth(hostId).status).toBe("degraded");
+      const client: Client = { resolveGitDiffStats: vi.fn().mockResolvedValue(DIFF) };
+      stubClient(client);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-diff-stats?sessionIds=${sessionId}`,
+      });
+      expect(Object.keys(res.json() as object)).toHaveLength(1);
+      expect(client.resolveGitDiffStats).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("git-refs does not ask an offline host for branches or the repo ref", async () => {
+    const app = await buildApp();
+    try {
+      const { hostId, projectId, cwd } = await seed(app);
+      app.hostHeartbeatTracker?.markOffline(hostId);
+      const client: Client = {
+        resolveGitBranches: vi
+          .fn()
+          .mockResolvedValue({ branches: [], worktrees: [], remoteBranches: [] }),
+        resolveGitHubRepo: vi.fn().mockResolvedValue(null),
+      };
+      stubClient(client);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-refs?ids=${projectId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { branches: object; prs: object };
+      expect(body.branches).toEqual({});
+      expect(body.prs).toEqual({});
+      const asked = [
+        ...client.resolveGitBranches.mock.calls,
+        ...client.resolveGitHubRepo.mock.calls,
+      ].map(([c]) => c);
+      expect(asked).not.toContain(cwd);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("an online host is asked, and asked again once it recovers from offline", async () => {
     const app = await buildApp();
     try {

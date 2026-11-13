@@ -491,7 +491,15 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           // roughly double this project's contribution to the batch's
           // total latency for no reason (nothing here depends on the
           // other's result).
+          // Issue #2991: an offline host is not asked by either half — both
+          // omit it, which keeps the dashboard's last-known-good.
+          const hostOffline =
+            project.hostId !== LOCAL_HOST_ID && isHostOffline(app, project.hostId);
           const branchesPromise = (async () => {
+            if (hostOffline) {
+              refsOutcome.failed(project.hostId);
+              return;
+            }
             // No `detail` param, same as the background poll path already
             // documented on the per-project route's own comment (the
             // Source Control's own on-demand fetch is what opts into the
@@ -520,6 +528,7 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
           // (viaRemote's own doc comment), so this still needs no
           // try/catch — just a three-way branch instead of a collapsed one.
           const prsPromise = (async () => {
+            if (hostOffline) return;
             const result = await resolveRepoRefResult(app, project);
             if (!result.ok) {
               // Transient (remote host unreachable) — omit, preserving
