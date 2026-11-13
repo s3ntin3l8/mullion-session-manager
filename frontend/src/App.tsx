@@ -84,7 +84,6 @@ import { usePostWorkspaceSwitchHighlight } from "./hooks/usePostWorkspaceSwitchH
 import { usePaneCapNotice } from "./hooks/usePaneCapNotice.js";
 import { useSidebarOpenTierReset } from "./hooks/useSidebarOpenTierReset.js";
 import { useSidebarSwipe } from "./hooks/useSidebarSwipe.js";
-import { useRightSidebarEdgeSwipe } from "./hooks/useRightSidebarEdgeSwipe.js";
 import { useRetriableLazy } from "./lib/retriableLazy.js";
 import { ResourceAlertBanner } from "./ResourceAlertBanner.js";
 
@@ -868,12 +867,6 @@ export function App() {
   // Edge-swipe to open/dismiss the compact sidebar. Extracted to
   // useSidebarSwipe; called here, where the effect was.
   useSidebarSwipe({ compact, sidebarOpen, setSidebarOpen, appBodyRef, sidebarWrapperRef });
-
-  const rightSidebarOpen = useDashboardStore((s) => s.rightSidebarOpen);
-  // Tablet right-edge swipe opens the right sidebar. Extracted to
-  // useRightSidebarEdgeSwipe; called here, immediately after the
-  // rightSidebarOpen subscription, where the effect was.
-  useRightSidebarEdgeSwipe({ layoutTier, rightSidebarOpen, appBodyRef });
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct

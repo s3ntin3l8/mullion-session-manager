@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
 import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
-import { attachSidebarSwipeGesture } from "../lib/sidebarSwipeGesture.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import { useDashboardStore } from "../store/index.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "../store/constants.js";
@@ -20,17 +19,28 @@ export interface RightSidebarProps {
   workspaceProjectIds?: number[] | null;
 }
 
-// Pinnable right sidebar: an icon rail plus a view drawer. Pinned (desktop
-// only) the drawer docks beside the grid and pushes it; otherwise — and always
-// on tablet — it floats over the grid with a click-away scrim. Rendered as
+// Below this window width a docked panel would leave the workspace less than
+// about 400px, so an open view takes the whole width instead (#3006).
+export const RIGHT_SIDEBAR_FULL_WIDTH_QUERY = "(max-width: 799.98px)";
+
+function subscribeFullWidth(onChange: () => void): () => void {
+  const mq = window.matchMedia(RIGHT_SIDEBAR_FULL_WIDTH_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+const readFullWidth = (): boolean => window.matchMedia(RIGHT_SIDEBAR_FULL_WIDTH_QUERY).matches;
+
+// Right sidebar: an icon rail plus a view panel. The panel is always docked
+// beside the grid and pushes it; it never floats, has no scrim and is not
+// dismissed by a swipe or a click elsewhere (#3006). A rail tab opens its
+// view, and the open view's tab closes the panel. Only where the window is
+// too narrow to dock does an open view cover the workspace. Rendered as
 // siblings of `.grid-area` inside `.app-body`. Not rendered on phone, where
 // the navigator panel already carries Source Control.
 export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSidebarProps) {
   const viewId = useDashboardStore((s) => s.rightSidebarView);
   const open = useDashboardStore((s) => s.rightSidebarOpen);
-  const pinned = useDashboardStore((s) => s.rightSidebarPinned);
   const storedWidth = useDashboardStore((s) => s.rightSidebarWidth);
-  const setPinned = useDashboardStore((s) => s.setRightSidebarPinned);
   const setStoredWidth = useDashboardStore((s) => s.setRightSidebarWidth);
   const close = useDashboardStore((s) => s.closeRightSidebar);
   const followed = useFollowedProject(workspaceProjectIds ?? null);
@@ -92,18 +102,17 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     cursor: "col-resize",
   });
 
-  const desktop = tier === "desktop";
-  // A pin saved on desktop is ignored (not erased) below desktop width.
-  const docked = desktop && pinned;
-  const overlay = open && !docked;
+  const full = useSyncExternalStore(subscribeFullWidth, readFullWidth);
+  // Covering the workspace is the one state the panel can be "in the way":
+  // only then do Escape and the back gesture close it.
+  const covering = open && full && tier !== "phone";
 
-  // Escape dismisses the floating drawer. A docked one is part of the layout,
-  // so Escape (which terminals need) leaves it alone. Even when floating, an
-  // Escape that something already handled (defaultPrevented) or that came
-  // from inside a terminal belongs to that terminal (vim, an agent TUI), not
-  // to the drawer.
+  // A docked panel is part of the layout, so Escape (which terminals need)
+  // leaves it alone. Even when it covers the workspace, an Escape that
+  // something already handled (defaultPrevented) or that came from inside a
+  // terminal belongs to that terminal (vim, an agent TUI), not to the panel.
   useEffect(() => {
-    if (!overlay) return;
+    if (!covering) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       if (e.target instanceof Element && e.target.closest(".xterm")) return;
@@ -111,34 +120,18 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [overlay, close]);
+  }, [covering, close]);
+  usePhoneBackStack(covering, close);
 
-  // Tablet: Android back / the back gesture closes the floating drawer, and
-  // so does a rightward swipe on it (the mirror of the left navigator).
-  const tablet = tier === "tablet";
-  usePhoneBackStack(tablet && overlay, close);
-  const panelRef = useRef<HTMLElement>(null);
-  const panelMounted = open && !docked;
-  useEffect(() => {
-    if (!tablet || !panelMounted) return;
-    const el = panelRef.current;
-    if (!el) return;
-    return attachSidebarSwipeGesture({ element: el, commitDirection: 1, onCommit: close });
-  }, [tablet, panelMounted, close]);
-
-  // A tier change (rotate, fold/unfold, window resize) that lands on phone,
-  // or takes a floating drawer from tablet to desktop, closes it like the
-  // left navigator does — `open` is persisted state, so it would otherwise
-  // linger invisibly (phone) or as a stale overlay (desktop). A pinned drawer
-  // simply docks on desktop and stays. The reverse, desktop → tablet, never
-  // closes: a docked drawer just becomes a floating one, which is intended.
+  // A tier change (rotate, fold/unfold, window resize) that lands on phone
+  // closes the panel: `open` is persisted state and phone renders nothing
+  // here, so it would otherwise linger invisibly.
   const lastTier = useRef(tier);
   useEffect(() => {
     const prev = lastTier.current;
     lastTier.current = tier;
-    if (prev === tier || !open) return;
-    if (tier === "phone" || (prev === "tablet" && tier === "desktop" && !pinned)) close();
-  }, [tier, open, pinned, close]);
+    if (prev !== tier && open && tier === "phone") close();
+  }, [tier, open, close]);
 
   if (tier === "phone") return null;
 
@@ -146,24 +139,14 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
 
   return (
     <>
-      {overlay && <div className="right-sidebar-scrim" onClick={close} />}
       {open && (
         <aside
-          className={`right-sidebar-panel${docked ? " docked" : " overlay"}${dragging ? " resizing" : ""}`}
-          ref={panelRef}
-          style={{ width }}
+          className={`right-sidebar-panel docked${full ? " full" : ""}${dragging ? " resizing" : ""}`}
+          style={full ? undefined : { width }}
           aria-label={`${view.label} sidebar`}
         >
-          {desktop && <div className="right-sidebar-resize-handle" onMouseDown={onMouseDown} />}
-          <RightSidebarPanel
-            view={view}
-            followed={followed}
-            actions={actions}
-            canPin={desktop}
-            pinned={pinned}
-            onTogglePin={() => setPinned(!pinned)}
-            onClose={close}
-          />
+          {!full && <div className="right-sidebar-resize-handle" onMouseDown={onMouseDown} />}
+          <RightSidebarPanel view={view} followed={followed} actions={actions} onClose={close} />
         </aside>
       )}
       <RightRail projectId={followed.effectiveProjectId} />

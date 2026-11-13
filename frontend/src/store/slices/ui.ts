@@ -209,8 +209,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     writeString(STORAGE_KEYS.themeHint, resolveTheme(next.theme));
   }
 
-  const rightSidebarPinned = readBool(STORAGE_KEYS.rightSidebarPinned, false);
-
   return {
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
@@ -230,9 +228,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     rightSidebarBranchRequest: null,
     rightSidebarPruneRequest: null,
     githubOpenPrByProject: {},
-    rightSidebarPinned,
-    // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
-    rightSidebarOpen: rightSidebarPinned && readBool(STORAGE_KEYS.rightSidebarOpen, false),
+    // The panel is always docked (#3006), so it comes back the way it was left.
+    rightSidebarOpen: readBool(STORAGE_KEYS.rightSidebarOpen, false),
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
     hierarchicalView: readStoredHierarchicalView(),
@@ -495,11 +492,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         selectedTaskId: null,
         ...(leavingGithub ? { githubOpenPrByProject: {}, githubOpenIssueByProject: {} } : {}),
       });
-    },
-
-    setRightSidebarPinned: (value) => {
-      writeBool(STORAGE_KEYS.rightSidebarPinned, value);
-      set({ rightSidebarPinned: value });
     },
 
     setRightSidebarWidth: (value) => {
