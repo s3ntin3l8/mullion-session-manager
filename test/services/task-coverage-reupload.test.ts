@@ -546,9 +546,35 @@ describe("#2904 — a non-Actions status stuck pending after green CI", () => {
     await reconcileTasks(app);
 
     const row = getTask(app, id);
-    expect(row.coverageReuploadCount).toBe(0);
+    expect(row.coverageReuploadCount).toBe(1);
     expect(row.needsHumanReason).toBeNull();
     expect(row.mergeError).toContain("lacks Actions write");
+
+    // A token that keeps answering 403 escalates instead of retrying forever.
+    nowMs += 21 * 60_000;
+    await reconcileTasks(app);
+    nowMs += 21 * 60_000;
+    await reconcileTasks(app);
+    expect(mockRerunJob).toHaveBeenCalledTimes(2);
+    expect(getTask(app, id).needsHumanReason).toBe("ci-status-stalled");
+    await app.close();
+  });
+
+  it("escalates a head with no coverage job after the cap instead of re-listing jobs forever", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    mockGetJobs.mockResolvedValue({ ok: true, jobs: [] });
+
+    await reconcileTasks(app);
+    expect(getTask(app, id).mergeError).toContain("nothing for Mullion to re-run");
+    expect(getTask(app, id).coverageReuploadCount).toBe(1);
+    nowMs += 21 * 60_000;
+    await reconcileTasks(app);
+    nowMs += 21 * 60_000;
+    await reconcileTasks(app);
+
+    expect(getTask(app, id).coverageReuploadCount).toBe(2);
+    expect(getTask(app, id).needsHumanReason).toBe("ci-status-stalled");
     await app.close();
   });
 

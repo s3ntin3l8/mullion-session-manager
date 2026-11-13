@@ -268,8 +268,8 @@ async function reuploadCoverage(
 /**
  * Stamp "we are about to ask GitHub" on the task row, WITHOUT spending budget.
  *
- * Only an answer that establishes something (GitHub accepted the re-run, or
- * refused every candidate) consumes one of the head's attempts — see
+ * Only a definite answer (GitHub accepted, refused every candidate, or the
+ * head has no coverage job / the token cannot re-run) consumes one of the head's attempts — see
  * {@link spendAttempt}. An ask that never landed (a rate limit, a 5xx, a
  * listing that failed, a token without Actions write) must not: two blips
  * would otherwise exhaust the cap and park the task with a false "provider
@@ -416,11 +416,14 @@ export async function attemptCoverageReupload(
 
   const result = await reuploadCoverage(app, task.id, token, args.repoRef, args.checkRuns);
   if (result === "unavailable") return { kind: "unavailable", stall };
+
+  // Every definite answer counts: accepted, refused, "no coverage job" and
+  // "token cannot re-run" are all GitHub answering. The last two are what a
+  // permanent misconfiguration keeps producing, so they must reach the cap
+  // and escalate to a human instead of re-listing jobs forever.
+  spendAttempt(app, task.id, args.headSha, attempt);
   if (result === "unauthorized") return { kind: "unauthorized", stall };
   if (result === "no-candidate") return { kind: "no-candidate", stall };
-
-  // Accepted or refused: GitHub answered, so the attempt counts.
-  spendAttempt(app, task.id, args.headSha, attempt);
   if (result === "refused") return { kind: "refused", stall, attempt };
 
   app.log.info(
