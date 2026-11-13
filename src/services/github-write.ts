@@ -1161,28 +1161,29 @@ export async function updatePullRequestTitle(
  * coverage makes Codecov reprocess the commit, and the pending status goes
  * green (that is exactly what a human did by hand on PR #2894).
  *
- * Returns `false` when GitHub REFUSES the re-run — 403/404 (a token without
- * Actions write, a job GitHub will not re-run) and 422 ("cannot be rerun",
- * which GitHub says of a job that is still running or of a run whose attempt
- * has already been re-used). A refusal is a definite answer the caller acts
- * on by SKIPPING that job and trying the next candidate — not an error. A
- * thrown rate-limit or network error is "could not ask" and propagates.
+ * Returns a discriminated answer:
+ * - `"accepted"` — GitHub queued the re-run.
+ * - `"refused"` — 422 ("cannot be rerun", which GitHub says of a job that is
+ *   still running or of a run whose attempt has already been re-used): a
+ *   definite answer about THIS job, so the caller SKIPS it and tries the next.
+ * - `"unauthorized"` — 403/404 (a token without Actions write, or a job the
+ *   token cannot see): also skipped, but kept apart from `"refused"` so the
+ *   caller can tell the human the dispatch token lacks Actions write instead
+ *   of blaming GitHub's per-job rules.
+ * A thrown rate-limit or network error is "could not ask" and propagates.
  */
 export async function rerunJob(
   token: string,
   owner: string,
   repo: string,
   jobId: number,
-): Promise<boolean> {
+): Promise<"accepted" | "refused" | "unauthorized"> {
   try {
     await githubRequest(token, owner, repo, "POST", `/actions/jobs/${jobId}/rerun`);
-    return true;
+    return "accepted";
   } catch (err) {
-    if (err instanceof GitHubWriteScopeError) return false;
-    // 422 — "cannot be rerun". GitHub's own wording for a job it will not
-    // re-run (still running, or its attempt already re-used). A refusal, like
-    // the 403 above.
-    if (err instanceof GitHubApiError && err.statusCode === 422) return false;
+    if (err instanceof GitHubWriteScopeError) return "unauthorized";
+    if (err instanceof GitHubApiError && err.statusCode === 422) return "refused";
     throw err;
   }
 }

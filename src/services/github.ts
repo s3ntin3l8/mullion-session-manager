@@ -1423,6 +1423,21 @@ export async function getWorkflowRunJobs(
   repo: string,
   runId: number,
 ): Promise<GitHubJob[]> {
+  return (await getWorkflowRunJobsChecked(token, owner, repo, runId)).jobs;
+}
+
+/**
+ * Same listing as `getWorkflowRunJobs`, but says whether GitHub actually
+ * answered: `ok: false` for a non-2xx response or a thrown request (where
+ * `jobs` is `[]`), `ok: true` for a real answer — including a run with no
+ * jobs. Callers that must tell "no jobs" from "couldn't ask" use this.
+ */
+export async function getWorkflowRunJobsChecked(
+  token: string,
+  owner: string,
+  repo: string,
+  runId: number,
+): Promise<{ ok: boolean; jobs: GitHubJob[] }> {
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -1433,9 +1448,9 @@ export async function getWorkflowRunJobs(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=100`,
       { headers },
     );
-    if (!res.ok) return [];
+    if (!res.ok) return { ok: false, jobs: [] };
     const data = (await res.json()) as GitHubJobsApiResponse;
-    return data.jobs.map((j) => ({
+    const jobs = data.jobs.map((j) => ({
       id: j.id,
       name: j.name,
       status: j.status,
@@ -1451,8 +1466,9 @@ export async function getWorkflowRunJobs(
           number: s.number,
         })) ?? [],
     }));
+    return { ok: true, jobs };
   } catch {
-    return [];
+    return { ok: false, jobs: [] };
   }
 }
 

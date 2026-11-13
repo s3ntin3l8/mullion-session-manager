@@ -1818,6 +1818,8 @@ async function attemptMerge(
           repoRef,
           headSha: pr.headSha,
           checkRuns: unstableCheckRuns,
+          // A red non-required check needs a fix, not a coverage re-upload.
+          skip: redUnstable.length > 0,
           fallbackMessage: checkRuns.ok
             ? heldReason
             : `${heldReason} The check list could not be read, so the title-lint self-heal did not run — use "Merge now" to override, or wait for the lookup to answer.`,

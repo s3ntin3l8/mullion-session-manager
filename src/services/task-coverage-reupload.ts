@@ -26,7 +26,7 @@ import type { GitHubRepoRef } from "./git-remote.js";
 import {
   actionsRunIdFromCheckUrl,
   fetchRunsForHeadChecked,
-  getWorkflowRunJobs,
+  getWorkflowRunJobsChecked,
   isRedCheckConclusion,
   type CheckRunResult,
 } from "./github.js";
@@ -93,12 +93,14 @@ export type CoverageReuploadOutcome =
   | { kind: "awaiting-retry"; stall: CoverageStall }
   /** The upload job was re-run; Codecov should reprocess the commit. */
   | { kind: "reuploaded"; stall: CoverageStall; attempt: number }
-  /** Every candidate job was refused by GitHub (it will not re-run them). */
+  /** Every candidate job was refused by GitHub (it will not re-run them). Spends an attempt. */
   | { kind: "refused"; stall: CoverageStall; attempt: number }
-  /** The head's CI has no job that uploads coverage — nothing to re-run. */
-  | { kind: "no-candidate"; stall: CoverageStall; attempt: number }
-  /** GitHub could not be asked (a rate limit, a network error). */
-  | { kind: "unavailable"; stall: CoverageStall; attempt: number }
+  /** Every candidate job answered 403/404: the dispatch token lacks Actions write. Spends nothing. */
+  | { kind: "unauthorized"; stall: CoverageStall }
+  /** The head's CI has no job that uploads coverage — nothing to re-run. Spends nothing. */
+  | { kind: "no-candidate"; stall: CoverageStall }
+  /** GitHub could not be asked (a rate limit, a network error). Spends nothing. */
+  | { kind: "unavailable"; stall: CoverageStall }
   /** The attempt could not be RECORDED (a database error) — no budget was spent. */
   | { kind: "reserve-failed"; stall: CoverageStall }
   /** The budget is spent and the status still has not settled: a human must act. */
@@ -206,7 +208,7 @@ function isCoverageUploadJob(job: { status: string; steps: readonly { name: stri
 }
 
 /** How one re-upload round ended. */
-type ReuploadResult = "accepted" | "refused" | "no-candidate" | "unavailable";
+type ReuploadResult = "accepted" | "refused" | "unauthorized" | "no-candidate" | "unavailable";
 
 /**
  * Re-run one job that uploads the coverage.
@@ -224,14 +226,23 @@ async function reuploadCoverage(
   checkRuns: readonly CheckRunResult[],
 ): Promise<ReuploadResult> {
   let refused = false;
+  let unauthorized = false;
   let failed = false;
   for (const runId of candidateCoverageRuns(checkRuns, repoRef)) {
-    const jobs = await getWorkflowRunJobs(token, repoRef.owner, repoRef.repo, runId);
-    for (const job of jobs) {
+    const listing = await getWorkflowRunJobsChecked(token, repoRef.owner, repoRef.repo, runId);
+    if (!listing.ok) {
+      // An unanswered listing is not "this run has no coverage job": the
+      // token may lack actions:read, or GitHub may have answered 5xx.
+      failed = true;
+      continue;
+    }
+    for (const job of listing.jobs) {
       if (!isCoverageUploadJob(job)) continue;
       try {
-        if (await rerunJob(token, repoRef.owner, repoRef.repo, job.id)) return "accepted";
-        refused = true;
+        const answer = await rerunJob(token, repoRef.owner, repoRef.repo, job.id);
+        if (answer === "accepted") return "accepted";
+        if (answer === "refused") refused = true;
+        else unauthorized = true;
       } catch (err) {
         // "Could not ask" (a rate limit, a network error) is NOT a refusal:
         // the job may well be re-runnable, and the next candidate may answer
@@ -246,37 +257,43 @@ async function reuploadCoverage(
   }
   if (failed) return "unavailable";
   if (refused) return "refused";
-  // Nothing to re-run: this head's CI has no completed job with a coverage
-  // upload step (a repository whose CI does not upload coverage at all, or a
-  // run whose jobs could not be listed). Saying "GitHub refused" would be a
-  // lie; saying nothing would hide it.
+  if (unauthorized) return "unauthorized";
+  // Nothing to re-run: every listing answered and this head's CI has no
+  // completed job with a coverage upload step (a repository whose CI does not
+  // upload coverage at all). Saying "GitHub refused" would be a lie; saying
+  // nothing would hide it.
   return "no-candidate";
 }
 
 /**
- * Reserve one re-upload attempt on the task row.
+ * Stamp "we are about to ask GitHub" on the task row, WITHOUT spending budget.
  *
- * The count belongs to the HEAD it was spent on: a new head starts a fresh
- * budget, because a new head is a new CI run with a new status to settle.
- * The write is a compare-and-set on the row it read, so two sweeps racing
- * over the same task cannot both spend the same attempt — the loser of the
- * CAS sees no change and does not re-upload.
+ * Only an answer that establishes something (GitHub accepted the re-run, or
+ * refused every candidate) consumes one of the head's attempts — see
+ * {@link spendAttempt}. An ask that never landed (a rate limit, a 5xx, a
+ * listing that failed, a token without Actions write) must not: two blips
+ * would otherwise exhaust the cap and park the task with a false "provider
+ * stall" diagnosis though no job was ever re-run. The stamp still sets
+ * `coverageReuploadAt`, so the 20-minute spacing holds between asks.
  *
- * Returns false when the row moved under us (another sweep spent the
- * attempt first).
+ * The count belongs to the HEAD: a new head starts at 0. The write is a
+ * compare-and-set on the row it read (count, head and last-ask time), so two
+ * sweeps racing over the same task cannot both ask — the loser sees no change.
+ *
+ * Returns false when the row moved under us.
  */
-async function reserveAttempt(
+async function stampAttempt(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   headSha: string,
-  attempt: number,
+  attempts: number,
   now: number,
 ): Promise<boolean> {
   const changed = app.db
     .update(tasks)
     .set({
       coverageReuploadHeadSha: headSha,
-      coverageReuploadCount: attempt,
+      coverageReuploadCount: attempts,
       coverageReuploadAt: new Date(now),
     })
     .where(
@@ -286,10 +303,27 @@ async function reserveAttempt(
         task.coverageReuploadHeadSha === null
           ? isNull(tasks.coverageReuploadHeadSha)
           : eq(tasks.coverageReuploadHeadSha, task.coverageReuploadHeadSha),
+        task.coverageReuploadAt === null
+          ? isNull(tasks.coverageReuploadAt)
+          : eq(tasks.coverageReuploadAt, task.coverageReuploadAt),
       ),
     )
     .run();
   return changed.changes > 0;
+}
+
+/** Spend one attempt of the head's budget (GitHub gave a definite answer). */
+function spendAttempt(
+  app: FastifyInstance,
+  taskId: number,
+  headSha: string,
+  attempt: number,
+): void {
+  app.db
+    .update(tasks)
+    .set({ coverageReuploadCount: attempt })
+    .where(and(eq(tasks.id, taskId), eq(tasks.coverageReuploadHeadSha, headSha)))
+    .run();
 }
 
 /**
@@ -363,15 +397,13 @@ export async function attemptCoverageReupload(
     return { kind: "awaiting-retry", stall };
   }
 
-  const attempt = sameHead ? attempts + 1 : 1;
-  // A failure to RESERVE the attempt (a database error) or to ask GitHub must
-  // not escape as a merge failure: it is "could not act", and the next tick
-  // tries again. The two differ in one way that matters to the human: a
-  // reserved-but-unused attempt IS spent from the budget, while a reserve that
-  // never landed is not — hence the two distinct outcomes below.
+  const attempt = attempts + 1;
+  // A failure to RECORD the ask (a database error) or to ask GitHub must not
+  // escape as a merge failure: it is "could not act", and the next tick tries
+  // again. Neither spends budget (see {@link stampAttempt}).
   try {
-    if (!(await reserveAttempt(app, task, args.headSha, attempt, now))) {
-      // Another sweep spent this attempt first — do not spend another one.
+    if (!(await stampAttempt(app, task, args.headSha, attempts, now))) {
+      // Another sweep asked first — do not ask again.
       return { kind: "awaiting-retry", stall };
     }
   } catch (err) {
@@ -383,9 +415,13 @@ export async function attemptCoverageReupload(
   }
 
   const result = await reuploadCoverage(app, task.id, token, args.repoRef, args.checkRuns);
-  if (result === "unavailable") return { kind: "unavailable", stall, attempt };
+  if (result === "unavailable") return { kind: "unavailable", stall };
+  if (result === "unauthorized") return { kind: "unauthorized", stall };
+  if (result === "no-candidate") return { kind: "no-candidate", stall };
+
+  // Accepted or refused: GitHub answered, so the attempt counts.
+  spendAttempt(app, task.id, args.headSha, attempt);
   if (result === "refused") return { kind: "refused", stall, attempt };
-  if (result === "no-candidate") return { kind: "no-candidate", stall, attempt };
 
   app.log.info(
     {
@@ -419,8 +455,11 @@ export async function holdForStuckCoverageStatus(
     checkRuns: readonly CheckRunResult[];
     /** What the merge sweep records when nothing is stuck. */
     fallbackMessage: string;
+    /** True when the hold has a more actionable cause (a red check): never re-upload. */
+    skip?: boolean;
   },
 ): Promise<{ message: string; reason?: MergeNeedsHumanReason }> {
+  if (args.skip) return { message: args.fallbackMessage };
   const outcome = await attemptCoverageReupload(app, task, args);
   if (outcome.kind === "no-stall") return { message: args.fallbackMessage };
 
@@ -457,7 +496,7 @@ export async function holdForStuckCoverageStatus(
           : COVERAGE_REUPLOAD_SPACING_MS - (Date.now() - last);
       return {
         message:
-          `Held: ${pending}. Mullion re-ran the coverage upload recently; the next attempt is due in ` +
+          `Held: ${pending}. Mullion tried the coverage re-upload recently; the next attempt is due in ` +
           `${Math.max(1, Math.ceil(wait / 60_000))} minute(s).`,
       };
     }
@@ -475,12 +514,19 @@ export async function holdForStuckCoverageStatus(
           `so there is nothing for Mullion to re-run. Re-run the coverage upload by hand, ` +
           `or use "Merge now" to override.`,
       };
+    case "unauthorized":
+      return {
+        message:
+          `Held: ${pending}, but GitHub would not let Mullion re-run the coverage upload job ` +
+          `(403/404 — the dispatch token likely lacks Actions write). No attempt was spent. ` +
+          `Fix the token's Actions permission, re-run the coverage upload by hand, or use "Merge now" to override.`,
+      };
     case "unavailable":
       return {
         message:
-          `Held: ${pending}, and Mullion could not re-run the coverage upload ` +
-          `(a rate limit or a network error), so attempt ` +
-          `${outcome.attempt} of ${MAX_COVERAGE_REUPLOADS_PER_HEAD} was spent without a re-run.`,
+          `Held: ${pending}, and Mullion could not reach GitHub to re-run the coverage upload ` +
+          `(a rate limit, a network error or an unreadable job list). No attempt was spent — ` +
+          `the next try is due in ${Math.ceil(COVERAGE_REUPLOAD_SPACING_MS / 60_000)} minute(s).`,
       };
     case "reserve-failed":
       return {

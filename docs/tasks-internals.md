@@ -1915,7 +1915,14 @@ spent and the status is still pending, the task is flagged
 "needs a human" instead of "still reviewing" — and the merge error names the
 stuck status and says it is a Codecov-side stall. A job GitHub refuses to
 re-run (403/422 "cannot be rerun") is skipped, not an error: the next candidate
-job is tried, and one accepted re-run is enough.
+job is tried, and one accepted re-run is enough. Only an answer that establishes
+something spends an attempt — GitHub accepting the re-run, or refusing every
+candidate. An ask that never landed (a rate limit, a 5xx, a job listing that
+could not be read, a token without Actions write) is not charged, so two blips
+cannot exhaust the cap and park the task with a false "provider stall"; it still
+stamps `coverageReuploadAt`, so the 20-minute spacing holds. A PR that also has a
+red non-required check keeps the red-check message and gets no re-upload — that
+one needs a fix, not a re-run.
 
 **Exception — PR-title lint self-heals (`#1035`).** A failing **PR-title
 lint** check (e.g. `wagoid/commitlint-github-action` on repos that adopted

@@ -23,7 +23,7 @@ const {
   mockRerunJob,
   mockFetchRunsForHeadChecked,
   mockFetchCheckRunsForHead,
-  mockGetWorkflowRunJobs,
+  mockGetJobs,
 } = vi.hoisted(() => ({
   mockResolveRepoRef: vi.fn(),
   mockResolveGitHubToken: vi.fn(),
@@ -31,7 +31,7 @@ const {
   mockRerunJob: vi.fn(),
   mockFetchRunsForHeadChecked: vi.fn(),
   mockFetchCheckRunsForHead: vi.fn(),
-  mockGetWorkflowRunJobs: vi.fn(),
+  mockGetJobs: vi.fn(),
 }));
 
 vi.mock("../../src/services/host-git.js", async (importOriginal) => ({
@@ -51,7 +51,7 @@ vi.mock("../../src/services/github.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   fetchRunsForHeadChecked: mockFetchRunsForHeadChecked,
   fetchCheckRunsForHead: mockFetchCheckRunsForHead,
-  getWorkflowRunJobs: mockGetWorkflowRunJobs,
+  getWorkflowRunJobsChecked: mockGetJobs,
 }));
 
 vi.mock("node-pty", () => ({
@@ -197,12 +197,12 @@ describe("#2904 — a non-Actions status stuck pending after green CI", () => {
     mockResolveRepoRef.mockReset().mockResolvedValue({ owner: "o", repo: "r" });
     mockResolveGitHubToken.mockReset().mockResolvedValue("tok");
     mockGetPullRequestByNumber.mockReset().mockResolvedValue(mockPr());
-    mockRerunJob.mockReset().mockResolvedValue(true);
+    mockRerunJob.mockReset().mockResolvedValue("accepted");
     mockFetchRunsForHeadChecked.mockReset().mockResolvedValue({ ok: true, runs: [workflowRun()] });
     mockFetchCheckRunsForHead
       .mockReset()
       .mockResolvedValue([greenActionsCheck(), pendingCodecovCheck()]);
-    mockGetWorkflowRunJobs.mockReset().mockResolvedValue([coverageJob(7001)]);
+    mockGetJobs.mockReset().mockResolvedValue({ ok: true, jobs: [coverageJob(7001)] });
   });
 
   afterEach(() => {
@@ -325,15 +325,14 @@ describe("#2904 — a non-Actions status stuck pending after green CI", () => {
   it("tries the next candidate job when GitHub refuses the first one", async () => {
     const app = await buildApp();
     await createTask(app);
-    mockGetWorkflowRunJobs.mockResolvedValue([
-      coverageJob(7001),
-      coverageJob(7002),
-      coverageJob(7003),
-    ]);
+    mockGetJobs.mockResolvedValue({
+      ok: true,
+      jobs: [coverageJob(7001), coverageJob(7002), coverageJob(7003)],
+    });
     // GitHub refuses to re-run the first job (its run already used its
     // attempt) and accepts the second.
-    mockRerunJob.mockImplementation(
-      async (_t: string, _o: string, _r: string, jobId: number) => jobId === 7002,
+    mockRerunJob.mockImplementation(async (_t: string, _o: string, _r: string, jobId: number) =>
+      jobId === 7002 ? "accepted" : "refused",
     );
 
     await reconcileTasks(app);
@@ -472,7 +471,7 @@ describe("#2904 — a non-Actions status stuck pending after green CI", () => {
   it("keeps the hold message when GitHub refuses every candidate job", async () => {
     const app = await buildApp();
     const id = await createTask(app);
-    mockRerunJob.mockResolvedValue(false);
+    mockRerunJob.mockResolvedValue("refused");
 
     await reconcileTasks(app);
 
@@ -482,6 +481,98 @@ describe("#2904 — a non-Actions status stuck pending after green CI", () => {
     expect(row.coverageReuploadCount).toBe(1);
     expect(row.needsHumanReason).toBeNull();
     expect(row.mergeError).toContain("refused");
+    await app.close();
+  });
+
+  it("does not spend the budget when GitHub cannot be reached, so two blips never park the task", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    mockRerunJob.mockRejectedValue(new Error("secondary rate limit"));
+
+    await reconcileTasks(app);
+    nowMs += 21 * 60_000;
+    await reconcileTasks(app);
+    nowMs += 21 * 60_000;
+    await reconcileTasks(app);
+
+    // Asked on every spaced tick, never charged.
+    expect(mockRerunJob).toHaveBeenCalledTimes(3);
+    const row = getTask(app, id);
+    expect(row.coverageReuploadCount).toBe(0);
+    expect(row.needsHumanReason).toBeNull();
+    expect(row.mergeError).toContain("No attempt was spent");
+
+    // And once GitHub answers, the re-run still happens.
+    mockRerunJob.mockResolvedValue("accepted");
+    nowMs += 21 * 60_000;
+    await reconcileTasks(app);
+    expect(getTask(app, id).coverageReuploadCount).toBe(1);
+    await app.close();
+  });
+
+  it("keeps the 20-minute spacing after an ask that never landed", async () => {
+    const app = await buildApp();
+    await createTask(app);
+    mockRerunJob.mockRejectedValue(new Error("502"));
+
+    await reconcileTasks(app);
+    nowMs += 5 * 60_000;
+    await reconcileTasks(app);
+
+    expect(mockRerunJob).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it("treats an unreadable job listing as unavailable, not as 'no coverage job'", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    mockGetJobs.mockResolvedValue({ ok: false, jobs: [] });
+
+    await reconcileTasks(app);
+
+    expect(mockRerunJob).not.toHaveBeenCalled();
+    const row = getTask(app, id);
+    expect(row.coverageReuploadCount).toBe(0);
+    expect(row.mergeError).toContain("could not reach GitHub");
+    expect(row.mergeError).not.toContain("nothing for Mullion to re-run");
+    await app.close();
+  });
+
+  it("names a missing Actions-write token instead of blaming GitHub or Codecov", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    mockRerunJob.mockResolvedValue("unauthorized");
+
+    await reconcileTasks(app);
+
+    const row = getTask(app, id);
+    expect(row.coverageReuploadCount).toBe(0);
+    expect(row.needsHumanReason).toBeNull();
+    expect(row.mergeError).toContain("lacks Actions write");
+    await app.close();
+  });
+
+  it("keeps the red-check message and re-runs nothing while a non-required check is red", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      greenActionsCheck(),
+      pendingCodecovCheck(),
+      {
+        name: "codecov/project",
+        conclusion: "failure",
+        status: "completed",
+        app: "codecov",
+        startedAt: minutesAgo(45),
+        url: "https://app.codecov.io/gh/o/r/commit/abc",
+        detail: "66.66% of diff hit",
+      },
+    ]);
+
+    await reconcileTasks(app);
+
+    expect(mockRerunJob).not.toHaveBeenCalled();
+    expect(getTask(app, id).mergeError).toContain("a non-required check is red");
     await app.close();
   });
 });

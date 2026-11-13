@@ -67,21 +67,21 @@ describe("rerunJob", () => {
 
   it("POSTs the job's rerun endpoint and reports it accepted", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
-    await expect(rerunJob("tok", "owner", "repo", 7001)).resolves.toBe(true);
+    await expect(rerunJob("tok", "owner", "repo", 7001)).resolves.toBe("accepted");
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.github.com/repos/owner/repo/actions/jobs/7001/rerun",
       expect.objectContaining({ method: "POST" }),
     );
   });
 
-  it("reports false when GitHub refuses with 422 (the job cannot be rerun)", async () => {
+  it("reports refused when GitHub refuses with 422 (the job cannot be rerun)", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(422, { message: "Cannot rerun job" }));
-    await expect(rerunJob("tok", "owner", "repo", 7001)).resolves.toBe(false);
+    await expect(rerunJob("tok", "owner", "repo", 7001)).resolves.toBe("refused");
   });
 
-  it("reports false when GitHub refuses with 403 (no Actions write)", async () => {
+  it("reports unauthorized when GitHub answers 403 (no Actions write)", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(403, { message: "Resource not accessible" }));
-    await expect(rerunJob("tok", "owner", "repo", 7001)).resolves.toBe(false);
+    await expect(rerunJob("tok", "owner", "repo", 7001)).resolves.toBe("unauthorized");
   });
 
   it("propagates an error that is not a refusal, so the caller can tell 'could not ask'", async () => {
