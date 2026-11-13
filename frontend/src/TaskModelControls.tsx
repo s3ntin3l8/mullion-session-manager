@@ -25,18 +25,23 @@ const providerOf = (id: string | null): string | null =>
 
 function ModelField({
   label,
+  aria,
   cli,
   role,
   value,
   resolved,
   onChange,
+  sidebar,
 }: {
   label: string;
+  // Accessible name; stays unique when the visible label is shortened.
+  aria: string;
   cli: ModelCli;
   role: ModelRole;
   value: string | null;
   resolved: string | null;
   onChange: (value: string | null) => void;
+  sidebar: boolean;
 }) {
   const catalog = useModelOptions(cli);
   // A pick of a provider with no model chosen yet has nowhere to live but here.
@@ -58,13 +63,24 @@ function ModelField({
     : [];
 
   return (
-    <div className="task-detail-agent-select">
-      <span className="task-detail-agent-label">
-        <BotIcon size={12} /> {label}:
-      </span>
+    <div
+      className={
+        sidebar
+          ? `sb-agent-fld${withProvider && provider !== null ? " sb-agent-fld-two" : ""}`
+          : "task-detail-agent-select"
+      }
+    >
+      {sidebar ? (
+        <span className="sb-agent-lbl">{label}</span>
+      ) : (
+        <span className="task-detail-agent-label">
+          <BotIcon size={12} /> {label}:
+        </span>
+      )}
       {withProvider && (
         <Dropdown
-          ariaLabel={`${label} provider`}
+          small={sidebar}
+          ariaLabel={`${aria} provider`}
           value={provider ?? ""}
           onChange={(p) => {
             setPickedProvider(p === "" ? null : p);
@@ -78,13 +94,14 @@ function ModelField({
       )}
       {(!withProvider || provider !== null) && (
         <ModelSelect
-          ariaLabel={`${label} model`}
+          ariaLabel={aria}
           value={value}
           options={options}
           defaultLabel={withProvider && value === null ? "Choose a model…" : defaultLabel(resolved)}
           allowCustom={allowCustom}
           onChange={onChange}
           small
+          stretch={sidebar}
         />
       )}
     </div>
@@ -97,6 +114,8 @@ export function TaskModelControls({
   reviewerAgent,
   settings,
   onUpdate,
+  section,
+  variant,
 }: {
   task: Task;
   // The agent ids the worker and reviewer resolve to; reviewerAgent is null
@@ -109,7 +128,12 @@ export function TaskModelControls({
     smallModel?: string | null;
     reviewerModel?: string | null;
   }) => Promise<unknown>;
+  // Render only one role's fields (the sidebar groups Worker and Reviewer).
+  section?: "worker" | "reviewer";
+  // "sidebar": label in the sb-kv column, controls stretched to the cell.
+  variant?: "sidebar";
 }) {
+  const sidebar = variant === "sidebar";
   const [error, setError] = useState<string | null>(null);
   const save = async (patch: Parameters<typeof onUpdate>[0]) => {
     setError(null);
@@ -119,8 +143,9 @@ export function TaskModelControls({
       setError(e instanceof Error ? e.message : "Could not save the model");
     }
   };
-  const workerCli = commandModelCli(workerAgent);
-  const reviewerCli = reviewerAgent === null ? null : commandModelCli(reviewerAgent);
+  const workerCli = section === "reviewer" ? null : commandModelCli(workerAgent);
+  const reviewerCli =
+    reviewerAgent === null || section === "worker" ? null : commandModelCli(reviewerAgent);
   const smallCli = workerCli === "opencode" || workerCli === "claude-code" ? workerCli : null;
   if (workerCli === null && reviewerCli === null) return null;
   // `key` remounts a field when its CLI changes, dropping a stale provider pick.
@@ -130,33 +155,39 @@ export function TaskModelControls({
         <ModelField
           key={`model-${workerCli}`}
           label="Model"
+          aria="Worker model"
           cli={workerCli}
           role="implementer"
           value={task.modelOverride ?? null}
           resolved={resolvedDefaultModel(workerCli, "implementer", task.body, settings)}
           onChange={(v) => save({ model: v })}
+          sidebar={sidebar}
         />
       )}
       {smallCli !== null && (
         <ModelField
           key={`small-${smallCli}`}
-          label="Small model"
+          label={sidebar ? "Small" : "Small model"}
+          aria="Small model"
           cli={smallCli}
           role="small"
           value={task.smallModelOverride ?? null}
           resolved={resolvedDefaultModel(smallCli, "small", task.body, settings)}
           onChange={(v) => save({ smallModel: v })}
+          sidebar={sidebar}
         />
       )}
       {reviewerCli !== null && (
         <ModelField
           key={`reviewer-${reviewerCli}`}
-          label="Reviewer model"
+          label={sidebar ? "Model" : "Reviewer model"}
+          aria="Reviewer model"
           cli={reviewerCli}
           role="reviewer"
           value={task.reviewerModel ?? null}
           resolved={resolvedDefaultModel(reviewerCli, "reviewer", task.body, settings)}
           onChange={(v) => save({ reviewerModel: v })}
+          sidebar={sidebar}
         />
       )}
       {error && <ErrorText>{error}</ErrorText>}

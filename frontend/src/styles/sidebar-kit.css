@@ -1467,6 +1467,10 @@ button.sb-chip--label[aria-pressed="true"] {
 .sb-agents {
   margin-top: 4px;
 }
+/* Programmatic focus fallback only; never a tab stop. */
+.sb-agents:focus {
+  outline: none;
+}
 .sb-agent-src {
   font-size: 0.6875rem;
 }
@@ -1487,15 +1491,51 @@ button.sb-chip--label[aria-pressed="true"] {
   border-top: 1px dashed var(--border-soft);
   font-size: 0.6875rem;
 }
-.sb-agents .task-detail-agents-config {
-  margin-top: 8px;
-  gap: 8px;
+.sb-agent-editor {
+  font-size: 0.75rem;
 }
-.sb-agents .task-detail-agent-select {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 3px;
+.sb-agent-grp {
+  margin: 12px 0 6px;
+  font-size: 0.65625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
 }
-.sb-agents .task-detail-agent-label {
+.sb-agent-fld {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  margin-bottom: 5px;
+}
+.sb-agent-fld-two {
+  grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1fr);
+}
+.sb-agent-lbl {
+  color: var(--dim);
+}
+.sb-agent-fld .settings-dropdown,
+.sb-agent-fld .model-select {
+  width: 100%;
   min-width: 0;
+}
+.sb-agent-fld .settings-dropdown select {
+  width: 100%;
+  min-width: 0;
+}
+.sb-agent-hint {
+  margin: 2px 0 0;
+  font-size: 0.6875rem;
+}
+.sb-agent-done {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+@container sidebar-frame (max-width: 300px) {
+  .sb-agent-fld,
+  .sb-agent-fld-two {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
 }

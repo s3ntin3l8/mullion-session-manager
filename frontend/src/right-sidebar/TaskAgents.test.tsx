@@ -79,11 +79,47 @@ describe("TaskAgents", () => {
     render(<TaskAgents task={task({})} />);
     await user.click(screen.getByRole("button", { name: "Edit" }));
     await screen.findAllByRole("option", { name: "Claude Code" });
-    const [agent, review] = screen.getAllByRole("combobox");
+    const agent = screen.getByRole("combobox", { name: "Worker agent" });
+    const review = screen.getByRole("combobox", { name: "Review agent" });
     await user.selectOptions(agent, "claude");
     expect(updateTask).toHaveBeenCalledWith(1, { agent: "claude" });
     await user.selectOptions(review, "none");
     expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
+  });
+
+  it("groups the editor into Worker and Reviewer and hides the summary rows", async () => {
+    const user = userEvent.setup();
+    render(<TaskAgents task={task({})} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("Worker")).toBeInTheDocument();
+    expect(screen.getByText("Reviewer")).toBeInTheDocument();
+    expect(screen.queryByText("(default)")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Reviewer model" })).toBeInTheDocument();
+  });
+
+  it("moves keyboard focus into the editor on Edit and back to Edit on Done", async () => {
+    const user = userEvent.setup();
+    render(<TaskAgents task={task({})} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("combobox", { name: "Worker agent" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("button", { name: "Edit" })).toHaveFocus();
+  });
+
+  it("keeps focus inside the panel when the task stops being editable mid-edit", async () => {
+    const user = userEvent.setup();
+    const { container, rerender } = render(<TaskAgents task={task({})} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    rerender(<TaskAgents task={task({ status: "in_progress", agentCommand: "claude" })} />);
+    expect(container.firstElementChild).toHaveFocus();
+  });
+
+  it("says Hermes picks its own model instead of a reviewer model field", async () => {
+    const user = userEvent.setup();
+    render(<TaskAgents task={task({ reviewAgent: "hermes" })} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByText("Hermes picks its own model.")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Reviewer model" })).toBeNull();
   });
 
   it("shows a failed save inline", async () => {

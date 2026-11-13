@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, normalizeAgentId } from "../api/index.js";
 import type { Launcher, Task } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
@@ -13,7 +13,6 @@ import {
 import { useDashboardStore } from "../store/index.js";
 import { TaskModelControls } from "../TaskModelControls.js";
 import { ErrorText } from "../ui/ErrorText.js";
-import { BotIcon } from "../ui/icons.js";
 import { Dropdown } from "../ui/primitives.js";
 
 // The per-task agent and model overrides, back in the task sidebar after the
@@ -24,6 +23,7 @@ import { Dropdown } from "../ui/primitives.js";
 // the user asks for them. Editable in the same statuses as before.
 
 const UNSET_AGENT = "";
+const EDITOR_ID = "sb-agent-editor";
 
 type Source = "task" | "issue" | "default";
 
@@ -53,11 +53,23 @@ export function TaskAgents({ task }: { task: Task }) {
   const projects = useDashboardStore((s) => s.projects);
   const updateTask = useDashboardStore((s) => s.updateTask);
   const [open, setOpen] = useState(false);
+  const editRef = useRef<HTMLButtonElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Edit and Done are separate buttons in separate blocks, so the one that was
+  // clicked unmounts: move focus to where the user goes next. Not on mount.
+  const toggled = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [launchers, setLaunchers] = useState<Launcher[]>([]);
 
   const editable = isAgentConfigEditable(task);
   const unfolded = open && editable;
+  useEffect(() => {
+    if (!toggled.current) return;
+    if (unfolded) editorRef.current?.querySelector<HTMLElement>("select, input")?.focus();
+    // Edit is gone when the task stopped being editable mid-edit: land on the host.
+    else (editRef.current ?? rootRef.current)?.focus();
+  }, [unfolded]);
   // The agent list is only needed once the dropdowns exist.
   useAsyncData(
     () => api.listProjectActions(task.projectId),
@@ -119,43 +131,50 @@ export function TaskAgents({ task }: { task: Task }) {
   };
 
   return (
-    <div className="sb-agents">
-      <dl className="sb-kv">
-        <dt>Worker</dt>
-        <dd>
-          {workerName}
-          {workerModel ? ` · ${workerModel}` : ""}{" "}
-          <SourceTag source={sourceOf(task.agent, task.issueAgent)} />
-          {editable && (
-            <button
-              type="button"
-              className="sb-link sb-agent-edit"
-              aria-expanded={unfolded}
-              onClick={() => setOpen((v) => !v)}
-            >
-              {unfolded ? "Done" : "Edit"}
-            </button>
-          )}
-        </dd>
-        <dt>Reviewer</dt>
-        <dd>
-          {reviewerName}
-          {reviewerModel ? ` · ${reviewerModel}` : ""}{" "}
-          <SourceTag source={sourceOf(task.reviewAgent, task.issueReviewAgent)} />
-        </dd>
-      </dl>
+    <div className="sb-agents" ref={rootRef} tabIndex={-1}>
+      {!unfolded && (
+        <dl className="sb-kv">
+          <dt>Worker</dt>
+          <dd>
+            {workerName}
+            {workerModel ? ` · ${workerModel}` : ""}{" "}
+            <SourceTag source={sourceOf(task.agent, task.issueAgent)} />
+            {editable && (
+              <button
+                type="button"
+                ref={editRef}
+                className="sb-link sb-agent-edit"
+                aria-expanded={false}
+                aria-controls={EDITOR_ID}
+                onClick={() => {
+                  toggled.current = true;
+                  setOpen(true);
+                }}
+              >
+                Edit
+              </button>
+            )}
+          </dd>
+          <dt>Reviewer</dt>
+          <dd>
+            {reviewerName}
+            {reviewerModel ? ` · ${reviewerModel}` : ""}{" "}
+            <SourceTag source={sourceOf(task.reviewAgent, task.issueReviewAgent)} />
+          </dd>
+        </dl>
+      )}
       {!editable && (
         <p className="sb-dim sb-agent-lock">
           Locked once a worker has claimed the task. Retry it, or move it to Backlog, to change.
         </p>
       )}
       {unfolded && (
-        <div className="task-detail-agents-config">
-          <div className="task-detail-agent-select">
-            <span className="task-detail-agent-label">
-              <BotIcon size={12} /> Agent:
-            </span>
+        <div className="sb-agent-editor" id={EDITOR_ID} ref={editorRef}>
+          <div className="sb-agent-grp">Worker</div>
+          <div className="sb-agent-fld">
+            <span className="sb-agent-lbl">Agent</span>
             <Dropdown
+              small
               ariaLabel="Worker agent"
               value={task.agent ?? UNSET_AGENT}
               onChange={(val) => save({ agent: val === UNSET_AGENT ? null : val })}
@@ -165,11 +184,20 @@ export function TaskAgents({ task }: { task: Task }) {
               )}
             />
           </div>
-          <div className="task-detail-agent-select">
-            <span className="task-detail-agent-label">
-              <BotIcon size={12} /> Review agent:
-            </span>
+          <TaskModelControls
+            task={task}
+            workerAgent={workerAgent}
+            reviewerAgent={reviewerAgent}
+            settings={settings}
+            onUpdate={(patch) => updateTask(task.id, patch)}
+            section="worker"
+            variant="sidebar"
+          />
+          <div className="sb-agent-grp">Reviewer</div>
+          <div className="sb-agent-fld">
+            <span className="sb-agent-lbl">Agent</span>
             <Dropdown
+              small
               ariaLabel="Review agent"
               value={task.reviewAgent ?? UNSET_AGENT}
               onChange={(val) => save({ reviewAgent: val === UNSET_AGENT ? null : val })}
@@ -184,14 +212,34 @@ export function TaskAgents({ task }: { task: Task }) {
               )}
             />
           </div>
-          <TaskModelControls
-            task={task}
-            workerAgent={workerAgent}
-            reviewerAgent={reviewerAgent}
-            settings={settings}
-            onUpdate={(patch) => updateTask(task.id, patch)}
-          />
+          {hermes ? (
+            <p className="sb-dim sb-agent-hint">Hermes picks its own model.</p>
+          ) : (
+            <TaskModelControls
+              task={task}
+              workerAgent={workerAgent}
+              reviewerAgent={reviewerAgent}
+              settings={settings}
+              onUpdate={(patch) => updateTask(task.id, patch)}
+              section="reviewer"
+              variant="sidebar"
+            />
+          )}
           {error && <ErrorText>{error}</ErrorText>}
+          <div className="sb-agent-done">
+            <button
+              type="button"
+              className="sb-link"
+              aria-expanded
+              aria-controls={EDITOR_ID}
+              onClick={() => {
+                toggled.current = true;
+                setOpen(false);
+              }}
+            >
+              Done
+            </button>
+          </div>
         </div>
       )}
     </div>
