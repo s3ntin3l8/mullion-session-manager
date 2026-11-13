@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 6</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 7</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 6</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 7</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -1152,7 +1152,8 @@
         </li>
         <li>
           <span class="tag open">idea</span><b>A rail on each half of the fold</b> instead of a top
-          bar (section 8).
+          bar (section 8), with the same left rail on desktop (section 9). If taken: at most two
+          sessions on the fold, one per half.
         </li>
         <li>
           <b>Cross-links:</b> "Open session in Workspace" switches mode; the task stays open in the
@@ -1704,6 +1705,362 @@
         <b>Against earlier decisions.</b> "Left sidebar hidden in Tasks mode" still holds for the
         project and session tree; the rail is new, thin chrome that stays. Applies to the tablet
         tier by width, not to the fold as a device.
+      </li>
+    </ul>
+
+    <h2>9 · Desktop with the same left rail <span class="tag open">idea</span></h2>
+    <p class="lede">
+      If the fold gets a left rail, desktop takes it too, so the mode switch sits in one place. The
+      rail is level one (mode, then workspaces); the existing left sidebar becomes level two, the
+      projects and sessions of the selected workspace, and it can collapse. Collapsed, the rail
+      lists the sessions itself, which is exactly the fold layout.
+    </p>
+    <div class="row">
+      <figure>
+        <div class="dev desktop">
+          <div class="tb">
+            <span class="grow"></span><span class="pill">Run command… ⌘K</span
+            ><span class="grow"></span>
+          </div>
+          <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 4px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 5px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: #fff"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid var(--g);
+                    border-radius: 6px;
+                    color: var(--g);
+                  "
+                  >D</b
+                ><br />Default</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid var(--dim);
+                    border-radius: 6px;
+                    color: inherit;
+                  "
+                  >C</b
+                ><br />Client</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">+</b><br />New</span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b><br /></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b><br
+              /></span>
+            </div>
+            <div class="left" style="width: 210px">
+              <div class="hd">Default <span style="float: right">«</span></div>
+              <div class="hd" style="margin-top: 14px">Projects</div>
+              aurora-web<br />&nbsp;&nbsp;● claude · login fix<br />&nbsp;&nbsp;● task #7 worker<br />orbit-api<br />&nbsp;&nbsp;●
+              claude · orders
+              <i style="color: var(--y)">●</i>
+            </div>
+            <div class="main">
+              <div class="grid2">
+                <div class="term">
+                  <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+                </div>
+                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
+              </div>
+            </div>
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>9a · Workspace mode, panel open.</b> Rail: mode switch, then the workspaces. Panel: the
+          selected workspace's projects and sessions with full names, as the left sidebar shows them
+          today. "«" collapses it.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev desktop">
+          <div class="tb">
+            <span class="grow"></span><span class="pill">Run command… ⌘K</span
+            ><span class="grow"></span>
+          </div>
+          <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 4px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 5px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: #fff"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid var(--g);
+                    border-radius: 6px;
+                    color: var(--g);
+                  "
+                  >D</b
+                ><br />Default</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b
+                  style="
+                    display: inline-grid;
+                    place-items: center;
+                    width: 24px;
+                    height: 24px;
+                    border: 1.5px solid var(--dim);
+                    border-radius: 6px;
+                    color: inherit;
+                  "
+                  >C</b
+                ><br />Client</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">+</b><br />New</span
+              ><span
+                style="width: 28px; border-top: 1px solid var(--border-soft); margin: 4px 0"
+              ></span
+              ><span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 5px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">◆</b><br />login</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">✳</b><br />#7</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">◇</b> <i style="color: var(--y)">●</i><br />orbit</span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">⋯</b><br />All 8</span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b><br /></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b><br
+              /></span>
+            </div>
+            <div class="main">
+              <div class="grid2">
+                <div class="term">
+                  <b>claude · login fix</b><br />&gt; fix the flaky login test<br />…
+                </div>
+                <div class="term"><b>task #7 worker</b><br />✓ 12 passed<br />…</div>
+              </div>
+            </div>
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>9b · Workspace mode, panel collapsed.</b> The sessions open in the workspace move into
+          the rail in compact form; "All" opens the full list. This is the fold's rail (frame 8c),
+          so the fold is desktop with the panel collapsed, not a separate design.
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev desktop">
+          <div class="tb">
+            <span class="grow"></span><span class="pill">Run command… ⌘K</span
+            ><span class="grow"></span>
+          </div>
+          <div class="body">
+            <div
+              class="rail"
+              style="
+                width: 52px;
+                border-left: 0;
+                border-right: 1px solid var(--border-soft);
+                gap: 4px;
+                font-size: 9px;
+                color: var(--muted);
+                text-align: center;
+              "
+            >
+              <span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">&gt;_</b><br />Work</span
+              ><span
+                style="
+                  display: block;
+                  width: 100%;
+                  padding: 5px 0;
+                  color: #fff;
+                  box-shadow: inset 3px 0 0 var(--g);
+                  background: #202023;
+                "
+                ><b style="font-size: 15px">▦</b> <i style="color: var(--y)">●</i><br />Tasks</span
+              ><span class="grow"></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">🔔</b><br /></span
+              ><span style="display: block; width: 100%; padding: 5px 0; color: inherit"
+                ><b style="font-size: 15px">⚙</b><br
+              /></span>
+            </div>
+            <div class="main">
+              <div class="filters">
+                <span class="pill">All projects ▾</span
+                ><span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span
+                ><span class="grow"></span><span class="btn">+ New</span>
+              </div>
+              <div class="lanes">
+                <div class="lane">
+                  <div class="hd">Backlog 6</div>
+                  <div class="card">Add dark mode toggle<small>aurora-web</small></div>
+                  <div class="card">Fix flaky reconciler test<small>aurora-web</small></div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Ready 2</div>
+                  <div class="card">Speed up orders query<small>orbit-api</small></div>
+                </div>
+                <div class="lane">
+                  <div class="hd">In progress 2</div>
+                  <div class="card">Add rate limiting<small>#10 · PR #12</small></div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Reviewing 2</div>
+                  <div class="card sel">
+                    Fix focus loss in the login form<span class="need">needs your approval</span>
+                  </div>
+                </div>
+                <div class="lane">
+                  <div class="hd">Done 1 · Failed 1</div>
+                  <div class="card">Dark mode contrast<span class="fail">merge failed</span></div>
+                </div>
+              </div>
+              <div class="adhoc">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
+            </div>
+            <div class="rs">
+              <div class="hd">Tasks · 3 need you</div>
+              <div class="card">
+                #7 Fix focus loss in the login form<span class="need"
+                  >Approved, needs your approval</span
+                >
+              </div>
+              <div class="card">
+                #9 Dark mode: low contrast<span class="fail">merge failed</span>
+              </div>
+              <div class="card">#10 Add rate limiting<small>running</small></div>
+            </div>
+            <div class="rail">
+              <span class="ic"></span><span class="ic"></span
+              ><span class="ic" style="border-color: var(--g); opacity: 1"></span
+              ><span class="ic"></span>
+            </div>
+          </div>
+        </div>
+        <figcaption>
+          <b>9c · Tasks mode.</b> The rail holds only the mode switch, bell and settings. The board
+          shows every lane at this width, so it needs no status entries in the rail and no panel.
+        </figcaption>
+      </figure>
+    </div>
+    <ul class="notes" style="max-width: 860px; margin-top: 24px">
+      <li>
+        <b>Why two levels and not "the sidebar is an expanded rail".</b> An expanding rail has to
+        show the same items in both states. Workspaces and sessions are different things, and
+        sessions need the width for their names. Two levels keeps the workspaces always visible and
+        gives sessions the wide panel when there is room.
+      </li>
+      <li>
+        <b>Cost on desktop.</b> 52px of width in Workspace mode when the panel is open. The top bar
+        loses the switch and the workspace picker and keeps the command box.
+      </li>
+      <li>
+        <span class="tag open">open</span><b>Fold, Workspace mode: one or two sessions.</b> At most
+        two, one per half. Tapping a session in the rail shows it on the left half. A long press
+        offers "show on the right half". The right half shows that second session whenever no
+        sidebar view is open; opening a sidebar view covers it and closing brings it back. Which
+        sessions the fold shows is remembered per device, like the phone's choice of the one
+        maximized pane, so the workspace layout shared with desktop is not edited. Try it in the
+        prototype (two rails, Work, long-press a session).
       </li>
     </ul>
   </body>

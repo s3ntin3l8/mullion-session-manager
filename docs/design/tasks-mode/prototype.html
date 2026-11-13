@@ -387,6 +387,74 @@
         display: none !important;
       }
 
+      /* Second session on the right half, while no sidebar view is open. */
+      #pane2 {
+        display: none;
+        flex: none;
+        width: calc(50% - 56px);
+        margin: 8px 8px 8px 0;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 10px;
+        font:
+          14px/1.4 ui-monospace,
+          monospace;
+        color: var(--muted);
+        white-space: pre;
+        overflow: hidden;
+      }
+      .split #pane2 {
+        display: block;
+      }
+      .rail button.wsp i {
+        width: 26px;
+        height: 26px;
+        border: 1.5px solid var(--dim);
+        border-radius: 7px;
+        display: grid;
+        place-items: center;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .rail button.wsp.on {
+        box-shadow: none;
+        background: none;
+      }
+      .rail button.wsp.on i {
+        border-color: var(--g);
+        color: var(--g);
+      }
+      .rail button.onr {
+        color: #fff;
+        box-shadow: inset -3px 0 0 var(--g);
+        background: #202023;
+      }
+      .rail button {
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: manipulation;
+      }
+      #menu {
+        display: none;
+        position: fixed;
+        left: 56px;
+        z-index: 5;
+        background: var(--chrome);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 8px 24px #000a;
+      }
+      #menu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 0 16px;
+        min-height: 48px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
       /* Sidebar content */
       #side h3 {
         margin: 0 0 10px;
@@ -465,15 +533,16 @@
         <button class="tk" data-jump="ready"><i>2</i>Ready</button>
         <button class="tk" data-jump="backlog"><i>6</i>Backlog</button>
         <button class="tk" data-jump="done"><i>2</i>Done<span class="pip"></span></button>
-        <!-- Workspace mode: the open sessions. -->
-        <button class="ws on" data-sess="task #7 worker · aurora-web"><i>◆</i>#7</button>
+        <!-- Workspace mode: the workspaces, then the sessions open in the current one. -->
+        <button class="ws wsp on"><i>D</i>Default</button>
+        <button class="ws wsp"><i>C</i>Client</button>
+        <hr class="ws" />
+        <button class="ws" data-sess="task #7 worker · aurora-web"><i>◆</i>#7</button>
         <button class="ws" data-sess="claude · orbit-api">
           <i>✳</i>orbit<span class="pip"></span>
         </button>
         <button class="ws" data-sess="codex · aurora-web"><i>◇</i>aurora</button>
-        <button class="ws" data-sess="(the full session picker would open here)">
-          <i>⋯</i>All 8
-        </button>
+        <button class="ws" data-all><i>⋯</i>All 8</button>
         <span class="grow"></span>
         <button><i>🔔</i></button>
         <button><i>☰</i></button>
@@ -495,7 +564,10 @@
         </div>
       </main>
 
+      <div id="pane2" class="ws"></div>
+
       <aside id="side"></aside>
+      <div id="menu"></div>
 
       <nav id="rrail" class="rail">
         <button data-view="tasks"><i>☑</i>Tasks</button>
@@ -554,7 +626,17 @@
       ];
       const $ = (s, r = document) => r.querySelector(s);
       const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-      const state = { mode: "tasks", rails: false, stack: "open", view: null, task: null };
+      const state = {
+        mode: "tasks",
+        rails: false,
+        stack: "open",
+        view: null,
+        task: null,
+        // Which sessions this device shows on each half. Device-local: the workspace's saved
+        // layout (shared with desktop) is not edited.
+        left: "task #7 worker · aurora-web",
+        right: null,
+      };
 
       const board = $("#board");
       for (const [k, name, cards] of LANES) {
@@ -605,7 +687,14 @@
           `m-${state.mode}` +
           (state.rails ? " rails" : "") +
           (open ? " open" : "") +
-          (stacked ? " stacked" : "");
+          (stacked ? " stacked" : "") +
+          (state.mode === "ws" && !open && state.right ? " split" : "");
+        $$("#lrail [data-sess]").forEach((b) => {
+          b.classList.toggle("on", b.dataset.sess === state.left);
+          b.classList.toggle("onr", b.dataset.sess === state.right);
+        });
+        $("#term").textContent = `${state.left}\n\n> ▯`;
+        $("#pane2").textContent = `${state.right}\n\n> ▯`;
         $$("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === state.mode));
         $$("#rrail button").forEach((b) => b.classList.toggle("on", b.dataset.view === state.view));
         $$("#opts .o").forEach((o) =>
@@ -627,9 +716,6 @@
           sel.scrollIntoView({ block: "center", inline: "center" });
         }
       }
-
-      $("#term").textContent =
-        "task #7 worker · aurora-web\n\n✓ 12 passed\nPushed 2 commits to PR #14.\n\n> ▯";
 
       document.addEventListener("click", (e) => {
         const t = e.target.closest("button");
@@ -654,15 +740,65 @@
           lane.scrollIntoView({ block: "start", inline: "start", behavior: "smooth" });
           return;
         } else if (t.dataset.sess) {
-          $$("#lrail .ws").forEach((b) => b.classList.toggle("on", b === t));
-          $("#term").textContent = `${t.dataset.sess}\n\n> ▯`;
-          return;
+          // Tap: show on the left half. Long press: choose a half (see below).
+          if (pressed) return void (pressed = false);
+          if (state.right === t.dataset.sess) state.right = null;
+          state.left = t.dataset.sess;
+        } else if (t.dataset.put) {
+          const [side, s] = t.dataset.put.split("|");
+          if (side === "close") state.right = null;
+          else if (side === "left") {
+            if (state.right === s) state.right = null;
+            state.left = s;
+          } else if (state.left !== s) {
+            state.right = s;
+            state.view = null;
+            state.task = null;
+          }
+          closeMenu();
         } else if (t.classList.contains("hd")) {
           t.parentElement.classList.toggle("closed");
           return;
         }
         render();
       });
+      // Long press (or right click) on a session in the rail: pick the half it shows on.
+      let pressed = false;
+      let timer = 0;
+      const menu = $("#menu");
+      function closeMenu() {
+        menu.style.display = "none";
+      }
+      function openMenu(b) {
+        const s = b.dataset.sess;
+        menu.innerHTML =
+          `<button data-put="left|${s}">Show on the left half</button>` +
+          `<button data-put="right|${s}">Show on the right half</button>` +
+          (state.right ? `<button data-put="close|">Close the right half</button>` : "");
+        menu.style.top = b.getBoundingClientRect().top + "px";
+        menu.style.display = "block";
+      }
+      document.addEventListener("pointerdown", (e) => {
+        if (!e.target.closest("#menu")) closeMenu();
+        const b = e.target.closest("#lrail [data-sess]");
+        if (!b) return;
+        pressed = false;
+        timer = setTimeout(() => {
+          pressed = true;
+          openMenu(b);
+        }, 450);
+      });
+      for (const ev of ["pointerup", "pointercancel"])
+        document.addEventListener(ev, () => clearTimeout(timer));
+      document.addEventListener("contextmenu", (e) => {
+        const b = e.target.closest("#lrail [data-sess]");
+        if (!b) return;
+        e.preventDefault();
+        clearTimeout(timer);
+        pressed = false;
+        openMenu(b);
+      });
+
       // Deep link, used by mockup.html to embed fixed states: #rails&task&ws&bare&stack=never
       const flag = (k) => location.hash.slice(1).split("&").includes(k);
       if (flag("rails")) state.rails = true;
@@ -670,6 +806,7 @@
       if (flag("bare")) $("#opts").style.display = "none";
       const st = location.hash.match(/stack=(\w+)/);
       if (st) state.stack = st[1];
+      if (flag("split")) state.right = "claude · orbit-api";
       if (flag("task")) {
         state.view = "tasks";
         state.task = ["Fix focus loss in the login form", "aurora-web · #7 · PR #14"];
