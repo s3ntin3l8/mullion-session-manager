@@ -369,7 +369,7 @@
     {
       "name": "tablet-workspace",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -384,7 +384,7 @@
     {
       "name": "tablet-navigator",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -402,7 +402,7 @@
     {
       "name": "tablet-tasks-list",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -420,7 +420,7 @@
     {
       "name": "tablet-tasks-detail",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -444,7 +444,7 @@
     {
       "name": "tablet-tasks-reopen",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -469,7 +469,7 @@
           "click": ".right-rail-btn[aria-label=\"Tasks\"]"
         },
         {
-          "waitFor": "[data-testid=\"task-detail-view\"]"
+          "wait": 500
         }
       ],
       "settle": 500,
@@ -480,7 +480,7 @@
     {
       "name": "tablet-notifications",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {

@@ -8,22 +8,24 @@ This is a re-audit of the surface covered by [2026-10-frontend-ui-ux.md](2026-10
 with a new axis: **usability**, meaning whether the compact tiers serve the real jobs well,
 not only whether they render and pass accessibility checks.
 
-**Status.** Findings only: nothing was fixed in this round, by decision. Every finding is
-tracked as an issue; see [Deferred backlog](#deferred-backlog). The one code change in this
-branch is the tablet scenes in `visual/scenes.json`, which is the evidence and the first
-guardrail.
+**Status.** Findings only: this branch fixes nothing, by the owner's decision to keep the
+audit and the fixes apart. That is a deliberate waiver of the audit convention that a P1 is
+fixed in the report's own pull request: the one P1 (finding 1) is fixed separately in #2986.
+Every other finding is tracked as an issue; see [Deferred backlog](#deferred-backlog). The one
+code change in this branch is the tablet scenes in `visual/scenes.json`, which are the
+evidence.
 
 ---
 
 ## How the audit was run
 
-| Layer                  | Method                                                                                                                                                                                                                                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Static review          | The tier logic (`lib/layoutTier.ts`), the app shell (`App.tsx`), the left navigator (`PhoneNavigator*.tsx`), the right sidebar (`right-sidebar/*`), task detail (`TaskDetail.tsx`, `TaskDetailView.tsx`, `hooks/useOpenTask.ts`), the gesture code and the tier stylesheets, read against what a touch user can do. |
-| Captures               | `make screenshots-audit` against the isolated demo: six new tablet scenes at two viewports (tablet 820×1180 and a fold-like 840×900), both themes, plus the existing phone and desktop scenes. `metrics.json` was read for axe, overflow, cut-off and unnamed controls.                                             |
-| Reproduction           | The stuck task detail was reproduced in the isolated demo with the app in a 840px-wide frame, which puts it in the tablet tier: open Tasks, open a task, close the drawer with its X, reopen Tasks.                                                                                                                 |
-| Usability walkthroughs | Counted from the captured flows and the code, not timed on a person. Only the jobs the demo scenes can reach were walked; the rest are marked as not walked and tracked in #2980.                                                                                                                                   |
-| What was not possible  | The demo browser pane has no touch or viewport emulation, so swipe-versus-scroll conflicts, thumb reach and real `(pointer: coarse)` target sizes were read from code and CSS, not tried on hardware. Those rows say so.                                                                                            |
+| Layer                  | Method                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Static review          | The tier logic (`lib/layoutTier.ts`), the app shell (`App.tsx`), the left navigator (`PhoneNavigator*.tsx`), the right sidebar (`right-sidebar/*`), task detail (`TaskDetail.tsx`, `TaskDetailView.tsx`, `hooks/useOpenTask.ts`), the gesture code and the tier stylesheets, read against what a touch user can do.                                                                                                     |
+| Captures               | `make screenshots-audit` against the isolated demo: six new tablet scenes at two viewports (tablet 820×1180 and a fold-like 840×900), both themes, plus the existing phone and desktop scenes. `metrics.json` was read for axe, overflow, cut-off and unnamed controls.                                                                                                                                                 |
+| Reproduction           | The stuck task detail was reproduced in the isolated demo with the app in a 840px-wide frame, which puts it in the tablet tier: open Tasks, open a task, close the drawer with its X, reopen Tasks.                                                                                                                                                                                                                     |
+| Usability walkthroughs | Counted from the captured flows and the code, not timed on a person. Only the jobs the demo scenes can reach were walked; the rest are marked as not walked and tracked in #2980.                                                                                                                                                                                                                                       |
+| What was not possible  | The **manual walkthrough** ran in the demo browser pane, which has no touch or viewport emulation, so swipe-versus-scroll conflicts and thumb reach were read from code and CSS, not tried on hardware. Those rows say so. The **captures** do emulate touch: the `tablet` and `fold` viewports set `mobile: true`, which turns on touch, so `(pointer: coarse)` styles apply in the screenshots and in `metrics.json`. |
 
 ### What the code already does well
 
@@ -62,7 +64,7 @@ scene renders without overflow or cut-off controls.
 
 | #   | Severity | Finding                                                                                                                                                                                                                                              | Evidence                                                                                                                                                                                                | Where                                                                                                                                         | What changed                                                              |
 | --- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 1   | P1       | A task detail cannot be dismissed by closing the drawer: closing and reopening Tasks shows the same detail again                                                                                                                                     | Reproduced in the demo at tablet width. The `tablet-tasks-reopen` scene captures the state after close and reopen: the detail, not the list                                                             | `store/slices/ui.ts` `closeRightSidebar` and `toggleRightSidebarView` clear the GitHub drill-in and `sidebarHistory` but not `selectedTaskId` | Deferred, #2973                                                           |
+| 1   | P1       | A task detail cannot be dismissed by closing the drawer: closing and reopening Tasks shows the same detail again                                                                                                                                     | Reproduced in the demo at tablet width. The `tablet-tasks-reopen` scene captures the state after close and reopen: the detail, not the list                                                             | `store/slices/ui.ts` `closeRightSidebar` and `toggleRightSidebarView` clear the GitHub drill-in and `sidebarHistory` but not `selectedTaskId` | Fixed in #2986 (not in this branch; see Status)                           |
 | 2   | P2       | The floating right sidebar closes on accidental touch: a swipe anywhere on the panel commits at 60px, and the scrim closes on any tap                                                                                                                | Read from code, not tried on hardware. `attachSidebarSwipeGesture` is attached with no edge zone and no ignore selector, so a horizontal scroll inside a task body can close it                         | `right-sidebar/RightSidebar.tsx` ~L121-127, `lib/sidebarSwipeGesture.ts`                                                                      | Deferred, #2974                                                           |
 | 3   | P2       | The right sidebar's header controls are below the touch-target floor: `.sb-ibtn` is 26×26, the close X 24×24, and the X sits 2px from the pop-out and GitHub buttons                                                                                 | Read from CSS: `styles/sidebar-kit.css`, `styles/right-sidebar.css`; `styles/tablet.css`'s 44px block does not list either class                                                                        | `.sb-ibtn`, `.right-sidebar-icon-btn`                                                                                                         | Deferred, #2974                                                           |
 | 4   | P2       | One task opens in two different places, and Tasks has two entry points on tablet. Chips and notifications open the full-screen docked panel; rows open the sidebar detail; the navigator also has a Tasks tab                                        | Code: `hooks/useOpenTask.ts` sends compact-tier chips to `requestOpenTask`; `TasksSidebarView.tsx` selects in place; `PhoneNavigator.tsx` has a Tasks tab; the `tablet-navigator` capture shows the tab | `hooks/useOpenTask.ts`, `right-sidebar/TasksSidebarView.tsx`, `PhoneNavigator.tsx`                                                            | Deferred, #2976                                                           |
@@ -150,7 +152,8 @@ The direction this implies, to be decided and specified in #2976 and #2977:
 What this does to the findings: 1, 2, 3 and 5 disappear once Tasks is not a drawer; 4 is
 resolved by construction; 6 and 7 are unaffected. The point fixes #2973 and #2974 stay worth
 doing only as a cheap interim (#2973 is a few lines in the store), and should be dropped if the
-redesign lands soon.
+redesign lands soon. Decisions taken after this report was written are recorded on #2976 and
+#2977, which are the current source for the direction.
 
 Decisions from the owner, after the audit:
 
@@ -162,3 +165,63 @@ Decisions from the owner, after the audit:
   non-action statuses.
 - The layout is to be designed before anything is changed: flows, information architecture
   and wireframes first, then implementation issues written from the design.
+
+---
+
+## Guardrails
+
+- **Tablet scenes for audits** (landed here): `tablet-workspace`, `tablet-navigator`,
+  `tablet-tasks-list`, `tablet-tasks-detail`, `tablet-tasks-reopen` and `tablet-notifications`,
+  each at the `tablet` and `fold` viewports, tagged `audit`. They are **not** tagged `check`
+  yet, for two reasons. visual-kit gates a new shot against an empty base, so every serious
+  axe rule counts as new, and all six scenes carry the two serious rules of finding 7; tagging
+  them `check` would turn the health job red on every UI pull request until #2886 lands. And
+  they have no committed baselines. Putting the tablet tier into the pull-request check is
+  #2975, which is blocked by #2886.
+- **`tablet-tasks-reopen` does not assert the bug.** It captures whatever the sidebar shows
+  after close and reopen: the stuck detail before #2986, the list after it. The fix does not
+  have to touch the scene.
+- **The `tablet` viewport is an override.** visual-kit's audit profile already defines
+  `tablet` at 820×1180, scale 1; `visual/scenes.json` redefines it at scale 2 with touch on,
+  for every audit capture in this repo.
+- **A store test per fixed defect**, starting with finding 1: reopening Tasks after each
+  close path shows the list (in #2986).
+- **A coarse-pointer target-size check** for the right sidebar header and rail (in #2974).
+- **A swipe test** that a drag starting inside scrollable content does not close the panel
+  (in #2974).
+
+---
+
+## Evidence
+
+Captures are local and gitignored. To regenerate them, from the repo root (needs Docker):
+
+```bash
+make screenshots-audit AUDIT=2026-11-frontend-ui-ux
+```
+
+It writes `docs/audit/assets/2026-11-frontend-ui-ux/`: one PNG per scene, viewport and
+theme, and `metrics.json`. The tablet scenes are `tablet-*` in `visual/scenes.json`, at the
+`tablet` (820×1180) and `fold` (840×900) viewports defined at the top of that file.
+visual-kit version: `0.4.1` (`visual/Dockerfile`).
+
+The stuck-detail reproduction needs no capture: start `make demo`, put the app in a frame
+about 840px wide (or a window of that width), open the Tasks rail view, tap a task, tap
+the drawer's X, tap the Tasks rail icon again.
+
+---
+
+## Deferred backlog
+
+| Issue | Finding        | Title                                                                                 |
+| ----- | -------------- | ------------------------------------------------------------------------------------- |
+| #2973 | 1              | fix(uiux): task detail sticks in the tablet sidebar after the drawer closes           |
+| #2985 | direction      | docs(uiux): rework the notification bell: fewer, sectioned, in a bigger view          |
+| #2974 | 2, 3           | fix(uiux): the floating right sidebar closes on accidental touch on tablet            |
+| #2975 | guardrail      | ci: capture the tablet tier in visual checks                                          |
+| #2976 | 4              | docs(uiux): make Tasks a primary mode beside Workspace, with one task-detail surface  |
+| #2977 | 5              | docs(uiux): decide docked versus floating sidebars on wide tablets and foldables      |
+| #2978 | 6              | fix(uiux): the empty workspace tells touch users to press ⌘K                          |
+| #2886 | 7              | fix(uiux): sidebar workspace rows, right-rail badge labels and heading order fail axe |
+| #2979 | 8, 9           | fix(uiux): tablet task detail header depends on :has() and truncates the title        |
+| #2980 | usability pass | docs(uiux): finish the phone and tablet usability walkthroughs on a device            |
