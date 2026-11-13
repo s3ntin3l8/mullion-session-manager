@@ -41,7 +41,7 @@ export async function listLocalDirectories(
   }
 
   try {
-    // CodeQL js/path-injection (alert #517): this API intentionally accepts
+    // CodeQL js/path-injection (alert #517, moved here from src/routes/fs.ts): this API intentionally accepts
     // any absolute directory behind the same auth gate as session creation,
     // which can already run a command in an arbitrary cwd. Restricting it to
     // project roots would prevent browsing for new projects. realpath follows
