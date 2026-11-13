@@ -1622,6 +1622,14 @@ multiply the load (#2991). A `fresh` read (the dirty-tree and workflow gates)
 never reads the cache or joins another request, so it always reaches the agent;
 its result then refreshes the cache for the next ordinary read.
 
+A host the heartbeat has marked **offline** is not asked at all by these batch
+routes or by `GET /api/projects`' per-project `currentBranch` / `ruleFiles`
+lookups: its ids are omitted (the dashboard keeps last-known-good) and it is
+polled again as soon as the heartbeat sees it. Only `offline` skips; `degraded`
+(slow or saturated) and `pending` (not yet checked) hosts are still polled, so a
+host that is merely slow never looks unreachable. The `fresh` gate paths do not
+consult the heartbeat.
+
 A session context that cannot be resolved is never replaced by the project's
 host or cwd:
 

@@ -118,6 +118,19 @@ function createBatchMemo(): <T>(key: string, call: () => Promise<T>) => Promise<
   };
 }
 
+/**
+ * Issue #2991: a host the heartbeat has marked offline (three missed pings) is
+ * not asked for git state by the batch polls — every id of it is omitted, which
+ * the dashboard reads as "keep last-known-good", and it is retried as soon as
+ * the heartbeat sees it again. Only `offline` skips: `degraded` (slow or
+ * saturated) and `pending` (not checked yet) are still polled, so a host that
+ * is merely slow never looks unreachable. The `fresh` gate paths do not go
+ * through here.
+ */
+function isHostOffline(app: FastifyInstance, hostId: string): boolean {
+  return app.hostHeartbeatTracker?.getHealth(hostId)?.status === "offline";
+}
+
 export interface ProjectGitBranchesResult {
   branches: GitBranchInfo[];
   worktrees: GitWorktreeInfo[];
@@ -250,6 +263,10 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               if (failure) problemsResult[project.id] = failure;
             }
           } else {
+            if (isHostOffline(app, project.hostId)) {
+              projectOutcome.failed(project.hostId);
+              continue;
+            }
             try {
               const remoteResult = await memoRemote(
                 `status\0${project.hostId}\0${project.cwd}`,
@@ -298,6 +315,10 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
               sessionsResult[target.sessionId] = status;
             }
           } else {
+            if (isHostOffline(app, target.hostId)) {
+              sessionOutcome.failed(target.hostId);
+              continue;
+            }
             try {
               const remoteResult = await memoRemote(`status\0${target.hostId}\0${target.cwd}`, () =>
                 getRemoteHostClient(app, target.hostId).resolveGitStatus(target.cwd),
@@ -382,6 +403,10 @@ export async function projectGitRoute(app: FastifyInstance): Promise<void> {
             result[target.sessionId] = stats;
           }
         } else {
+          if (isHostOffline(app, target.hostId)) {
+            outcome.failed(target.hostId);
+            continue;
+          }
           try {
             const remoteResult = await memoRemote(
               `diff\0${target.hostId}\0${target.cwd}\0${base ?? ""}`,
