@@ -1420,7 +1420,7 @@
         let x = el._x ?? 0;
         let v = v0 ?? el._v ?? 0;
         let last = performance.now();
-        const k = ((2 * Math.PI) / 0.3) ** 2;
+        const k = ((2 * Math.PI) / 0.36) ** 2;
         const c = 2 * Math.sqrt(k);
         const step = (now) => {
           const dt = Math.min(0.032, (now - last) / 1000) / fx.slow;
@@ -1499,7 +1499,8 @@
       sheet.addEventListener("pointercancel", endDrag);
       const ease = "cubic-bezier(0.2, 0.8, 0.2, 1)";
       const play = (el, frames, ms) =>
-        fx.on && el.animate(frames, { duration: (fx.reduce ? 120 : ms) * fx.slow, easing: ease });
+        fx.on &&
+        el.animate(frames, { duration: (fx.reduce ? 120 : ms * 1.2) * fx.slow, easing: ease });
       let prev = {};
 
       function render() {
