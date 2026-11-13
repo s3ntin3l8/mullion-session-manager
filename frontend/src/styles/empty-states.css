@@ -3334,3 +3334,29 @@ button.github-panel-row.gh-issue-row {
   background: color-mix(in srgb, var(--warning, #d9a400) 22%, transparent);
   color: var(--warning, #d9a400);
 }
+
+/* #2998 — code-scanning alert detail under the "needs a human" line. */
+.blocking-alert {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.blocking-alert-snippet {
+  margin: 6px 0;
+  padding: 6px 0;
+  overflow-x: auto;
+  font-family: var(--font-mono, monospace);
+  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+  border-radius: 4px;
+}
+.blocking-alert-line {
+  display: block;
+  padding: 0 8px;
+  white-space: pre;
+}
+.blocking-alert-line-flagged {
+  background: rgba(255, 170, 0, 0.22);
+}
+.blocking-alert-note {
+  opacity: 0.8;
+  font-style: italic;
+}

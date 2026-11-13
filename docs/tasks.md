@@ -571,7 +571,15 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
   (`github-advanced-security`, or a comment linking `/security/code-scanning/<n>`)
   also shows its alert number and links the alert. When the thread list is
   unavailable (a fetch failure, or more threads than one page), only the generic
-  line shows.
+  line shows. The task detail (not the card, which makes no extra request)
+  also loads, for an alert thread, the alert's rule id, severity and
+  description, its `path:line` and CodeQL's message, the flagged code with
+  three lines of context, and earlier dismissed alerts of the same rule (same
+  path first, at most five, each linked, with reason, comment and who dismissed
+  it) so a repeat false positive is recognisable without leaving Mullion. If
+  the connected GitHub account could not later dismiss alerts (none connected,
+  or a classic token without `repo`/`security_events`), a note says why.
+  Read-only: Mullion never dismisses an alert here.
 - `pr-closed` — an approved task's PR was closed without merging, so nothing
   landed. The issue stays open (a comment says why, and `mullion-done` is
   removed). Reopen the PR and use **Merge now** (a hand-merge is noticed within

@@ -2,6 +2,7 @@
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
 import type { Task, ClearDoneResult } from "./types.js";
+import type { BlockingAlertsResponse } from "./blocking-alerts-types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
 
 export const tasksApi = {
@@ -161,4 +162,10 @@ export const tasksApi = {
   // fresh one, without that sweep's own hour-long grace or one-shot
   // inconclusiveReviewRearmCount bound.
   reReviewTask: (id: number) => request<Task>(`/api/tasks/${id}/re-review`, { method: "POST" }),
+
+  // #2998 — read-only rule/snippet/past-dismissal detail for the code-scanning
+  // alert(s) a done task's PR is blocked on. 404 unless the task is
+  // `blocked-threads` with a stored alert number.
+  getBlockingAlerts: (id: number) =>
+    request<BlockingAlertsResponse>(`/api/tasks/${id}/blocking-alerts`),
 };

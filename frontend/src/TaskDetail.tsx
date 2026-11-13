@@ -1,4 +1,5 @@
 import { TaskActions } from "./TaskActions.js";
+import { BlockingAlertDetail } from "./BlockingAlertDetail.js";
 import { FailureDiagnostics } from "./FailureDiagnostics.js";
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
@@ -737,6 +738,9 @@ export function TaskDetail({
           {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
           {task.needsHumanReason === "blocked-threads" && (
             <MergeBlockedThreadsDetail raw={task.mergeBlockedThreads} />
+          )}
+          {task.needsHumanReason === "blocked-threads" && (
+            <BlockingAlertDetail taskId={task.id} raw={task.mergeBlockedThreads} />
           )}
         </div>
       )}
