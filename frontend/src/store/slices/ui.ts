@@ -570,7 +570,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         ),
         rightSidebarView: "tasks",
         rightSidebarOpen: true,
-              }));
+      }));
     },
 
     setFollowedProjectId: (projectId) => {
