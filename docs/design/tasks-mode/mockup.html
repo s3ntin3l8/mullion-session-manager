@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <!-- Design proposal for #2976 (Tasks as a primary mode beside Workspace). Low-fidelity wireframes: layout and flow only, not final visuals. The mock data is fictional. -->
-    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 11</title>
+    <title>Mullion — Tasks mode and Workspace mode: wireframes · rev 12</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
@@ -472,7 +472,7 @@
     </style>
   </head>
   <body>
-    <h1>Tasks mode and Workspace mode — wireframes, rev 11</h1>
+    <h1>Tasks mode and Workspace mode — wireframes, rev 12</h1>
     <p class="lede">
       Proposal for #2976. Mullion gets two first-level modes: <b>Workspace</b> (the dockview grid,
       as today) and <b>Tasks</b> (the kanban board, front and center). These are low-fidelity
@@ -912,9 +912,10 @@
         today, and a task from the board.
       </li>
       <li>
-        <b>Devices.</b> An open device screen is a pane beside the terminals, as it is today, so it
-        appears among the open panes with its own mark. It is not a session: no agent, no needs-you
-        state. The Devices list (start, stop, open) stays in the sidebar.
+        <b>Devices.</b> On desktop a device screen stays a pane you can place anywhere in the grid,
+        and the Devices list stays in the left sidebar. On the fold it is a view in the right rail,
+        like Git or GitHub: the tab shows the device list and the open screen on the right half. It
+        is not listed among the sessions.
       </li>
       <li>
         <b>Where the top bar's controls go.</b> Board toggle: the mode switch. Sidebar toggle: the
@@ -979,7 +980,8 @@
           <b>2d · Workspace mode, two sessions.</b> At most two, one per half. A session on the
           right half is listed in the right rail below the sidebar views and toggles like them. Each
           pane's header has a button that moves it to the other half. The "＋" under a rail's
-          sessions adds a session to that half.
+          sessions opens a sheet over that half (new session, search, sessions by project) with rows
+          at touch size.
         </figcaption>
       </figure>
     </div>
@@ -998,6 +1000,11 @@
         rail's sessions means the same on both sides, add a session to this half (new, another
         existing one, or one from the other half). A long press on a rail entry is a shortcut.
         Dragging is not offered.
+      </li>
+      <li>
+        <b>No docked left sidebar on the fold.</b> Its contents are reached from the rail: the
+        workspace chip opens the workspace list, "＋" opens the session sheet, and Devices is a
+        right-rail view.
       </li>
       <li>
         <b>Narrow tablets.</b> Where a half would be narrower than about 400px (windows under
@@ -1038,7 +1045,8 @@
           </div>
           <div class="adhoc">▸ Ad-hoc sessions · 8 · 1 needs you</div>
           <div class="bb">
-            <span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span>
+            <span>Workspace</span><span class="on">Tasks <i class="dot">3</i></span
+            ><span style="flex: 0 0 56px">⋯</span>
           </div>
         </div>
         <figcaption>
@@ -1078,8 +1086,7 @@
       <figure>
         <div class="dev phone">
           <div class="tb">
-            <span class="ic"></span><span class="pill grow ell">● task #7 worker ▾</span
-            ><span class="ic"></span>
+            <span class="pill grow ell">● task #7 worker ▾</span><span class="ic"></span>
           </div>
           <div class="main">
             <div class="term" style="font-size: 14px">
@@ -1091,12 +1098,82 @@
             ><span>↓</span><span>🎤</span><span>⋮</span>
           </div>
           <div class="bb">
-            <span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span>
+            <span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span
+            ><span style="flex: 0 0 56px">⋯</span>
           </div>
         </div>
         <figcaption>
           <b>3c · Workspace mode.</b> The terminal and its key bar, as today, with the mode bar
           under it (option B, chosen; see section 4).
+        </figcaption>
+      </figure>
+      <figure>
+        <div class="dev phone">
+          <div class="tb">
+            <span class="pill grow ell">● task #7 worker ▾</span><span class="ic"></span>
+          </div>
+          <div class="main">
+            <div class="term" style="font-size: 14px; opacity: 0.35">
+              <b>task #7 worker</b><br /><br />✓ 12 passed<br />&gt; ▯
+            </div>
+          </div>
+          <div
+            style="
+              flex: none;
+              background: var(--chrome);
+              border-top: 1px solid var(--border);
+              border-radius: 16px 16px 0 0;
+              padding: 6px 16px 10px;
+            "
+          >
+            <div class="hd" style="margin: 12px 0 4px">Devices</div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ▯ Pixel 9 emulator · running<span class="grow"></span><span class="pill">Open</span>
+            </div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+                color: var(--muted);
+              "
+            >
+              ▯ Pixel Tablet · stopped<span class="grow"></span><span class="pill">Start</span>
+            </div>
+            <div class="hd" style="margin: 16px 0 4px">App</div>
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                min-height: 52px;
+                border-bottom: 1px solid var(--border-soft);
+              "
+            >
+              ⚙ Settings
+            </div>
+            <div style="display: flex; align-items: center; min-height: 52px">
+              ◐ Theme<span class="grow"></span><span class="pill">Dark</span>
+            </div>
+          </div>
+          <div class="bb">
+            <span class="on">Workspace</span><span>Tasks <i class="dot">3</i></span
+            ><span style="flex: 0 0 56px; color: #fff">⋯</span>
+          </div>
+        </div>
+        <figcaption>
+          <span class="tag open">proposal</span><b>3d · "More" replaces the drawer.</b> The left
+          drawer goes away. Its four tabs each have a home: Projects is the session picker (the
+          title in the top bar), Tasks is the mode bar, Devices and Settings open from "⋯" at the
+          end of the mode bar, as a bottom sheet with rows at touch size. An open device screen is a
+          pane and stays in the picker's "Open panes".
         </figcaption>
       </figure>
     </div>
@@ -1258,8 +1335,8 @@
           under the workspace chip that jump to a group (frames 1a, 1b).
         </li>
         <li>
-          <b>Phone navigator:</b> its Tasks tab goes; the rest needs its own rethink, not designed
-          here.
+          <span class="tag open">proposal</span><b>Phone drawer removed:</b> Devices and Settings
+          move to "⋯" on the mode bar (frame 3d).
         </li>
         <li><b>The bell</b> is unchanged here; its rework is #2985.</li>
       </ul>

@@ -501,6 +501,103 @@
         -webkit-user-select: none;
         touch-action: manipulation;
       }
+      /* The "+" sheet: covers the half it adds to, rows at touch size. */
+      #body {
+        position: relative;
+      }
+      #sheet {
+        display: none;
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: calc(50% - 48px);
+        background: var(--chrome);
+        overflow-y: auto;
+        z-index: 4;
+        padding: 0 12px 12px;
+      }
+      #sheet.left {
+        left: 48px;
+        border-right: 1px solid var(--border);
+      }
+      #sheet.right {
+        right: 48px;
+        border-left: 1px solid var(--border);
+      }
+      #sheet .sh {
+        display: flex;
+        align-items: center;
+        min-height: 56px;
+        font-size: 16px;
+      }
+      #sheet .sh b {
+        flex: 1;
+      }
+      #sheet .sh button {
+        width: 48px;
+        height: 48px;
+        color: var(--muted);
+      }
+      #sheet .snew {
+        display: block;
+        width: 100%;
+        min-height: 52px;
+        border-radius: 9px;
+        background: var(--accent-fill);
+        color: #fff;
+        font-weight: 600;
+      }
+      #sheet .sfind {
+        margin-top: 10px;
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        color: var(--dim);
+      }
+      #sheet .mh {
+        padding: 16px 0 4px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+      }
+      #sheet .srow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        min-height: 56px;
+        text-align: left;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      #sheet .srow i {
+        font-style: normal;
+        font-size: 18px;
+        width: 24px;
+        text-align: center;
+      }
+      #sheet .srow b {
+        display: block;
+        font-weight: 500;
+      }
+      #sheet .srow small {
+        color: var(--dim);
+      }
+      .devscreen {
+        height: 420px;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: #0b0b0c;
+        display: grid;
+        place-content: center;
+        text-align: center;
+        color: var(--muted);
+        margin-bottom: 9px;
+      }
       #menu {
         display: none;
         position: fixed;
@@ -640,6 +737,7 @@
         <button data-view="github"><i>⎇</i>GitHub</button>
         <button data-view="git"><i>±</i>Git</button>
         <button data-view="files"><i>▤</i>Files</button>
+        <button data-view="device"><i>▯</i>Device</button>
         <hr class="ws" />
         <span id="rsess" class="ws" style="display: contents"></span>
         <button class="ws" data-add="right"><i>＋</i></button>
@@ -714,7 +812,6 @@
         ["task #7 worker · aurora-web", "◆", "#7"],
         ["claude · orbit-api", "✳", "orbit", 1],
         ["codex · aurora-web", "◇", "aurora"],
-        ["Pixel 9 emulator (device)", "▯", "Pixel"],
       ];
       const WSPS = [
         ["AI Usage", "#3b82f6", ["Mullion", "Runway"]],
@@ -746,6 +843,11 @@
       }
 
       function sideHtml() {
+        if (state.view === "device")
+          return `<h3>Devices</h3>
+            <div class="box"><b>Pixel 9 emulator</b> · running <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Stop</span></div>
+            <div class="devscreen">Pixel 9 screen<br><small>live, touch goes to the device</small></div>
+            <div class="box"><b>Pixel Tablet</b> · stopped <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Start</span></div>`;
         if (state.view !== "tasks")
           return `<h3>${state.view}</h3><div class="box">Placeholder for the ${state.view} view. Tap its rail tab again to close.</div>`;
         if (!state.task)
@@ -768,7 +870,11 @@
           <div class="box"><b>Timeline</b> · claimed · PR opened · review round 1 · review round 2</div>`;
       }
 
+      const sheet = document.createElement("div");
+      sheet.id = "sheet";
+      $("#body").append(sheet);
       function render() {
+        sheet.style.display = "none";
         const open = !!state.view;
         const stacked = state.stack === "always" || (state.stack === "open" && open);
         document.body.className =
@@ -878,14 +984,28 @@
           const here = t.dataset.add;
           const other = SESS.filter((x) => onRight(x[0]) !== (here === "right"));
           const act = here === "right" ? "mvr" : "mvl";
-          menu.innerHTML =
-            `<button data-put="noop|">New session</button>` +
-            `<button data-put="noop|">Open another session…</button>` +
+          const side = here === "right" ? "right" : "left";
+          const row = (x, a) =>
+            `<button class="srow" data-put="${a}|${x[0]}"><i>${x[1]}</i><span><b>${x[0].split(" · ")[0]}</b><small>${x[0].split(" · ")[1] || ""}</small></span></button>`;
+          sheet.innerHTML =
+            `<div class="sh"><b>Add to the ${side} half</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+            `<button class="snew" data-put="noop|">＋ New session</button>` +
+            `<div class="sfind">Search sessions…</div>` +
             (other.length
-              ? `<div class="mh">From the ${here === "right" ? "left" : "right"} half</div>`
+              ? `<div class="mh">On the ${side === "right" ? "left" : "right"} half</div>`
               : "") +
-            other.map((x) => `<button data-put="${act}|${x[0]}">${x[1]} ${x[0]}</button>`).join("");
-          showMenu(t);
+            other.map((x) => row(x, act)).join("") +
+            `<div class="mh">Mullion · not open</div>` +
+            [
+              ["claude · docs cleanup", "✳"],
+              ["codex · flaky test", "◇"],
+            ]
+              .map((x) => row(x, "noop"))
+              .join("") +
+            `<div class="mh">Runway · not open</div>` +
+            [["claude · importer", "✳"]].map((x) => row(x, "noop")).join("");
+          sheet.className = side;
+          sheet.style.display = "block";
           return;
         } else if (t.dataset.wsp !== undefined) {
           // The current workspace is one chip; tapping it opens the full workspace list.
