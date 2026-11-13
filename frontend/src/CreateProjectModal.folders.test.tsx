@@ -117,8 +117,14 @@ describe("CreateProjectModal folder picker", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("disables Browse when a remote host is selected", async () => {
+  it("enables Browse for a remote host and lists that host's folders", async () => {
     const user = userEvent.setup();
+    vi.mocked(api.listDirectories).mockResolvedValue({
+      path: "/srv/code",
+      parent: "/srv",
+      directories: [{ name: "app", path: "/srv/code/app" }],
+      truncated: false,
+    });
     render(
       <CreateProjectModal
         hosts={[makeHost({ id: "remote", name: "Remote", isLocal: false })]}
@@ -127,12 +133,28 @@ describe("CreateProjectModal folder picker", () => {
       />,
     );
     await user.selectOptions(fieldSelect("Host"), "remote");
-    expect(screen.getByRole("button", { name: "Browse…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Browse…" })).toHaveAttribute(
-      "title",
-      expect.stringContaining("remote hosts"),
+    expect(screen.getByRole("button", { name: "Browse…" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Browse…" }));
+    expect(await screen.findByRole("button", { name: "app/" })).toBeInTheDocument();
+    expect(api.listDirectories).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ hostId: "remote" }),
     );
-    expect(api.listDirectories).not.toHaveBeenCalled();
+  });
+
+  it("shows the unreachable error in the picker for an offline remote host", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listDirectories).mockRejectedValue(new Error("Host remote is unreachable"));
+    render(
+      <CreateProjectModal
+        hosts={[makeHost({ id: "remote", name: "Remote", isLocal: false, health: "offline" })]}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+    await user.selectOptions(fieldSelect("Host"), "remote");
+    await user.click(screen.getByRole("button", { name: "Browse…" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Host remote is unreachable");
   });
 
   it("keeps the picker closed after switching away from the local host and back", async () => {

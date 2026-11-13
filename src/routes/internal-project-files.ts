@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { FastifyReply } from "fastify";
 import type { Readable } from "node:stream";
+import { FsDirsError, listLocalDirectories } from "../services/fs-dirs.js";
 import { readFilesLocally, writeEntriesLocally } from "../services/host-files.js";
 import { discoverCommittedScaffold } from "../services/session-lifecycle.js";
 import { PathEscapeError } from "../services/safe-path.js";
@@ -137,6 +138,39 @@ export function registerProjectFilesRoutes(app: FastifyInstance): void {
     }
     throw err;
   }
+
+  // The Add project folder picker for a remote host: the primary's
+  // GET /api/fs/dirs?hostId=… lands here. Deliberately NOT confined to
+  // PROJECTS_ROOTS — the picker exists to find a folder for a NEW project —
+  // matching the primary's own unrestricted GET /api/fs/dirs.
+  app.get<{ Querystring: { path: string; hidden?: string } }>(
+    "/internal/fs/dirs",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        querystring: {
+          type: "object",
+          required: ["path"],
+          properties: {
+            path: { type: "string", minLength: 1, maxLength: 4096 },
+            hidden: { type: "string", enum: ["0", "1"] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return await listLocalDirectories(request.query.path, request.query.hidden === "1");
+      } catch (err) {
+        if (err instanceof FsDirsError) {
+          if (err.statusCode === 404) return reply.notFound(err.message);
+          if (err.statusCode === 403) return reply.forbidden(err.message);
+          return reply.badRequest(err.message);
+        }
+        throw err;
+      }
+    },
+  );
 
   app.post<{ Body: ProjectFilesListBody }>(
     "/internal/project-files/list",

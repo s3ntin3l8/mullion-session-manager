@@ -488,7 +488,7 @@ export function CreateProjectModal({
     applyPath(slug ? `${base}/${slug}` : base);
   };
 
-  const canBrowse = (isEdit ? projectHostId : hostId) === LOCAL_HOST_ID;
+  const browseHostId = isEdit ? projectHostId : hostId;
   const browse = () => setPickerPath(path.trim() || projectRoot?.trim() || "~");
   const closePicker = () => {
     setPickerPath(null);
@@ -1098,13 +1098,14 @@ export function CreateProjectModal({
               if (e.key === "Enter") void confirm();
             }}
           />
-          <BrowseButton canBrowse={canBrowse} onClick={browse} />
+          <BrowseButton remote={browseHostId !== LOCAL_HOST_ID} onClick={browse} />
         </span>
       </label>
 
-      {pickerPath !== null && canBrowse && (
+      {pickerPath !== null && (
         <FolderPicker
-          key={pickerPath}
+          key={`${browseHostId}:${pickerPath}`}
+          hostId={browseHostId === LOCAL_HOST_ID ? undefined : browseHostId}
           initialPath={pickerPath}
           onClose={closePicker}
           onSelect={(selected) => {

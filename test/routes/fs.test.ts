@@ -6,6 +6,8 @@ import type * as FsPromises from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { hosts } from "../../src/db/schema.js";
+import { HostRequestError, HostUnreachableError } from "../../src/services/remote-host-errors.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof FsPromises>();
@@ -168,5 +170,81 @@ describe("GET /api/fs/dirs", () => {
     expect(limited.headers["x-ratelimit-limit"]).toBe("60");
     expect(vi.mocked(opendir).mock.calls.length).toBe(reads);
     expect((await list(root)).statusCode).toBe(200);
+  });
+
+  describe("with a remote hostId", () => {
+    const remoteListing = {
+      path: "/srv/code",
+      parent: "/srv",
+      directories: [{ name: "app", path: "/srv/code/app" }],
+      truncated: false,
+    };
+
+    async function remoteList(hostId: string, client: unknown) {
+      const mod = await import("../../src/services/remote-host-client.js");
+      const spy = vi.spyOn(mod, "getRemoteHostClient").mockReturnValue(client as never);
+      try {
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/fs/dirs?path=${encodeURIComponent("/srv/code")}&hidden=1&hostId=${hostId}`,
+          headers,
+        });
+        return { res, spy: { calls: [...spy.mock.calls] } };
+      } finally {
+        spy.mockRestore();
+      }
+    }
+
+    it("returns the remote host's listing instead of listing the primary", async () => {
+      app.db
+        .insert(hosts)
+        .values({ id: "fs-remote", name: "r", baseUrl: "http://127.0.0.1:1" })
+        .run();
+      const listDirectories = vi.fn().mockResolvedValue(remoteListing);
+      const { res, spy } = await remoteList("fs-remote", { listDirectories });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(remoteListing);
+      expect(spy.calls[0]?.[1]).toBe("fs-remote");
+      expect(listDirectories).toHaveBeenCalledWith("/srv/code", true);
+    });
+
+    it("404s an unknown host", async () => {
+      const { res } = await remoteList("nope", {});
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("503s with an unreachable message when the host cannot be reached", async () => {
+      const { res } = await remoteList("fs-remote", {
+        listDirectories: vi.fn().mockRejectedValue(new HostUnreachableError("fs-remote", "down")),
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().message).toBe("Host fs-remote is unreachable");
+    });
+
+    it("forwards the host's own 404 for a missing directory", async () => {
+      const { res } = await remoteList("fs-remote", {
+        listDirectories: vi
+          .fn()
+          .mockRejectedValue(
+            new HostRequestError(
+              "fs-remote",
+              404,
+              JSON.stringify({ message: "Directory does not exist." }),
+            ),
+          ),
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toContain("Directory does not exist.");
+    });
+
+    it("treats hostId=local as this machine", async () => {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/fs/dirs?path=${encodeURIComponent(root)}&hostId=local`,
+        headers,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().path).toBe(root);
+    });
   });
 });

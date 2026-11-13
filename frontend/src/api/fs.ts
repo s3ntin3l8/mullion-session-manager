@@ -8,8 +8,11 @@ export interface DirectoryListing {
 }
 
 export const fsApi = {
-  listDirectories: (path: string, opts?: { hidden?: boolean }) =>
+  /** `hostId` lists that host's filesystem instead of the primary's. */
+  listDirectories: (path: string, opts?: { hidden?: boolean; hostId?: string }) =>
     request<DirectoryListing>(
-      `/api/fs/dirs?path=${encodeURIComponent(path)}${opts?.hidden ? "&hidden=1" : ""}`,
+      `/api/fs/dirs?path=${encodeURIComponent(path)}${opts?.hidden ? "&hidden=1" : ""}${
+        opts?.hostId ? `&hostId=${encodeURIComponent(opts.hostId)}` : ""
+      }`,
     ),
 };

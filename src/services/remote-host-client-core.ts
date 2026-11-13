@@ -34,6 +34,7 @@ import {
   AGENT_CHANNEL_STREAMS_OPERATION,
   type AgentChannelStreamKind,
 } from "../shared/agent-channel.js";
+import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
 import { probeHealth } from "./host-health-probe.js";
@@ -456,6 +457,14 @@ export class RemoteHostClient {
   // project on every poll — see /internal/agent-rules/exists's own comment.
   resolveExistingRuleFileNames(cwd: string): Promise<string[]> {
     return this.request(`/internal/agent-rules/exists?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** The sub-directories of `path` on THIS host's filesystem — the Add project
+   * folder picker for a remote host (GET /internal/fs/dirs). */
+  listDirectories(path: string, hidden: boolean): Promise<DirectoryListing> {
+    return this.request(
+      `/internal/fs/dirs?path=${encodeURIComponent(path)}${hidden ? "&hidden=1" : ""}`,
+    );
   }
 
   writeAgentRule(cwd: string, target: string, content: string): Promise<AgentRuleTarget> {
