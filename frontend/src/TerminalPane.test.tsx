@@ -22,6 +22,9 @@ import {
   unregisterTerminalRepaint,
 } from "./terminalRepaintRegistry.js";
 import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputRegistry.js";
+import { DockSidebarView } from "./right-sidebar/DockSidebarView.js";
+import type { RightSidebarActions } from "./right-sidebar/views.js";
+import { DockLogPane } from "./dock/DockLogPane.js";
 
 vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -520,6 +523,7 @@ function renderPane(
   extra: {
     active?: boolean;
     inputAffordances?: boolean;
+    readOnly?: boolean;
     onOpenFile?: (path: string, line?: number) => void;
   } = {},
 ) {
@@ -1047,6 +1051,142 @@ describe("TerminalPane file-path link provider", () => {
       links = result;
     });
     expect(links).toEqual([]);
+  });
+});
+
+// #3012 — the right sidebar's Dock view shows a monitor's log through a
+// read-only pane. The key bar routes by session id and cannot tell this mount
+// from the session's own pane, so a read-only pane must never register.
+describe("TerminalPane readOnly (#3012)", () => {
+  it("registers as a key-bar target without readOnly (the control)", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    expect(registerTerminalInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not register or unregister a terminal input handle", () => {
+    stubFakeWebSocket(true);
+    const { unmount } = renderPane({ readOnly: true });
+    expect(Terminal).toHaveBeenCalled();
+    expect(registerTerminalInput).not.toHaveBeenCalled();
+    unmount();
+    expect(unregisterTerminalInput).not.toHaveBeenCalled();
+  });
+
+  it("disables stdin and sends nothing typed to the PTY", () => {
+    stubFakeWebSocket(true);
+    renderPane({ readOnly: true });
+    const ctorOptions = vi.mocked(Terminal).mock.calls.at(-1)![0] as { disableStdin?: boolean };
+    expect(ctorOptions.disableStdin).toBe(true);
+    const term = getLatestTermInstance() as unknown as {
+      onData: ReturnType<typeof vi.fn>;
+    };
+    const onData = term.onData.mock.calls[0]![0] as (data: string) => void;
+    fakeWsSend.mockClear();
+    onData("rm -rf /\r");
+    expect(fakeWsSend).not.toHaveBeenCalled();
+  });
+
+  it("asks for no on-screen keyboard and accepts no text", () => {
+    stubFakeWebSocket(true);
+    const original = vi.mocked(Terminal).getMockImplementation()!;
+    vi.mocked(Terminal).mockImplementationOnce(function (this: unknown, ...args: unknown[]) {
+      const term = (original as (...a: unknown[]) => Record<string, unknown>).apply(this, args);
+      term.textarea = document.createElement("textarea");
+      return term as never;
+    });
+    renderPane({ readOnly: true });
+    const textarea = (getLatestTermInstance() as unknown as { textarea: HTMLTextAreaElement })
+      .textarea;
+    expect(textarea.getAttribute("inputmode")).toBe("none");
+    expect(textarea.hasAttribute("readonly")).toBe(true);
+  });
+
+  it("shows no attach button and ignores the paste chord", async () => {
+    stubFakeWebSocket(true);
+    const blob = new Blob(["fake"], { type: "image/png" });
+    const read = vi
+      .fn()
+      .mockResolvedValue([{ types: ["image/png"], getType: vi.fn().mockResolvedValue(blob) }]);
+    const readText = vi.fn().mockResolvedValue("pasted");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { read, readText },
+    });
+    renderPane({ readOnly: true });
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    expect(screen.queryByRole("button", { name: "Attach files" })).toBeNull();
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    act(() => {
+      handler({
+        type: "keydown",
+        key: "v",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+      });
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    // Not even the image upload a paste would start before onData drops it.
+    expect(read).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
+    expect(api.uploadSessionFile).not.toHaveBeenCalled();
+    expect(term.paste).not.toHaveBeenCalled();
+  });
+});
+
+// #3012 — the proof for the right sidebar's Dock view itself, with the REAL
+// TerminalPane mounted inside it: showing a running monitor's log there does
+// not register a terminal input target. The control in the same harness is
+// the bottom Dock's own log pane for the same session, which does.
+describe("Dock view log is not a terminal input target (#3012)", () => {
+  const monitor = makeStoreSession({
+    id: 7,
+    projectId: 1,
+    kind: "dock",
+    status: "active",
+    command: "npm run dev",
+  } as Partial<Session>);
+
+  it("the bottom Dock's log pane registers (the control)", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    vi.mocked(registerTerminalInput).mockClear();
+    render(<DockLogPane sessionId={7} minWidthPx={100} minHeightPx={100} />);
+    expect(registerTerminalInput).toHaveBeenCalledWith(7, expect.anything());
+  });
+
+  it("the Dock view mounts the real terminal for the log and never registers it", async () => {
+    stubFakeWebSocket(true);
+    // Settings come from renderPane's own store setup; unmount its pane.
+    renderPane().unmount();
+    vi.mocked(registerTerminalInput).mockClear();
+    vi.mocked(unregisterTerminalInput).mockClear();
+    vi.mocked(Terminal).mockClear();
+    // Restored at the end: later tests in this file read sessions/projects.
+    const { projects, sessions, sessionsLoaded } = useDashboardStore.getState();
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1, name: "aurora-web" })],
+      sessions: [monitor],
+      sessionsLoaded: true,
+    });
+    const listDock = vi
+      .spyOn(api, "listProjectDock")
+      .mockResolvedValue([{ id: "dev", title: "dev", command: "npm run dev" }]);
+    const actions = { onOpenDockConfig: vi.fn() } as unknown as RightSidebarActions;
+    const { unmount } = render(<DockSidebarView projectId={1} actions={actions} />);
+    await screen.findByRole("button", { name: /^dev, running/ });
+    // The log is a real TerminalPane: an xterm Terminal was constructed for it.
+    await waitFor(() => expect(Terminal).toHaveBeenCalled());
+    expect(registerTerminalInput).not.toHaveBeenCalled();
+    unmount();
+    expect(unregisterTerminalInput).not.toHaveBeenCalled();
+    listDock.mockRestore();
+    useDashboardStore.setState({ projects, sessions, sessionsLoaded });
   });
 });
 

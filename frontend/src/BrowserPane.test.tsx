@@ -244,6 +244,45 @@ describe("BrowserPane", () => {
     expect(sentTypes).toContainEqual({ type: "mouse", action: "wheel", deltaX: 1, deltaY: 2 });
   });
 
+  it("scrolls the page with a one-finger drag (#3012)", () => {
+    const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+    openSocket();
+    const canvas = container.querySelector("canvas")!;
+    canvas.width = 200;
+    canvas.height = 200;
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+      right: 100,
+      bottom: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.touchStart(canvas, { touches: [{ clientX: 10, clientY: 50 }] });
+    fireEvent.touchMove(canvas, { touches: [{ clientX: 10, clientY: 40 }] });
+    // A second finger is a pinch, not a scroll: ignored.
+    fireEvent.touchMove(canvas, {
+      touches: [
+        { clientX: 10, clientY: 30 },
+        { clientX: 50, clientY: 30 },
+      ],
+    });
+    fireEvent.touchEnd(canvas, { touches: [] });
+    // After the finger lifts, a stray move sends nothing.
+    fireEvent.touchMove(canvas, { touches: [{ clientX: 10, clientY: 10 }] });
+
+    const sent = fakeSocket.send.mock.calls.map((c) => JSON.parse(c[0] as string));
+    // The start point (scaled to the frame's pixels) positions the pointer.
+    expect(sent).toContainEqual({ type: "mouse", action: "move", x: 20, y: 100 });
+    // Dragging up by 10 CSS px scrolls the page down by 20 frame px.
+    const wheels = sent.filter((m) => m.action === "wheel");
+    expect(wheels).toEqual([{ type: "mouse", action: "wheel", deltaX: 0, deltaY: 20 }]);
+  });
+
   it("forwards keydown/keyup from the canvas", () => {
     const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
     openSocket();

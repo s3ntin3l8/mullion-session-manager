@@ -247,7 +247,7 @@ export function BrowserPane(props: {
     // Mouse/keyboard forwarding — the canvas shows a scaled bitmap of the
     // remote page, so pointer coordinates are rescaled from CSS pixels to
     // the frame's own pixel dimensions before being sent.
-    function canvasPoint(event: MouseEvent): { x: number; y: number } {
+    function canvasPoint(event: { clientX: number; clientY: number }): { x: number; y: number } {
       const rect = canvas!.getBoundingClientRect();
       // `|| 1` alone doesn't catch a zero-width/height rect (e.g. before
       // layout, or in a headless test) when canvas.width is non-zero — that
@@ -275,6 +275,42 @@ export function BrowserPane(props: {
     // The canvas has its own right-click semantics in the remote page — the
     // browser's native context menu over it would just be confusing noise.
     const onContextMenu = (event: MouseEvent) => event.preventDefault();
+    // Touch (the fold's Browser view, a tablet's grid pane): a one-finger
+    // drag scrolls the page. Without this a finger could only tap, through
+    // the browser's compatibility mouse events, and never scroll. The finger's
+    // start point is sent as a mouse move first, because the remote wheel
+    // scrolls whatever is under the remote pointer. A tap never moves, so
+    // it still arrives as the compatibility click.
+    let lastTouch: { x: number; y: number } | null = null;
+    const onTouchStart = (event: TouchEvent) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+      if (!touch) {
+        lastTouch = null;
+        return;
+      }
+      lastTouch = { x: touch.clientX, y: touch.clientY };
+      const { x, y } = canvasPoint(touch);
+      sendControl({ type: "mouse", action: "move", x, y });
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+      if (!touch || !lastTouch) return;
+      const rect = canvas!.getBoundingClientRect();
+      const scale = rect.height > 0 ? canvas!.height / rect.height : 1;
+      const deltaX = (lastTouch.x - touch.clientX) * scale;
+      const deltaY = (lastTouch.y - touch.clientY) * scale;
+      lastTouch = { x: touch.clientX, y: touch.clientY };
+      if (deltaX === 0 && deltaY === 0) return;
+      event.preventDefault();
+      sendControl({ type: "mouse", action: "wheel", deltaX, deltaY });
+    };
+    const onTouchEnd = () => {
+      lastTouch = null;
+    };
+    canvas.addEventListener("touchstart", onTouchStart, { passive: true });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("touchcancel", onTouchEnd);
     canvas.addEventListener("mousemove", onMouseMove);
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mouseup", onMouseUp);
@@ -384,6 +420,10 @@ export function BrowserPane(props: {
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchEnd);
       canvas.removeEventListener("mousemove", onMouseMove);
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("mouseup", onMouseUp);

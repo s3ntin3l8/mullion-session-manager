@@ -9,14 +9,18 @@
 
 import {
   DeviceIcon,
+  DockIcon,
   FolderIcon,
   GitBranchIcon,
   GitHubIcon,
   GearIcon,
+  GlobeIcon,
   HistoryIcon,
   ListIcon,
 } from "../ui/icons.js";
+import { BrowserSidebarView } from "./BrowserSidebarView.js";
 import { DevicesSidebarView } from "./DevicesSidebarView.js";
+import { DockSidebarView } from "./DockSidebarView.js";
 import { FilesSidebarView } from "./FilesSidebarView.js";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { GitSidebarView } from "./GitSidebarView.js";
@@ -31,6 +35,7 @@ import {
   useTaskMasterEnabled,
   useTasksBadge,
 } from "./views-badges.js";
+import { RAILS_BANDS, useEnabledInRailsBands } from "./viewBands.js";
 import type { RightSidebarView } from "./views.js";
 
 export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
@@ -92,5 +97,26 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     useBadge: useNoBadge,
     useEnabled: useAlwaysEnabled,
     hostGlobal: true,
+  },
+  // Browser and Dock are views only on the rails layouts (`bands`): there the
+  // screen is a session with its companions beside it. From 1100px they stay
+  // a grid pane and the bottom Dock, and are not registered here.
+  {
+    id: "browser",
+    label: "Browser",
+    icon: GlobeIcon,
+    Component: BrowserSidebarView,
+    useBadge: useNoBadge,
+    useEnabled: useEnabledInRailsBands,
+    bands: RAILS_BANDS,
+  },
+  {
+    id: "dock",
+    label: "Dock",
+    icon: DockIcon,
+    Component: DockSidebarView,
+    useBadge: useNoBadge,
+    useEnabled: useEnabledInRailsBands,
+    bands: RAILS_BANDS,
   },
 ];

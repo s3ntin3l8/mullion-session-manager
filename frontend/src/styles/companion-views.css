@@ -1,0 +1,255 @@
+/* The right sidebar's Browser and Dock views (#3012), registered only on the
+   rails layouts (700 to 1099.98px). Both fill the view rather than scroll in
+   it: the browser page and the Dock log take the height that is left. */
+
+/* A view that fills the panel body: the body stops scrolling and lays the
+   view out as a column; the view's own regions scroll instead. */
+.right-sidebar-body:has(> .rs-fill) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.right-sidebar-body > .rs-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Browser: the page fills the view under BrowserPane's own address bar. No
+   side padding, so the page runs edge to edge. */
+.right-sidebar-body > .rs-fill.browser-sidebar-view {
+  padding: 0;
+}
+.browser-sidebar-view .browser-pane {
+  flex: 1;
+}
+/* A finger drag on the page scrolls the remote page (BrowserPane's touch
+   handlers), not the app. */
+.browser-sidebar-view .browser-pane-canvas {
+  touch-action: none;
+}
+.browser-sidebar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px var(--rs-pad-x);
+}
+.rs-touch-btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--seg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Dock: the list, the selected row's actions, then its read-only log. */
+.dock-view-list {
+  flex: 0 1 auto;
+  max-height: 45%;
+  min-height: 0;
+  overflow-y: auto;
+}
+.dock-view-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.dock-view-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dock-view-heading > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-view-heading small {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.dock-view-heading small.error {
+  color: var(--r);
+}
+.dock-view-stack-menu {
+  margin-left: auto;
+  min-width: 44px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.dock-view-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dock-view-row.selected {
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
+}
+.dock-view-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.dock-view-row-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.dock-view-row-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-view-row-text small {
+  color: var(--muted);
+}
+/* The image tag stays on the row; tinted when an update is available, the
+   same tint the bottom Dock's pill uses. */
+.dock-view-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-view-image.update {
+  background: color-mix(in srgb, var(--o) 14%, transparent);
+  border-color: color-mix(in srgb, var(--o) 30%, transparent);
+  color: var(--o);
+}
+.dock-view-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-top: 1px solid var(--border);
+}
+.dock-view-actions > button,
+.dock-view-status > button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--seg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.dock-view-actions > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dock-view-actions > button.armed {
+  border-color: var(--r);
+  color: var(--r);
+}
+.dock-view-branch {
+  min-height: 44px;
+}
+.dock-view-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.dock-view-status.error {
+  color: var(--r);
+}
+.dock-view-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent-solid);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* The read-only log takes what is left of the view's height. */
+.dock-view-log {
+  flex: 1;
+  min-height: 160px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+  background: var(--term);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  overflow: hidden;
+}
+/* min-width: 0 for the same xterm resize-runaway reason as the bottom Dock's
+   .dock-log-pane-body (empty-states.css). */
+.dock-view-log-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* The stack's own actions: a sheet with rows of at least 48px (52px, the
+   design's sheet row). */
+.dock-view-sheet-rows {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 12px;
+}
+.dock-view-sheet-row {
+  min-height: 52px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+.dock-view-sheet-row.danger.armed {
+  color: var(--r);
+}

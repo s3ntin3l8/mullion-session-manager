@@ -279,7 +279,8 @@ sidebar has a **Devices** view (the rail's device icon; tablet and desktop —
 on the phone the navigator's Devices tab carries the same list) listing every
 device row that still exists — active _and_ stopped. It is host-global, so it
 shows no project picker. With zero devices it shows a short empty state that
-points at Settings → Devices (see below).
+points at Settings → Devices (see below). If the first fetch of the list
+fails, it says "Couldn't load devices." until a later poll succeeds.
 A row's status dot reflects its live state, a stopped row renders dimmed with
 a **Start** control (an active row gets **Stop** instead), and clicking the row
 itself opens (or focuses) that device's panel via `openDevicePanel`

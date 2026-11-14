@@ -192,7 +192,19 @@ export function TerminalPane(props: {
   // dockview/project-agnostic, see the header comment); Dock.tsx omits it,
   // which registers no path provider at all.
   onOpenFile?: (path: string, line?: number) => void;
+  // A view of the session's output that can never write to it (#3012): the
+  // right sidebar's Dock view shows a monitor's log this way. It does not
+  // register with terminalInputRegistry (the key bar routes by session id,
+  // and could not tell this mount from the session's own pane), sends no
+  // keystroke, paste or terminal reply to the PTY, keeps xterm's stdin
+  // disabled, has no input affordances (attach, drop, voice) and asks touch
+  // devices for no on-screen keyboard. Selection, copy, find and the copy
+  // sheet still work; resizes are still sent, as they are not input. Read
+  // at mount: changing it means remounting (key the pane on it).
+  readOnly?: boolean;
 }) {
+  const readOnly = props.readOnly === true;
+  const inputAffordances = !readOnly && (props.inputAffordances ?? true);
   const onOpenFileRef = useRef(props.onOpenFile);
   useEffect(() => {
     onOpenFileRef.current = props.onOpenFile;
@@ -508,7 +520,8 @@ export function TerminalPane(props: {
   // dictation and insert into the log-stream PTY, now with no on-screen
   // phase indicator at all (the mic button was the only one). Read the same
   // way captureCtrlCRef is, below.
-  const inputAffordancesRef = useRef(props.inputAffordances ?? true);
+  const inputAffordancesRef = useRef(inputAffordances);
+  const readOnlyRef = useRef(readOnly);
   // Mirrors `props.onTitleChange` for the same reason as prefsRef above — the
   // mount effect's term.onTitleChange subscription (below) is created once
   // and must not go stale if the caller passes a new callback identity later.
@@ -545,9 +558,7 @@ export function TerminalPane(props: {
   // floating button covered the prompt) into the key bar, which reaches
   // these controls through terminalVoiceRegistry.ts.
   const showVoiceMic =
-    (props.inputAffordances ?? true) &&
-    terminalSettings.voice.enabled &&
-    voiceController.isSupported;
+    inputAffordances && terminalSettings.voice.enabled && voiceController.isSupported;
   const { phase: voicePhase, interimText: voiceInterimText, isSecureContext } = voiceController;
   useEffect(() => {
     if (!showVoiceMic || !isCoarsePointer) return;
@@ -705,6 +716,8 @@ export function TerminalPane(props: {
       // (canvas fillStyle / WebGL texture atlas), which doesn't resolve CSS
       // custom properties on its own.
       theme: buildXtermTheme(prefs.colorScheme, theme),
+      // Read only (see the prop): xterm ignores keyboard input on its own.
+      disableStdin: readOnlyRef.current,
       // Unicode11Addon reads term.unicode, which xterm gates behind this
       // flag as a "proposed" (not yet stabilized) API.
       allowProposedApi: true,
@@ -920,6 +933,13 @@ export function TerminalPane(props: {
     }
 
     term.open(container);
+    if (readOnlyRef.current) {
+      // A tap on a read-only log must not raise the on-screen keyboard: the
+      // hidden textarea still takes focus (find and copy need it), but asks
+      // for no keyboard and accepts no text.
+      term.textarea?.setAttribute("inputmode", "none");
+      term.textarea?.setAttribute("readonly", "");
+    }
     // Android soft-keyboard autocomplete otherwise makes xterm re-send the whole
     // typed line (xtermjs/xterm.js#3600) — see imeInput.ts. Needs term.element,
     // so it must attach after open().
@@ -1016,6 +1036,8 @@ export function TerminalPane(props: {
     };
 
     const dataSub = term.onData((data) => {
+      // Read only: nothing typed, pasted or replied reaches the PTY.
+      if (readOnlyRef.current) return;
       let out = data;
       const ctrl = ctrlModifierRef.current;
       if (ctrl.mode !== "off" && !suppressCtrl) {
@@ -1284,7 +1306,9 @@ export function TerminalPane(props: {
         withoutCtrl(() => term.input("\x03"));
       },
     };
-    registerTerminalInput(props.params.sessionId, inputHandle);
+    // Read only: never a key-bar target (see the prop's comment).
+    const registersInput = !readOnlyRef.current;
+    if (registersInput) registerTerminalInput(props.params.sessionId, inputHandle);
 
     // Mounting a new Terminal shares (and, via the settings-sync effect's
     // clearTextureAtlas() calls, can wipe) the module-global WebGL glyph
@@ -1440,6 +1464,8 @@ export function TerminalPane(props: {
     // Registered via attachKeyConflictHandler above so it works even when
     // the browser wants to intercept the chord itself.
     pasteHandlerRef.current = () => {
+      // Read only: an image paste would still upload before onData drops it.
+      if (readOnlyRef.current) return;
       tryImagePaste()
         .then((handled) => {
           if (handled) return;
@@ -1631,7 +1657,7 @@ export function TerminalPane(props: {
       setLinkTooltip(null);
       refitRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
-      unregisterTerminalInput(props.params.sessionId, inputHandle);
+      if (registersInput) unregisterTerminalInput(props.params.sessionId, inputHandle);
       // The copy/scrollback sheet shows this session's buffer — never carry
       // it over to the next session this pane is switched to.
       setCopyModeSheet(null);
@@ -1660,7 +1686,7 @@ export function TerminalPane(props: {
   // changes, without triggering the full font/atlas/repaint logic below.
   useEffect(() => {
     captureCtrlCRef.current = props.captureCtrlC;
-    inputAffordancesRef.current = props.inputAffordances ?? true;
+    inputAffordancesRef.current = inputAffordances;
     const term = termRef.current;
     if (!term) return;
     attachKeyConflictHandler({
@@ -1687,7 +1713,7 @@ export function TerminalPane(props: {
     // inputAffordances changes, not on every render). The linter can't see
     // through the custom-hook boundary to infer that stability on its own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.captureCtrlC, props.inputAffordances]);
+  }, [props.captureCtrlC, inputAffordances]);
 
   // Applies every terminal pref to the *live* instance in place — this is
   // what fixes the async-hydration race noted above (a pane that mounted
@@ -2077,7 +2103,7 @@ export function TerminalPane(props: {
           if (files.length > 0) uploadFilesRef.current(files);
         }}
       />
-      {(props.inputAffordances ?? true) && !isCoarsePointer && (
+      {inputAffordances && !isCoarsePointer && (
         <button
           className="pane-tab-btn terminal-attach-image-btn"
           title="Attach files (or paste an image / drop files)"
