@@ -46,6 +46,58 @@ not a duration: a critically damped spring (no bounce) with a response of
 `ui/BottomSheet.tsx` is the reference consumer: it enters on the spring,
 leaves on it, and follows a finger on its header.
 
+## Where it lives
+
+The rules below are applied once, in `frontend/src/styles/motion.css`
+(imported last), rather than per component:
+
+- **Press feedback.** Every button, `role="button"`/`tab`/`menuitem`/`option`,
+  and the rows and cards that are not buttons (`.session-item`, `.task-card`,
+  `.rail-ws-row`) scale a little and take a `--press-tint` on `:active`, over
+  `--motion-press`. It uses the `scale` property, so it composes with any
+  `transform` a component already has. A component that declares its own
+  `transition` still scales on press, just without easing into it; restate
+  `scale var(--motion-press) var(--motion-ease-press)` in that transition to
+  keep the ease (`.task-card` does). Controls whose `pointerdown` calls
+  `preventDefault()` are left out: that strands `:active` on touch.
+- **Overlays enter and leave.** A menu or popover (`.pane-tab-overflow-menu`,
+  `.custom-select-menu`) grows from its trigger; a dialog (`.motion-scrim`
+  around `.motion-dialog`, set by `ui/Modal.tsx` and the command palette)
+  settles in over a scrim that fades. Each leaves the same way when it
+  carries `data-presence="leaving"`.
+- **Material.** Sheets and popovers sit on `--material` with
+  `--material-blur` and a `--material-edge`; under
+  `prefers-reduced-transparency: reduce` they are solid `--chrome`. `--dim`
+  reads as `--muted` on material: it falls below 4.5:1 on any translucent
+  surface, and `tokens.contrast.test.ts` holds `--fg` and `--muted` at 4.5:1
+  over a white and a black backdrop.
+- **Layout changes.** A right-sidebar view arriving or replacing another
+  fades and settles in (`.motion-arrive`); the mode switch fades the board in,
+  and the grid and the Dock back in. Nothing that holds a terminal changes
+  size over time.
+- **Soft edges.** Lists that scroll under a header fade out over their top
+  16px once scrolled (a scroll timeline, so nothing runs while still; at rest
+  nothing is masked).
+
+### Keeping an overlay mounted while it leaves
+
+`hooks/usePresence.ts` has the two shapes:
+
+- `usePresence(open, ref)` for an overlay that owns its `open` state (a menu,
+  a popover): render while `present`, put `state` on its root as
+  `data-presence`.
+- `useDismissExit(onClose, ref)` for an overlay its parent mounts
+  (`{open && <Modal/>}`): its own dismiss controls call `dismiss`, which plays
+  the exit and then calls `onClose`. A close the parent makes by itself (a
+  submit that succeeded) still unmounts at once.
+
+Both wait on the overlay's own animations (`lib/presence.ts`), not a timer:
+nothing there knows a duration. Under reduced motion, or where there is no
+Web Animations (jsdom), there is nothing to wait for and the overlay goes at
+once. A test that wants to see the leaving state installs
+`test/exitAnimations.ts`, asserts `data-presence="leaving"`, then calls
+`finishExits()`.
+
 ## Rules
 
 - **Feedback on touch-down.** A control answers the moment it is pressed (a

@@ -79,19 +79,53 @@ describe("styles/motion.css", () => {
 
   it("writes no literal duration or curve: every one comes from a token", () => {
     expect(css).not.toMatch(/\b\d+(\.\d+)?m?s\b/);
-    expect(css).not.toMatch(
-      /cubic-bezier|(?<![\w-])(ease|ease-in|ease-out|ease-in-out|linear)(?![\w-])/,
-    );
+    expect(css).not.toMatch(/cubic-bezier|(?<![\w-])(ease|ease-in|ease-out|ease-in-out)(?![\w-])/);
   });
 
-  it("animates only opacity, scale and translate", () => {
+  it("animates only opacity, scale and translate over time", () => {
     const frames = [...css.matchAll(/@keyframes\s+(\w+)\s*\{([\s\S]*?)\n\}/g)];
     expect(frames.length).toBeGreaterThanOrEqual(6);
     for (const [, name, body] of frames) {
+      // The scroll-edge fade follows the scroll position, not the clock.
+      const allowed =
+        name === "scrollEdgeIn" ? ["--scroll-edge"] : ["opacity", "scale", "translate"];
       for (const prop of body.matchAll(/([\w-]+)\s*:/g)) {
-        expect(["opacity", "scale", "translate"], `${name} animates ${prop[1]}`).toContain(prop[1]);
+        expect(allowed, `${name} animates ${prop[1]}`).toContain(prop[1]);
       }
     }
+  });
+
+  it("moves the content of a layout change, never a box a terminal sits in", () => {
+    // A right-sidebar view arriving settles in; the mode switch is a fade.
+    expect(rules(css, ".motion-arrive")[0][1]).toMatch(
+      /animation:\s*motionArrive var\(--motion-fade\)/,
+    );
+    expect(rules(css, ".kanban-board-overlay")[0][1]).toMatch(/var\(--motion-fade\)/);
+    const workspace = rules(css, '[data-mode="workspace"]');
+    expect(workspace.map(([sel]) => sel).join("\n")).toContain(".dock");
+    expect(workspace[0][1]).toMatch(/animation:\s*motionModeIn var\(--motion-fade\)/);
+    // The mode keyframes are opacity only: the grid, the Dock and the board can hold a terminal.
+    const mode = css.match(/@keyframes motionModeIn\s*\{([\s\S]*?)\n\}/)![1];
+    expect(mode).not.toMatch(/scale|translate/);
+    // No size or position property is ever transitioned or animated here.
+    expect(css).not.toMatch(
+      /transition:[^;]*\b(width|height|inline-size|block-size|left|right|top|flex)/,
+    );
+  });
+
+  it("softens the edge under a header only on a scroll timeline, and only once scrolled", () => {
+    const block = css.slice(css.indexOf("@supports (animation-timeline: scroll())"));
+    for (const list of [
+      ".task-board-lanes",
+      ".mobile-session-list",
+      ".rail-ws-scroll",
+      ".notif-feed-scroll",
+    ]) {
+      expect(block).toContain(list);
+    }
+    expect(block).toMatch(/animation-timeline:\s*scroll\(self\)/);
+    // At rest --scroll-edge is 0px, so the gradient masks nothing.
+    expect(css).toMatch(/@property --scroll-edge[\s\S]*?initial-value:\s*0px/);
   });
 
   it("plays an exit for every overlay that carries data-presence", () => {

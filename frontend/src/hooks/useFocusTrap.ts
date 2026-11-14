@@ -135,6 +135,7 @@ export function useFocusTrap({
     const toFocus =
       initialFocusRef?.current ?? (containerRef.current && getFocusable(containerRef.current)[0]);
     toFocus?.focus();
+    const container = containerRef.current;
     return () => {
       if (suppressRestoreRef.current) return;
       const target = lastFocusedRef.current;
@@ -142,7 +143,7 @@ export function useFocusTrap({
       // an exit is still mounted when its trap deactivates, and an element
       // that grabbed focus as it mounted (an autoFocus search field) would
       // otherwise take focus back into the overlay that is leaving.
-      if (target?.isConnected && !containerRef.current?.contains(target)) {
+      if (target?.isConnected && !container?.contains(target)) {
         target.focus();
       }
     };

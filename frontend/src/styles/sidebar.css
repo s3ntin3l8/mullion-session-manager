@@ -41,7 +41,10 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  transition: width 0.16s ease;
+  /* No width transition (#3015, docs/motion.md): the docked sidebar's width
+     is the terminal grid's width too, so an eased collapse re-flowed every
+     terminal and resized its PTY on each frame. It snaps; the grid beside it
+     takes its final size at once. */
 }
 
 /* Floating-sidebar redesign — phone and tablet tiers, not a raw viewport
@@ -373,7 +376,7 @@
 }
 .ws-group-chevron {
   flex-shrink: 0;
-  transition: transform 0.15s;
+  transition: transform var(--motion-fade) var(--motion-ease);
   color: currentColor;
 }
 .ws-group-chevron.collapsed {
@@ -599,7 +602,7 @@
      The hover lift below still brings it to full strength, so the
      de-emphasis survives: the handle is quiet until the row is engaged. */
   opacity: 0.75;
-  transition: opacity 0.1s;
+  transition: opacity var(--motion-press) var(--motion-ease-press);
   user-select: none;
 }
 .ws-group-header:hover .ws-drag-handle,

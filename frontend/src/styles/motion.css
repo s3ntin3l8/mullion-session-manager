@@ -52,7 +52,9 @@
   scale: 0.96;
   background-image: linear-gradient(var(--press-tint), var(--press-tint));
 }
-/* Wide things (rows, cards, list options) move less than a small button. */
+/* Wide things (rows, cards, list options) move less than a small button.
+   The same `:not()` list as above keeps this rule exactly as specific, so,
+   coming later, it wins for a row that is also a button. */
 :is(
     .session-item,
     .task-card,
@@ -61,7 +63,7 @@
     [role="option"],
     .phone-more-row,
     .pane-tab-overflow-item
-  ):active:not(:disabled, [aria-disabled="true"]) {
+  ):active:not(:disabled, [aria-disabled="true"], .mobile-key-bar-btn, .device-toolbar button) {
   scale: 0.98;
   background-image: linear-gradient(var(--press-tint), var(--press-tint));
 }
@@ -188,4 +190,73 @@
   .pane-tab-overflow-menu {
     border-color: var(--border);
   }
+}
+
+/* ---- Soft edges where content scrolls under a header -------------------- */
+/* The board's lanes (under the filter row) and the lists inside sheets and
+   popovers (under their headers) fade out over their top 16px instead of
+   being cut off by a hard line. Only once they are scrolled: at rest the
+   first row is never masked, so nothing is harder to read; the header's own
+   border stays. Driven by the scroll position itself (a scroll timeline), so
+   nothing runs while the list is still. Where scroll timelines are not
+   supported there is no mask at all. */
+@property --scroll-edge {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes scrollEdgeIn {
+  to {
+    --scroll-edge: 16px;
+  }
+}
+@supports (animation-timeline: scroll()) {
+  .task-board-lanes,
+  .mobile-session-list,
+  .mobile-notif-scroll,
+  .tasks-phone-filter-body,
+  .rail-ws-scroll,
+  .notif-feed-scroll {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-edge));
+    mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-edge));
+    animation: scrollEdgeIn auto linear both;
+    animation-timeline: scroll(self);
+    animation-range: 0 24px;
+  }
+}
+
+/* ---- Layout changes carry their content --------------------------------- */
+/* A box that can hold a terminal is never animated in size: the sidebar and
+   the halves snap to their final width at once (a width animation would
+   re-flow the terminal and resize its PTY every frame). Only what is inside
+   them moves, and only with opacity and translate, which never change a box
+   a terminal measures. */
+@keyframes motionArrive {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+/* A right-sidebar view arriving, or replacing another (RightSidebarPanel keys
+   its body by the view, so each view mounts fresh). */
+.motion-arrive {
+  animation: motionArrive var(--motion-fade) var(--motion-ease);
+}
+/* The mode switch. Into Tasks the board mounts over the grid and fades in;
+   back to Workspace the grid underneath (which stayed mounted) fades back in,
+   and so does the Dock, which remounts. Opacity only: all three can hold a
+   terminal. The workspace side keys on the mode attribute App.tsx already
+   sets, with its own keyframe name so the animation restarts on each switch
+   back. */
+@keyframes motionModeIn {
+  from {
+    opacity: 0;
+  }
+}
+.kanban-board-overlay {
+  animation: motionFadeIn var(--motion-fade) var(--motion-ease);
+}
+.app[data-mode="workspace"] .dockview-container > :is(.dockview-theme-dark, .dockview-theme-light),
+.app[data-mode="workspace"] .dock {
+  animation: motionModeIn var(--motion-fade) var(--motion-ease);
 }

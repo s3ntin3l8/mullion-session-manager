@@ -97,7 +97,7 @@
   background: color-mix(in srgb, var(--accent-solid) 18%, transparent);
 }
 .cmd-palette-target-chevron {
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-fade) var(--motion-ease);
   flex-shrink: 0;
 }
 .cmd-palette-target-chevron.open {

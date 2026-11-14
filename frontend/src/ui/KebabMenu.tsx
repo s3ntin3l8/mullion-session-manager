@@ -255,7 +255,6 @@ export function KebabMenu({
   // falls back to MENU_MAX_HEIGHT_FLOOR only then. A small *positive* gap is
   // used as-is: flooring it back up to 120px hid the menu behind the
   // keyboard, which is the bug this cap exists to fix.
-  let opensUpward = false;
   const getMenuStyle = (): React.CSSProperties | null => {
     const rect = triggerRect;
     if (!rect) return null;
@@ -270,7 +269,7 @@ export function KebabMenu({
     const visible = visibleViewport();
     const spaceAbove = rect.top - visible.top - 8;
     const spaceBelow = visible.bottom - rect.bottom - 8;
-    opensUpward =
+    const opensUpward =
       menuPlacement === "top" ||
       (menuPlacement === "auto" && menuHeight > spaceBelow && spaceAbove > spaceBelow);
     if (opensUpward) {
@@ -285,6 +284,8 @@ export function KebabMenu({
     return style;
   };
   const menuStyle = getMenuStyle();
+  // An upward menu has its `top` resolved to "auto" (see getMenuStyle).
+  const opensUpward = menuStyle?.top === "auto";
 
   return (
     <>
