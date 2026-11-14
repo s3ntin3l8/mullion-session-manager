@@ -128,12 +128,14 @@
   --field: var(--sidebar);
   --seg: color-mix(in srgb, var(--fg) 11%, transparent);
   /* Material (docs/motion.md): the translucent layer sheets and popovers sit
-     on, its light edge, and the tint a pressed control shows. 90% is the
-     most see-through --chrome gets while --fg and --muted keep 4.5:1 over a
-     pure white OR pure black backdrop (a web preview, a light terminal
-     scheme); tokens.contrast.test.ts holds it there. --dim does not survive
-     any translucency, so styles/motion.css lifts it to --muted on material. */
-  --material: color-mix(in srgb, var(--chrome) 90%, transparent);
+     on, its light edge, and the tint a pressed control shows. Based on
+     --term, not --chrome. Over the worst backdrop (pure white under this
+     theme) 94% of --term is still no lighter than solid --chrome, so every
+     text colour that clears AA on --chrome clears it on material too.
+     --chrome itself has no such headroom (--r and --accent-solid barely
+     clear 4.5:1 on it), so no visible translucency of --chrome keeps AA.
+     tokens.contrast.test.ts holds the invariant. */
+  --material: color-mix(in srgb, var(--term) 94%, transparent);
   --material-edge: color-mix(in srgb, #ffffff 9%, transparent);
   --press-tint: color-mix(in srgb, var(--fg) 8%, transparent);
 }
@@ -218,7 +220,7 @@
   --track: color-mix(in srgb, var(--fg) 5%, transparent);
   --field: #ffffff;
   --seg: color-mix(in srgb, var(--fg) 9%, transparent);
-  --material: color-mix(in srgb, var(--chrome) 90%, transparent);
+  --material: color-mix(in srgb, var(--term) 94%, transparent);
   /* On a light surface the edge of light is white, stronger than dark's. */
   --material-edge: color-mix(in srgb, #ffffff 70%, transparent);
   --press-tint: color-mix(in srgb, var(--fg) 7%, transparent);

@@ -26,10 +26,11 @@
    on press, it just does not ease into it.
 
    Left out: controls whose pointerdown calls preventDefault() to keep focus
-   in the terminal (the phone key bar, the device toolbar) — on touch
+   in the terminal (the phone key bar, the device toolbar, the voice mic) — on touch
    browsers that strands `:active` after the finger lifts (tablet.css's
    .mobile-key-bar-btn comment); the key bar has its own JS-driven press
-   state. Disabled controls do not answer. */
+   state. Disabled controls do not answer, and a row whose drag handle is
+   being pressed stays still: it is the drag image the browser captures. */
 :where(
   button,
   [role="button"],
@@ -47,7 +48,9 @@
     :disabled,
     [aria-disabled="true"],
     .mobile-key-bar-btn,
-    .device-toolbar button
+    .device-toolbar button,
+    .terminal-voice-btn,
+    :has(.ws-drag-handle:active)
   ) {
   scale: 0.96;
   background-image: linear-gradient(var(--press-tint), var(--press-tint));
@@ -62,8 +65,19 @@
     [role="menuitem"],
     [role="option"],
     .phone-more-row,
-    .pane-tab-overflow-item
-  ):active:not(:disabled, [aria-disabled="true"], .mobile-key-bar-btn, .device-toolbar button) {
+    .pane-tab-overflow-item,
+    .workspace-item,
+    .dock-monitor,
+    .sidebar-device-row,
+    .update-banner
+  ):active:not(
+    :disabled,
+    [aria-disabled="true"],
+    .mobile-key-bar-btn,
+    .device-toolbar button,
+    .terminal-voice-btn,
+    :has(.ws-drag-handle:active)
+  ) {
   scale: 0.98;
   background-image: linear-gradient(var(--press-tint), var(--press-tint));
 }
@@ -160,14 +174,10 @@
   -webkit-backdrop-filter: var(--material-blur);
   backdrop-filter: var(--material-blur);
 }
-/* --dim falls below 4.5:1 on any translucent surface (tokens.css), so text
-   in that role reads as --muted on material. The `.cmux-root` half matches a
-   portaled popover, which carries the theme classes itself: it has to outrank
-   `.cmux-root.light`'s own --dim. */
-.mobile-session-sheet,
-.pane-tab-overflow-menu,
-.pane-tab-overflow-menu.cmux-root {
-  --dim: var(--muted);
+/* The notification feed's sticky group header matches its panel (#1229), so
+   it moves to material with it instead of showing as a solid band. */
+.notif-panel .notif-group-header {
+  background: var(--material);
 }
 /* The light edge: on the side the layer came from. */
 .mobile-session-sheet {
@@ -183,6 +193,9 @@
     background: var(--chrome);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+  .notif-panel .notif-group-header {
+    background: var(--chrome);
   }
   .mobile-session-sheet {
     border-top-color: var(--border);
@@ -256,7 +269,20 @@
 .kanban-board-overlay {
   animation: motionFadeIn var(--motion-fade) var(--motion-ease);
 }
-.app[data-mode="workspace"] .dockview-container > :is(.dockview-theme-dark, .dockview-theme-light),
+.app[data-mode="workspace"] .dockview-container .dv-shell,
 .app[data-mode="workspace"] .dock {
   animation: motionModeIn var(--motion-fade) var(--motion-ease);
+}
+
+/* Reduced motion: the layout-change fades become nothing rather than the
+   reset's 0.01ms. Every one of these can hold a terminal, and tokens.css's
+   reset explains why a near-zero transition leaves xterm's WebGL text canvas
+   at half resolution; an animation that short is not worth that risk. */
+@media (prefers-reduced-motion: reduce) {
+  .motion-arrive,
+  .kanban-board-overlay,
+  .app[data-mode="workspace"] .dockview-container .dv-shell,
+  .app[data-mode="workspace"] .dock {
+    animation: none;
+  }
 }

@@ -100,22 +100,64 @@ describe("usePresence", () => {
     expect(screen.queryByTestId("popover")).toBeNull();
   });
 
-  it("does not wait on an infinite animation inside it (a spinner)", () => {
+  function stubAnimations(animations: unknown[]) {
     exits.restore();
     Object.defineProperty(Element.prototype, "getAnimations", {
       configurable: true,
       writable: true,
-      value: () => [
-        {
-          finished: new Promise(() => {}),
-          effect: { getTiming: () => ({ iterations: Infinity }) },
-        },
-      ],
+      value: () => animations,
     });
-    const { rerender } = render(<Popover open />);
-    rerender(<Popover open={false} />);
-    expect(screen.queryByTestId("popover")).toBeNull();
-    delete (Element.prototype as { getAnimations?: unknown }).getAnimations;
+  }
+
+  it("does not wait on an infinite animation inside it (a spinner)", () => {
+    stubAnimations([
+      { finished: new Promise(() => {}), effect: { getTiming: () => ({ iterations: Infinity }) } },
+    ]);
+    try {
+      const { rerender } = render(<Popover open />);
+      rerender(<Popover open={false} />);
+      expect(screen.queryByTestId("popover")).toBeNull();
+    } finally {
+      delete (Element.prototype as { getAnimations?: unknown }).getAnimations;
+    }
+  });
+
+  it("does not wait on a scroll-driven animation inside it (a list's soft edge)", () => {
+    class FakeDocumentTimeline {}
+    vi.stubGlobal("DocumentTimeline", FakeDocumentTimeline);
+    stubAnimations([
+      {
+        finished: new Promise(() => {}),
+        timeline: {}, // a ScrollTimeline: not the document's clock
+        effect: { getTiming: () => ({ iterations: 1 }) },
+      },
+    ]);
+    try {
+      const { rerender } = render(<Popover open />);
+      rerender(<Popover open={false} />);
+      expect(screen.queryByTestId("popover")).toBeNull();
+    } finally {
+      delete (Element.prototype as { getAnimations?: unknown }).getAnimations;
+    }
+  });
+
+  it("goes in the end even if its exit never finishes", async () => {
+    vi.useFakeTimers();
+    stubAnimations([
+      { finished: new Promise(() => {}), effect: { getTiming: () => ({ iterations: 1 }) } },
+    ]);
+    try {
+      const { rerender } = render(<Popover open />);
+      rerender(<Popover open={false} />);
+      expect(screen.getByTestId("popover")).toHaveAttribute("data-presence", "leaving");
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.queryByTestId("popover")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      delete (Element.prototype as { getAnimations?: unknown }).getAnimations;
+    }
   });
 });
 

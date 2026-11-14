@@ -67,14 +67,18 @@ The rules below are applied once, in `frontend/src/styles/motion.css`
   carries `data-presence="leaving"`.
 - **Material.** Sheets and popovers sit on `--material` with
   `--material-blur` and a `--material-edge`; under
-  `prefers-reduced-transparency: reduce` they are solid `--chrome`. `--dim`
-  reads as `--muted` on material: it falls below 4.5:1 on any translucent
-  surface, and `tokens.contrast.test.ts` holds `--fg` and `--muted` at 4.5:1
-  over a white and a black backdrop.
+  `prefers-reduced-transparency: reduce` they are solid `--chrome`.
+  `--material` is `--term` at 94%, not a translucent `--chrome`: over the worst
+  backdrop (white under the dark theme, black under the light one) it is
+  still no closer to the text than solid `--chrome`, so every text colour that
+  clears AA on `--chrome` clears it on material. `--chrome` has no headroom
+  for that (`--r` and `--accent-solid` barely clear 4.5:1 on it).
+  `tokens.contrast.test.ts` holds the invariant.
 - **Layout changes.** A right-sidebar view arriving or replacing another
   fades and settles in (`.motion-arrive`); the mode switch fades the board in,
   and the grid and the Dock back in. Nothing that holds a terminal changes
-  size over time.
+  size over time, and under reduced motion these fades are off entirely
+  (`animation: none`, not the reset's 0.01ms).
 - **Soft edges.** Lists that scroll under a header fade out over their top
   16px once scrolled (a scroll timeline, so nothing runs while still; at rest
   nothing is masked).
@@ -91,8 +95,11 @@ The rules below are applied once, in `frontend/src/styles/motion.css`
   the exit and then calls `onClose`. A close the parent makes by itself (a
   submit that succeeded) still unmounts at once.
 
-Both wait on the overlay's own animations (`lib/presence.ts`), not a timer:
-nothing there knows a duration. Under reduced motion, or where there is no
+Both wait on the overlay's own clock-driven animations (`lib/presence.ts`),
+not a timer: nothing there knows how long an exit is. Infinite and
+scroll-driven animations inside the overlay are not waited on, and a safety
+net (`EXIT_SAFETY_MS`, far past any exit) unmounts it even if an animation
+never finishes. Under reduced motion, or where there is no
 Web Animations (jsdom), there is nothing to wait for and the overlay goes at
 once. A test that wants to see the leaving state installs
 `test/exitAnimations.ts`, asserts `data-presence="leaving"`, then calls

@@ -130,6 +130,10 @@ export function Modal({
   // skips it: its caller guards `onClose` and keeps it, and an exit that
   // came back would only flicker.
   const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
+  // Not `inert` while leaving (the menus are): that would blur the focused
+  // control, and a caller that refuses the close would get its dialog back
+  // with focus stranded on <body>. motion.css's `pointer-events: none` on a
+  // leaving overlay is enough to keep a stray click from landing.
   const requestClose = closeDisabled ? onClose : dismiss;
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: true,
@@ -163,7 +167,6 @@ export function Modal({
       ref={backdropRef}
       className={`${backdropClassName} motion-scrim`}
       data-presence={presence}
-      inert={presence === "leaving"}
       onClick={requestClose}
     >
       <div

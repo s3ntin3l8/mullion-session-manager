@@ -849,7 +849,6 @@ export function CommandPalette({
       ref={backdropRef}
       className="overlay-backdrop cmd-palette-backdrop motion-scrim"
       data-presence={presence}
-      inert={presence === "leaving"}
       onClick={dismiss}
     >
       <div
@@ -945,6 +944,10 @@ export function CommandPalette({
                 return;
               }
               if (e.key === "Escape") {
+                // Handled here: the global Escape (useGlobalShortcuts) would
+                // otherwise unmount the palette in the same batch, before its
+                // exit could play (#3015).
+                e.stopPropagation();
                 dismiss();
               } else if (e.key === "ArrowDown" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();

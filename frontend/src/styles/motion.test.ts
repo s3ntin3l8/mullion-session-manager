@@ -113,6 +113,14 @@ describe("styles/motion.css", () => {
     );
   });
 
+  it("turns the layout-change fades off under reduced motion (they can hold a terminal)", () => {
+    const block = mediaBlock("prefers-reduced-motion: reduce");
+    for (const target of [".motion-arrive", ".kanban-board-overlay", ".dv-shell", ".dock"]) {
+      expect(block).toContain(target);
+    }
+    expect(block).toMatch(/animation:\s*none/);
+  });
+
   it("softens the edge under a header only on a scroll timeline, and only once scrolled", () => {
     const block = css.slice(css.indexOf("@supports (animation-timeline: scroll())"));
     for (const list of [

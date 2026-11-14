@@ -194,9 +194,9 @@ export function PairDeviceDialog({
   };
 
   return (
-    <div className="create-modal-backdrop" onClick={onClose}>
+    <div className="create-modal-backdrop motion-scrim" onClick={onClose}>
       <div
-        className="create-modal"
+        className="create-modal motion-dialog"
         role="dialog"
         aria-label="Pair a phone or tablet"
         onClick={(event) => event.stopPropagation()}
