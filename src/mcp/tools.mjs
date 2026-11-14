@@ -7,6 +7,7 @@
 // image, issue #2884), or throws, which server.mjs turns into a tool-level
 // `isError: true` result rather than a protocol-level failure.
 
+import { createDockTools } from "./dock-tools.mjs";
 import { browserToolResult } from "./browser-screenshot.mjs";
 import { useDevice } from "./device-use.mjs";
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
@@ -237,54 +238,6 @@ const listSessions = {
   },
 };
 
-const startDockSession = {
-  name: "start_dock_session",
-  description:
-    "Start one of a project's dock controls (e.g. the dev server) — see list_dock_controls for " +
-    "ids. From an agent session this works for your OWN project only (omit projectId); pass " +
-    "branch to run it on that branch in a preview worktree. Docker-discovered controls need " +
-    "full scope (MULLION_AUTH_TOKEN).",
-  inputSchema: {
-    type: "object",
-    required: ["dockControlId"],
-    properties: {
-      projectId: {
-        type: "string",
-        description: "The project (full scope; defaults to your own project in a session).",
-      },
-      dockControlId: { type: "string", description: "The dock control's id (list_dock_controls)." },
-      branch: { type: "string", description: "Optional branch to run the control on." },
-    },
-  },
-  async handler(args, client) {
-    const result = await client.startDockSession(
-      args?.projectId,
-      args?.dockControlId,
-      args?.branch,
-    );
-    return JSON.stringify(result);
-  },
-};
-
-const listDockControls = {
-  name: "list_dock_controls",
-  description:
-    "List your project's dock controls (id, title, command, port) and, for each, the running " +
-    "session if any. Use the ids with start_dock_session / stop_dock_session.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      projectId: {
-        type: "string",
-        description: "The project (full scope; defaults to your own project in a session).",
-      },
-    },
-  },
-  async handler(args, client) {
-    return JSON.stringify(await client.listDockControls(args?.projectId));
-  },
-};
-
 const spawnChildSession = {
   name: "spawn_child_session",
   description:
@@ -475,35 +428,6 @@ const listSpawnTargets = {
   },
   async handler(args, client) {
     const result = await client.listSpawnTargets(args?.sessionId);
-    return JSON.stringify(result);
-  },
-};
-
-const stopDockSession = {
-  name: "stop_dock_session",
-  description:
-    "Stop a dock control by dockControlId (your own project's, from list_dock_controls) — " +
-    "works from an agent session. Passing a raw sessionId instead kills any session by id and " +
-    "needs full scope (MULLION_AUTH_TOKEN).",
-  inputSchema: {
-    type: "object",
-    properties: {
-      dockControlId: { type: "string", description: "The dock control to stop." },
-      projectId: {
-        type: "string",
-        description: "The project (full scope; defaults to your own project in a session).",
-      },
-      sessionId: { type: "string", description: "Full scope only: a session id to kill." },
-    },
-  },
-  async handler(args, client) {
-    if (args?.dockControlId === undefined && args?.sessionId === undefined) {
-      throw new Error("pass dockControlId (or, with full scope, sessionId)");
-    }
-    const result = await client.stopDockSession(args?.sessionId, {
-      projectId: args?.projectId,
-      dockControlId: args?.dockControlId,
-    });
     return JSON.stringify(result);
   },
 };
@@ -1375,6 +1299,15 @@ const reportStatus = {
   },
 };
 
+const {
+  startDockSession,
+  listDockControls,
+  getDockLogs,
+  waitForDockOutput,
+  switchDockBranch,
+  stopDockSession,
+} = createDockTools({ normalizeWaitArgs });
+
 export const TOOLS = [
   promoteToWorktree,
   reportStatus,
@@ -1389,6 +1322,9 @@ export const TOOLS = [
   listSessions,
   startDockSession,
   listDockControls,
+  getDockLogs,
+  waitForDockOutput,
+  switchDockBranch,
   spawnChildSession,
   listSpawnTargets,
   listChildSessions,

@@ -287,12 +287,16 @@ from the dashboard once.
 your own checkout that you can edit — no new capability beyond the shell you
 already have.
 
-Reading a dock session's output and switching its branch in place are not
-available to a session yet; until then:
+Read a running control's output with `mullion dock logs <controlId>` /
+`get_dock_logs`, block until it prints something with `wait_for_dock_output`,
+and move it to another branch with `mullion dock switch <controlId> <branch>`
+(or `--worktree <path>`: the project checkout or one of its git worktrees) /
+`switch_dock_branch`. A switch validates the target first, then stops and
+restarts the control; `list` shows where it runs now.
 
-- Read your own scrollback (`mullion session logs`, or the `get_scrollback`
-  MCP tool) — including a dev server's startup banner if you started it
-  yourself as a plain process in your own shell.
+Other useful surfaces at session scope:
+
+- Your own scrollback (`mullion session logs`, or `get_scrollback`).
 - `mullion project actions` — whatever the project's own launcher config
   exposes as a one-shot action.
 - Drive the browser (above) against whatever's already listening.

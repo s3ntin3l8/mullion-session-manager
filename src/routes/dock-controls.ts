@@ -8,6 +8,7 @@ import { buildAuthHeaders } from "../plugins/control-socket-core.js";
 import {
   listDockControls,
   startDockControl,
+  switchDockControl,
   stopDockControl,
   type DockControlResult,
   type LaunchSession,
@@ -58,7 +59,10 @@ export async function dockControlsRoute(app: FastifyInstance) {
         body: {
           type: ["object", "null"],
           additionalProperties: false,
-          properties: { branch: { type: "string", minLength: 1 } },
+          properties: {
+            branch: { type: "string", minLength: 1 },
+            worktreePath: { type: "string", minLength: 1 },
+          },
         },
       },
     },
@@ -75,5 +79,31 @@ export async function dockControlsRoute(app: FastifyInstance) {
     { schema: { params: controlParams } },
     async (request, reply) =>
       send(reply, await stopDockControl(app, request.params.id, request.params.controlId)),
+  );
+
+  app.post<{
+    Params: { id: number; controlId: string };
+    Body: { branch?: string; worktreePath?: string };
+  }>(
+    "/api/projects/:id/dock/controls/:controlId/switch",
+    {
+      schema: {
+        params: controlParams,
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            branch: { type: "string", minLength: 1 },
+            worktreePath: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id, controlId } = request.params;
+      const result = await switchDockControl(app, id, controlId, request.body, launch);
+      if (result.ok) reply.code(201);
+      return send(reply, result);
+    },
   );
 }

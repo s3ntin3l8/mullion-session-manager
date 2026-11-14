@@ -261,4 +261,97 @@ describe("docks.* ops (#2494)", () => {
     expect(ok.statusCode).toBe(201);
     expect(launch.calls.at(-1)).toMatchObject({ dockControlId: "dev" });
   });
+
+  describe("logs, wait and switch (#3049)", () => {
+    async function running(controlId = "dev-server") {
+      const ctx = await setup();
+      const { conn, frames } = sinkConn("session", ctx.agentSession);
+      await dispatch(ctx.app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: controlId },
+      });
+      const sessionId = (frames[0].result as { sessionId: number }).sessionId;
+      frames.length = 0;
+      return { ...ctx, conn, frames, sessionId };
+    }
+
+    it("docks.logs reads the running control's screen; not running is a 404", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, { id: 2, op: "docks.logs", body: { dockControlId: "logs" } });
+      await dispatch(app, conn, { id: 3, op: "docks.logs", body: {} });
+      expect(frames.map((f) => f.status)).toEqual([404, 400]);
+      // The running one is resolved (the scrollback route itself answers for a
+      // session with no live PTY here; what matters is it is not refused).
+      await dispatch(app, conn, { id: 4, op: "docks.logs", body: { dockControlId: "dev-server" } });
+      expect(frames[2].status).not.toBe(403);
+      expect(frames[2].error).not.toBe("Dock control is not running");
+    });
+
+    it("docks.logs and docks.wait_for_output refuse another project and a stopped control", async () => {
+      const { app, conn, frames, projectB } = await running();
+      for (const op of ["docks.logs", "docks.wait_for_output"]) {
+        await dispatch(app, conn, {
+          id: 5,
+          op,
+          body: { projectId: String(projectB), dockControlId: "dev-server", match: "x" },
+        });
+      }
+      await dispatch(app, conn, {
+        id: 6,
+        op: "docks.wait_for_output",
+        body: { dockControlId: "logs", match: "x" },
+      });
+      expect(frames.map((f) => f.status)).toEqual([403, 403, 404]);
+    });
+
+    it("docks.wait_for_output validates like sessions.wait_for_output", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 7,
+        op: "docks.wait_for_output",
+        body: { dockControlId: "dev-server" },
+      });
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+    });
+
+    it("docks.switch restarts the control on a branch", async () => {
+      const { app, conn, frames, sessionId } = await running();
+      await dispatch(app, conn, {
+        id: 8,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", branch: "feat/x" },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ worktree: { branch: "feat/x" } });
+      expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
+        "killed",
+      );
+    });
+
+    it("docks.switch refuses a bad target before stopping anything", async () => {
+      const { app, conn, frames, sessionId } = await running();
+      const bodies = [
+        { dockControlId: "dev-server" },
+        { dockControlId: "dev-server", branch: "a", worktreePath: cwdA },
+        { dockControlId: "dev-server", worktreePath: os.tmpdir() },
+      ];
+      for (const body of bodies) await dispatch(app, conn, { id: 9, op: "docks.switch", body });
+      expect(frames.map((f) => f.status)).toEqual([400, 400, 400]);
+      expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
+        "active",
+      );
+    });
+
+    it("docks.switch accepts a path inside the project checkout", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 10,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: path.join(cwdA, "web") },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(cwdA, "web") });
+    });
+  });
 });

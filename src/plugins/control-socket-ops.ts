@@ -28,6 +28,7 @@ import {
   resolveTargetProjectId,
 } from "../services/control-session-authority.js";
 import type { OpContext, OpSpec, ReplyPayload, Route, Scope } from "./control-socket-core.js";
+import { findRunningDockSession } from "../services/dock-control.js";
 import {
   STREAM_UNAVAILABLE,
   bad,
@@ -139,6 +140,100 @@ export function routeOp(scopes: readonly Scope[], resolve: ResolveFn | DeclaredR
       );
     },
   };
+}
+
+/** The shared body of `sessions.wait_for_output` / `docks.wait_for_output`:
+ * the caller has already pinned `id` to a session it may wait on. */
+async function waitOutputFor({ app, conn, body, reply }: OpContext, id: string): Promise<void> {
+  const matcher = compileOutputMatcher(body?.match, body?.regex);
+  if (!matcher.ok) {
+    reply(bad(400, matcher.error));
+    return;
+  }
+  const timeout = parseWaitTimeout(body?.timeoutMs);
+  if (!timeout.ok) {
+    reply(bad(400, timeout.error));
+    return;
+  }
+  const afterOffset = body?.afterOffset;
+  if (
+    afterOffset !== undefined &&
+    (typeof afterOffset !== "number" || !Number.isInteger(afterOffset) || afterOffset < 0)
+  ) {
+    reply(bad(400, "'afterOffset' must be a non-negative integer"));
+    return;
+  }
+  if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
+    reply(bad(429, "too many pending waits on this connection"));
+    return;
+  }
+  const unverifiable = await adoptLocalChild(app, id);
+  if (unverifiable) {
+    reply(unverifiable);
+    return;
+  }
+  const controller = new AbortController();
+  const onClose = () => controller.abort();
+  const offClose = conn.onClose(onClose);
+  conn.activeWaits = (conn.activeWaits ?? 0) + 1;
+  try {
+    const callerActive = () => conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!);
+    // The wait runs on the child's own host (issue #1951): the PTY lives
+    // there. A local child is one in-process wait; a remote one is a loop
+    // of bounded waits (SessionBackend.waitOutput).
+    const outcome = await resolveBackend(app, childHostId(app, id)).waitOutput(id, {
+      match: body?.match as string,
+      regex: body?.regex === true,
+      timeoutMs: timeout.timeoutMs,
+      ...(afterOffset !== undefined ? { afterOffset } : {}),
+      signal: controller.signal,
+      // The caller must stay active for the whole wait, same as sessions.wait.
+      alive: callerActive,
+    });
+    if ("aborted" in outcome) return;
+    if ("notRunning" in outcome) {
+      reply(bad(409, NOT_LOCAL_MESSAGE));
+      return;
+    }
+    if ("failed" in outcome) {
+      reply(bad(outcome.status, outcome.error));
+      return;
+    }
+    if ("gone" in outcome && !callerActive()) {
+      reply(bad(403, "this session is no longer active"));
+      return;
+    }
+    reply({ ok: true, status: 200, result: outcome });
+  } finally {
+    conn.activeWaits -= 1;
+    offClose();
+  }
+}
+
+/** #3049 — the running session of a dock control of the caller's own project,
+ * from `body.dockControlId`. The project is pinned like every `docks.*` op
+ * (resolveTargetProjectId); no running session is a 404, same as an unknown one. */
+function resolveDockSessionId(
+  ctx: OpContext,
+): { ok: true; id: string } | { ok: false; reply: ReplyPayload } {
+  const project = resolveTargetProjectId(ctx.app, ctx.conn, ctx.body);
+  if (!project.ok) return project;
+  const controlId = extractIdField(ctx.body, "dockControlId");
+  if (controlId === null) return { ok: false, reply: bad(400, "'dockControlId' is required") };
+  const row = findRunningDockSession(ctx.app, Number(project.id), controlId);
+  return row
+    ? { ok: true, id: String(row.id) }
+    : { ok: false, reply: bad(404, "Dock control is not running") };
+}
+
+/** The `branch` / `worktreePath` a dock start or switch may carry. */
+function dockTargetFields(body: Record<string, unknown> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of ["branch", "worktreePath"]) {
+    const value = body?.[key];
+    if (typeof value === "string") out[key] = value;
+  }
+  return out;
 }
 
 type Resolver = DeclaredResolver;
@@ -296,79 +391,26 @@ export const OPS: Record<string, OpSpec> = {
   // A raw OpSpec like sessions.wait, so it does its own pinning FIRST.
   "sessions.wait_for_output": {
     scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveOwnedSessionId(app, conn, body, { childOnly: true });
+    handler: async (ctx) => {
+      const target = resolveOwnedSessionId(ctx.app, ctx.conn, ctx.body, { childOnly: true });
       if (!target.ok) {
-        reply(target.reply);
+        ctx.reply(target.reply);
         return;
       }
-      const matcher = compileOutputMatcher(body?.match, body?.regex);
-      if (!matcher.ok) {
-        reply(bad(400, matcher.error));
+      await waitOutputFor(ctx, target.id);
+    },
+  },
+  // #3049 — the same wait, on the running session of one of the caller's OWN
+  // project's dock controls (a dock session is never the caller's child).
+  "docks.wait_for_output": {
+    scopes: ["full", "session"],
+    handler: async (ctx) => {
+      const target = resolveDockSessionId(ctx);
+      if (!target.ok) {
+        ctx.reply(target.reply);
         return;
       }
-      const timeout = parseWaitTimeout(body?.timeoutMs);
-      if (!timeout.ok) {
-        reply(bad(400, timeout.error));
-        return;
-      }
-      const afterOffset = body?.afterOffset;
-      if (
-        afterOffset !== undefined &&
-        (typeof afterOffset !== "number" || !Number.isInteger(afterOffset) || afterOffset < 0)
-      ) {
-        reply(bad(400, "'afterOffset' must be a non-negative integer"));
-        return;
-      }
-      if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
-        reply(bad(429, "too many pending waits on this connection"));
-        return;
-      }
-      const unverifiable = await adoptLocalChild(app, target.id);
-      if (unverifiable) {
-        reply(unverifiable);
-        return;
-      }
-      const controller = new AbortController();
-      const onClose = () => controller.abort();
-      const offClose = conn.onClose(onClose);
-      conn.activeWaits = (conn.activeWaits ?? 0) + 1;
-      try {
-        const callerActive = () =>
-          conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!);
-        // The wait runs on the child's own host (issue #1951): the PTY lives
-        // there. A local child is one in-process wait; a remote one is a loop
-        // of bounded waits (SessionBackend.waitOutput).
-        const outcome = await resolveBackend(app, childHostId(app, target.id)).waitOutput(
-          target.id,
-          {
-            match: body?.match as string,
-            regex: body?.regex === true,
-            timeoutMs: timeout.timeoutMs,
-            ...(afterOffset !== undefined ? { afterOffset } : {}),
-            signal: controller.signal,
-            // The caller must stay active for the whole wait, same as sessions.wait.
-            alive: callerActive,
-          },
-        );
-        if ("aborted" in outcome) return;
-        if ("notRunning" in outcome) {
-          reply(bad(409, NOT_LOCAL_MESSAGE));
-          return;
-        }
-        if ("failed" in outcome) {
-          reply(bad(outcome.status, outcome.error));
-          return;
-        }
-        if ("gone" in outcome && !callerActive()) {
-          reply(bad(403, "this session is no longer active"));
-          return;
-        }
-        reply({ ok: true, status: 200, result: outcome });
-      } finally {
-        conn.activeWaits -= 1;
-        offClose();
-      }
+      await waitOutputFor(ctx, target.id);
     },
   },
   // Types a prompt into a running CHILD agent and (optionally) waits for its
@@ -1480,11 +1522,32 @@ export const OPS: Record<string, OpSpec> = {
     onProject((id, ctx) => {
       const controlId = extractIdField(ctx.body, "dockControlId");
       if (controlId === null) return bad(400, "'dockControlId' is required");
-      const branch = typeof ctx.body?.branch === "string" ? ctx.body.branch : undefined;
       return {
         method: "POST",
         url: `/api/projects/${enc(id)}/dock/controls/${enc(controlId)}/start`,
-        payload: json(branch !== undefined ? { branch } : {}),
+        payload: json(dockTargetFields(ctx.body)),
+      };
+    }),
+  ),
+  // #3049 — the running control's terminal screen as plain text.
+  "docks.logs": routeOp(
+    ["full", "session"],
+    pinned((ctx) => {
+      const target = resolveDockSessionId(ctx);
+      return target.ok
+        ? { method: "GET", url: `/api/sessions/${enc(target.id)}/scrollback?mode=rendered` }
+        : target.reply;
+    }),
+  ),
+  "docks.switch": routeOp(
+    ["full", "session"],
+    onProject((id, ctx) => {
+      const controlId = extractIdField(ctx.body, "dockControlId");
+      if (controlId === null) return bad(400, "'dockControlId' is required");
+      return {
+        method: "POST",
+        url: `/api/projects/${enc(id)}/dock/controls/${enc(controlId)}/switch`,
+        payload: json(dockTargetFields(ctx.body)),
       };
     }),
   ),

@@ -248,6 +248,9 @@ servers, log tails — distinct from one-shot launchers).
   control (`docks.start`); a lone id is your own project's control. `--branch`
   runs it in a preview worktree of that branch. A Docker-discovered control
   needs full scope.
+- `dock logs [<projectId>] <dockControlId>` — the running control's screen as text.
+- `dock switch [<projectId>] <dockControlId> <branch>` / `--worktree <path>` —
+  restart the control on a branch (preview worktree) or an existing worktree.
 - `dock stop <dockControlId> --control` (your own project) /
   `dock stop <projectId> <dockControlId>` / `dock stop <sessionId>` (full scope
   only: kills any session by id).

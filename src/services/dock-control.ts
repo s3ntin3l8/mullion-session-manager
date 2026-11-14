@@ -12,6 +12,7 @@
  * (it shows as not running); stop it from the dashboard once.
  */
 import type { FastifyInstance } from "fastify";
+import path from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
@@ -21,6 +22,7 @@ import { getRemoteHostClient } from "./remote-host-client.js";
 import { getProjectRow } from "./session-host.js";
 import { killSession } from "./session-lifecycle.js";
 import { withLiveStatus } from "./session-live-info.js";
+import { isSiblingWorktreeCwd } from "./session-cwd.js";
 import { getStoredSettings } from "./settings.js";
 
 export interface DockControlView {
@@ -124,8 +126,11 @@ async function resolveControl(
   return control ? { ok: true, value: control } : fail(404, "Dock control not found");
 }
 
+/** Where to run the control: a branch (preview worktree) or an existing
+ * worktree path of the project; neither means the control's own cwd. */
 export interface StartTarget {
   branch?: string;
+  worktreePath?: string;
 }
 
 /** Launches a session exactly as the dashboard does (`POST /api/sessions`).
@@ -133,6 +138,31 @@ export interface StartTarget {
 export type LaunchSession = (
   payload: Record<string, unknown>,
 ) => Promise<{ statusCode: number; body: { id?: number; message?: string; code?: unknown } }>;
+
+/** A bad target is refused before anything is stopped or launched. */
+async function validateTarget(
+  app: FastifyInstance,
+  projectId: number,
+  target: StartTarget,
+): Promise<DockControlResult<never> | null> {
+  if (target.branch !== undefined && target.worktreePath !== undefined) {
+    return fail(400, "pass either branch or worktreePath, not both");
+  }
+  if (target.worktreePath === undefined) return null;
+  // The dashboard offers only the project's checkout and its git worktrees;
+  // nothing else may become a dock session's cwd (a session has no parent
+  // here, so createSessionRecord's child-cwd containment does not apply).
+  const project = getProjectRow(app, projectId)!;
+  const resolved = path.resolve(target.worktreePath);
+  const root = path.resolve(project.cwd);
+  const ok =
+    resolved === root ||
+    resolved.startsWith(root + path.sep) ||
+    (await isSiblingWorktreeCwd({ cwd: project.cwd, hostId: project.hostId }, resolved));
+  return ok
+    ? null
+    : fail(400, "worktreePath must be the project checkout or one of its git worktrees");
+}
 
 export async function startDockControl(
   app: FastifyInstance,
@@ -161,6 +191,8 @@ export async function startDockControl(
     await killSession(app, running.id, "detach");
   }
   const c = control.value;
+  const invalid = await validateTarget(app, projectId, target);
+  if (invalid) return invalid;
   const worktreeRefresh =
     c.worktreeRefresh ?? getStoredSettings(app.db).dock?.defaultWorktreeRefresh ?? false;
   const payload = {
@@ -171,9 +203,11 @@ export async function startDockControl(
     name: c.title,
     ...(target.branch !== undefined
       ? { worktree: { branch: target.branch }, worktreeRefresh }
-      : c.cwd
-        ? { cwd: c.cwd }
-        : {}),
+      : target.worktreePath !== undefined
+        ? { cwd: target.worktreePath }
+        : c.cwd
+          ? { cwd: c.cwd }
+          : {}),
     ...(c.env ? { env: c.env } : {}),
   };
   const { statusCode, body } = await launch(payload);
@@ -196,4 +230,25 @@ export async function stopDockControl(
   if (!running) return { ok: true, value: { sessionId: null } };
   await killSession(app, running.id, "detach");
   return { ok: true, value: { sessionId: running.id } };
+}
+
+/** Stops the control if it is running, then starts it on `target`. */
+export async function switchDockControl(
+  app: FastifyInstance,
+  projectId: number,
+  controlId: string,
+  target: StartTarget,
+  launch: LaunchSession,
+): Promise<DockControlResult<{ sessionId: number }>> {
+  if (target.branch === undefined && target.worktreePath === undefined) {
+    return fail(400, "pass branch or worktreePath");
+  }
+  const control = await resolveControl(app, projectId, controlId);
+  if (!control.ok) return control;
+  // Validate before stopping: a bad target must not kill a healthy server.
+  const invalid = await validateTarget(app, projectId, target);
+  if (invalid) return invalid;
+  const stopped = await stopDockControl(app, projectId, controlId);
+  if (!stopped.ok) return stopped;
+  return startDockControl(app, projectId, controlId, target, launch);
 }

@@ -430,6 +430,38 @@ export class MullionClient {
     return this.controlRequest("sessions.kill", { sessionId });
   }
 
+  /** Terminal screen of a running dock control, as plain text (#3049). */
+  dockLogs(projectId, dockControlId) {
+    return this.controlRequest("docks.logs", {
+      ...(projectId !== undefined ? { projectId } : {}),
+      dockControlId,
+    });
+  }
+
+  /** Server-side wait for a running dock control to print `match` (#3049). */
+  waitForDockOutput({ projectId, dockControlId, match, regex, timeoutMs, afterOffset }) {
+    const body = { dockControlId, match };
+    if (projectId !== undefined) body.projectId = projectId;
+    if (regex !== undefined) body.regex = regex;
+    if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+    if (afterOffset !== undefined) body.afterOffset = afterOffset;
+    return this.controlRequest(
+      "docks.wait_for_output",
+      body,
+      (timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
+    );
+  }
+
+  /** Restart a dock control on another branch or worktree (#3049). */
+  switchDockControl(projectId, dockControlId, { branch, worktreePath } = {}) {
+    return this.controlRequest("docks.switch", {
+      ...(projectId !== undefined ? { projectId } : {}),
+      dockControlId,
+      ...(branch !== undefined ? { branch } : {}),
+      ...(worktreePath !== undefined ? { worktreePath } : {}),
+    });
+  }
+
   /** The caller's own project's dock controls and what is running (#2494). */
   listDockControls(projectId) {
     return this.controlRequest("docks.list", projectId !== undefined ? { projectId } : {});
