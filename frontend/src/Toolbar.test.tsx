@@ -16,9 +16,10 @@ let viewMode: string;
 let themePreference: string;
 const setViewMode = vi.fn();
 const cycleTheme = vi.fn();
+const openLauncher = vi.fn();
 
 function storeState() {
-  return { settings: { theme: themePreference }, viewMode, setViewMode, cycleTheme };
+  return { settings: { theme: themePreference }, viewMode, setViewMode, cycleTheme, openLauncher };
 }
 
 vi.mock("./store/index.js", () => {
@@ -52,6 +53,7 @@ beforeEach(() => {
   themePreference = "dark";
   setViewMode.mockClear();
   cycleTheme.mockClear();
+  openLauncher.mockClear();
 });
 
 describe("Toolbar — workspace view (viewMode !== kanban)", () => {
@@ -61,6 +63,14 @@ describe("Toolbar — workspace view (viewMode !== kanban)", () => {
     expect(screen.getByText("3 panes")).toBeInTheDocument();
     expect(screen.queryByText("Tasks")).toBeNull();
     expect(screen.queryByTitle("Back to workspace")).toBeNull();
+  });
+
+  it("opens the New session launcher from the + button, not the command palette (#3013)", async () => {
+    const user = userEvent.setup();
+    render(<Toolbar {...NOOP_PROPS} />);
+    await user.click(screen.getByTitle("New session"));
+    expect(openLauncher).toHaveBeenCalledTimes(1);
+    expect(NOOP_PROPS.onOpenLauncher).not.toHaveBeenCalled();
   });
 
   it("renders nothing in the center when there is no active workspace", () => {
@@ -103,10 +113,11 @@ describe("Toolbar — Tasks view (viewMode === kanban)", () => {
     expect(screen.getByTitle("Command palette (unavailable in Task view)")).toBeDisabled();
   });
 
-  it("does not call onOpenLauncher when the disabled New-session button is clicked", async () => {
+  it("does not open the launcher when the disabled New-session button is clicked", async () => {
     const user = userEvent.setup();
     render(<Toolbar {...NOOP_PROPS} />);
     await user.click(screen.getByTitle("New session (unavailable in Task view)"));
+    expect(openLauncher).not.toHaveBeenCalled();
     expect(NOOP_PROPS.onOpenLauncher).not.toHaveBeenCalled();
   });
 });
@@ -137,7 +148,9 @@ describe("Toolbar — phone session switcher slot and app menu", () => {
     const user = userEvent.setup();
     await user.click(screen.getByTitle("Menu"));
     await user.click(screen.getByText("New session"));
-    expect(onOpenLauncher).toHaveBeenCalledTimes(1);
+    // Issue #3013 — New session opens the launcher, not the command palette.
+    expect(openLauncher).toHaveBeenCalledTimes(1);
+    expect(onOpenLauncher).not.toHaveBeenCalled();
 
     await user.click(screen.getByTitle("Menu"));
     await user.click(screen.getByText("Theme: Dark"));

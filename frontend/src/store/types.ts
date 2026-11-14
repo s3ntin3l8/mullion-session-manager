@@ -95,6 +95,23 @@ export interface TerminalPrefs {
   scrollback: number;
 }
 
+// Issue #3013 — an open New session launcher (SessionLauncher.tsx). `target`
+// is where the session should land: `projectId` preselects the project (a
+// sidebar project's "+"); `half` is the fold's left or right half, which a
+// later slice acts on — until then it is stored and passed through only.
+// Null while the launcher is closed.
+export interface LauncherTarget {
+  half?: "left" | "right";
+  projectId?: number;
+}
+
+export interface LauncherRequest {
+  target: LauncherTarget | null;
+  // Distinct per open, so a surface that stays mounted between opens (the
+  // touch sheet) can start each one with fresh choices.
+  seq: number;
+}
+
 // A pane's split-right/split-down action (PaneHeaderActions.tsx, a dockview
 // `rightHeaderActionsComponent`) can't receive custom props from App.tsx —
 // dockview owns that component's render — so it signals intent through the
@@ -852,6 +869,14 @@ export interface UiSlice {
   setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
   requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
   clearSplitRequest: () => void;
+  // Issue #3013 — the New session launcher. The store cannot import
+  // `canLaunchTerminal` (panelUtils.ts imports the store), so the view-mode
+  // gate is applied where the launcher renders (SessionLauncherHost).
+  launcherRequest: LauncherRequest | null;
+  openLauncher: (target?: LauncherTarget) => void;
+  // With a `seq`, closes only that open (a stale launch must not close a
+  // launcher opened after it); without one, closes whatever is open.
+  closeLauncher: (seq?: number) => void;
   // Issue #1429 — a desktop OS notification's onclick opens the session
   // directly (same destination the bell row/phone sheet/push click/deep
   // link all converged on) — but useAttentionNotifications.ts has no

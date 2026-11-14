@@ -1,5 +1,10 @@
-import { useRef } from "react";
-import type { ReactNode, RefObject, KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef } from "react";
+import type {
+  ReactNode,
+  RefObject,
+  MutableRefObject,
+  KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import { CloseIcon } from "./icons.js";
 
@@ -91,6 +96,11 @@ export interface ModalProps {
   // reach it regardless). Not `disabled`: that would drop focus out of the
   // dialog the moment the button was the last focusable thing in it.
   closeDisabled?: boolean;
+  // Receives the focus trap's `suppressRestore` — same contract as
+  // BottomSheet's prop of the same name. A caller whose action moves focus on
+  // purpose (the New session launcher focusing the new terminal) calls it
+  // before closing, so the trap's restore-to-opener doesn't win the race.
+  suppressRestoreRef?: MutableRefObject<(() => void) | null>;
 }
 
 export function Modal({
@@ -109,13 +119,17 @@ export function Modal({
   footerClassName = "create-modal-footer",
   headerContent,
   closeDisabled = false,
+  suppressRestoreRef,
 }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
-  const { onKeyDown: onTrapKeyDown } = useFocusTrap({
+  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: true,
     containerRef: modalRef,
     initialFocusRef,
   });
+  useEffect(() => {
+    if (suppressRestoreRef) suppressRestoreRef.current = suppressRestore;
+  }, [suppressRestoreRef, suppressRestore]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {

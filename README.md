@@ -42,8 +42,10 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   inside a transient `systemd --user` scope. Sessions survive redeploys,
   service restarts, and closed browser tabs — the dashboard reattaches to
   what's already running rather than owning the process.
-- **Mission control.** One dashboard for every host-run AI CLI: a
-  command-palette launcher with official CLI logos, project discovery, a
+- **Mission control.** One dashboard for every host-run AI CLI: a New session
+  launcher (pick where, then an agent with its model and permission mode, or a
+  shell or script; a sheet with an "Open existing" tab on touch) alongside the
+  ⌘K command palette, official CLI logos, project discovery, a
   per-project dock (see [`docs/dock.md`](docs/dock.md)) with branch/worktree
   selection and optional live-sync preview worktrees, and session status
   signals (exited detection, activity/attention) so you always know what's

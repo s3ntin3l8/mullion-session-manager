@@ -6,6 +6,9 @@ when you'd reach for it.
 
 ## Using Mullion
 
+- [`sessions.md`](sessions.md) — starting a session: the New session
+  launcher (where, agent, model, permission override, shells and scripts) and
+  how it relates to the command palette.
 - [`dock.md`](dock.md) — the Dock: a shared rail of per-project monitors
   (`dock.json`), Docker Compose service discovery, dev-server port
   auto-detection.
