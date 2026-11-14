@@ -523,7 +523,7 @@ export function Sidebar({
       )}
       <>
         <div className="sidebar-section-header">
-          <h3 className="sidebar-section-title">Projects</h3>
+          <h2 className="sidebar-section-title">Projects</h2>
           {/* Issue #1889 — this caption was the bare word "sessions":
                 a label with no number, or a number that never got filled
                 in. It is the count now, with its unit, so it reads as the

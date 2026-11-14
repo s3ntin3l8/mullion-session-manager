@@ -207,7 +207,7 @@
   color: var(--dim);
   font-weight: 700;
   flex: 1;
-  /* This is an <h3> — the sidebar's section headings — and nothing resets
+  /* This is a heading (Projects is an <h2>, #2886) and nothing resets
      the UA's heading margins, so the default `margin: 1em 0` has to go or
      the header row gains a gap above and below the title. */
   margin: 0;
@@ -240,6 +240,37 @@
    base" posture as `.source-control-header` (empty-states.css) — Devices'
    and Tasks' own headers reuse the base class without a click handler, so
    the pointer cursor/hover can't live there. */
+/* #2886 — the one real button in a workspace row, group header or the
+   WORKSPACES header (WorkspaceSwitcher.tsx), which are no longer buttons
+   themselves. It looks like the text it wraps. */
+.ws-row-btn {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.ws-row-btn:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+.ws-section-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ws-group-toggle {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
 .ws-section-header {
   cursor: pointer;
 }

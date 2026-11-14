@@ -242,15 +242,19 @@ describe("WorkspaceSwitcher", () => {
   // no keyboard support. Same role="button"/tabIndex/Enter-Space pattern as
   // Sidebar.tsx's SessionRow/ProjectHeader.
   describe("P10 — keyboard accessibility", () => {
-    it("workspace row is a focusable role=button that selects on Enter", async () => {
+    // #2886 — axe `nested-interactive`: the row holds a grip, a rename input
+    // and a kebab, so it is not itself a button; its name is its one button.
+    it("workspace row has one real button, its name, that selects on Enter", async () => {
       const user = userEvent.setup();
       useDashboardStore.setState({ activeWorkspaceId: null });
       const { container } = render(<WorkspaceSwitcher />);
       const row = container.querySelector(".workspace-item") as HTMLElement;
-      expect(row).toHaveAttribute("role", "button");
-      expect(row).toHaveAttribute("tabIndex", "0");
+      expect(row).not.toHaveAttribute("role");
+      expect(row).not.toHaveAttribute("tabIndex");
+      expect(row.querySelector("[role='button'] button, button button")).toBeNull();
+      const name = row.querySelector("button.workspace-item-name") as HTMLElement;
 
-      row.focus();
+      name.focus();
       await user.keyboard("{Enter}");
 
       expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
@@ -260,9 +264,9 @@ describe("WorkspaceSwitcher", () => {
       const user = userEvent.setup();
       useDashboardStore.setState({ activeWorkspaceId: null });
       const { container } = render(<WorkspaceSwitcher />);
-      const row = container.querySelector(".workspace-item") as HTMLElement;
+      const name = container.querySelector("button.workspace-item-name") as HTMLElement;
 
-      row.focus();
+      name.focus();
       await user.keyboard(" ");
 
       expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
@@ -296,7 +300,7 @@ describe("WorkspaceSwitcher", () => {
       expect(useDashboardStore.getState().activeWorkspaceId).toBeNull();
     });
 
-    it("group header is a focusable role=button that toggles collapse on Enter", async () => {
+    it("group header's chevron is its disclosure button and toggles collapse on Enter", async () => {
       // WorkspaceSwitcher's mount effect (useWorkspaceTree) fires
       // refreshGroups() while no groups are loaded yet, which could otherwise
       // overwrite the `groups` state set below with the
@@ -312,11 +316,12 @@ describe("WorkspaceSwitcher", () => {
       const user = userEvent.setup();
       const { container } = render(<WorkspaceSwitcher />);
       const header = container.querySelector(".ws-group-header") as HTMLElement;
-      expect(header).toHaveAttribute("role", "button");
-      expect(header).toHaveAttribute("tabIndex", "0");
-      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(header).not.toHaveAttribute("role");
+      const toggle = header.querySelector("button.ws-group-toggle") as HTMLElement;
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(toggle).toHaveAttribute("aria-controls", "ws-group-body-1");
 
-      header.focus();
+      toggle.focus();
       await user.keyboard("{Enter}");
 
       expect(api.updateGroup).toHaveBeenCalledWith(1, { collapsed: true });
@@ -356,7 +361,7 @@ describe("WorkspaceSwitcher", () => {
       });
       const { container } = render(<WorkspaceSwitcher />);
       expect(container.querySelector(".workspace-item")).toHaveClass("active");
-      expect(container.querySelector(".workspace-item")).toHaveAttribute(
+      expect(container.querySelector(".workspace-item-name")).toHaveAttribute(
         "data-focus-fallback",
         WORKSPACE_FOCUS_FALLBACK,
       );
@@ -444,7 +449,7 @@ describe("WorkspaceSwitcher", () => {
 
     it("starts expanded by default and shows the workspace list", () => {
       const { container } = render(<WorkspaceSwitcher />);
-      const header = container.querySelector(".ws-section-header") as HTMLElement;
+      const header = container.querySelector(".ws-section-toggle") as HTMLElement;
       expect(header).toHaveAttribute("aria-expanded", "true");
       expect(container.querySelector(".workspace-item")).not.toBeNull();
     });
@@ -452,7 +457,7 @@ describe("WorkspaceSwitcher", () => {
     it("hides the workspace list and 'New workspace' button on click, and shows them again on a second click", async () => {
       const user = userEvent.setup();
       const { container } = render(<WorkspaceSwitcher />);
-      const header = container.querySelector(".ws-section-header") as HTMLElement;
+      const header = container.querySelector(".ws-section-toggle") as HTMLElement;
 
       await user.click(header);
 
@@ -466,12 +471,13 @@ describe("WorkspaceSwitcher", () => {
       expect(container.querySelector(".workspace-item")).not.toBeNull();
     });
 
-    it("toggles on Enter/Space when the header itself has focus", async () => {
+    it("toggles on Enter/Space when the header's toggle has focus", async () => {
       const user = userEvent.setup();
       const { container } = render(<WorkspaceSwitcher />);
-      const header = container.querySelector(".ws-section-header") as HTMLElement;
-      expect(header).toHaveAttribute("role", "button");
-      expect(header).toHaveAttribute("tabIndex", "0");
+      const header = container.querySelector(".ws-section-toggle") as HTMLElement;
+      // #2886 — the header row holds the "+" button, so it is not itself a
+      // button; its chevron and title are the disclosure button.
+      expect(container.querySelector(".ws-section-toggle")).not.toHaveAttribute("role");
 
       header.focus();
       await user.keyboard("{Enter}");
@@ -488,21 +494,21 @@ describe("WorkspaceSwitcher", () => {
 
       await user.click(header.querySelector(".toolbar-icon-btn")!);
 
-      expect(header).toHaveAttribute("aria-expanded", "true");
+      expect(header.querySelector(".ws-section-toggle")).toHaveAttribute("aria-expanded", "true");
     });
 
     it("persists the collapsed state across remounts via localStorage", async () => {
       const user = userEvent.setup();
       const first = render(<WorkspaceSwitcher />);
-      await user.click(first.container.querySelector(".ws-section-header")!);
+      await user.click(first.container.querySelector(".ws-section-toggle")!);
       expect(
-        first.container.querySelector(".ws-section-header")!.getAttribute("aria-expanded"),
+        first.container.querySelector(".ws-section-toggle")!.getAttribute("aria-expanded"),
       ).toBe("false");
       first.unmount();
 
       const second = render(<WorkspaceSwitcher />);
       expect(
-        second.container.querySelector(".ws-section-header")!.getAttribute("aria-expanded"),
+        second.container.querySelector(".ws-section-toggle")!.getAttribute("aria-expanded"),
       ).toBe("false");
     });
 

@@ -207,7 +207,8 @@ describe("RightSidebar", () => {
       },
     });
     renderSidebar();
-    expect(screen.getByRole("button", { name: "Git" }).textContent).toContain("2");
+    // The badge's count is part of the button's name (WCAG 2.5.3, #2886).
+    expect(screen.getByRole("button", { name: "Git, 2" }).textContent).toContain("2");
   });
 
   it("shows an alert badge, not a count, on conflicts", () => {

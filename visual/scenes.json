@@ -60,7 +60,7 @@
           "click": ".session-item:has-text(\"fake-agent.sh\")"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Git\"]"
+          "click": ".right-rail-btn[aria-label=\"Git\"], .right-rail-btn[aria-label^=\"Git, \"]"
         },
         {
           "waitFor": "text=feat/ahead"
@@ -107,7 +107,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"GitHub\"]"
+          "click": ".right-rail-btn[aria-label=\"GitHub\"], .right-rail-btn[aria-label^=\"GitHub, \"]"
         },
         {
           "waitFor": "text=#12"
@@ -140,7 +140,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -167,7 +167,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -324,7 +324,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"History\"]"
+          "click": ".right-rail-btn[aria-label=\"History\"], .right-rail-btn[aria-label^=\"History, \"]"
         },
         {
           "wait": 800
@@ -350,7 +350,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Files\"]"
+          "click": ".right-rail-btn[aria-label=\"Files\"], .right-rail-btn[aria-label^=\"Files, \"]"
         },
         {
           "wait": 800
@@ -400,7 +400,7 @@
       "viewports": ["tablet", "fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -418,7 +418,7 @@
       "viewports": ["tablet", "fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -442,7 +442,7 @@
       "viewports": ["tablet", "fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -460,7 +460,7 @@
           "wait": 400
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "wait": 500
@@ -547,7 +547,7 @@
       "viewports": ["fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Browser\"]"
+          "click": ".right-rail-btn[aria-label=\"Browser\"], .right-rail-btn[aria-label^=\"Browser, \"]"
         },
         {
           "waitFor": ".browser-sidebar-view"
@@ -568,7 +568,7 @@
       "viewports": ["fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Dock\"]"
+          "click": ".right-rail-btn[aria-label=\"Dock\"], .right-rail-btn[aria-label^=\"Dock, \"]"
         },
         {
           "waitFor": ".dock-sidebar-view"
@@ -589,7 +589,7 @@
       "viewports": ["fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Devices\"]"
+          "click": ".right-rail-btn[aria-label=\"Devices\"], .right-rail-btn[aria-label^=\"Devices, \"]"
         },
         {
           "waitFor": ".devices-sidebar-view"
@@ -667,7 +667,7 @@
           "wait": 800
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Git\"]"
+          "click": ".right-rail-btn[aria-label=\"Git\"], .right-rail-btn[aria-label^=\"Git, \"]"
         },
         {
           "wait": 800

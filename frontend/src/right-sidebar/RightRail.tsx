@@ -20,11 +20,14 @@ function RailButton({ view, projectId, active, onClick }: RailButtonProps) {
     if (view.id === "github" && projectId != null) prefetchGithubProject(projectId);
   };
   if (!enabled) return null;
+  const count = badge?.kind === "count" ? (badge.value > 99 ? "99+" : String(badge.value)) : null;
   return (
     <button
       type="button"
       className={`right-rail-btn${active ? " active" : ""}`}
-      aria-label={view.label}
+      // The count badge is the button's only visible text, so the name has to
+      // contain it (WCAG 2.5.3, axe `label-content-name-mismatch`, #2886).
+      aria-label={count === null ? view.label : `${view.label}, ${count}`}
       aria-pressed={active}
       title={badge ? `${view.label} — ${badge.title}` : view.label}
       onClick={onClick}
@@ -32,9 +35,9 @@ function RailButton({ view, projectId, active, onClick }: RailButtonProps) {
       onFocus={warm}
     >
       <Icon size={17} />
-      {badge?.kind === "count" && (
+      {count !== null && (
         <span className="right-rail-badge" aria-hidden="true">
-          {badge.value > 99 ? "99+" : badge.value}
+          {count}
         </span>
       )}
       {badge?.kind === "alert" && <span className="right-rail-badge alert" aria-hidden="true" />}
