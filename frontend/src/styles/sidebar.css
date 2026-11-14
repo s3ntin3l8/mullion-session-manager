@@ -260,6 +260,12 @@
   outline-offset: 1px;
   border-radius: 4px;
 }
+/* On the active row's --accent-fill the accent ring disappears (the two are
+   one colour in the light theme), and this is where the palette puts focus
+   after a workspace switch: the ring takes the row's own text colour. */
+.workspace-item.active .ws-row-btn:focus-visible {
+  outline-color: currentColor;
+}
 .ws-section-toggle {
   flex: 1;
   display: flex;

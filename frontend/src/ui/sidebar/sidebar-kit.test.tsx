@@ -323,6 +323,26 @@ describe("DetailHeader in the drawer's detail slot", () => {
     panel.remove();
   });
 
+  it("keeps the mark when one detail replaces another", () => {
+    const panel = document.createElement("div");
+    panel.innerHTML = '<div class="right-sidebar-header"><div id="slot"></div></div>';
+    document.body.append(panel);
+    function Swap({ id }: { id: number }) {
+      return (
+        <SidebarDetailSlotContext.Provider value={document.getElementById("slot")}>
+          <DetailHeader key={id} title={`Task ${id}`} onBack={() => {}} />
+        </SidebarDetailSlotContext.Provider>
+      );
+    }
+    const { rerender, unmount } = render(<Swap id={1} />);
+    rerender(<Swap id={2} />);
+    expect(panel).toHaveAttribute("data-sidebar-detail");
+    expect(document.getElementById("slot")).toHaveTextContent("Task 2");
+    unmount();
+    expect(panel).not.toHaveAttribute("data-sidebar-detail");
+    panel.remove();
+  });
+
   it("lets the title in the header row wrap to two lines", () => {
     expect(css).toMatch(/\.sb-vh--bare \.sb-vh-name \{[^}]*-webkit-line-clamp: 2/);
   });
