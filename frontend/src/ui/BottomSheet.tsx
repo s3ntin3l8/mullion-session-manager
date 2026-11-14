@@ -278,6 +278,8 @@ interface DragState {
   // clientY minus the sheet's offset when the finger went down.
   origin: number;
   samples: PointerSample[];
+  // Whether the finger has moved since it went down. A tap is not a drag.
+  moved: boolean;
 }
 
 function useSheetMotion(
@@ -332,6 +334,9 @@ function useSheetMotion(
     const animation = backdrop.animate([{ opacity: from }, { opacity: to }], {
       duration: MOTION_FADE_MS,
       easing: MOTION_EASE,
+      // A fade-out holds its end state: without it the sheet is back at full
+      // opacity for the frame between the finish and React's unmount.
+      fill: to === 0 ? "forwards" : "none",
     });
     fadeRef.current = animation;
     animation.onfinish = () => {
@@ -403,12 +408,18 @@ function useSheetMotion(
       pointerId: e.pointerId,
       origin: e.clientY - spring.value,
       samples: [{ position: e.clientY, time: e.timeStamp }],
+      moved: false,
     };
   };
 
   const onDragMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || e.pointerId !== drag.pointerId) return;
+    if (!drag.moved) {
+      // Until the first move the only sample is where the finger went down.
+      if (e.clientY === drag.samples[0].position) return;
+      drag.moved = true;
+    }
     const offset = e.clientY - drag.origin;
     // Down it tracks the finger 1:1; up, past its resting place, it resists.
     getSpring().jump(offset < 0 ? rubberBand(offset) : offset);
@@ -422,8 +433,16 @@ function useSheetMotion(
     const spring = getSpring();
     const velocity = e.type === "pointercancel" ? 0 : releaseVelocity(drag.samples, e.timeStamp);
     const travel = travelRef.current;
-    // Decided by where the throw is heading, not where the finger lifted.
-    const dismiss = travel > 0 && projectRest(spring.value, velocity) > travel / 2;
+    // Decided by where the throw is heading, not where the finger lifted. A
+    // tap that never moved is not a drag: a sheet caught while still
+    // arriving (most of its travel away) just carries on arriving.
+    const dismiss = drag.moved && travel > 0 && projectRest(spring.value, velocity) > travel / 2;
+    // Under reduced motion the spring would jump back to 0 before the fade
+    // out; the sheet fades from where the finger left it instead.
+    if (dismiss && prefersReducedMotion()) {
+      onClose();
+      return;
+    }
     // Hands the finger's speed to the spring either way. On a dismiss the
     // close re-targets it to the edge before the next frame, so the throw
     // carries on out; if the caller keeps the sheet open, it springs back.

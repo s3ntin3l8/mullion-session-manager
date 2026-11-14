@@ -563,6 +563,21 @@ describe("BottomSheet motion", () => {
     expect(offset()).toBeCloseTo(caught + 20, 6);
   });
 
+  it("lets a sheet tapped while arriving carry on arriving instead of closing", () => {
+    const onClose = vi.fn();
+    render(<Sheet open={true} onClose={onClose} />);
+    frame();
+    frame();
+    // Still most of its travel away: a position-only decision would dismiss.
+    expect(offset()).toBeGreaterThan(200);
+    pointer(header(), "pointerdown", 100, 1000);
+    pointer(header(), "pointermove", 100, 1010);
+    pointer(header(), "pointerup", 100, 1020);
+    expect(onClose).not.toHaveBeenCalled();
+    runToRest();
+    expect(sheet().style.transform).toBe("");
+  });
+
   it("does not start a drag from a button in the header, or after a cancel", () => {
     const onClose = vi.fn();
     render(<Sheet open={true} onClose={onClose} />);
@@ -584,7 +599,11 @@ describe("BottomSheet motion", () => {
   it("fades instead of travelling under reduced motion", () => {
     reduceMotion = true;
     const animations: { keyframes: Keyframe[]; finish: () => void; cancel: () => void }[] = [];
-    const animate = vi.fn(function (this: Element, keyframes: Keyframe[]) {
+    const animate = vi.fn(function (
+      this: Element,
+      keyframes: Keyframe[],
+      _options?: KeyframeAnimationOptions,
+    ) {
       const animation = {
         keyframes,
         onfinish: null as null | (() => void),
@@ -606,9 +625,23 @@ describe("BottomSheet motion", () => {
 
       rerender(<Sheet open={false} />);
       expect(animations[1].keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
+      // Holds its end state, so the sheet doesn't flash back before unmounting.
+      expect(animate.mock.calls[1][1]).toMatchObject({ fill: "forwards" });
       expect(sheet()).not.toBeNull();
       act(() => animations[1].finish());
       expect(document.querySelector(".mobile-session-sheet")).toBeNull();
+
+      // A drag-dismiss fades from where the finger left it, not from the top.
+      function Harness() {
+        const [open, setOpen] = useState(true);
+        return <Sheet open={open} onClose={() => setOpen(false)} />;
+      }
+      rerender(<Harness />);
+      pointer(header(), "pointerdown", 100, 1000);
+      pointer(header(), "pointermove", 400, 1400);
+      pointer(header(), "pointerup", 400, 2000);
+      expect(offset()).toBe(300);
+      expect(animations[animations.length - 1].keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
     } finally {
       delete (HTMLElement.prototype as { animate?: unknown }).animate;
     }
