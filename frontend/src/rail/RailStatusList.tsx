@@ -1,3 +1,4 @@
+import type { TaskStatus } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 
 // Tasks mode's middle region of the left rail (#3026, design frame 2a): one
@@ -7,7 +8,10 @@ import { useDashboardStore } from "../store/index.js";
 // ones its stacked sections and strip show), and a tap raises the store's
 // jump request, which the board consumes whichever layout it shows.
 // The rail is 40px wide at 9px text: the long titles get a shorter word.
-const SHORT_LABEL: Partial<Record<string, string>> = { reviewing: "Review", in_progress: "Active" };
+const SHORT_LABEL: Partial<Record<TaskStatus, string>> = {
+  reviewing: "Review",
+  in_progress: "Active",
+};
 
 export function RailStatusList() {
   const statuses = useDashboardStore((s) => s.boardStatuses);

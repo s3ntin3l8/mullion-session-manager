@@ -245,10 +245,10 @@ export function UnifiedBoard({
   const statusSections = useMemo(() => stackSections(visibleTasks), [visibleTasks]);
   const stackedSections = stacked ? statusSections : EMPTY_SECTIONS;
   useEffect(() => {
-    // The rail is not rendered on the phone: nothing to publish for.
-    if (phone) return;
+    // The rail is not rendered on the phone: publish nothing there, and retract
+    // what a wider layout published before the window narrowed.
     useDashboardStore.getState().setBoardStatuses(
-      statusSections.map((s) => ({
+      (phone ? [] : statusSections).map((s) => ({
         id: s.id,
         title: s.title,
         count: s.tasks.length,

@@ -107,6 +107,7 @@ describe("LeftRail in Tasks mode", () => {
     const entries = [
       { id: "reviewing", title: "Reviewing", count: 2, needsYou: true, needsYouCount: 1 },
       { id: "ready", title: "Ready", count: 1, needsYou: false, needsYouCount: 0 },
+      { id: "in_progress", title: "In progress", count: 3, needsYou: false, needsYouCount: 0 },
       { id: "done", title: "Done", count: 0, needsYou: false, needsYouCount: 0 },
     ] as const;
     beforeEach(() =>
@@ -122,9 +123,14 @@ describe("LeftRail in Tasks mode", () => {
       ).toBeInTheDocument();
       expect(within(list).getByRole("button", { name: "Ready, 1 task" })).toBeInTheDocument();
       expect(within(list).getByRole("button", { name: "Done, 0 tasks" })).toBeInTheDocument();
+      expect(within(list).getByRole("button", { name: /^In progress/ })).toHaveTextContent(
+        /^3Active$/,
+      );
       expect(list.querySelectorAll(".rail-status-dot")).toHaveLength(1);
       // The long titles get a shorter visible word; the name stays whole.
-      expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent("Review");
+      expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent(
+        /^2Review$/,
+      );
       expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent("2");
     });
 
