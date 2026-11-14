@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type * as layoutTier from "../lib/layoutTier.js";
-import { useOpenTask } from "./useOpenTask.js";
+import { useCanPopOutTask, useOpenTask } from "./useOpenTask.js";
 import { useDashboardStore } from "../store/index.js";
 
 let tier: "desktop" | "tablet" | "phone" = "desktop";
@@ -66,5 +66,40 @@ describe("useOpenTask", () => {
     expect(state.openTaskRequest?.taskId).toBe(5);
     expect(state.selectedTaskId).toBeNull();
     expect(state.rightSidebarOpen).toBe(false);
+  });
+});
+
+// #3011 — the pop-out to a docked panel follows the band, not the tier: kept
+// with the desktop structure from 1100px, dropped on the rails bands below it.
+describe("useCanPopOutTask", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const atWidth = (width: number) =>
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => {
+        const min = /min-width: ([\d.]+)px/.exec(query);
+        const max = /max-width: ([\d.]+)px/.exec(query);
+        return {
+          matches:
+            query.includes("width") &&
+            (!min || width >= Number(min[1])) &&
+            (!max || width <= Number(max[1])),
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        };
+      }),
+    );
+
+  it.each([
+    [500, false],
+    [851, false],
+    [1099, false],
+    [1100, true],
+    [1500, true],
+  ])("at %spx: %s", (width, expected) => {
+    atWidth(width);
+    const { result } = renderHook(() => useCanPopOutTask());
+    expect(result.current).toBe(expected);
   });
 });

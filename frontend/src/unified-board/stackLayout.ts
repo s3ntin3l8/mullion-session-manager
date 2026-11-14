@@ -29,14 +29,21 @@ export function boardStacks(width: number): boolean {
 // in the design's five sections, but a failed task always needs the owner, so
 // it sits right after the active ones, open, and only while it holds a task.
 // Backlog and Done start collapsed.
-export const STACK_ORDER: readonly TaskStatus[] = [
-  "reviewing",
-  "in_progress",
-  "ready",
-  "failed",
-  "backlog",
-  "done",
-];
+// A Record over the whole TaskStatus union, so a status added to it fails the
+// build here instead of silently dropping its tasks off the stacked board.
+// Claimed has no section: its tasks are listed under In progress.
+const STACK_RANK: Record<TaskStatus, number | null> = {
+  reviewing: 0,
+  in_progress: 1,
+  ready: 2,
+  failed: 3,
+  backlog: 4,
+  done: 5,
+  claimed: null,
+};
+export const STACK_ORDER: readonly TaskStatus[] = (Object.keys(STACK_RANK) as TaskStatus[])
+  .filter((id) => STACK_RANK[id] !== null)
+  .sort((a, b) => (STACK_RANK[a] ?? 0) - (STACK_RANK[b] ?? 0));
 
 const COLLAPSED_BY_DEFAULT: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["backlog", "done"]);
 

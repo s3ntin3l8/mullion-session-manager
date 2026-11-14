@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useLayoutContext } from "../lib/layoutTier.js";
+import { useLayoutBand, useLayoutContext } from "../lib/layoutTier.js";
 import { useDashboardStore } from "../store/index.js";
 import type { SidebarBack } from "../store/types.js";
 
@@ -15,6 +15,16 @@ import type { SidebarBack } from "../store/types.js";
 // `back` (from 700px) is where the task detail's Back returns, for a caller
 // that is itself a sidebar detail (an issue, a PR): the same Tasks ↔ GitHub
 // cross-link the shared status strip records.
+// Whether the right sidebar offers "Pop out to a docked panel" (#3011). Kept
+// where the shell has the desktop structure (1100px and up, the two desktop
+// bands: design section 9.1); dropped on the rails bands, where the sidebar's
+// own detail is the task detail and a docked panel would take the half the
+// board or the session needs.
+export function useCanPopOutTask(): boolean {
+  const band = useLayoutBand(useDashboardStore((s) => s.settings.layoutMode));
+  return band === "desktop" || band === "desktop-narrow";
+}
+
 export function useOpenTask(): (taskId: number, back?: SidebarBack) => void {
   const phone = useLayoutContext().tier === "phone";
   return useCallback(

@@ -477,9 +477,10 @@ The strip is on every layout, phone included.
   opens on Active, then Ready, when they hold something, and Hide Done & Failed
   removes the Done segment. The compact two-column variant (per-status chips,
   two adjacent columns) is no longer rendered from 700px, where the board is
-  full size in Tasks mode. Both keep the same compact card, show the filters in the filter sheet, ignore Group by
-  (the board stays flat) and keep empty columns as full columns rather than
-  rails. Tapping a card opens its detail full-screen.
+  full size in Tasks mode. The phone keeps the same compact card, shows the
+  filters in the filter sheet, ignores Group by (the board stays flat) and keeps
+  empty columns as full columns rather than rails. Tapping a card opens its
+  detail full-screen.
 - Cards show the title; the linked **issue** number and the **PR** number as
   links to GitHub, the resolved agent name and the time in status; the owning
   **project** (always, since it is what tells one project's `#310` from
@@ -532,7 +533,7 @@ approval` (generic on purpose, no title: a notification tray is outside the
   embedded timeline and — when a review agent is configured — a distinct
   "Review" card with the review agent's own timeline, its captured findings
   text, and (once the task has auto-returned) a round indicator. From 700px
-  this is the only task detail (`#3011`). The phone renders no right sidebar,
+  every card, task chip and notification opens here (`#3011`). The phone renders no right sidebar,
   so a card there opens the full-screen docked task detail instead. A task
   notification click opens the same detail the same way, and the PR and issue
   chips in the GitHub and Git views show the task in the Tasks view too.
@@ -667,8 +668,8 @@ edge, with the collapse chevron on the right.
 
 The detail does not depend on the list: a backlog, done, archived or
 other-project task opens too, and Back returns to the list with its filter and
-scroll position. On desktop the icon in the header pops the task out to a
-docked panel; the tablet tier has no such panel (`#3011`). **Approve** in the
+scroll position. From 1100px the icon in the header pops the task out to a
+docked panel; the rails bands below that do not offer it (`#3011`). **Approve** in the
 sidebar (the task detail, and the task strip in a PR's or an issue's detail)
 sits behind a confirm step: the first press arms it ("Confirm approve", with a
 countdown), the second approves.

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
-import { useLayoutContext } from "../lib/layoutTier.js";
+import { useCanPopOutTask } from "../hooks/useOpenTask.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
@@ -149,9 +149,9 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const prsByProject = useDashboardStore((s) => s.prsByProject);
   const openTaskInSidebar = useDashboardStore((s) => s.openRightSidebarTask);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
-  // The docked task panel is a desktop extra (#3011): on the tablet tier the
-  // sidebar's detail is the only task detail, so there is nothing to pop out to.
-  const canPopOut = useLayoutContext().tier === "desktop";
+  // The pop-out to a docked panel is offered from 1100px only (#3011, see
+  // useCanPopOutTask).
+  const canPopOut = useCanPopOutTask();
   const [bodyOpen, setBodyOpen] = useState(false);
   // A task is shown from outside the rail (a board card, a notification, a
   // task chip in the GitHub or Git views) as often as from inside it, and the

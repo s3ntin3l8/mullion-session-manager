@@ -27,12 +27,17 @@ const task = (o: Partial<Task>): Task =>
 
 const actions = { onOpenTasks: vi.fn() } as unknown as RightSidebarActions;
 
-// The tablet tier (700–1279px, the 851px fold included), by matchMedia.
+// A window of the fold's 851px, by matchMedia (the tablet tier, the rails band).
 function stubTablet() {
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => ({
-      matches: query === "(min-width: 700px) and (max-width: 1279.98px)",
+      matches:
+        (!/min-width: ([\d.]+)px/.exec(query) ||
+          851 >= Number(/min-width: ([\d.]+)px/.exec(query)![1])) &&
+        (!/max-width: ([\d.]+)px/.exec(query) ||
+          851 <= Number(/max-width: ([\d.]+)px/.exec(query)![1])) &&
+        query.includes("width"),
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
