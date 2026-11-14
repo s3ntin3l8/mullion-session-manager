@@ -6,7 +6,7 @@ import { isStartable } from "../dockerServiceStatus.js";
 import { dockRowKey, imagePillLabel } from "../dock/dockHelpers.js";
 import { useDockProject } from "../dock/useDockProject.js";
 import type { DockControlView, DockStackActions } from "../dock/useDockProject.js";
-import { useArmedKill } from "../dock/useArmedKill.js";
+import { KILL_ARM_DISARM_MS, useArmedKill } from "../dock/useArmedKill.js";
 import { BottomSheet } from "../ui/BottomSheet.js";
 import { CustomSelect } from "../ui/CustomSelect.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
@@ -39,8 +39,6 @@ import type { RightSidebarViewProps } from "./views.js";
 // is off, as the bottom Dock does: reading the log is why you tapped it, and
 // `docker compose logs` changes nothing. The view does not run the Dock's
 // "Auto-attach Docker logs" effect; the bottom Dock does.
-
-const SERVICE_STOP_ARM_MS = 3000;
 
 type RowKind = "command" | "service" | "log";
 
@@ -116,7 +114,7 @@ function DockRow({
 function DockActions({ view }: { view: DockControlView }) {
   const { control } = view;
   const kind = rowKind(control);
-  const { armedIds, arm, disarm } = useArmedKill(SERVICE_STOP_ARM_MS);
+  const { armedIds, arm, disarm } = useArmedKill(KILL_ARM_DISARM_MS);
   const disabled = view.held;
 
   const stopLabel = view.armed ? "Tap again to stop" : "Stop";
@@ -251,7 +249,7 @@ function StackSheet({
   stack: DockStackActions | null;
   onClose: () => void;
 }) {
-  const { armedIds, arm, disarm } = useArmedKill(SERVICE_STOP_ARM_MS);
+  const { armedIds, arm, disarm } = useArmedKill(KILL_ARM_DISARM_MS);
   const row = (key: string, label: string, run: () => void, confirm?: string) => {
     const armed = armedIds.has(key);
     return (

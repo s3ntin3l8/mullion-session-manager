@@ -24,7 +24,7 @@ import {
 } from "./dockHelpers.js";
 import type { DockerStackGroup } from "./dockHelpers.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
-import { useArmedKill } from "./useArmedKill.js";
+import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
 
 // One project's Dock data and actions (#3012): its controls (dock.json and
@@ -175,7 +175,6 @@ export function useDockProject(
       }
       return { ...prev, [controlId]: conflict };
     });
-  const KILL_ARM_DISARM_MS = 6000; // matches ConfirmButton.tsx's own window
   const {
     armedIds: killArmedIds,
     arm: armKill,

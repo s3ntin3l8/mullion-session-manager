@@ -12,6 +12,9 @@ import { useEffect, useRef, useState } from "react";
 // either inventing a third shape or forcing every control in a column to
 // share one armed slot (which would silently disarm a SECOND monitor's
 // confirm step the instant a first one gets armed).
+/** The Dock's one "tap again to confirm" window, ConfirmButton.tsx's own. */
+export const KILL_ARM_DISARM_MS = 6000;
+
 export function useArmedKill(disarmMs: number) {
   const [armedIds, setArmedIds] = useState<Set<string>>(new Set());
   const timersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
