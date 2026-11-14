@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RailPaneList, RailPanes } from "./RailPaneList.js";
 import type { RailPaneEntry } from "../lib/railPanes.js";
@@ -125,5 +125,72 @@ describe("RailPanes", () => {
     const btn = screen.getByRole("button", { name: "task #7 worker — orbit-api, needs you" });
     expect(btn).toHaveTextContent("#7");
     expect(btn).toHaveAttribute("aria-current", "true");
+  });
+});
+
+// #3010 — a long press (or a right click) on a rail entry offers to move it.
+describe("RailPaneList long-press menu", () => {
+  const items = (onSelect: () => void) => () => [{ label: "Move to the right half", onSelect }];
+
+  it("opens on a long press, runs the choice, and does not also focus the pane", async () => {
+    vi.useFakeTimers();
+    const onSelect = vi.fn();
+    const onFocus = vi.fn();
+    render(
+      <RailPaneList
+        entries={[entry({})]}
+        onFocus={onFocus}
+        onAdd={vi.fn()}
+        menuItems={items(onSelect)}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /login fix/ });
+    expect(btn).toHaveAttribute("aria-haspopup", "menu");
+    fireEvent.pointerDown(btn);
+    act(() => {
+      vi.advanceTimersByTime(520);
+    });
+    fireEvent.pointerUp(btn);
+    fireEvent.click(btn);
+    expect(onFocus).not.toHaveBeenCalled();
+    const menu = screen.getByRole("menu", { name: "claude · login fix" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Move to the right half" }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+    // An ordinary tap afterwards focuses as usual.
+    fireEvent.click(btn);
+    expect(onFocus).toHaveBeenCalledWith("session-1");
+    vi.useRealTimers();
+  });
+
+  it("opens on a right click and closes on Escape; a short press is just a tap", () => {
+    const onFocus = vi.fn();
+    render(
+      <RailPaneList
+        entries={[entry({})]}
+        onFocus={onFocus}
+        onAdd={vi.fn()}
+        menuItems={items(vi.fn())}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /login fix/ });
+    expect(btn).toHaveAttribute("aria-expanded", "false");
+    fireEvent.contextMenu(btn);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(btn).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.pointerDown(btn);
+    fireEvent.pointerUp(btn);
+    fireEvent.click(btn);
+    expect(onFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no menu when there is nothing to offer", () => {
+    render(
+      <RailPaneList entries={[entry({})]} onFocus={vi.fn()} onAdd={vi.fn()} menuItems={() => []} />,
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: /login fix/ }));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

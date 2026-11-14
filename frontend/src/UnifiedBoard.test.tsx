@@ -99,7 +99,7 @@ function storeState() {
 
 vi.mock("./lib/layoutTier.js", async (importOriginal) => ({
   ...(await importOriginal<typeof layoutTierModule>()),
-  useLayoutContext: () => ({ tier: layoutTier, tabletPaneCap: 2 }),
+  useLayoutContext: () => ({ tier: layoutTier }),
 }));
 
 vi.mock("./store/index.js", () => {

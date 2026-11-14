@@ -6,10 +6,12 @@ import { resolveTaskMaster } from "../../taskConfig.js";
 import {
   STORAGE_KEYS,
   readBool,
+  readJSON,
   readMutedSessionIds,
   readString,
   removeItem,
   writeBool,
+  writeJSON,
   writeMutedSessionIds,
   writeNumber,
   writeString,
@@ -31,6 +33,18 @@ import {
   resolveTheme,
 } from "../helpers.js";
 import type { DashboardState, UiSlice } from "../types.js";
+import {
+  EMPTY_FOLD_HALVES,
+  moveToHalf,
+  noteOpen,
+  noteShownLeft,
+  noteUsed,
+  parseFoldHalves,
+  forgetPanes,
+  showRight,
+  toggleRight,
+} from "../../lib/foldHalves.js";
+import type { FoldHalvesState } from "../../lib/foldHalves.js";
 import {
   currentSidebarLocation,
   pruneSidebarHistory,
@@ -212,6 +226,19 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     writeString(STORAGE_KEYS.themeHint, resolveTheme(next.theme));
   }
 
+  // #3010 — applies one change to the active workspace's halves and keeps
+  // the device-local copy in step. A no-op change writes nothing.
+  const updateFoldHalves = (change: (h: FoldHalvesState) => FoldHalvesState) => {
+    const { activeWorkspaceId, foldHalves } = get();
+    if (activeWorkspaceId === null) return;
+    const before = foldHalves[activeWorkspaceId] ?? EMPTY_FOLD_HALVES;
+    const after = change(before);
+    if (after === before) return;
+    const next = { ...foldHalves, [activeWorkspaceId]: after };
+    writeJSON(STORAGE_KEYS.foldHalves, next);
+    set({ foldHalves: next });
+  };
+
   return {
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
@@ -242,6 +269,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     launcherRequest: null,
     openSessionRequest: null,
     openTaskRequest: null,
+    foldHalves: parseFoldHalves(readJSON(STORAGE_KEYS.foldHalves, {})),
+    focusedHalf: "left",
+    foldHalvesActive: false,
     selectedTaskId: null,
     taskSelectionSeq: 0,
     sidebarHistory: [],
@@ -525,6 +555,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       // Only a real switch is a cross-link: from Workspace there is no Tasks
       // mode to return to.
       if (viewMode === "kanban") set({ crossLinkReturn: { taskId: selectedTaskId } });
+      // #3010 — the cross-link lands on the left half (design frame 2c),
+      // whichever half the session was on.
+      get().moveToHalf(`session-${sessionId}`, "left", []);
       get().requestOpenSession(sessionId);
     },
 
@@ -533,6 +566,30 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       if (!link) return;
       get().setViewMode("kanban");
       if (link.taskId !== null) get().openRightSidebarTask(link.taskId, null);
+    },
+
+    moveToHalf: (panelId, half, openIds) =>
+      updateFoldHalves((h) => moveToHalf(h, panelId, half, openIds)),
+    toggleRightPane: (panelId) => updateFoldHalves((h) => toggleRight(h, panelId)),
+    showRightPane: (panelId) => updateFoldHalves((h) => showRight(h, panelId)),
+    noteLeftPane: (panelId, used = true) =>
+      updateFoldHalves((h) => noteShownLeft(h, panelId, used)),
+    noteHalfUsed: (used) => updateFoldHalves((h) => noteUsed(h, used)),
+    forgetFoldPanes: (closedIds) => updateFoldHalves((h) => forgetPanes(h, closedIds)),
+    noteFoldOpen: (openIds) => updateFoldHalves((h) => noteOpen(h, openIds)),
+    forgetFoldHalvesWorkspace: (workspaceId) => {
+      const { foldHalves } = get();
+      if (!(workspaceId in foldHalves)) return;
+      const next = { ...foldHalves };
+      delete next[workspaceId];
+      writeJSON(STORAGE_KEYS.foldHalves, next);
+      set({ foldHalves: next });
+    },
+    setFocusedHalf: (half) => {
+      if (get().focusedHalf !== half) set({ focusedHalf: half });
+    },
+    setFoldHalvesActive: (active) => {
+      if (get().foldHalvesActive !== active) set({ foldHalvesActive: active });
     },
 
     setHierarchicalView: (value) => {

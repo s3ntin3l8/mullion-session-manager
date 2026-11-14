@@ -4,7 +4,12 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RightSidebar } from "./RightSidebar.js";
-import { COARSE_POINTER_QUERY, RIGHT_SIDEBAR_FULL_WIDTH_QUERY } from "../lib/layoutTier.js";
+import {
+  COARSE_POINTER_QUERY,
+  RAILS_HALVES_BAND_QUERY,
+  RIGHT_SIDEBAR_FULL_WIDTH_QUERY,
+  TABLET_BREAKPOINT_QUERY,
+} from "../lib/layoutTier.js";
 import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
@@ -12,6 +17,8 @@ import type { GitStatus, Project } from "../api/index.js";
 import type { GitHubPrPhase } from "../api/types.js";
 import { BottomSheet } from "../ui/BottomSheet.js";
 import { makeTask } from "../test/fixtures.js";
+import { EMPTY_FOLD_HALVES } from "../lib/foldHalves.js";
+import type { FoldHalvesState } from "../lib/foldHalves.js";
 
 const PROJECT = { id: 1, name: "demo", cwd: "/x/demo", hostId: "local" } as Project;
 
@@ -550,6 +557,207 @@ describe("RightSidebar", () => {
 
     expect(useDashboardStore.getState().rightSidebarWidth).toBe(390);
     expect(localStorage.getItem("crs.rightSidebarWidth")).toBe("390");
+  });
+});
+
+// #3010 — the two halves between 800 and 1099px.
+describe("RightSidebar in the two halves", () => {
+  const half = <div data-testid="right-half-session">session</div>;
+  const rail = <button type="button">Right half session</button>;
+
+  it("is exactly the right half: no stored width, no resize handle", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarWidth: 520 });
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    const panel = container.querySelector(".right-sidebar-panel.docked") as HTMLElement;
+    expect(panel).toHaveClass("half");
+    expect(panel.style.width).toBe("");
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+  });
+
+  it("shows the right half's session while no view covers it, and the view over it", () => {
+    useDashboardStore.setState({ rightSidebarOpen: false });
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+    expect(container.querySelector('[aria-label="Right half"]')).toHaveClass("half");
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
+    act(() => useDashboardStore.setState({ rightSidebarOpen: false }));
+    expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+  });
+
+  it("lists the right half's sessions in the rail, below the views", () => {
+    render(<RightSidebar tier="tablet" actions={actions} halves railSessions={rail} />);
+    const nav = screen.getByRole("navigation", { name: "Right sidebar" });
+    const buttons = [...nav.querySelectorAll("button")];
+    expect(buttons.at(-1)).toHaveTextContent("Right half session");
+  });
+
+  it("renders no right half outside the halves", () => {
+    useDashboardStore.setState({ rightSidebarOpen: false });
+    render(<RightSidebar tier="desktop" actions={actions} rightHalf={half} />);
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
+  });
+
+  // #3032's Browser and Dock views exist in this band, and show on the right
+  // half like any other view: the panel is exactly the half.
+  it.each([
+    ["browser", ".browser-sidebar-view"],
+    ["dock", ".dock-sidebar-view"],
+  ])("shows the %s view on the right half", (view, selector) => {
+    matchQueries(TABLET_BREAKPOINT_QUERY, RAILS_HALVES_BAND_QUERY);
+    act(() => useDashboardStore.getState().openRightSidebarView(view));
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    const panel = container.querySelector(".right-sidebar-panel.docked.half");
+    expect(panel?.querySelector(selector)).toBeTruthy();
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
+    const nav = screen.getByRole("navigation", { name: "Right sidebar" });
+    expect(within(nav).getByRole("button", { name: "Browser" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "Dock" })).toBeInTheDocument();
+    act(() => useDashboardStore.getState().closeRightSidebar());
+  });
+
+  // Design 9.2 — folding (halves → phone) and unfolding again.
+  describe("folding and unfolding", () => {
+    const halvesProps = { actions, halves: true, rightHalf: half, railSessions: rail };
+    const fold = (lastUsed: FoldHalvesState["lastUsed"], viewMode: "list" | "kanban" = "list") => {
+      useDashboardStore.setState({
+        viewMode,
+        activeWorkspaceId: 1,
+        foldHalves: { 1: { ...EMPTY_FOLD_HALVES, lastUsed } },
+      });
+      useDashboardStore.getState().openRightSidebarView("git");
+      const r = render(<RightSidebar tier="tablet" {...halvesProps} />);
+      r.rerender(<RightSidebar tier="phone" actions={actions} />);
+      return r;
+    };
+    afterEach(() => {
+      useDashboardStore.setState({
+        rightSidebarOpen: false,
+        viewMode: "list",
+        foldHalves: {},
+        activeWorkspaceId: null,
+      });
+    });
+
+    it("keeps the view full screen when it was used last, and on the right half after", () => {
+      const { container, rerender } = fold({ kind: "view" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(container.querySelector(".right-sidebar-panel.phone")).toBeTruthy();
+      rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+      expect(container.querySelector(".right-sidebar-panel.docked.half")).toBeTruthy();
+      expect(screen.queryByTestId("right-half-session")).toBeNull();
+    });
+
+    it("closes the view for the phone when a session was used last, and brings it back", () => {
+      const { container, rerender } = fold({ kind: "pane", panelId: "session-3" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      expect(container.querySelector(".right-sidebar-panel")).toBeNull();
+      rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+      const state = useDashboardStore.getState();
+      expect(state.rightSidebarOpen).toBe(true);
+      expect(state.rightSidebarView).toBe("git");
+    });
+
+    it("brings the view back when unfolding to 700-799px instead", () => {
+      const { rerender } = fold({ kind: "pane", panelId: "session-3" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      rerender(<RightSidebar tier="tablet" actions={actions} band="rails-full" />);
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    });
+
+    it("in Tasks mode keeps the task's sidebar open through the fold", () => {
+      const { container } = fold({ kind: "pane", panelId: "session-3" }, "kanban");
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(container.querySelector(".right-sidebar-panel.phone")).toBeTruthy();
+    });
+
+    it("a view opened and closed on the phone is not brought back on unfolding", () => {
+      const { rerender } = fold({ kind: "pane", panelId: "session-3" });
+      act(() => useDashboardStore.getState().openRightSidebarView("files"));
+      act(() => useDashboardStore.getState().closeRightSidebar());
+      rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+    });
+
+    describe("back after a fold", () => {
+      const popBack = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      beforeEach(() => {
+        resetPhoneBackStackForTests();
+        vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+        vi.spyOn(window.history, "back").mockImplementation(() => {});
+        useDashboardStore.setState({
+          selectedTaskId: null,
+          sidebarHistory: [],
+          taskMasterEnabled: true,
+          tasks: [makeTask({ id: 7, projectId: 1, status: "in_progress", title: "Fix focus" })],
+        });
+      });
+      afterEach(() => {
+        vi.restoreAllMocks();
+        useDashboardStore.setState({ selectedTaskId: null, tasks: [] });
+      });
+
+      it("a task kept open in Tasks mode closes back to the board", () => {
+        useDashboardStore.setState({ viewMode: "kanban", activeWorkspaceId: 1 });
+        act(() => useDashboardStore.getState().openRightSidebarTask(7));
+        const { rerender } = render(<RightSidebar tier="tablet" {...halvesProps} />);
+        rerender(<RightSidebar tier="phone" actions={actions} />);
+        expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+        popBack();
+        const state = useDashboardStore.getState();
+        expect(state.rightSidebarOpen).toBe(false);
+        expect(state.viewMode).toBe("kanban");
+      });
+
+      it("forgets where an earlier phone stretch opened the view", () => {
+        useDashboardStore.setState({
+          viewMode: "kanban",
+          activeWorkspaceId: 1,
+          foldHalves: { 1: { ...EMPTY_FOLD_HALVES, lastUsed: { kind: "view" } } },
+        });
+        const { rerender } = render(<RightSidebar tier="phone" actions={actions} />);
+        // On the phone, a task opened from the board: its entry point.
+        act(() => useDashboardStore.getState().openRightSidebarTask(7));
+        rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+        // Back on the halves, the task list; then fold with the view kept.
+        act(() => useDashboardStore.getState().selectTask(null));
+        rerender(<RightSidebar tier="phone" actions={actions} />);
+        expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+        expect(screen.getByRole("dialog", { name: "Tasks view" })).toBeInTheDocument();
+      });
+    });
+
+    it("counts working in a view on the right half as using it", () => {
+      useDashboardStore.setState({
+        activeWorkspaceId: 1,
+        foldHalves: {
+          1: { ...EMPTY_FOLD_HALVES, lastUsed: { kind: "pane", panelId: "session-3" } },
+        },
+      });
+      act(() => useDashboardStore.getState().openRightSidebarView("git"));
+      const { container } = render(<RightSidebar tier="tablet" {...halvesProps} />);
+      fireEvent.pointerDown(container.querySelector(".right-sidebar-panel.docked.half")!);
+      expect(useDashboardStore.getState().foldHalves[1]?.lastUsed).toEqual({ kind: "view" });
+    });
+
+    it("a fold from outside the halves closes the view, as the phone does", () => {
+      useDashboardStore.setState({
+        activeWorkspaceId: 1,
+        foldHalves: { 1: { ...EMPTY_FOLD_HALVES, lastUsed: { kind: "view" } } },
+        rightSidebarOpen: true,
+      });
+      const { rerender } = render(<RightSidebar tier="tablet" actions={actions} />);
+      rerender(<RightSidebar tier="phone" actions={actions} />);
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    });
   });
 });
 

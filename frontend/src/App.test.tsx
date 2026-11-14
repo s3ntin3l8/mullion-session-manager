@@ -1,244 +1,21 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import type { LayoutMode, Session } from "./api/index.js";
-
-// Set by the pane-cap test before render. Null keeps every other test on the
-// old path: DockviewReact never reports an api, and the palette stays empty.
-const { splitHarness, sidebarHarness, dockHarness, persistenceHarness } = vi.hoisted(() => ({
-  splitHarness: {
-    api: null as {
-      panels: unknown[];
-      activePanel: null;
-      getPanel: (id: string) => unknown;
-      addPanel: (opts: { id: string; params?: { sessionId?: number } }) => void;
-      onDidActivePanelChange: () => { dispose: () => void };
-      onDidAddPanel: () => { dispose: () => void };
-      onWillMutateLayout: () => { dispose: () => void };
-      onDidMutateLayout: () => { dispose: () => void };
-    } | null,
-    launch: null as {
-      id: number;
-      projectId: number;
-      name: string | null;
-      nameLocked: boolean;
-      lastTitle: string | null;
-      command: string;
-    } | null,
-    announced: false,
-  },
-  sidebarHarness: {
-    props: null as { workspaceProjectIds?: number[] | null } | null,
-  },
-  dockHarness: {
-    props: null as { workspaceProjectIds?: number[] | null } | null,
-  },
-  persistenceHarness: {
-    restoringRef: { current: false },
-    restoredWorkspaceIdRef: { current: null as number | null },
-  },
-}));
-
-// App is the integration seam for every layout tier, and nothing mounted it
-// before the tablet-tier carry-over series. This is a deliberately shallow
-// smoke harness: every child component and network-touching hook is stubbed,
-// so what's under test is App's OWN tier wiring (initial tier seeding, the
-// `data-tier` attribute, compact-vs-desktop sidebar semantics) — not the
-// children, which have their own suites. jsdom does no layout, so geometry
-// is out of scope here.
-
-vi.mock("dockview-react", () => ({
-  DockviewReact: (props: { onReady?: (event: { api: unknown }) => void }) => {
-    if (splitHarness.api && !splitHarness.announced) {
-      splitHarness.announced = true;
-      queueMicrotask(() => props.onReady?.({ api: splitHarness.api }));
-    }
-    return <div data-testid="dockview" />;
-  },
-}));
-vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
-vi.mock("./Sidebar.js", () => ({
-  Sidebar: (props: { workspaceProjectIds?: number[] | null }) => {
-    sidebarHarness.props = props;
-    return <div data-testid="sidebar" />;
-  },
-}));
-vi.mock("./WorkspaceSwitcher.js", () => ({
-  WorkspaceSwitcher: ({ onSelectWorkspace }: { onSelectWorkspace?: (id: number) => void }) => (
-    <span data-testid="workspace-switcher">
-      {splitHarness.launch ? (
-        <button type="button" data-testid="show-workspace" onClick={() => onSelectWorkspace?.(2)} />
-      ) : null}
-    </span>
-  ),
-}));
-vi.mock("./PhoneNavigator.js", () => ({
-  PhoneNavigatorPanel: ({
-    tablet,
-    workspaces,
-  }: {
-    tablet?: boolean;
-    workspaces?: React.ReactNode;
-  }) => (
-    <div data-testid="navigator" data-tablet={String(!!tablet)}>
-      {workspaces}
-    </div>
-  ),
-}));
-vi.mock("./Toolbar.js", () => ({
-  Toolbar: ({
-    onToggleSidebar,
-    notificationSheet,
-    mobileSessionSlot,
-  }: {
-    onToggleSidebar?: () => void;
-    notificationSheet?: boolean;
-    mobileSessionSlot?: React.ReactNode;
-  }) => (
-    <div data-testid="toolbar">
-      {onToggleSidebar && (
-        <button
-          data-testid="toggle-sidebar"
-          data-notif-sheet={String(!!notificationSheet)}
-          onClick={onToggleSidebar}
-        />
-      )}
-      {mobileSessionSlot}
-    </div>
-  ),
-}));
-// From 700px the left rail holds the sidebar toggle the top bar used to (#3009).
-// Same test id, so the tier-agnostic sidebar tests find whichever one renders.
-vi.mock("./LeftRail.js", () => ({
-  LeftRail: ({
-    onToggleSidebar,
-    notificationSheet,
-    sidebarShown,
-    middle,
-  }: {
-    onToggleSidebar: () => void;
-    notificationSheet?: boolean;
-    sidebarShown: boolean;
-    middle?: React.ReactNode;
-  }) => (
-    <nav data-testid="left-rail" data-sidebar-shown={String(sidebarShown)}>
-      <button
-        data-testid="toggle-sidebar"
-        data-notif-sheet={String(!!notificationSheet)}
-        onClick={onToggleSidebar}
-      />
-      {middle}
-    </nav>
-  ),
-}));
-// The rail's middle region (#3009): records what App hands it.
-const railHarness = vi.hoisted(() => ({
-  props: null as null | {
-    sheet: boolean;
-    showPanes: boolean;
-    panes: { id: string; title: string; sessionId: number | undefined }[];
-    activePanelId: string | null;
-    onFocusPane: (panelId: string) => void;
-    onNewSession: () => void;
-    onSelectWorkspace: (id: number) => void;
-  },
-}));
-vi.mock("./rail/RailWorkspaceSection.js", () => ({
-  RailWorkspaceSection: (props: NonNullable<typeof railHarness.props>) => {
-    railHarness.props = props;
-    return <div data-testid="rail-middle" data-show-panes={String(props.showPanes)} />;
-  },
-}));
-vi.mock("./MobileKeyBar.js", () => ({ MobileKeyBar: () => null }));
-vi.mock("./MobileSessionBar.js", () => ({
-  MobileSessionBar: ({ tier, contextLabel }: { tier: string; contextLabel?: string }) => (
-    <span data-testid="session-bar" data-tier={tier} data-context={contextLabel ?? ""} />
-  ),
-}));
-vi.mock("./PaneHeaderActions.js", () => ({ PaneHeaderActions: () => null }));
-vi.mock("./CommandPalette.js", () => ({
-  CommandPalette: (props: {
-    onLaunched?: (session: NonNullable<typeof splitHarness.launch>) => void;
-  }) => (
-    <div data-testid="palette">
-      {splitHarness.launch ? (
-        <button
-          type="button"
-          data-testid="launch-split"
-          onClick={() => props.onLaunched?.(splitHarness.launch!)}
-        />
-      ) : null}
-    </div>
-  ),
-}));
-vi.mock("./Dock.js", () => ({
-  Dock: (props: { workspaceProjectIds?: number[] | null }) => {
-    dockHarness.props = props;
-    return null;
-  },
-}));
-vi.mock("./ResourceAlertBanner.js", () => ({ ResourceAlertBanner: () => null }));
-vi.mock("./panels/registry.js", () => ({
-  components: {},
-  tabComponents: {},
-  KanbanBoardOverlay: ({ phone }: { phone?: boolean }) => (
-    <div data-testid="kanban-overlay" data-phone={String(!!phone)} />
-  ),
-}));
-vi.mock("./Settings.js", () => ({ Settings: () => null }));
-vi.mock("./terminalRepaintRegistry.js", () => ({ repaintAllTerminals: vi.fn() }));
-vi.mock("./pushClient.js", () => ({ ensurePushSubscribed: vi.fn().mockResolvedValue(undefined) }));
-
-// Hooks that talk to the network, the DOM globally, or dockview.
-vi.mock("./hooks/useAppStreams.js", () => ({ useAppStreams: vi.fn() }));
-vi.mock("./hooks/usePolling.js", () => ({ usePolling: vi.fn() }));
-vi.mock("./hooks/useAttentionNotifications.js", () => ({ useAttentionNotifications: vi.fn() }));
-vi.mock("./hooks/useSessionDeepLink.js", () => ({ useSessionDeepLink: vi.fn() }));
-vi.mock("./hooks/useOpenSessionRequest.js", () => ({ useOpenSessionRequest: vi.fn() }));
-vi.mock("./hooks/useGlobalShortcuts.js", () => ({ useGlobalShortcuts: vi.fn() }));
-vi.mock("./hooks/useDockviewDrop.js", () => ({
-  useDockviewDrop: () => ({ dockviewRef: { current: null } }),
-}));
-vi.mock("./hooks/useWorkspacePersistence.js", () => ({
-  useWorkspacePersistence: () => persistenceHarness,
-}));
-vi.mock("./hooks/useLayoutPresentation.js", () => ({ useLayoutPresentation: vi.fn() }));
-vi.mock("./hooks/useVisualViewportInset.js", () => ({ useVisualViewportInset: vi.fn() }));
-vi.mock("./hooks/usePanelOpener.js", () => ({ usePanelOpener: () => ({}) }));
-// The mode bar has its own tests (PhoneModeBar.test.tsx).
-vi.mock("./PhoneModeBar.js", () => ({ PhoneModeBar: () => <nav data-testid="mode-bar" /> }));
-vi.mock("./hooks/usePhoneBackStack.js", () => ({ usePhoneBackStack: vi.fn() }));
-vi.mock("./lib/sidebarSwipeGesture.js", () => ({
-  attachSidebarSwipeGesture: vi.fn(() => () => {}),
-}));
-
+import type { Session } from "./api/index.js";
+// The mocks live in the shared harness; import it before App.
+import {
+  splitHarness,
+  sidebarHarness,
+  dockHarness,
+  persistenceHarness,
+  railHarness,
+  setLayoutMode,
+  stubWidth,
+} from "./test/appHarness.js";
 import { App } from "./App.js";
 import { useDashboardStore } from "./store/index.js";
 import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
-
-function setLayoutMode(layoutMode: LayoutMode) {
-  useDashboardStore.setState({
-    settings: { ...useDashboardStore.getState().settings, layoutMode },
-  });
-}
-
-// matchMedia stub keyed on the width tier the test wants to simulate.
-function stubWidth(tier: "phone" | "tablet" | "desktop", coarse = false) {
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn((query: string) => ({
-      matches:
-        (tier === "phone" && query.includes("max-width: 699.98px")) ||
-        (tier === "tablet" && query.includes("min-width: 700px")) ||
-        (tier === "desktop" && query.includes("min-width: 1280px")) ||
-        (coarse && query === "(pointer: coarse)"),
-      media: query,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })),
-  );
-}
 
 describe("App tier wiring", () => {
   beforeEach(() => {
@@ -743,7 +520,7 @@ describe("App workspace bootstrap", () => {
   });
 });
 
-describe("App tablet pane-cap notice", () => {
+describe("App explicit split on the tablet", () => {
   function referenceSession(id: number): Session {
     return {
       id,
@@ -825,7 +602,6 @@ describe("App tablet pane-cap notice", () => {
       settings: {
         ...useDashboardStore.getState().settings,
         layoutMode: "tablet",
-        tabletPaneCap: 2,
       },
     });
   });
@@ -839,29 +615,19 @@ describe("App tablet pane-cap notice", () => {
     vi.clearAllMocks();
   });
 
-  it("warns once for an explicit split past the cap, and clears on a workspace switch", async () => {
+  // #3010 removed the tablet pane cap and its notice: an explicit split
+  // still adds the session, and nothing warns about columns any more.
+  it("adds an explicit split's session without a pane-cap notice", async () => {
     render(<App />);
-    const launch = await screen.findByTestId("launch-split");
-    fireEvent.click(launch);
-    // Scoped to the app's OWN notice rather than "any role=status" — the
-    // app also mounts the app-wide toast host, which is a role=status
-    // region that is always present (the global toast slice).
-    const notice = await screen.findByText(/This split is past the tablet pane cap/);
-    expect(notice).toHaveAttribute("role", "status");
-    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByTestId("show-workspace"));
-    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
-
-    useDashboardStore.setState({
-      splitRequest: { referencePanelId: "session-1", direction: "right" },
-    });
-    // A second split of the same session only focuses the panel already
-    // added. A new session is what can add another column.
-    splitHarness.launch = { ...splitHarness.launch!, id: 10 };
     fireEvent.click(await screen.findByTestId("launch-split"));
-    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
-    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(2);
+    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
+    expect(splitHarness.api?.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "session-9",
+        position: expect.objectContaining({ direction: "right" }),
+      }),
+    );
+    expect(screen.queryByText(/pane cap/)).toBeNull();
   });
 });
 

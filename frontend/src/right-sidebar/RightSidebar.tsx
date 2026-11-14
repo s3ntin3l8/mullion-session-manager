@@ -1,15 +1,17 @@
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { markViewRestored } from "../hooks/useFoldHalves.js";
 import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
 import {
   RIGHT_SIDEBAR_FULL_WIDTH_QUERY,
   isCompactTier,
   useCoarsePointer,
 } from "../lib/layoutTier.js";
-import type { LayoutTier } from "../lib/layoutTier.js";
+import type { LayoutBand, LayoutTier } from "../lib/layoutTier.js";
 import { useShallow } from "zustand/react/shallow";
 import { goSidebarBack } from "../sidebarBack.js";
 import { useDashboardStore } from "../store/index.js";
@@ -27,6 +29,17 @@ export interface RightSidebarProps {
   // Issue #1877 — the workspace's project ids (App's scopedWorkspaceProjectIds);
   // the project picker offers only these. null/absent = every project.
   workspaceProjectIds?: number[] | null;
+  /** #3010 — the two halves (800-1099px): the panel is exactly the right
+   *  half (equal to the left, no stored width, no resize handle). */
+  halves?: boolean;
+  /** The right half's session, shown while no sidebar view covers it. */
+  rightHalf?: ReactNode;
+  /** The right half's sessions, listed in the rail below the views. */
+  railSessions?: ReactNode;
+  /** The layout band (App's `layoutBand`); defaults to the halves' band when
+   *  `halves` is set. Tells a fold from the halves apart from other routes
+   *  to the phone. */
+  band?: LayoutBand;
 }
 
 function subscribeFullWidth(onChange: () => void): () => void {
@@ -35,6 +48,21 @@ function subscribeFullWidth(onChange: () => void): () => void {
   return () => mq.removeEventListener("change", onChange);
 }
 const readFullWidth = (): boolean => window.matchMedia(RIGHT_SIDEBAR_FULL_WIDTH_QUERY).matches;
+
+// #3010 / design 9.2 — folding from the halves keeps an open view full
+// screen if it was the thing used last, or in Tasks mode (the task on the
+// right half becomes the task full screen).
+function noteViewUsed(): void {
+  const s = useDashboardStore.getState();
+  if (s.viewMode !== "kanban") s.noteHalfUsed({ kind: "view" });
+}
+
+function viewKeptOnFold(): boolean {
+  const s = useDashboardStore.getState();
+  if (s.viewMode === "kanban") return true;
+  const halves = s.activeWorkspaceId === null ? null : s.foldHalves[s.activeWorkspaceId];
+  return halves?.lastUsed?.kind === "view";
+}
 
 // One slot in the phone's back stack. Keyed by the caller, so a new key (a
 // drill-in that moved to another detail) registers a fresh entry: the stack
@@ -93,7 +121,15 @@ function leaveDrillIn(drill: SidebarBack): void {
 // back gesture closes a drill-in inside it first (a task's detail, a PR), then
 // the view. A view opened straight at a detail (a task from the board) has no
 // list behind it, so back from that detail closes the view.
-export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSidebarProps) {
+export function RightSidebar({
+  tier,
+  actions,
+  workspaceProjectIds,
+  halves = false,
+  rightHalf,
+  railSessions,
+  band = halves ? "rails-halves" : tier === "phone" ? "phone" : "desktop",
+}: RightSidebarProps) {
   const viewId = useDashboardStore((s) => s.rightSidebarView);
   const open = useDashboardStore((s) => s.rightSidebarOpen);
   const storedWidth = useDashboardStore((s) => s.rightSidebarWidth);
@@ -183,15 +219,49 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // forced desktop tier on a narrow window keeps Escape but not back.
   usePhoneBackStack(covering && isCompactTier(tier), close);
 
-  // Landing on the phone, at start or from a tier change (rotate, fold),
-  // closes the panel: `open` is persisted for the docked sidebar, and on the
-  // phone an open view is a full screen nobody asked for.
+  // Landing on the phone, at start or from a tier change (rotate, a narrowed
+  // window), closes the panel: `open` is persisted for the docked sidebar, and
+  // on the phone an open view is a full screen nobody asked for.
+  //
+  // #3010 — folding from the two halves follows design 9.2 instead: the view
+  // stays open, full screen, when it was the thing used last (or in Tasks
+  // mode, where the right half is the task). Otherwise the phone shows the
+  // session used last, and the view, closed for the phone, comes back on the
+  // right half when the halves do.
+  //
+  // The tier and the band are separate state and can cross 700px one commit
+  // apart, so "came from the halves" is the last band seen while neither said
+  // phone, and a pending reopen survives a commit where only one of them has
+  // left the phone.
   const lastTier = useRef<LayoutTier | null>(null);
+  const lastWideBand = useRef<LayoutBand | null>(null);
+  const reopenOnUnfold = useRef<string | null>(null);
   useEffect(() => {
-    const prev = lastTier.current;
+    const prevTier = lastTier.current;
     lastTier.current = tier;
-    if (prev !== tier && open && tier === "phone") close();
-  }, [tier, open, close]);
+    if (tier === "phone") {
+      // A view opened on the phone is a new choice: unfolding keeps it.
+      if (prevTier === "phone" && open) reopenOnUnfold.current = null;
+      if (prevTier === tier || !open) return;
+      if (lastWideBand.current === "rails-halves") {
+        if (viewKeptOnFold()) return;
+        reopenOnUnfold.current = useDashboardStore.getState().rightSidebarView;
+      }
+      close();
+      return;
+    }
+    if (band === "phone") return;
+    lastWideBand.current = band;
+    const reopen = reopenOnUnfold.current;
+    reopenOnUnfold.current = null;
+    // Back on any width where the sidebar docks (the halves, or 700-799px
+    // where a view takes the full width), the view comes back.
+    if (reopen !== null && !open) {
+      // Putting it back is not using it: the session stays the one used last.
+      if (halves) markViewRestored();
+      useDashboardStore.getState().openRightSidebarView(reopen);
+    }
+  }, [tier, band, halves, open, close]);
 
   const view = RIGHT_SIDEBAR_VIEWS.find((v) => v.id === viewId) ?? RIGHT_SIDEBAR_VIEWS[0];
   const phone = tier === "phone";
@@ -203,6 +273,15 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // in one flush (a ?task= link on a cold start, the cross-link's return) never
   // renders the closed state in between.
   const [openedAt, setOpenedAt] = useState<string | null>(null);
+  // #3010 — a view kept open through a fold (design 9.2) enters the phone
+  // where it is now: a task open in it is its entry point, so back returns
+  // to the board, and what it opened at during an earlier phone stretch
+  // does not linger. Render-phase, keyed on entering the phone.
+  const [phoneSeen, setPhoneSeen] = useState(phone);
+  if (phone !== phoneSeen) {
+    setPhoneSeen(phone);
+    if (phone) setOpenedAt(key);
+  }
   const followedRef = useRef(followedProjectId);
   useEffect(() => {
     followedRef.current = followedProjectId;
@@ -322,17 +401,27 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     <>
       {open && (
         <aside
-          className={`right-sidebar-panel docked${full ? " full" : ""}${dragging ? " resizing" : ""}`}
-          style={full ? undefined : { width }}
+          className={`right-sidebar-panel docked${full ? " full" : ""}${dragging ? " resizing" : ""}${halves ? " half" : ""}`}
+          style={full || halves ? undefined : { width }}
           aria-label={`${view.label} sidebar`}
+          // #3010 — working in a view on the right half is using it, for
+          // the phone after folding (design 9.2: "opened or used last").
+          onPointerDownCapture={halves ? noteViewUsed : undefined}
+          onKeyDownCapture={halves ? noteViewUsed : undefined}
         >
-          {!full && !coarse && (
+          {!full && !coarse && !halves && (
             <div className="right-sidebar-resize-handle" onMouseDown={onMouseDown} />
           )}
           <RightSidebarPanel view={view} followed={followed} actions={actions} onClose={close} />
         </aside>
       )}
-      <RightRail projectId={followed.effectiveProjectId} />
+      {/* #3010 — the right half's session, while no view covers it. */}
+      {!open && halves && rightHalf && (
+        <aside className="right-sidebar-panel docked half" aria-label="Right half">
+          {rightHalf}
+        </aside>
+      )}
+      <RightRail projectId={followed.effectiveProjectId}>{railSessions}</RightRail>
     </>
   );
 }

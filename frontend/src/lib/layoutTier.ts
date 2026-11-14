@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { LayoutMode, TabletPaneCap } from "../api/index.js";
+import type { LayoutMode } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutBand, LayoutTier } from "./layoutTierTypes.js";
 
@@ -135,14 +135,12 @@ export function useLayoutTier(layoutMode: LayoutMode): LayoutTier {
   return tier;
 }
 
-// The tier PLUS the settings the tablet-tier capped-grid policy needs
-// (panelUtils.ts's tabletPositioning/positioningForTier) — bundled into one
-// param object so a caller passing this through a panel-opener function
-// doesn't need two positional args, and adding a future layout-relevant
-// setting doesn't touch every call site's argument list again.
+// What the panel openers need to place a panel (panelUtils.ts's
+// positioningForTier) — an object, so adding a layout input later does not
+// touch every call site's argument list. The tablet pane cap setting it used
+// to carry is gone (#3010): the band decides.
 export interface LayoutContext {
   tier: LayoutTier;
-  tabletPaneCap: TabletPaneCap;
 }
 
 // Reads both settings this app's layout logic currently needs from the
@@ -153,9 +151,8 @@ export interface LayoutContext {
 // can still call useLayoutTier directly instead.
 export function useLayoutContext(): LayoutContext {
   const layoutMode = useDashboardStore((s) => s.settings.layoutMode);
-  const tabletPaneCap = useDashboardStore((s) => s.settings.tabletPaneCap);
   const tier = useLayoutTier(layoutMode);
-  return { tier, tabletPaneCap };
+  return { tier };
 }
 
 // An explicit layoutMode override has no real width, so it maps to the band
@@ -177,7 +174,7 @@ export function resolveLayoutBand(layoutMode: LayoutMode): LayoutBand {
   return "desktop";
 }
 
-const BAND_BOUNDARY_QUERIES = [
+export const BAND_BOUNDARY_QUERIES = [
   PHONE_BREAKPOINT_QUERY,
   RAILS_FULL_BAND_QUERY,
   RAILS_HALVES_BAND_QUERY,
@@ -204,4 +201,18 @@ export function useLayoutBand(layoutMode: LayoutMode): LayoutBand {
   }, [layoutMode]);
 
   return band;
+}
+
+/**
+ * How the grid is presented (#3010): the phone shows one pane, the two-halves
+ * band (800-1099px) shows one grid pane per half on the left with the right
+ * half beside it, every other width shows the grid. Both one-pane
+ * presentations are a device-local view of the workspace: saves are
+ * suspended while either is on screen (useWorkspacePersistence).
+ */
+export type LayoutPresentation = "phone" | "halves" | "grid";
+
+export function resolveLayoutPresentation(layoutMode: LayoutMode): LayoutPresentation {
+  if (resolveLayoutTier(layoutMode) === "phone") return "phone";
+  return resolveLayoutBand(layoutMode) === "rails-halves" ? "halves" : "grid";
 }

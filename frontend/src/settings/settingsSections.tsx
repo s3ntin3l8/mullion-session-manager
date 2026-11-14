@@ -257,7 +257,6 @@ export const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "appearance", text: "theme dark light system" },
   { section: "appearance", text: "sidebar density comfortable compact" },
   { section: "appearance", text: "layout auto phone tablet desktop foldable" },
-  { section: "appearance", text: "tablet columns panes side by side" },
   { section: "terminal", text: "terminal font family geist jetbrains ibm plex sf mono menlo" },
   { section: "terminal", text: "font size" },
   { section: "terminal", text: "pane padding margin inset panel edge" },
