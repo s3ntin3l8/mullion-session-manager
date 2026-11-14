@@ -9,11 +9,9 @@
  *
  *   C1  where focus lands after a palette-initiated workspace switch
  *       (audit finding 43, deferred to #1884 — MEASURED here, not fixed)
- *   C2  that the phone's hidden, `inert` sidebar host is genuinely
- *       unreachable by Tab, and (non-vacuity) that the desktop sidebar takes
- *       focus once the rail's sidebar button shows it. NOT covered since the
- *       redesign: the 700-1279px off-screen drawer (see the issue linked in
- *       the PR that made this change)
+ *   C2  that the phone's hidden sidebar host and the collapsed docked
+ *       sidebar (1200px) are unreachable by Tab, and that the rail's button
+ *       opens a sidebar Tab can reach. Only the 1200px half proves `inert`
  *   C3  the rendered contrast of the text-role tokens (--dim, --muted, --fg)
  *       over the tinted and hovered backgrounds (the shipped guard compares
  *       token against token, so it cannot see a semi-transparent tint layered
@@ -53,10 +51,12 @@ import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
 import { withDemo } from "./demo/with-demo.mjs";
 import {
+  openSidebarAndTab,
   pinProjectIfTreeEmpty,
   pinProjectInDock,
-  showDesktopSidebar,
+  probeCollapsedSidebar,
   switchToLight,
+  tabWalk,
 } from "./lib/verify-ui-sidebar.mjs";
 import { judgeStates, parseColor, renderSample } from "./lib/color-math.mjs";
 
@@ -566,138 +566,67 @@ const CHECKS = [
   {
     id: "C2",
     title:
-      "the phone's hidden sidebar host is unreachable by Tab, and the desktop sidebar opens from the rail",
+      "the hidden/collapsed sidebars are unreachable by Tab, and the rail's button opens a reachable one",
     async run({ browser, demo }) {
-      const page = await browser.newPage({ viewport: PHONE });
-      await openApp(page, demo);
-
-      // The phone has no drawer (#3014): the sidebar still mounts, hidden and
-      // inert, in `.phone-sidebar-host`. That is the closed-state surface
-      // this check walks.
-      const drawer = page.locator(".phone-sidebar-host");
-      await drawer.waitFor({ state: "attached", timeout: 15_000 });
-
-      // Precondition: the drawer really is inert. Without this the Tab walk
-      // below would pass for the wrong reason.
-      const inertState = await drawer.evaluate((el) => ({
+      // Half 1, the phone: its sidebar mounts hidden in `.sidebar-host-hidden`.
+      // That element is `hidden` (display: none) AND `inert`, so the UA rule
+      // alone keeps Tab out: this half pins the attribute and that nothing in
+      // it takes focus, it does NOT prove `inert` works. Half 2 does.
+      const phone = await browser.newPage({ viewport: PHONE });
+      await openApp(phone, demo);
+      await phone.locator(".sidebar-host-hidden").waitFor({ state: "attached", timeout: 15_000 });
+      const phoneInert = await phone.locator(".sidebar-host-hidden").evaluate((el) => ({
         property: el.inert === true,
         attribute: el.hasAttribute("inert"),
-        visibility: globalThis.getComputedStyle(el).visibility,
       }));
-      if (!inertState.property || !inertState.attribute) {
-        await page.close();
-        return {
-          status: "fail",
-          detail:
-            "the closed drawer is NOT inert (property=" +
-            `${inertState.property}, attribute=${inertState.attribute}) — ` +
-            "the Tab walk would have been meaningless",
-          evidence: { inertState },
-        };
-      }
+      const phoneWalk = await tabWalk(phone, ".sidebar-host-hidden");
+      await phone.close();
 
-      // Start the walk from a known focusable element OUTSIDE the drawer.
-      const startFocus = await page.evaluate(() => {
-        const drawerEl = globalThis.document.querySelector(".phone-sidebar-host");
-        const focusable = Array.from(
-          globalThis.document.querySelectorAll(
-            "a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])",
-          ),
-        ).filter((el) => {
-          if (drawerEl?.contains(el)) return false;
-          const r = el.getBoundingClientRect();
-          const cs = globalThis.getComputedStyle(el);
-          return r.width > 0 && r.height > 0 && cs.visibility !== "hidden";
-        });
-        focusable[0]?.focus();
-        return focusable[0]
-          ? { tag: focusable[0].tagName.toLowerCase(), className: focusable[0].className }
-          : null;
-      });
-
-      const landed = [];
-      let inDrawer = 0;
-      const outside = new Set();
-      for (let i = 0; i < 30; i++) {
-        await page.keyboard.press("Tab");
-        const where = await page.evaluate((selector) => {
-          const drawerEl = globalThis.document.querySelector(selector);
-          const el = globalThis.document.activeElement;
-          const tag = el ? el.tagName.toLowerCase() : "(none)";
-          const cls = el && typeof el.className === "string" ? el.className : "";
-          return {
-            tag,
-            className: cls,
-            inDrawer: drawerEl ? drawerEl.contains(el) : false,
-            key: `${tag}.${cls}`,
-          };
-        }, ".phone-sidebar-host");
-        landed.push(where);
-        if (where.inDrawer) inDrawer++;
-        else outside.add(where.key);
-      }
-
-      // `inert` also refuses focus directly, not just through the tab order:
-      // asking a descendant to take focus must not work while the drawer is
-      // closed. That is the sharper half of the property.
-      const focusWhileClosed = await drawer.evaluate((el) => {
-        const candidate = el.querySelector(
-          "button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex='-1'])",
-        );
-        if (!candidate) return { found: false, focused: false };
-        candidate.focus();
-        return { found: true, focused: globalThis.document.activeElement === candidate };
-      });
-
-      await page.close();
-
-      // Non-vacuity, on the DESKTOP shell (>= 1280px, where the rail's sidebar
-      // button is stable): the sidebar must be REACHABLE once it is shown,
-      // otherwise "unreachable when closed" could be trivially true. The
-      // button is read, not blind-clicked: the sidebar may already be shown,
-      // and the step ends only when `aria-pressed` is "true".
-      const desk = await browser.newPage({ viewport: DESKTOP });
-      await openApp(desk, demo);
-      const toggle = desk.locator("[data-toggle-sidebar]").first();
+      // Half 2, 1200px: the docked sidebar is collapsed by default and
+      // `inert`; see probeCollapsedSidebar for how `inert` is made the only
+      // guard and shown able to fail. Then the rail button opens it and Tab
+      // from a control outside it must get in.
+      const narrow = { width: 1200, height: 800 };
+      const closedPage = await browser.newPage({ viewport: narrow });
+      await openApp(closedPage, demo);
+      const collapsed = await probeCollapsedSidebar(closedPage);
+      await closedPage.close();
+      const openPage = await browser.newPage({ viewport: narrow });
+      await openApp(openPage, demo);
+      const toggle = openPage.locator("[data-toggle-sidebar]").first();
       await toggle.waitFor({ state: "visible", timeout: 15_000 });
-      const { pressedBefore, pressedAfter, openedState, focusWhenOpen, reachedWhenOpen } =
-        await showDesktopSidebar(desk, toggle);
-      await desk.close();
+      const opened = await openSidebarAndTab(openPage, toggle);
+      await openPage.close();
 
       const ok =
-        inDrawer === 0 &&
-        outside.size >= 3 &&
-        focusWhileClosed.found &&
-        !focusWhileClosed.focused &&
-        pressedAfter === "true" &&
-        !openedState.property &&
-        !openedState.attribute &&
-        focusWhenOpen.focused &&
-        reachedWhenOpen;
+        phoneInert.property &&
+        phoneInert.attribute &&
+        phoneWalk.inside === 0 &&
+        phoneWalk.distinctOutside >= 3 &&
+        collapsed.inert.property &&
+        collapsed.inert.attribute &&
+        collapsed.walk.inside === 0 &&
+        collapsed.walk.distinctOutside >= 3 &&
+        !collapsed.focusWhileCollapsed.focused &&
+        collapsed.controlFocusWithoutInert.focused &&
+        opened.pressedAfter === "true" &&
+        !opened.inert.property &&
+        !opened.inert.attribute &&
+        opened.reached;
       return {
         status: ok ? "pass" : "fail",
         detail: ok
-          ? `30 Tab presses, 0 landed in the inert phone sidebar host (${outside.size} distinct controls outside it); ` +
-            "the closed host refuses focus, the desktop sidebar takes it"
-          : `landedInDrawer=${inDrawer}, distinctOutside=${outside.size}, ` +
-            `focusWhileClosed=${JSON.stringify(focusWhileClosed)}, ` +
-            `stillInertWhenOpen=${openedState.property}, focusWhenOpen=${JSON.stringify(focusWhenOpen)}, ` +
-            `reachedWhenOpen=${reachedWhenOpen}`,
+          ? "phone: hidden host inert, 0/30 Tab landings (attribute pin only); 1200px: collapsed " +
+            "sidebar inert with visibility overridden, 0/30 landings, refuses focus, takes it " +
+            `once inert is removed; opened from the rail, reached by Tab in ${opened.presses} presses`
+          : `phone=${JSON.stringify({ phoneInert, phoneWalk })} collapsed=${JSON.stringify(collapsed)} opened=${JSON.stringify(opened)}`,
         evidence: {
-          viewport: PHONE,
-          openViewport: DESKTOP,
-          sidebarPressedBefore: pressedBefore,
-          sidebarPressedAfter: pressedAfter,
-          inertState,
-          openedState,
-          tabPresses: landed.length,
-          landedInDrawer: inDrawer,
-          distinctOutsideDrawer: outside.size,
-          startFocus,
-          focusWhileClosed,
-          focusWhenOpen,
-          reachableWhenOpen: reachedWhenOpen,
-          landingSample: landed.slice(0, 5),
+          phoneViewport: PHONE,
+          narrowViewport: narrow,
+          phoneInert,
+          phoneWalk,
+          collapsed,
+          opened,
         },
       };
     },
