@@ -697,8 +697,9 @@ export function App() {
   useTaskNotificationOpen();
 
   // Issue #2020 — resolves requestOpenTask (the desktop Tasks detail's
-  // pop-out, and every "show me this task" on phone; the sidebar has no
-  // dockview API of its own). Same ordering contract as the hook above.
+  // pop-out, useCanPopOutTask; every other "show me this task" opens the
+  // sidebar's own detail, #3011, #3014; the sidebar has no dockview API of its
+  // own). Same ordering contract as the hook above.
   useOpenTaskRequest({
     dockviewApi,
     activeWorkspaceId,

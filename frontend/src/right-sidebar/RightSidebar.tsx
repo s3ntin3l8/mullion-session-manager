@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
+import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
 import {
   RIGHT_SIDEBAR_FULL_WIDTH_QUERY,
@@ -111,8 +112,8 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // instead of deriving it a second time. App mounts this on every tier. Phone renders
   // nothing here until a view opens, but the project a focused panel puts here is
   // the one the phone follows; the board words the option for it (#2864). With
-  // nothing focused the hook only falls back to the first project, which nothing made "active", so phone publishes null then
-  // (a visible sidebar does show that fallback project, so it still publishes it). The
+  // nothing focused the hook only falls back to the first project, which
+  // nothing made "active", so phone publishes null then (a visible sidebar does show that fallback project, so it still publishes it). The
   // phone navigator's own Source Control section is only mounted on its projects tab, so
   // it cannot be the producer while the Tasks board is showing.
   const setFollowedProjectId = useDashboardStore((s) => s.setFollowedProjectId);
@@ -210,7 +211,12 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     if (!phone) return;
     return useDashboardStore.subscribe((s, prev) => {
       if (!s.rightSidebarOpen) return;
-      if (!prev.rightSidebarOpen) {
+      // Opened, or moved to another view with no way back (no sidebar history
+      // entry, unlike a task's PR link): either way a fresh entry point.
+      if (
+        !prev.rightSidebarOpen ||
+        (s.rightSidebarView !== prev.rightSidebarView && s.sidebarHistory.length === 0)
+      ) {
         setOpenedAt(drillKey(drillOf(s, followedRef.current)));
         return;
       }
@@ -243,14 +249,36 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     [actions, close],
   );
 
-  // The full screen covers everything else: it is a modal dialog for
-  // assistive technology, and focus moves into it (its back control) as it
-  // opens, rather than staying on the board underneath.
+  // The full screen covers everything else, so it is a modal dialog: focus
+  // moves into it as it opens (its first control, the back arrow), Tab wraps
+  // inside it, and closing it returns focus to where it was (useFocusTrap).
   const phoneRef = useRef<HTMLElement>(null);
+  const { onKeyDown: onPhoneKeyDown } = useFocusTrap({
+    active: phoneOpen,
+    containerRef: phoneRef,
+  });
+  // A drill-in swaps the header: the view's back row steps aside for the
+  // detail's own header (mobile.css), so focus would fall to <body>. Move it to
+  // the back control that is showing now. The first run is the trap's.
+  const focusedKey = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    if (!phoneOpen) return;
-    phoneRef.current?.querySelector<HTMLElement>(".right-sidebar-phone-back")?.focus();
-  }, [phoneOpen]);
+    if (!phoneOpen) {
+      focusedKey.current = undefined;
+      return;
+    }
+    if (focusedKey.current === undefined) {
+      focusedKey.current = key;
+      return;
+    }
+    if (focusedKey.current === key) return;
+    focusedKey.current = key;
+    const root = phoneRef.current;
+    const target =
+      key !== null
+        ? root?.querySelector<HTMLElement>(".right-sidebar-detail-slot button")
+        : root?.querySelector<HTMLElement>(".right-sidebar-phone-back");
+    target?.focus();
+  }, [phoneOpen, key]);
 
   if (phone) {
     if (!phoneOpen) return null;
@@ -261,6 +289,7 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
         role="dialog"
         aria-modal="true"
         aria-label={`${view.label} view`}
+        onKeyDown={onPhoneKeyDown}
       >
         {/* Registered before the drill-in below, so a view opened straight at
             a detail is under it on the stack. */}

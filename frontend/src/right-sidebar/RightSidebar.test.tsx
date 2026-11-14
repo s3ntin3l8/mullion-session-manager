@@ -601,6 +601,58 @@ describe("RightSidebar on the phone", () => {
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Back" }));
   });
 
+  it("keeps Tab inside the full screen and returns focus on close", async () => {
+    const outside = document.createElement("button");
+    outside.textContent = "outside";
+    document.body.appendChild(outside);
+    outside.focus();
+    renderSidebar("phone");
+    open("git");
+    const dialog = screen.getByRole("dialog", { name: "Git view" });
+    const back = within(dialog).getByRole("button", { name: "Back" });
+    expect(document.activeElement).toBe(back);
+    // Shift+Tab from the first control wraps to the last one, inside.
+    await userEvent.tab({ shift: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
+  it("moves focus to the detail's back control on a drill-in, and back on leaving it", () => {
+    const { container } = renderSidebar("phone");
+    open("tasks");
+    act(() => useDashboardStore.getState().selectTask(7));
+    const slot = container.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    expect(slot.contains(document.activeElement)).toBe(true);
+    act(() => useDashboardStore.getState().selectTask(null));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back" }));
+  });
+
+  it("a view reached with no way back is a fresh entry point", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    // Another view, no sidebar history: its list must stay open.
+    act(() => useDashboardStore.getState().openRightSidebarView("git"));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Git view" })).toBeInTheDocument();
+  });
+
+  it("a task's PR link keeps the task as the way back", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    act(() => useDashboardStore.getState().openRightSidebarPr(1, 5));
+    popBack();
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.rightSidebarView).toBe("tasks");
+    expect(state.selectedTaskId).toBe(7);
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
   it("the back gesture closes the view", () => {
     renderSidebar("phone");
     open("files");
