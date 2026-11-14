@@ -251,8 +251,12 @@
   }
 }
 /* A right-sidebar view arriving, or replacing another (RightSidebarPanel keys
-   its body by the view, so each view mounts fresh). */
-.motion-arrive {
+   its body by the view, so each view mounts fresh); between 800 and 1099px
+   that is the right half's view. A session arriving on the right half
+   (App.tsx keys RightHalfPane by the session) does the same. The half itself,
+   like the sidebar, is at its final width at once (right-sidebar.css). */
+.motion-arrive,
+.fold-half-right {
   animation: motionArrive var(--motion-fade) var(--motion-ease);
 }
 /* The mode switch. Into Tasks the board mounts over the grid and fades in;
@@ -280,9 +284,26 @@
    at half resolution; an animation that short is not worth that risk. */
 @media (prefers-reduced-motion: reduce) {
   .motion-arrive,
+  .fold-half-right,
   .kanban-board-overlay,
   .app[data-mode="workspace"] .dockview-container .dv-shell,
   .app[data-mode="workspace"] .dock {
     animation: none;
   }
+}
+
+/* ---- Rails: the selected entry's marker grows in ------------------------ */
+/* The bar on the rail's outer edge (left-rail.css, right-sidebar.css) grows
+   from its middle when an entry becomes the selected one, instead of
+   appearing (the motion study's rail). Scale only; the entry's own box and
+   the rail never change size. */
+@keyframes motionMarkIn {
+  from {
+    opacity: 0;
+    scale: 1 0;
+  }
+}
+.left-rail-btn.active::before,
+.right-rail-btn.active::after {
+  animation: motionMarkIn var(--motion-fade) var(--motion-ease);
 }

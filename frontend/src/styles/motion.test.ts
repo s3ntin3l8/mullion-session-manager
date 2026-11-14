@@ -121,6 +121,17 @@ describe("styles/motion.css", () => {
     expect(block).toMatch(/animation:\s*none/);
   });
 
+  it("covers the halves and the rails (#3010) under the same rules", () => {
+    // A session or view arriving on the right half settles in; the half itself
+    // is never animated in size, and the fade is off under reduced motion.
+    expect(rules(css, ".fold-half-right")[0][1]).toMatch(/animation:\s*motionArrive/);
+    expect(mediaBlock("prefers-reduced-motion: reduce")).toContain(".fold-half-right");
+    // The selected rail entry's marker grows in, by scale only.
+    const marker = rules(css, ".left-rail-btn.active::before");
+    expect(marker[0][0]).toContain(".right-rail-btn.active::after");
+    expect(marker[0][1]).toMatch(/animation:\s*motionMarkIn var\(--motion-fade\)/);
+  });
+
   it("softens the edge under a header only on a scroll timeline, and only once scrolled", () => {
     const block = css.slice(css.indexOf("@supports (animation-timeline: scroll())"));
     for (const list of [

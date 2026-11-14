@@ -78,7 +78,12 @@ The rules below are applied once, in `frontend/src/styles/motion.css`
   fades and settles in (`.motion-arrive`); the mode switch fades the board in,
   and the grid and the Dock back in. Nothing that holds a terminal changes
   size over time, and under reduced motion these fades are off entirely
-  (`animation: none`, not the reset's 0.01ms).
+  (`animation: none`, not the reset's 0.01ms). Between 800 and 1099px the
+  right half's view arrives the same way, and so does a session arriving on
+  the right half (`App.tsx` keys `RightHalfPane` by the session); the halves
+  themselves snap.
+- **Rails.** Rail entries are buttons, so they take the press rule; the
+  selected entry's edge marker grows in (`scale`) instead of appearing.
 - **Soft edges.** Lists that scroll under a header fade out over their top
   16px once scrolled (a scroll timeline, so nothing runs while still; at rest
   nothing is masked).

@@ -1718,6 +1718,9 @@ export function App() {
           rightHalf={
             rightHalfSession && rightHalfPanelId ? (
               <RightHalfPane
+                // #3015 — keyed by the session, so a session arriving on the
+                // right half mounts fresh and plays its arrival (motion.css).
+                key={rightHalfSession.id}
                 sessionId={rightHalfSession.id}
                 title={sessionPaneTitle(rightHalfSession)}
                 projectName={
