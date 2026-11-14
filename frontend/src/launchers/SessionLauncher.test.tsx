@@ -6,6 +6,7 @@ import { SessionLauncherHost } from "./SessionLauncher.js";
 import { DEFAULT_SETTINGS } from "../api/index.js";
 import type { AppSettings, Launcher, Project } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
+import { mockFetch } from "../test/mockFetch.js";
 import { makeSession } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
 import { useDashboardStore } from "../store/index.js";
@@ -57,36 +58,52 @@ function withSkip(skipPermissionsAgents: string[]): AppSettings {
   };
 }
 
-function mockFetch(
+// The shared route-table harness (test/mockFetch.ts): an unstubbed request
+// lands in `unexpectedCalls`, asserted empty after every test.
+let unexpectedCalls: string[] = [];
+
+function stubFetch(
   opts: {
     launchers?: Launcher[];
+    launchersByProject?: Record<number, Launcher[]>;
     onCreateSession?: (body: Record<string, unknown>) => void;
     failCreate?: boolean;
+    // Replaces the default 201 response, e.g. to hold the request open.
+    createSession?: () => Promise<Response>;
+    branches?: unknown;
   } = {},
 ) {
-  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.includes("/actions"))
-      return Promise.resolve(jsonResponse(200, opts.launchers ?? [CLAUDE, CODEX, BASH, DEV]));
-    if (url.endsWith("/models")) return Promise.resolve(jsonResponse(200, []));
-    if (url.endsWith("/api/sessions") && init?.method === "POST") {
-      if (opts.failCreate) {
-        return Promise.resolve(jsonResponse(503, { message: "Host is unreachable" }));
-      }
-      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+  const empty = () => jsonResponse(200, []);
+  const result = mockFetch({
+    "GET /api/projects/:id/actions": ({ params }) =>
+      jsonResponse(
+        200,
+        opts.launchersByProject?.[Number(params.id)] ??
+          opts.launchers ?? [CLAUDE, CODEX, BASH, DEV],
+      ),
+    "GET /api/projects/:id/git-branches": () =>
+      opts.branches ? jsonResponse(200, opts.branches) : new Response(null, { status: 204 }),
+    "GET /api/codex/models": empty,
+    "GET /api/agy/models": empty,
+    "GET /api/opencode/models": empty,
+    "GET /api/mcode/models": empty,
+    "GET /api/sessions": empty,
+    "POST /api/sessions": ({ init }) => {
+      if (opts.failCreate) return jsonResponse(503, { message: "Host is unreachable" });
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       opts.onCreateSession?.(body);
-      return Promise.resolve(
-        jsonResponse(201, {
-          id: 42,
-          projectId: PROJECT.id,
-          command: body.command,
-          status: "active",
-        }),
-      );
-    }
-    if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
-    return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      if (opts.createSession) return opts.createSession();
+      return jsonResponse(201, {
+        id: 42,
+        projectId: PROJECT.id,
+        command: body.command,
+        status: "active",
+      });
+    },
   });
+  unexpectedCalls = result.unexpectedCalls;
+  vi.stubGlobal("fetch", result.fetchMock);
+  return result;
 }
 
 function stubCoarsePointer() {
@@ -123,6 +140,7 @@ function openLauncher(target?: { half?: "left" | "right" }) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   resetStore({
     projects: [PROJECT, OTHER],
     sessions: [],
@@ -134,11 +152,13 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  expect(unexpectedCalls).toEqual([]);
+  unexpectedCalls = [];
 });
 
 describe("SessionLauncher — desktop dialog", () => {
   it("shows Where, agents as a radio group, and shells and scripts as a list — no tabs", async () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     renderHost();
     openLauncher();
 
@@ -161,7 +181,7 @@ describe("SessionLauncher — desktop dialog", () => {
   });
 
   it("does not open outside a workspace view, and does not pop up on the way back", () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     useDashboardStore.setState({ viewMode: "kanban" });
     renderHost();
     openLauncher();
@@ -173,7 +193,7 @@ describe("SessionLauncher — desktop dialog", () => {
 
   it("launches an agent with a non-default model and passes the target through", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     const { onLaunched } = renderHost();
     openLauncher({ half: "right" });
@@ -194,7 +214,7 @@ describe("SessionLauncher — desktop dialog", () => {
 
   it("does not carry a model picked for one agent over to another", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -212,7 +232,7 @@ describe("SessionLauncher — desktop dialog", () => {
 
   it("launches a shell on click, with no options", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     const { onLaunched } = renderHost();
     openLauncher();
@@ -226,8 +246,50 @@ describe("SessionLauncher — desktop dialog", () => {
     expect(body).not.toHaveProperty("skipPermissions");
   });
 
+  it("sends the Where row's worktree choice with the launch", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({
+      onCreateSession,
+      branches: {
+        branches: [
+          { name: "main", isCurrent: true },
+          { name: "feature/x", isCurrent: false },
+        ],
+        worktrees: [],
+        remoteBranches: [],
+        defaultBranch: "main",
+      },
+    });
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost();
+    openLauncher();
+
+    await user.click(await screen.findByRole("checkbox", { name: /Isolate in a new worktree/ }));
+    const base = await screen.findByDisplayValue(/main/);
+    await user.selectOptions(base, "feature/x");
+    await user.click(screen.getByRole("button", { name: "Launch claude" }));
+
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree: { baseRef: "feature/x" } }),
+    );
+  });
+
+  it("with no agent, Launch starts the first shell or script", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({ onCreateSession, launchers: [BASH, DEV] });
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    expect(await screen.findByText("No agents found for this project.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Launch bash" }));
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "bash" }));
+  });
+
   it("shows a failed launch inline and stays open", async () => {
-    vi.stubGlobal("fetch", mockFetch({ failCreate: true }));
+    stubFetch({ failCreate: true });
     const user = userEvent.setup();
     const { onLaunched } = renderHost();
     openLauncher();
@@ -235,6 +297,8 @@ describe("SessionLauncher — desktop dialog", () => {
     await user.click(await screen.findByRole("button", { name: "Launch claude" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/unreachable/i);
+    // Only a launch that happened becomes the next open's default project.
+    expect(localStorage.getItem("crs.lastLaunchProjectId")).toBeNull();
     expect(onLaunched).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
     expect(useDashboardStore.getState().launcherRequest).not.toBeNull();
@@ -250,12 +314,10 @@ describe("SessionLauncher — desktop dialog", () => {
 
   it("a launch that outlives its launcher does not close one opened after it", async () => {
     let resolveCreate: (() => void) | null = null;
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [CLAUDE, BASH]));
-      if (url.endsWith("/models")) return Promise.resolve(jsonResponse(200, []));
-      if (url.endsWith("/api/sessions") && init?.method === "POST") {
-        return new Promise<Response>((resolve) => {
+    stubFetch({
+      launchers: [CLAUDE, BASH],
+      createSession: () =>
+        new Promise<Response>((resolve) => {
           resolveCreate = () =>
             resolve(
               jsonResponse(201, {
@@ -265,12 +327,8 @@ describe("SessionLauncher — desktop dialog", () => {
                 status: "active",
               }),
             );
-        });
-      }
-      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
-      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+        }),
     });
-    vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     const { onLaunched } = renderHost();
     openLauncher();
@@ -291,7 +349,7 @@ describe("SessionLauncher — desktop dialog", () => {
 describe("SessionLauncher — skip permissions", () => {
   it("off in settings: the switch starts off, launches off, and the override turns it on", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -315,7 +373,7 @@ describe("SessionLauncher — skip permissions", () => {
 
   it("off in settings and left alone: launches with prompts", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -330,7 +388,7 @@ describe("SessionLauncher — skip permissions", () => {
   it("on in settings: the tile is flagged, the switch starts on, and the override turns it off", async () => {
     useDashboardStore.setState({ settings: withSkip(["claude"]) });
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -358,7 +416,7 @@ describe("SessionLauncher — skip permissions", () => {
   it("on in settings and left alone: launches skipping prompts", async () => {
     useDashboardStore.setState({ settings: withSkip(["claude"]) });
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -372,7 +430,7 @@ describe("SessionLauncher — skip permissions", () => {
 
   it("an override applies to the agent it was set on only", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -394,7 +452,7 @@ describe("SessionLauncher — skip permissions", () => {
 describe("SessionLauncher — keyboard", () => {
   it("typing filters, Enter launches the selected agent", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -416,7 +474,7 @@ describe("SessionLauncher — keyboard", () => {
 
   it("Enter launches the first shell or script once no agent matches", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -432,7 +490,7 @@ describe("SessionLauncher — keyboard", () => {
 
   it("arrow keys move through the tiles and on into the list", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -460,7 +518,7 @@ describe("SessionLauncher — keyboard", () => {
   });
 
   it("typing on a tile moves to the filter", async () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -475,7 +533,7 @@ describe("SessionLauncher — keyboard", () => {
   });
 
   it("Escape closes and returns focus to the trigger", async () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     const user = userEvent.setup();
     renderHost();
     const trigger = screen.getByRole("button", { name: "trigger" });
@@ -492,7 +550,7 @@ describe("SessionLauncher — keyboard", () => {
   });
 
   it("a launch does not hand focus back to the trigger", async () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     const user = userEvent.setup();
     const { onLaunched } = renderHost();
     const trigger = screen.getByRole("button", { name: "trigger" });
@@ -506,15 +564,7 @@ describe("SessionLauncher — keyboard", () => {
   });
 
   it("switching the project reloads that project's launchers", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes(`/projects/${OTHER.id}/actions`))
-        return Promise.resolve(jsonResponse(200, [CODEX]));
-      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [CLAUDE]));
-      if (url.endsWith("/models")) return Promise.resolve(jsonResponse(200, []));
-      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    stubFetch({ launchersByProject: { [PROJECT.id]: [CLAUDE], [OTHER.id]: [CODEX] } });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -532,7 +582,7 @@ describe("SessionLauncher — touch sheet", () => {
   });
 
   it("has two tabs, New session and Open existing, and no filter field", async () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -550,7 +600,7 @@ describe("SessionLauncher — touch sheet", () => {
   });
 
   it("Open existing lists sessions by project, the project under each title, and opens one", async () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     const docs = makeSession({
       id: 7,
       projectId: PROJECT.id,
@@ -583,7 +633,7 @@ describe("SessionLauncher — touch sheet", () => {
 
   it("launches an agent from the sheet", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     const { onLaunched } = renderHost();
     openLauncher();
@@ -596,7 +646,7 @@ describe("SessionLauncher — touch sheet", () => {
 
   it("keeps the New session choices across a tab switch", async () => {
     const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    stubFetch({ onCreateSession });
     const user = userEvent.setup();
     renderHost();
     openLauncher();
@@ -609,7 +659,7 @@ describe("SessionLauncher — touch sheet", () => {
   });
 
   it("starts each open on New session", async () => {
-    vi.stubGlobal("fetch", mockFetch());
+    stubFetch();
     const user = userEvent.setup();
     renderHost();
     openLauncher();

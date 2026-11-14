@@ -271,7 +271,6 @@ export function useLaunchSession({
   ) => {
     if (target === null || launching) return;
     const projectId = target.id;
-    writeNumber(STORAGE_KEYS.lastLaunchProjectId, projectId);
     const name = expandSessionNamePattern(settings.sessions.namePattern, {
       agent: launcher.title,
       project: target.name,
@@ -306,6 +305,8 @@ export function useLaunchSession({
         ),
       })
       .then((session) => {
+        // Only a launch that happened becomes the next open's default project.
+        writeNumber(STORAGE_KEYS.lastLaunchProjectId, projectId);
         onLaunched(session);
       })
       .catch((err: unknown) => {

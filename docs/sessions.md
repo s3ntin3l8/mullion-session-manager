@@ -49,6 +49,6 @@ and returns focus to the button that opened it.
 Under a coarse pointer the launcher is a sheet, full width on a phone, with
 targets of at least 48px and no filter field (so opening it never raises the
 on-screen keyboard). It has a second tab, **Open existing**: the sessions by
-project, the project named under each title — the same list as the phone's
-session switcher, because a touch layout has no sidebar to pick a session
-from. The desktop dialog has no such tab: there the sidebar lists sessions.
+project, the project named under each title — the project groups of the
+phone's session switcher (without its "Needs you" and "Open panes" groups),
+because a touch layout has no sidebar to pick a session from. The desktop dialog has no such tab: there the sidebar lists sessions.

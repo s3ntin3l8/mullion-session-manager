@@ -305,6 +305,8 @@ function LauncherNewSession({
       theme: s.theme,
     })),
   );
+  // Always a global open: the launcher has no project-scoped entry yet (a
+  // project row's "+ session" and a pane split still open the palette).
   const [projectId, setProjectId] = useState<number | null>(() =>
     resolveInitialLaunchProjectId({
       scope: "global",
@@ -641,13 +643,13 @@ function LauncherNewSession({
           // `aria-disabled`, not `disabled`, while a launch is in flight: a
           // disabled button drops focus out of the dialog, and a failed launch
           // would leave Tab and Escape with nothing to act on.
-          disabled={!selected}
+          disabled={!primary}
           aria-disabled={launching || undefined}
           onClick={() => {
-            if (selected && !launching) launchAgent(selected);
+            if (!launching) launchPrimary();
           }}
         >
-          {launching ? "Launching…" : selected ? `Launch ${selected.title}` : "Launch"}
+          {launching ? "Launching…" : primary ? `Launch ${primary.title}` : "Launch"}
         </button>
       </div>
     </div>
@@ -750,6 +752,11 @@ function OpenExistingList({
     })),
   );
   const taskSessionIds = useMemo(() => taskLinkedSessionIds(input.tasks), [input.tasks]);
+  // Project sections only, deliberately. "Needs you" repeats rows that are
+  // already under their project; "Open panes" is mostly panes that are not
+  // sessions (git, browser, devices), which this tab is not for. The one
+  // session that lives only there — an open pane whose project has been
+  // removed — is still reachable from the phone's session switcher.
   const sections = useMemo(
     () =>
       buildPickerSections({ ...input, panels, taskSessionIds }).filter(
