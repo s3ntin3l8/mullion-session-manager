@@ -1637,9 +1637,32 @@ export function App() {
                 <div className="empty-grid-dropzone" style={{ position: "absolute", inset: 0 }}>
                   <GridIcon size={26} style={{ color: "var(--dim)" }} />
                   <span className="empty-grid-title">Nothing tiled here yet</span>
-                  <span className="empty-grid-hint">
-                    ⌘K to launch · pick a session from the sidebar
-                  </span>
+                  {/* #2978 — a touch screen has no ⌘K: it gets the launcher and
+                      the sidebar as buttons instead of the keyboard hint. */}
+                  {isCoarsePointer ? (
+                    <div className="ui-empty-state-actions empty-grid-actions">
+                      <button
+                        type="button"
+                        className="ui-empty-state-btn-primary"
+                        onClick={openNewSessionLauncher}
+                      >
+                        Launch a session
+                      </button>
+                      {!leftSidebarShown && (
+                        <button
+                          type="button"
+                          className="ui-empty-state-btn-secondary"
+                          onClick={toggleSidebar}
+                        >
+                          Show the sidebar
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="empty-grid-hint">
+                      ⌘K to launch · pick a session from the sidebar
+                    </span>
+                  )}
                 </div>
               )}
               {/* The unified task/session board (formerly issue #211's
