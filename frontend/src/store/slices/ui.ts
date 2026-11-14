@@ -264,7 +264,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     crossLinkReturn: null,
     hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
-    splitRequest: null,
     launcherRequest: null,
     openSessionRequest: null,
     openTaskRequest: null,
@@ -595,12 +594,11 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set((state) => ({ kanbanOrder: { ...state.kanbanOrder, [columnId]: order } }));
     },
 
-    requestSplit: (referencePanelId, direction) => {
-      set({ splitRequest: { referencePanelId, direction } });
-    },
-
-    clearSplitRequest: () => {
-      set({ splitRequest: null });
+    requestSplit: (referencePanelId, direction, projectId) => {
+      get().openLauncher({
+        ...(projectId !== undefined ? { projectId } : {}),
+        split: { referencePanelId, direction },
+      });
     },
 
     openLauncher: (target) => {

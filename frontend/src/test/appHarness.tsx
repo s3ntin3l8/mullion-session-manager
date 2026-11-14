@@ -5,9 +5,11 @@ import { act } from "@testing-library/react";
 import { vi } from "vitest";
 import type { LayoutMode } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
+import type { LauncherTarget } from "../store/types.js";
 
-// Set by the pane-cap test before render. Null keeps every other test on the
-// old path: DockviewReact never reports an api, and the palette stays empty.
+// Set by the split test before render. Null keeps every other test on the
+// old path: DockviewReact never reports an api. `launch` is the session the
+// split's launcher hands back.
 const { splitHarness, sidebarHarness, dockHarness, persistenceHarness } = vi.hoisted(() => ({
   splitHarness: {
     api: null as {
@@ -133,7 +135,8 @@ vi.mock("../MobileKeyBar.js", () => ({
 const foldHarness = vi.hoisted(() => ({
   rightHalf: null as null | { sessionId: number; focused: boolean; onUse: () => void },
   launcher: null as null | {
-    onLaunched: (session: unknown, target: { half?: "left" | "right" } | null) => void;
+    onLaunched: (session: unknown, target: LauncherTarget | null) => void;
+    onOpenSession: (session: unknown, target: LauncherTarget | null) => void;
   },
   onOpenSession: (() => {}) as (session: unknown) => void,
 }));
@@ -154,19 +157,7 @@ vi.mock("../MobileSessionBar.js", () => ({
 }));
 vi.mock("../PaneHeaderActions.js", () => ({ PaneHeaderActions: () => null }));
 vi.mock("../CommandPalette.js", () => ({
-  CommandPalette: (props: {
-    onLaunched?: (session: NonNullable<typeof splitHarness.launch>) => void;
-  }) => (
-    <div data-testid="palette">
-      {splitHarness.launch ? (
-        <button
-          type="button"
-          data-testid="launch-split"
-          onClick={() => props.onLaunched?.(splitHarness.launch!)}
-        />
-      ) : null}
-    </div>
-  ),
+  CommandPalette: () => <div data-testid="palette" />,
 }));
 vi.mock("../Dock.js", () => ({
   Dock: (props: { workspaceProjectIds?: number[] | null }) => {

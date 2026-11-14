@@ -7,7 +7,7 @@ import "dockview-react/dist/styles/dockview.css";
 import { SidebarShell } from "./sidebar/SidebarShell.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
-import type { TerminalPaneParams } from "./TerminalPane.js";
+import type { LauncherTarget } from "./store/types.js";
 import { useHalfActions } from "./fold/useHalfActions.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
@@ -249,7 +249,6 @@ export function App() {
     settings,
     settingsLoaded,
     sidebarCollapsed,
-    splitRequest,
     backendReachable,
     sessionExpired,
     currentVersion,
@@ -275,7 +274,6 @@ export function App() {
       settings: s.settings,
       settingsLoaded: s.settingsLoaded,
       sidebarCollapsed: s.sidebarCollapsed,
-      splitRequest: s.splitRequest,
       backendReachable: s.backendReachable,
       sessionExpired: s.sessionExpired,
       currentVersion: s.currentVersion,
@@ -790,33 +788,6 @@ export function App() {
     useDashboardStore.getState().openLauncher({ half });
   }, []);
 
-  // A split-right/split-down click (PaneHeaderActions.tsx) signals intent
-  // via the store's `splitRequest` (that component can't receive props from
-  // here — dockview owns its render). Rather than an effect that computes
-  // the reference panel's project and then calls setPalette (the same
-  // setState-in-effect anti-pattern already worked around elsewhere in this
-  // file — see CommandPalette/Dock/Settings in Phase 4b), derive whether the
-  // palette should be open, and for which project, directly in render. A
-  // splitRequest whose reference panel/session can no longer be resolved
-  // (e.g. the pane was closed between the click and this render) simply
-  // fails to open a palette for it — inert until overwritten by a fresh
-  // request or cleared by the palette's own close handler.
-  const splitRequestProjectId = useMemo(() => {
-    if (!splitRequest || !dockviewApi) return null;
-    const panel = dockviewApi.getPanel(splitRequest.referencePanelId);
-    const sessionId = (panel?.params as TerminalPaneParams | undefined)?.sessionId;
-    return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
-  }, [splitRequest, dockviewApi, sessions]);
-  const paletteOpen = palette.open || (splitRequest !== null && splitRequestProjectId !== null);
-  const paletteScope = splitRequest ? "project" : palette.scope;
-  const paletteProjectId = splitRequest ? splitRequestProjectId : palette.projectId;
-
-  // The palette's actual launch handler: if this launch was requested via a
-  // split action, add the new panel positioned next to the reference panel
-  // instead of the normal open-or-focus path (an already-open session for
-  // that id just gets focused — dockview panel ids are unique, and split's
-  // whole point is launching a *new* session, so this collision is rare).
-  // Falls back to the normal `onOpenSession` path for a non-split launch.
   // #3010 — a session launched or opened from a half's "+" lands on that
   // half: assigned before it opens, so the open path's router places it.
   // In a workspace with no tiled pane yet, the right half's "+" lands on the
@@ -835,32 +806,37 @@ export function App() {
     [foldHalves, dockviewApi, onOpenSession],
   );
 
-  const handleLaunched = useCallback(
-    (session: Session) => {
-      if (!dockviewApi || !splitRequest) {
-        onOpenSession(session);
+  // #3054 — a pane's "Split right"/"Split down" opens the launcher with a
+  // split target; the launched (or opened existing) session lands beside the
+  // reference pane rather than through the normal open path. A session whose
+  // pane is already open is just focused (dockview panel ids are unique), and
+  // a reference pane closed in the meantime falls back to dockview's default
+  // placement.
+  const placeLaunchedSession = useCallback(
+    (session: Session, target: LauncherTarget | null) => {
+      const split = target?.split;
+      if (!split || !dockviewApi) {
+        openSessionOnHalf(session, target);
         return;
       }
-      const req = splitRequest;
-      useDashboardStore.getState().clearSplitRequest();
       const panelId = `session-${session.id}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
         focusPanelForTier(dockviewApi, existing, layoutTier);
-      } else {
-        const referencePanel = dockviewApi.getPanel(req.referencePanelId);
-        const projectName = projects.find((p) => p.id === session.projectId)?.name;
-        dockviewApi.addPanel({
-          id: panelId,
-          component: "terminal",
-          tabComponent: "terminal",
-          title: initialPaneTitle(session, projectName),
-          params: { sessionId: session.id },
-          ...(referencePanel ? { position: { referencePanel, direction: req.direction } } : {}),
-        });
+        return;
       }
+      const referencePanel = dockviewApi.getPanel(split.referencePanelId);
+      const projectName = projects.find((p) => p.id === session.projectId)?.name;
+      dockviewApi.addPanel({
+        id: panelId,
+        component: "terminal",
+        tabComponent: "terminal",
+        title: initialPaneTitle(session, projectName),
+        params: { sessionId: session.id },
+        ...(referencePanel ? { position: { referencePanel, direction: split.direction } } : {}),
+      });
     },
-    [dockviewApi, splitRequest, onOpenSession, projects, layoutTier],
+    [dockviewApi, openSessionOnHalf, projects, layoutTier],
   );
 
   const handleSelectWorkspace = useCallback((workspaceId: number) => {
@@ -1683,19 +1659,15 @@ export function App() {
       <SessionLauncherHost
         phone={isMobile}
         panels={mobilePanels}
-        onLaunched={openSessionOnHalf}
-        onOpenSession={openSessionOnHalf}
+        onLaunched={placeLaunchedSession}
+        onOpenSession={placeLaunchedSession}
       />
-      {paletteOpen && (
+      {palette.open && (
         <CommandPalette
-          scope={paletteScope}
+          scope={palette.scope}
           layoutTier={layoutTier}
-          projectId={paletteProjectId}
-          onClose={() => {
-            setPalette((p) => ({ ...p, open: false }));
-            useDashboardStore.getState().clearSplitRequest();
-          }}
-          onLaunched={handleLaunched}
+          projectId={palette.projectId}
+          onClose={() => setPalette((p) => ({ ...p, open: false }))}
           onOpenSession={onOpenSession}
           onOpenGitHub={onOpenGitHub}
           onOpenAgentRules={onOpenAgentRules}

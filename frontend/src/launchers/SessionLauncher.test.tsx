@@ -683,3 +683,73 @@ describe("SessionLauncher — touch sheet", () => {
     );
   });
 });
+
+// #3054 — a launch entry chosen in the command palette opens the launcher on
+// that entry; Launch takes focus once the launchers are in, so Enter launches
+// it. A split's target passes through to the caller, which places the session.
+describe("SessionLauncher — opened from the palette or a split (#3054)", () => {
+  it("preselects an agent, focuses Launch, and Enter launches it", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({ onCreateSession });
+    const user = userEvent.setup();
+    renderHost();
+    act(() =>
+      useDashboardStore.getState().openLauncher({ projectId: OTHER.id, launcherId: CODEX.id }),
+    );
+
+    const launch = await screen.findByRole("button", { name: "Launch codex" });
+    await waitFor(() => expect(launch).toHaveFocus());
+    expect(screen.getByRole("radio", { name: "codex" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue(String(OTHER.id));
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
+  });
+
+  it("preselects a shell over the default agent, and choosing an agent takes over", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({ onCreateSession });
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: BASH.id }));
+
+    const launch = await screen.findByRole("button", { name: "Launch bash" });
+    await waitFor(() => expect(launch).toHaveFocus());
+    expect(screen.getByRole("button", { name: "bash" })).toHaveAttribute("aria-current", "true");
+    await user.click(screen.getByRole("radio", { name: "codex" }));
+    expect(screen.getByRole("button", { name: "Launch codex" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "bash" })).not.toHaveAttribute("aria-current");
+
+    act(() => useDashboardStore.getState().closeLauncher());
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: BASH.id }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Launch bash" })).toHaveFocus());
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "bash" }));
+  });
+
+  it("a plain open keeps focus on the filter", async () => {
+    stubFetch();
+    renderHost();
+    openLauncher();
+    await screen.findByRole("radiogroup", { name: "Agent" });
+    expect(
+      screen.getByRole("textbox", { name: "Filter agents, shells and scripts" }),
+    ).toHaveFocus();
+  });
+
+  it("hands a split target to the caller with the launched session", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost();
+    act(() => useDashboardStore.getState().requestSplit("session-3", "below", PROJECT.id));
+
+    await user.click(await screen.findByRole("button", { name: "Launch claude" }));
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
+    expect(onLaunched).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }), {
+      projectId: PROJECT.id,
+      split: { referencePanelId: "session-3", direction: "below" },
+    });
+  });
+});

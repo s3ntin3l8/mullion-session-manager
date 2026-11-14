@@ -153,6 +153,7 @@ function LauncherDialog({
       <LauncherNewSession
         coarse={false}
         initialProjectId={request.target?.projectId ?? null}
+        initialLauncherId={request.target?.launcherId ?? null}
         filterRef={filterRef}
         onLaunched={(session) => {
           finishOpen(request.seq, suppressRestoreRef);
@@ -260,6 +261,7 @@ function LauncherSheet({
             key={request.seq}
             coarse
             initialProjectId={request.target?.projectId ?? null}
+            initialLauncherId={request.target?.launcherId ?? null}
             onLaunched={(session) => {
               finishOpen(request.seq, suppressRestoreRef);
               onLaunched(session, target);
@@ -292,6 +294,7 @@ function LauncherSheet({
 function LauncherNewSession({
   coarse,
   initialProjectId,
+  initialLauncherId,
   filterRef,
   onLaunched,
 }: {
@@ -299,6 +302,10 @@ function LauncherNewSession({
   // A project to preselect (a sidebar project's "+"); null picks the usual
   // default (the focused pane's project, then the last launched into).
   initialProjectId: number | null;
+  // #3054 — an agent, shell or script chosen in the command palette: it is
+  // what Launch runs, and Launch takes focus once the launchers have loaded,
+  // so the palette's Enter-then-Enter stays two keystrokes.
+  initialLauncherId: string | null;
   filterRef?: MutableRefObject<HTMLInputElement | null>;
   onLaunched: (session: Session) => void;
 }) {
@@ -329,7 +336,14 @@ function LauncherNewSession({
   const launchTarget = useLaunchTarget(target, sessions);
   const { launchers, loaded } = useProjectLaunchers(target?.id ?? null);
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialLauncherId);
+  // A shell or script picked in the palette (#3054). Picking an agent tile
+  // here clears it: the tile is then what Launch runs.
+  const [pickedRowId, setPickedRowId] = useState<string | null>(initialLauncherId);
+  const selectAgent = (id: string) => {
+    setSelectedId(id);
+    setPickedRowId(null);
+  };
   // Per-launch skip-permissions override, for the agent it was set on only.
   const [skipOverride, setSkipOverride] = useState<{ agentId: string; value: boolean } | null>(
     null,
@@ -373,9 +387,21 @@ function LauncherNewSession({
     });
   // Shells and scripts have no options.
   const launchRow = (row: Launcher) => launch(row);
-  // What Enter launches from the filter: the selected agent, else the first
-  // shell or script.
-  const primary = selected ?? rows[0] ?? null;
+  // What Enter launches from the filter: a shell or script picked in the
+  // palette, else the selected agent, else the first shell or script.
+  const pickedRow = rows.find((r) => r.id === pickedRowId) ?? null;
+  const primary = pickedRow ?? selected ?? rows[0] ?? null;
+
+  // #3054 — opened from a palette entry: once the launchers are in (Launch is
+  // disabled until then, so it cannot take focus at mount), Launch takes
+  // focus, once per open.
+  const launchButtonRef = useRef<HTMLButtonElement>(null);
+  const focusedLaunchRef = useRef(false);
+  useEffect(() => {
+    if (initialLauncherId === null || !loaded || focusedLaunchRef.current) return;
+    focusedLaunchRef.current = true;
+    launchButtonRef.current?.focus();
+  }, [initialLauncherId, loaded]);
   const launchPrimary = () => {
     if (!primary) return;
     if (primary.kind === "agent") launchAgent(primary);
@@ -439,7 +465,7 @@ function LauncherNewSession({
       }
       const next = visibleAgents[(index + step + visibleAgents.length) % visibleAgents.length];
       if (next) {
-        setSelectedId(next.id);
+        selectAgent(next.id);
         focusTile(next.id);
       }
     } else if (e.key === "Enter") {
@@ -563,7 +589,7 @@ function LauncherNewSession({
                       tabIndex={isSelected ? 0 : -1}
                       data-launcher-id={agent.id}
                       className={`session-launcher-tile${isSelected ? " on" : ""}`}
-                      onClick={() => setSelectedId(agent.id)}
+                      onClick={() => selectAgent(agent.id)}
                       onDoubleClick={() => launchAgent(agent)}
                       onKeyDown={(e) => onTileKeyDown(e, index)}
                     >
@@ -612,7 +638,8 @@ function LauncherNewSession({
                     key={row.id}
                     type="button"
                     data-launcher-row
-                    className="session-launcher-row"
+                    className={`session-launcher-row${row.id === pickedRow?.id ? " on" : ""}`}
+                    aria-current={row.id === pickedRow?.id || undefined}
                     onClick={() => launchRow(row)}
                     onKeyDown={(e) => onRowKeyDown(e, index)}
                   >
@@ -647,6 +674,7 @@ function LauncherNewSession({
           </span>
         )}
         <button
+          ref={launchButtonRef}
           type="button"
           className="sb-btn sb-btn--primary session-launcher-launch"
           // `aria-disabled`, not `disabled`, while a launch is in flight: a

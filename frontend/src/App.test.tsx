@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Session } from "./api/index.js";
 // The mocks live in the shared harness; import it before App.
 import {
   splitHarness,
+  foldHarness,
   sidebarHarness,
   dockHarness,
   persistenceHarness,
@@ -578,6 +579,9 @@ describe("App explicit split on the tablet", () => {
           group: { id: `g${panels.length + 1}` },
         });
       }),
+      maximizeGroup: vi.fn(),
+      hasMaximizedGroup: () => false,
+      exitMaximizedGroup: vi.fn(),
       onDidActivePanelChange: () => ({ dispose: vi.fn() }),
       onDidAddPanel: () => ({ dispose: vi.fn() }),
       onWillMutateLayout: () => ({ dispose: vi.fn() }),
@@ -615,7 +619,8 @@ describe("App explicit split on the tablet", () => {
       activeWorkspaceId: 1,
       sessions: [referenceSession(1), referenceSession(2)],
       projects: [],
-      splitRequest: { referencePanelId: "session-1", direction: "right" },
+      launcherRequest: null,
+      viewMode: "list",
       settings: {
         ...useDashboardStore.getState().settings,
         layoutMode: "tablet",
@@ -632,19 +637,63 @@ describe("App explicit split on the tablet", () => {
     vi.clearAllMocks();
   });
 
-  // #3010 removed the tablet pane cap and its notice: an explicit split
-  // still adds the session, and nothing warns about columns any more.
-  it("adds an explicit split's session without a pane-cap notice", async () => {
+  // #3054 — a pane's split opens the launcher (not the palette) with the
+  // pane's project and a split target; the launched session lands beside the
+  // reference pane. #3010 removed the tablet pane cap and its notice.
+  it("a split opens the launcher, and the launched session lands right of the reference pane", async () => {
     render(<App />);
-    fireEvent.click(await screen.findByTestId("launch-split"));
+    await waitFor(() => expect(foldHarness.launcher).not.toBeNull());
+
+    act(() => useDashboardStore.getState().requestSplit("session-1", "right", 7));
+    const target = useDashboardStore.getState().launcherRequest?.target ?? null;
+    expect(target).toEqual({
+      projectId: 7,
+      split: { referencePanelId: "session-1", direction: "right" },
+    });
+    expect(screen.queryByTestId("palette")).toBeNull();
+
+    act(() => foldHarness.launcher!.onLaunched(splitHarness.launch!, target));
     expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
     expect(splitHarness.api?.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "session-9",
-        position: expect.objectContaining({ direction: "right" }),
+        position: expect.objectContaining({
+          direction: "right",
+          referencePanel: expect.objectContaining({ id: "session-1" }),
+        }),
       }),
     );
     expect(screen.queryByText(/pane cap/)).toBeNull();
+  });
+
+  it("an existing session opened from a split's launcher lands below the reference pane", async () => {
+    render(<App />);
+    await waitFor(() => expect(foldHarness.launcher).not.toBeNull());
+
+    act(() => useDashboardStore.getState().requestSplit("session-2", "below", 7));
+    const target = useDashboardStore.getState().launcherRequest?.target ?? null;
+    act(() => foldHarness.launcher!.onOpenSession(splitHarness.launch!, target));
+    expect(splitHarness.api?.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "session-9",
+        position: expect.objectContaining({
+          direction: "below",
+          referencePanel: expect.objectContaining({ id: "session-2" }),
+        }),
+      }),
+    );
+  });
+
+  it("a split whose session is already open focuses that pane instead of adding one", async () => {
+    render(<App />);
+    await waitFor(() => expect(foldHarness.launcher).not.toBeNull());
+
+    act(() =>
+      foldHarness.launcher!.onLaunched(referenceSession(2), {
+        split: { referencePanelId: "session-1", direction: "right" },
+      }),
+    );
+    expect(splitHarness.api?.addPanel).not.toHaveBeenCalled();
   });
 });
 

@@ -402,6 +402,23 @@
 .pane-tab-overflow-item:hover {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
+/* #3054 — the same items in the touch sheet (PaneActionsMenu.tsx under a
+   coarse pointer): full-width rows of at least 44px, the menu scrolling
+   inside the sheet rather than being clipped. */
+.pane-actions-sheet-menu {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+}
+.pane-actions-sheet-menu .pane-tab-overflow-item {
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 0.875rem;
+}
+.pane-actions-sheet-menu .pane-tab-overflow-divider {
+  margin: 4px 0;
+}
 /* Issue #1106 — previously nothing at all: a `disabled` item rendered at
    full color with a live `:hover` background, visually identical to an
    enabled one, with no signal that clicking does nothing. Keyed off
