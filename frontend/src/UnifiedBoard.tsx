@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { useOpenTask } from "./hooks/useOpenTask.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
@@ -40,6 +41,47 @@ import {
 } from "./unified-board/taskLanes.js";
 import { AdhocLane } from "./unified-board/AdhocLane.js";
 import { openEpicInSidebar } from "./lib/sidebarLinks.js";
+import { StackedBoard } from "./unified-board/StackedBoard.js";
+import { boardStacks, stackSections } from "./unified-board/stackLayout.js";
+import {
+  MOTION_EASE,
+  MOTION_FADE_MS,
+  MOTION_LAYOUT_MS,
+  prefersReducedMotion,
+} from "./lib/motion.js";
+
+// The board's own width, measured (#3011): whether it stacks depends on the
+// room it has, not on the device or the tier, so a narrow desktop window and
+// an opening right sidebar stack it too. 0 until measured (and always in
+// jsdom), which keeps the lanes. `onBeforeChange` runs with the new width
+// before React re-renders, while the old layout is still on screen, so the
+// caller can note where things were.
+function useBoardWidth(
+  ref: RefObject<HTMLElement | null>,
+  onBeforeChange: (width: number) => void,
+): number {
+  const [width, setWidth] = useState(0);
+  const onBeforeChangeRef = useRef(onBeforeChange);
+  useLayoutEffect(() => {
+    onBeforeChangeRef.current = onBeforeChange;
+  });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Measured before the first paint, so a narrow board never shows its
+    // lanes for a frame and then stacks.
+    setWidth(el.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const next = el.getBoundingClientRect().width;
+      onBeforeChangeRef.current(next);
+      setWidth(next);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
 
 // The window's inner width, for the facets panel's "Auto" setting.
 function useViewportWidth(): number {
@@ -176,7 +218,67 @@ export function UnifiedBoard({
   );
   const activeProjectIds = filters.projectIds;
   const viewportWidth = useViewportWidth();
-  const facetsShown = !phone && facetsOpen(filterApi.facets, viewportWidth, projects.length);
+  // Stacked (one section per status) while the board is too narrow for three
+  // lanes; the phone keeps its own one-column layout.
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Where the selected card was just before the board changed between lanes
+  // and stacked, so it can travel from there to its new place.
+  const travelFromRef = useRef<DOMRect | null>(null);
+  const stackedRef = useRef(false);
+  const boardWidth = useBoardWidth(rootRef, (next) => {
+    if (phone || boardStacks(next) === stackedRef.current) return;
+    travelFromRef.current = selectedCardRect(rootRef.current, selectedTaskId);
+  });
+  const stacked = !phone && boardStacks(boardWidth);
+  const facetsShown =
+    !phone && !stacked && facetsOpen(filterApi.facets, viewportWidth, projects.length);
+  const stackedSections = useMemo(
+    () => (stacked ? stackSections(visibleTasks) : []),
+    [stacked, visibleTasks],
+  );
+  const selectedTask =
+    selectedTaskId !== null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null;
+  const selectedStatus = selectedTask ? boardColumnOf(selectedTask.status) : null;
+
+  // The selected card stays in view when the layout changes under it, and
+  // travels there (docs/motion.md: layout changes carry their content).
+  // The first measurement is where the board starts, not a change: nothing moves.
+  const measuredRef = useRef(false);
+  useLayoutEffect(() => {
+    const firstMeasurement = !measuredRef.current && boardWidth > 0;
+    if (boardWidth > 0) measuredRef.current = true;
+    if (stackedRef.current === stacked) return;
+    stackedRef.current = stacked;
+    if (firstMeasurement) return;
+    const from = travelFromRef.current;
+    travelFromRef.current = null;
+    const card = findCard(rootRef.current, selectedTaskId);
+    if (!card) return;
+    // Optional calls: jsdom has neither scrollIntoView nor animate.
+    card.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (typeof card.animate !== "function") return;
+    if (prefersReducedMotion() || !from) {
+      card.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: MOTION_FADE_MS,
+        easing: MOTION_EASE,
+      });
+      return;
+    }
+    const to = card.getBoundingClientRect();
+    if (!to.width) return;
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    card.animate(
+      [
+        {
+          transform: `translate(${dx}px, ${dy}px) scaleX(${from.width / to.width})`,
+          transformOrigin: "0 0",
+        },
+        { transform: "none", transformOrigin: "0 0" },
+      ],
+      { duration: MOTION_LAYOUT_MS, easing: MOTION_EASE },
+    );
+  }, [stacked, selectedTaskId, boardWidth]);
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -263,8 +365,8 @@ export function UnifiedBoard({
   };
 
   // A card click selects the task and shows its detail (#2843: the board no
-  // longer has a drawer of its own): in the sidebar's Tasks view on desktop,
-  // in the full-screen docked panel on phone and tablet. useOpenTask owns that
+  // longer has a drawer of its own): in the right sidebar's Tasks view from
+  // 700px, in the full-screen docked panel on phone (#3011). useOpenTask owns that
   // tier decision for every caller (this board, the GitHub and Git views'
   // task chips, the issue view), so they cannot drift apart.
   const openTask = useOpenTask();
@@ -326,7 +428,7 @@ export function UnifiedBoard({
   }, [phone, segmented, phoneColumn]);
 
   return (
-    <div className="kanban-unified">
+    <div className="kanban-unified" ref={rootRef} data-board-layout={stacked ? "stacked" : "lanes"}>
       <div className="kanban-unified-main">
         {!tasksLoaded && (
           <span className="visually-hidden" role="status">
@@ -525,77 +627,115 @@ export function UnifiedBoard({
           )}
           <div className={`task-board-body${facetsShown ? " task-board-body--facets" : ""}`}>
             {facetsShown && <TaskFacetsPanel api={filterApi} projects={projects} />}
-            <div className="task-board-lanes">
-              {lanes.map((lane) => {
-                const epicKey = groupBy === "epic" && lane.key !== NO_EPIC ? lane.key : null;
-                const sample = lane.tasks[0];
-                const progress = epicKey !== null ? epicProgress(tasks, epicKey) : null;
-                return (
-                  <section
-                    key={lane.key}
-                    className={grouped ? "task-lane" : "task-lane task-lane-flat"}
-                    aria-label={grouped ? lane.title : undefined}
-                  >
-                    {grouped && (
-                      <TaskLaneHeader
-                        title={lane.title}
-                        count={lane.tasks.length}
-                        colour={epicKey !== null ? `var(--lane-${epicColourSlot(epicKey)})` : null}
-                        progress={progress}
-                        href={epicKey !== null && sample ? epicUrl(sample) : null}
-                        onOpen={sample ? () => openEpicInSidebar(tasks, sample) : undefined}
-                      />
-                    )}
-                    <div
-                      className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
+            {stacked ? (
+              <div className="task-board-lanes task-board-lanes--stacked">
+                <StackedBoard
+                  sections={stackedSections}
+                  selectedTaskId={selectedTaskId}
+                  selectedStatus={selectedStatus}
+                  hideDone={hideDone}
+                  renderBody={(section) => (
+                    <TaskColumn
+                      title={section.title}
+                      headless
+                      projectsById={projectsById}
+                      sessionsById={sessionsById}
+                      theme={theme}
+                      tasks={section.tasks}
+                      taskMasterEnabled={taskMasterEnabled}
+                      acceptsDrop={
+                        draggingTask !== null &&
+                        (boardColumnOf(draggingTask.status) === section.id ||
+                          (canDragToColumn(draggingTask.status) && canDragToColumn(section.id)))
+                      }
+                      onOpen={(task) => openTask(task.id)}
+                      onOpenSession={onOpenSession}
+                      onDrop={(draggedId, index) => applyDrop(draggedId, section.id, index)}
+                      onDragBegin={setDraggingId}
+                      onDragFinish={() => setDraggingId(null)}
+                      loading={!tasksLoaded}
+                      selectedTaskId={selectedTaskId}
+                    />
+                  )}
+                />
+              </div>
+            ) : (
+              <div className="task-board-lanes">
+                {lanes.map((lane) => {
+                  const epicKey = groupBy === "epic" && lane.key !== NO_EPIC ? lane.key : null;
+                  const sample = lane.tasks[0];
+                  const progress = epicKey !== null ? epicProgress(tasks, epicKey) : null;
+                  return (
+                    <section
+                      key={lane.key}
+                      className={grouped ? "task-lane" : "task-lane task-lane-flat"}
+                      aria-label={grouped ? lane.title : undefined}
                     >
-                      {(phone
-                        ? BOARD_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
-                        : BOARD_COLUMNS
-                      ).map((column) => {
-                        const columnTasks = boardColumnTasks(lane.tasks, column.id);
-                        // A card can only be dropped in its own lane: a lane is an epic or
-                        // a project, and dragging never changes either.
-                        const acceptsDrop =
-                          draggingTask !== null &&
-                          (!grouped || laneKeyOf(draggingTask, groupBy) === lane.key) &&
-                          (boardColumnOf(draggingTask.status) === column.id ||
-                            (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
-                        return (
-                          <TaskColumn
-                            key={column.id}
-                            title={column.title}
-                            projectsById={projectsById}
-                            sessionsById={sessionsById}
-                            theme={theme}
-                            tasks={columnTasks}
-                            taskMasterEnabled={taskMasterEnabled}
-                            acceptsDrop={acceptsDrop}
-                            onOpen={(task) => openTask(task.id)}
-                            onOpenSession={onOpenSession}
-                            onDrop={(draggedId, index) =>
-                              applyDrop(
-                                draggedId,
-                                column.id,
-                                index,
-                                lane.tasks,
-                                grouped ? lane.key : null,
-                              )
-                            }
-                            onDragBegin={setDraggingId}
-                            onDragFinish={() => setDraggingId(null)}
-                            collapsed={hideDone && (column.id === "done" || column.id === "failed")}
-                            loading={!tasksLoaded}
-                            rail={!phone}
-                            selectedTaskId={selectedTaskId}
-                          />
-                        );
-                      })}
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
+                      {grouped && (
+                        <TaskLaneHeader
+                          title={lane.title}
+                          count={lane.tasks.length}
+                          colour={
+                            epicKey !== null ? `var(--lane-${epicColourSlot(epicKey)})` : null
+                          }
+                          progress={progress}
+                          href={epicKey !== null && sample ? epicUrl(sample) : null}
+                          onOpen={sample ? () => openEpicInSidebar(tasks, sample) : undefined}
+                        />
+                      )}
+                      <div
+                        className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
+                      >
+                        {(phone
+                          ? BOARD_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
+                          : BOARD_COLUMNS
+                        ).map((column) => {
+                          const columnTasks = boardColumnTasks(lane.tasks, column.id);
+                          // A card can only be dropped in its own lane: a lane is an epic or
+                          // a project, and dragging never changes either.
+                          const acceptsDrop =
+                            draggingTask !== null &&
+                            (!grouped || laneKeyOf(draggingTask, groupBy) === lane.key) &&
+                            (boardColumnOf(draggingTask.status) === column.id ||
+                              (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+                          return (
+                            <TaskColumn
+                              key={column.id}
+                              title={column.title}
+                              projectsById={projectsById}
+                              sessionsById={sessionsById}
+                              theme={theme}
+                              tasks={columnTasks}
+                              taskMasterEnabled={taskMasterEnabled}
+                              acceptsDrop={acceptsDrop}
+                              onOpen={(task) => openTask(task.id)}
+                              onOpenSession={onOpenSession}
+                              onDrop={(draggedId, index) =>
+                                applyDrop(
+                                  draggedId,
+                                  column.id,
+                                  index,
+                                  lane.tasks,
+                                  grouped ? lane.key : null,
+                                )
+                              }
+                              onDragBegin={setDraggingId}
+                              onDragFinish={() => setDraggingId(null)}
+                              collapsed={
+                                hideDone && (column.id === "done" || column.id === "failed")
+                              }
+                              loading={!tasksLoaded}
+                              rail={!phone}
+                              selectedTaskId={selectedTaskId}
+                            />
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -603,9 +743,24 @@ export function UnifiedBoard({
         laneColumns={laneColumns}
         projectsById={projectsById}
         kanbanOrder={kanbanOrder}
-        onOpenSession={onOpenSession}
+        // From 700px a tap on an ad-hoc session switches to Workspace mode and
+        // shows it there (#3011, design 9.6); the phone keeps its own route.
+        onOpenSession={
+          phone
+            ? onOpenSession
+            : (session) => useDashboardStore.getState().openSessionInWorkspace(session.id)
+        }
         onSessionEnded={onSessionEnded}
       />
     </div>
   );
+}
+
+function findCard(root: HTMLElement | null, taskId: number | null): HTMLElement | null {
+  if (!root || taskId === null) return null;
+  return root.querySelector<HTMLElement>(`[data-task-id="${taskId}"]`);
+}
+
+function selectedCardRect(root: HTMLElement | null, taskId: number | null): DOMRect | null {
+  return findCard(root, taskId)?.getBoundingClientRect() ?? null;
 }

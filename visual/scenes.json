@@ -478,6 +478,57 @@
       }
     },
     {
+      "name": "tablet-tasks-board",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=/^Tasks/] >> nth=0"
+        },
+        {
+          "waitFor": ".kanban-unified[data-board-layout]"
+        },
+        {
+          "wait": 1500
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tablet-tasks-stacked",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=/^Tasks/] >> nth=0"
+        },
+        {
+          "waitFor": ".task-card"
+        },
+        {
+          "click": ".task-card-title >> nth=0"
+        },
+        {
+          "waitFor": "[data-testid=\"task-detail-view\"]"
+        },
+        {
+          "waitFor": ".kanban-unified[data-board-layout=\"stacked\"]"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
       "name": "tablet-notifications",
       "path": "/",
       "tags": ["audit"],

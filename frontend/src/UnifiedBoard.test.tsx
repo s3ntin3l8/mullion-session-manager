@@ -6,7 +6,7 @@
 // TaskColumn.tsx's drop targets, TaskCard.tsx's drag source, and this
 // file's own `applyDrop`/`updateTask` call), and how a card click opens a task
 // (the board has no drawer of its own since #2843: it selects the task in the
-// sidebar, or opens the docked panel on phone and tablet).
+// sidebar from 700px, or opens the docked panel on the phone, #3011).
 // Per-region tests live in unified-board/TasksToolbar.test.tsx,
 // unified-board/TaskColumn.test.tsx, unified-board/TaskCard.test.tsx,
 // unified-board/TaskSessionSlot.test.tsx, and unified-board/LaneCard.test.tsx
@@ -359,7 +359,21 @@ describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
     expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
   });
 
-  it("phone and tablet: a card click asks for the full-screen docked panel instead", async () => {
+  // #3011 — from 700px (the 851px fold is the tablet tier) a card opens the
+  // right sidebar's detail; the docked panel is the phone's alone.
+  it("tablet (851px): a card click opens the sidebar detail, never the docked panel", async () => {
+    tasks = [makeTask({ id: 8, status: "in_progress", title: "Open on the fold" })];
+    layoutTier = "tablet";
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Open on the fold"));
+
+    expect(openRightSidebarTask).toHaveBeenCalledWith(8);
+    expect(requestOpenTask).not.toHaveBeenCalled();
+  });
+
+  it("phone: a card click asks for the full-screen docked panel instead", async () => {
     tasks = [makeTask({ id: 7, status: "in_progress", title: "Open on phone" })];
     layoutTier = "phone";
     const user = userEvent.setup();

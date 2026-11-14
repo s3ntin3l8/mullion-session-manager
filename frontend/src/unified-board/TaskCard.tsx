@@ -263,6 +263,9 @@ export function TaskCard({
       className={`task-card${severityClass ? ` ${severityClass}` : ""}${task.blockedState === "blocked" ? " task-card-is-blocked" : ""}${dropTarget ? " kanban-card-drop-target" : ""}${selected ? " task-card-selected" : ""}`}
       style={epicColour ? ({ "--task-epic-colour": epicColour } as CSSProperties) : undefined}
       aria-current={selected ? "true" : undefined}
+      // Lets the board find a card again after its layout changes (the
+      // stacked switch keeps the selected card in view and moves it, #3011).
+      data-task-id={task.id}
       draggable
       onDragStart={onDragStart}
       onDragOver={onDragOver}

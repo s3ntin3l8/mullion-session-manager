@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "../api/types.js";
 import { needsYouReason, taskBucket, type TaskBucket } from "../github/taskMasterSummary.js";
 import { useDashboardStore } from "../store/index.js";
+import { useCanPopOutTask } from "../hooks/useOpenTask.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ExternalLinkIcon, RefreshIcon } from "../ui/icons.js";
 import { IconButton, SidebarRow, StatusChip } from "../ui/sidebar/index.js";
@@ -48,6 +49,9 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
   const allTasks = useDashboardStore((s) => s.tasks);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
+  // The pop-out to a docked panel is offered from 1100px only (#3011, see
+  // useCanPopOutTask).
+  const canPopOut = useCanPopOutTask();
   const selectedTaskId = useDashboardStore((s) => s.selectedTaskId);
   const selectTask = useDashboardStore((s) => s.selectTask);
   const [filter, setFilter] = useState<StatusFilter>("all");
@@ -163,12 +167,14 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 meta={reason ?? BUCKET_LABEL[bucket]}
                 onClick={() => openTask(task.id)}
                 actions={
-                  <IconButton
-                    label="Pop out to a docked panel"
-                    onClick={() => requestOpenTask(task.id)}
-                  >
-                    <ExternalLinkIcon size={13} />
-                  </IconButton>
+                  canPopOut ? (
+                    <IconButton
+                      label="Pop out to a docked panel"
+                      onClick={() => requestOpenTask(task.id)}
+                    >
+                      <ExternalLinkIcon size={13} />
+                    </IconButton>
+                  ) : undefined
                 }
                 extra={
                   <>

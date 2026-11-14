@@ -249,3 +249,105 @@
   writing-mode: vertical-rl;
   color: var(--dim);
 }
+
+/* ───────── Stacked board (#3011) ─────────
+   While the board has room for fewer than three lanes (UnifiedBoard measures
+   it), it lists one section per status instead, active ones first. */
+.task-board-lanes--stacked {
+  overflow-x: hidden;
+}
+.stacked-board {
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 12px;
+}
+.task-status-strip {
+  display: flex;
+  gap: 6px;
+  padding: 8px 0;
+  overflow-x: auto;
+  flex: none;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+.task-status-strip-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--motion-press) var(--motion-ease-press);
+}
+.task-status-strip-entry:hover {
+  color: var(--fg);
+}
+.task-status-strip-entry:active {
+  transform: scale(0.97);
+}
+.task-status-strip-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.task-status-strip-dot,
+.stacked-section-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--y);
+  flex: none;
+}
+.stacked-section {
+  display: flex;
+  flex-direction: column;
+  scroll-margin-top: 52px;
+}
+.stacked-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 4px 0;
+  padding: 0 4px;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.stacked-section-header:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.stacked-section-title {
+  flex: 1;
+}
+/* A card scrolled into view lands below the sticky status strip, not under it. */
+.stacked-section-body .task-card {
+  scroll-margin-top: 56px;
+}
+.stacked-section-body .kanban-column {
+  min-width: 0;
+  max-width: none;
+}
+@media (pointer: coarse) {
+  .task-status-strip-entry {
+    min-height: 44px;
+  }
+}

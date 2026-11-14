@@ -86,7 +86,7 @@ describe("useTaskNotificationOpen (desktop)", () => {
   });
 });
 
-describe("useTaskNotificationOpen (phone and tablet)", () => {
+describe("useTaskNotificationOpen (phone)", () => {
   it("asks for the full-screen docked panel instead of selecting in a sidebar that is not there", () => {
     renderHook(() => useTaskNotificationOpen(true));
     post(7);
@@ -107,10 +107,10 @@ describe("useTaskNotificationOpen (phone and tablet)", () => {
   });
 
   it("follows a tier change without re-reading the URL", () => {
-    const { rerender } = renderHook(({ compact }) => useTaskNotificationOpen(compact), {
-      initialProps: { compact: false },
+    const { rerender } = renderHook(({ phone }) => useTaskNotificationOpen(phone), {
+      initialProps: { phone: false },
     });
-    rerender({ compact: true });
+    rerender({ phone: true });
     post(3);
     expect(useDashboardStore.getState().openTaskRequest?.taskId).toBe(3);
     expect(useDashboardStore.getState().selectedTaskId).toBeNull();
