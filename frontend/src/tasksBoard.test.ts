@@ -15,6 +15,8 @@ import {
   boardColumnOf,
   boardColumnTasks,
   foldClaimedCounts,
+  openingPhoneSegment,
+  phoneSegmentsNeedingYou,
 } from "./tasksBoard.js";
 import type { PhoneSegmentId } from "./tasksBoard.js";
 import type { Task, TaskStatus } from "./api/index.js";
@@ -436,5 +438,48 @@ describe("Claimed folded into In progress (#2841)", () => {
       failed: 7,
     };
     expect(foldClaimedCounts(counts)).toEqual({ ...counts, claimed: 0, in_progress: 7 });
+  });
+});
+
+// #3014 — the phone board's dots and its opening lane.
+describe("phoneSegmentsNeedingYou", () => {
+  const needs = (t: Task) => t.title === "needs";
+  it("maps each task needing you to its lane, Claimed into Active", () => {
+    const set = phoneSegmentsNeedingYou(
+      [
+        makeTask({ id: 1, status: "claimed", title: "needs" }),
+        makeTask({ id: 2, status: "failed", title: "needs" }),
+        makeTask({ id: 3, status: "ready", title: "fine" }),
+      ],
+      needs,
+    );
+    expect([...set].sort()).toEqual(["active", "done"]);
+  });
+  it("is empty when nothing needs you", () => {
+    expect(phoneSegmentsNeedingYou([makeTask({ status: "ready" })], needs).size).toBe(0);
+  });
+});
+
+describe("openingPhoneSegment", () => {
+  const counts = Object.fromEntries(
+    TASK_COLUMNS.map((c) => [c.id, c.id === "ready" ? 2 : c.id === "in_progress" ? 1 : 0]),
+  ) as Record<TaskStatus, number>;
+  const all: PhoneSegmentId[] = ["backlog", "ready", "active", "done"];
+  it("opens on the first lane, in strip order, holding a task that needs you", () => {
+    expect(openingPhoneSegment(counts, all, new Set<PhoneSegmentId>(["done", "ready"]))).toBe(
+      "ready",
+    );
+  });
+  it("skips a lane that is not offered", () => {
+    expect(
+      openingPhoneSegment(
+        counts,
+        ["backlog", "ready", "active"],
+        new Set<PhoneSegmentId>(["done"]),
+      ),
+    ).toBe("active");
+  });
+  it("falls back to the usual default without one", () => {
+    expect(openingPhoneSegment(counts, all, new Set())).toBe(defaultPhoneSegment(counts, all));
   });
 });

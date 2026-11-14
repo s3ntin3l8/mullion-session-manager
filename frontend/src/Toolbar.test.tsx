@@ -107,6 +107,22 @@ describe("Toolbar — Tasks view (viewMode === kanban)", () => {
     expect(document.querySelector(".toolbar-mobile-title")).toBeNull();
   });
 
+  it("has no drawer toggle on the phone, which has no drawer (#3014)", () => {
+    const { container } = render(
+      <Toolbar {...NOOP_PROPS} phone mobileSessionSlot={<span>switcher</span>} />,
+    );
+    expect(container.querySelector("[data-toggle-sidebar]")).toBeNull();
+    expect(screen.queryByTitle("Toggle sidebar")).toBeNull();
+    // The picker and the bell stay.
+    expect(screen.getByText("switcher")).toBeInTheDocument();
+    expect(screen.getByTestId("bell")).toBeInTheDocument();
+  });
+
+  it("keeps the drawer toggle off the phone", () => {
+    const { container } = render(<Toolbar {...NOOP_PROPS} />);
+    expect(container.querySelector("[data-toggle-sidebar]")).not.toBeNull();
+  });
+
   it("disables the New-session and Command-palette buttons (issue #730 — no launch from Task view)", () => {
     render(<Toolbar {...NOOP_PROPS} />);
     expect(screen.getByTitle("New session (unavailable in Task view)")).toBeDisabled();

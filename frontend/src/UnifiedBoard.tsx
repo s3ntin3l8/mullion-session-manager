@@ -13,8 +13,9 @@ import {
   absoluteDropIndex,
   PHONE_SEGMENTS,
   defaultPhoneColumn,
-  defaultPhoneSegment,
   foldClaimedCounts,
+  openingPhoneSegment,
+  phoneSegmentsNeedingYou,
   phoneSegmentCount,
   visibleColumnWindow,
 } from "./tasksBoard.js";
@@ -40,6 +41,9 @@ import {
   laneKeyOf,
 } from "./unified-board/taskLanes.js";
 import { AdhocLane } from "./unified-board/AdhocLane.js";
+import { PhoneLaneStrip } from "./unified-board/PhoneLaneStrip.js";
+import { usePhoneLaneSwipe } from "./unified-board/usePhoneLaneSwipe.js";
+import { needsYouReason } from "./github/taskMasterSummary.js";
 import { openEpicInSidebar } from "./lib/sidebarLinks.js";
 import { StackedBoard } from "./unified-board/StackedBoard.js";
 import { boardStacks, stackSections } from "./unified-board/stackLayout.js";
@@ -365,10 +369,10 @@ export function UnifiedBoard({
   };
 
   // A card click selects the task and shows its detail (#2843: the board no
-  // longer has a drawer of its own): in the right sidebar's Tasks view from
-  // 700px, in the full-screen docked panel on phone (#3011). useOpenTask owns that
-  // tier decision for every caller (this board, the GitHub and Git views'
-  // task chips, the issue view), so they cannot drift apart.
+  // longer has a drawer of its own): in the right sidebar's Tasks view (#3011),
+  // which the phone shows full screen (#3014). useOpenTask owns that for every
+  // caller (this board, the GitHub and Git views' task chips, the issue view),
+  // so they cannot drift apart.
   const openTask = useOpenTask();
 
   // Per-status counts (after the board's filters) for the phone strip, and
@@ -400,13 +404,28 @@ export function UnifiedBoard({
   const segmented = phone && columnCount === 1;
   const [phoneSegmentChoice, setPhoneSegmentChoice] = useState<PhoneSegmentId | null>(null);
   const phoneSegments = PHONE_SEGMENTS.filter((seg) => !(hideDone && seg.id === "done"));
+  // Lanes holding a task that needs the owner get a dot, and the board opens
+  // on the first of them (#3014).
+  const segmentsNeedingYou = useMemo(
+    () => phoneSegmentsNeedingYou(visibleTasks, (t) => needsYouReason(t) !== null),
+    [visibleTasks],
+  );
   const phoneSegment =
     phoneSegmentChoice !== null && phoneSegments.some((seg) => seg.id === phoneSegmentChoice)
       ? phoneSegmentChoice
-      : defaultPhoneSegment(
+      : openingPhoneSegment(
           statusCounts,
           phoneSegments.map((seg) => seg.id),
+          segmentsNeedingYou,
         );
+  const lanesBodyRef = useRef<HTMLDivElement>(null);
+  usePhoneLaneSwipe(
+    lanesBodyRef,
+    segmented,
+    phoneSegments.map((seg) => seg.id),
+    phoneSegment,
+    setPhoneSegmentChoice,
+  );
   const visibleColumnIds: TaskStatus[] = segmented
     ? [...(PHONE_SEGMENTS.find((seg) => seg.id === phoneSegment)?.statuses ?? [])]
     : visibleColumnWindow(
@@ -467,26 +486,16 @@ export function UnifiedBoard({
             }
           />
           {segmented && (
-            <div
-              className="tasks-phone-strip tasks-phone-strip--segmented"
-              role="group"
-              aria-label="Task status"
-            >
-              {phoneSegments.map((segment) => (
-                <button
-                  key={segment.id}
-                  type="button"
-                  className="tasks-phone-strip-chip"
-                  aria-pressed={segment.id === phoneSegment}
-                  onClick={() => setPhoneSegmentChoice(segment.id)}
-                >
-                  {segment.title}
-                  <span className="tasks-phone-strip-count">
-                    {phoneSegmentCount(statusCounts, segment)}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <PhoneLaneStrip
+              lanes={phoneSegments.map((segment) => ({
+                id: segment.id,
+                title: segment.title,
+                count: phoneSegmentCount(statusCounts, segment),
+              }))}
+              current={phoneSegment}
+              needingYou={segmentsNeedingYou}
+              onSelect={setPhoneSegmentChoice}
+            />
           )}
           {phone && !segmented && (
             <div ref={stripRef} className="tasks-phone-strip" role="group" aria-label="Task status">
@@ -625,7 +634,10 @@ export function UnifiedBoard({
               )}
             </EmptyStateNote>
           )}
-          <div className={`task-board-body${facetsShown ? " task-board-body--facets" : ""}`}>
+          <div
+            ref={lanesBodyRef}
+            className={`task-board-body${facetsShown ? " task-board-body--facets" : ""}`}
+          >
             {facetsShown && <TaskFacetsPanel api={filterApi} projects={projects} />}
             {stacked ? (
               <div className="task-board-lanes task-board-lanes--stacked">

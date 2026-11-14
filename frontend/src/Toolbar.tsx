@@ -18,7 +18,8 @@ import type { AppSettings, Session } from "./api/index.js";
 import type { SettingsSection } from "./Settings.js";
 
 interface ToolbarProps {
-  onToggleSidebar: () => void;
+  /** Not on the phone, which has no drawer to toggle (#3014). */
+  onToggleSidebar?: () => void;
   onOpenSession: (session: Session) => void;
   // Issue #270 — passed straight through to NotificationBell; see its own
   // prop doc for why this is distinct from onOpenSession.
@@ -116,16 +117,19 @@ export function Toolbar({
   return (
     <div className={`toolbar${compactPicker ? " toolbar--compact-picker" : ""}`}>
       <div className="toolbar-lead">
-        <button
-          className="toolbar-icon-btn"
-          onClick={onToggleSidebar}
-          title="Toggle sidebar"
-          data-toggle-sidebar
-        >
-          <SidebarToggleIcon size={17} />
-        </button>
-        {/* Phone: the bell sits at the right edge (below), so the lead is
-            just the navigator toggle. */}
+        {!phone && onToggleSidebar && (
+          <button
+            className="toolbar-icon-btn"
+            onClick={onToggleSidebar}
+            title="Toggle sidebar"
+            data-toggle-sidebar
+          >
+            <SidebarToggleIcon size={17} />
+          </button>
+        )}
+        {/* Phone: the bell sits at the right edge (below), and there is no
+            drawer to toggle (#3014): sessions are the picker, the rest is the
+            mode bar's "more" sheet. */}
         {!phone && bell}
         <button
           className="toolbar-icon-btn toolbar-new-session-btn"

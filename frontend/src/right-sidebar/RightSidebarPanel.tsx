@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
-import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
+import { ChevronLeftIcon, CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
 import { useCheckoutTarget } from "../hooks/useCheckoutTarget.js";
 import { useDashboardStore } from "../store/index.js";
@@ -19,9 +19,21 @@ export interface RightSidebarPanelProps {
   followed: FollowedProject;
   actions: RightSidebarActions;
   onClose: () => void;
+  /** Phone (#3014): the view is a full screen with a header row that names it
+   * and a back control, in place of the close button. Back closes the view. */
+  phone?: boolean;
+  /** With `phone`: the name the header row shows. */
+  title?: string;
 }
 
-export function RightSidebarPanel({ view, followed, actions, onClose }: RightSidebarPanelProps) {
+export function RightSidebarPanel({
+  view,
+  followed,
+  actions,
+  onClose,
+  phone = false,
+  title,
+}: RightSidebarPanelProps) {
   const projectId = followed.effectiveProjectId;
   const hostGlobal = view.hostGlobal === true;
   // A view that does not exist in this band (Browser and Dock from 1100px)
@@ -48,6 +60,22 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
   )?.label;
   return (
     <>
+      {phone && (
+        // Steps aside while a detail fills the header's detail slot: the
+        // detail's own header carries the back control then (right-sidebar.css).
+        <div className="right-sidebar-phone-head">
+          <button
+            type="button"
+            className="right-sidebar-phone-back"
+            aria-label="Back"
+            title="Back"
+            onClick={onClose}
+          >
+            <ChevronLeftIcon size={18} />
+          </button>
+          <h2 className="right-sidebar-phone-title">{title ?? view.label}</h2>
+        </div>
+      )}
       {/* One header row for every view: the project picker is the title, then
           the view's toolbar, pin and close. The strip below names the view and
           its context. A pushed detail view fills the detail slot instead, and
@@ -75,17 +103,19 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
         )}
         <div className="right-sidebar-toolbar-slot" ref={setToolbarSlot} />
         <div className="right-sidebar-detail-slot" ref={setDetailSlot} />
-        <span className="right-sidebar-header-actions">
-          <button
-            type="button"
-            className="right-sidebar-icon-btn"
-            aria-label="Close sidebar"
-            title="Close"
-            onClick={onClose}
-          >
-            <CloseIcon size={14} />
-          </button>
-        </span>
+        {!phone && (
+          <span className="right-sidebar-header-actions">
+            <button
+              type="button"
+              className="right-sidebar-icon-btn"
+              aria-label="Close sidebar"
+              title="Close"
+              onClick={onClose}
+            >
+              <CloseIcon size={14} />
+            </button>
+          </span>
+        )}
       </div>
       <div className="right-sidebar-strip-slot" ref={setStripSlot} />
       {!inBand ? null : projectId == null && !hostGlobal ? (
