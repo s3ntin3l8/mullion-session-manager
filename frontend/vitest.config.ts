@@ -68,6 +68,7 @@ export default defineConfig({
         /styles\/sidebar-kit\.css/,
         /styles\/github-pr\.css/,
         /styles\/task-board\.css/,
+        /styles\/session-launcher\.css/,
         /styles\/left-rail\.css/,
         /styles\/companion-views\.css/,
         /styles\/motion\.css/,

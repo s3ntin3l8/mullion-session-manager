@@ -17,6 +17,8 @@
   gap: 14px;
   padding: 14px 18px 0;
   min-height: 0;
+  /* The override row stacks by this width, not the viewport's (#3055). */
+  container: launcher-content / inline-size;
 }
 .session-launcher-filter {
   display: flex;
@@ -118,8 +120,10 @@
   color: var(--o);
 }
 .session-launcher-options {
-  display: flex;
-  flex-wrap: wrap;
+  /* Two equal columns for every agent: a long hint wraps inside its column
+     instead of pushing the switch onto its own line (#3055). */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   gap: 10px 18px;
   padding: 8px 10px;
@@ -134,6 +138,17 @@
 .session-launcher-option-text {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.session-launcher-switch {
+  flex-shrink: 0;
+}
+/* Below about 420px of sheet width the two options stack, for every agent. */
+@container launcher-content (max-width: 384px) {
+  .session-launcher-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .session-launcher-option-label {
   font-size: 0.75rem;

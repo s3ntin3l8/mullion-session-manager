@@ -5,20 +5,28 @@
    toolbar-aware top offset. Phone doesn't render any of this. */
 
 .right-rail {
-  width: 40px;
+  /* 48px at every band, border included, like the left rail (#3055). */
+  width: calc(48px + env(safe-area-inset-right));
+  box-sizing: border-box;
+  padding-right: env(safe-area-inset-right);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 8px 0;
+  padding-top: 8px;
+  padding-bottom: 8px;
   background: var(--sidebar);
   border-left: 1px solid var(--border);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 
 .right-rail-btn {
   position: relative;
-  width: 30px;
+  width: 40px;
+  flex-shrink: 0;
   height: 30px;
   display: grid;
   place-items: center;
@@ -100,9 +108,9 @@
 }
 /* Always docked (#3006): the panel is a flex sibling of the grid and pushes
    it. It never takes more than leaves the workspace about 400px beside the
-   40px rail. */
+   48px rail. */
 .right-sidebar-panel.docked {
-  max-width: calc(100vw - 440px);
+  max-width: calc(100vw - 448px);
 }
 /* Too narrow to dock (RIGHT_SIDEBAR_FULL_WIDTH_QUERY): an open view covers
    the workspace up to the rail. No scrim; the rail tab or Escape closes it. */
@@ -111,7 +119,7 @@
   top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
   /* Clear of the left rail, so the mode switch stays reachable (#3009). */
   left: var(--left-rail-w);
-  right: 40px;
+  right: calc(48px + env(safe-area-inset-right));
   bottom: 0;
   max-width: none;
   z-index: 46;
@@ -314,43 +322,21 @@
 }
 
 /* Touch: the header and rail controls are what opens and closes the panel
-   now, so they get a taller target (#3006). Outside the two halves the rail
-   is 40px wide, so a rail button is 44px tall and 30px wide; between 800 and
-   1099px the rail matches the left one, 48px with 48px targets on touch
-   (#3010, the block at the end of this file). */
+   now, so they get a taller target (#3006). The rail is 48px wide at every
+   band, matching the left one (#3055), so its touch targets are 48px. */
 @media (pointer: coarse) {
   .right-sidebar-icon-btn,
   .right-sidebar-header .sb-ibtn {
     min-width: 44px;
     min-height: 44px;
   }
-  .right-rail-btn {
-    min-height: 44px;
+  .right-rail-btn,
+  .right-rail .left-rail-btn {
+    min-height: 48px;
   }
 }
 
 /* ---- Two halves, 800-1099px (#3010) -------------------------------------- */
-/* The right rail matches the left one: 48px, and its buttons the left rail's
-   40px; on touch, 48px targets. */
-.app[data-band="rails-halves"] .right-rail {
-  /* Border included, like the left rail, so the halves come out equal. */
-  width: calc(48px + env(safe-area-inset-right));
-  padding-right: env(safe-area-inset-right);
-  box-sizing: border-box;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-.app[data-band="rails-halves"] .right-rail-btn {
-  width: 40px;
-  flex-shrink: 0;
-}
-@media (pointer: coarse) {
-  .app[data-band="rails-halves"] .right-rail-btn,
-  .app[data-band="rails-halves"] .right-rail .left-rail-btn {
-    min-height: 48px;
-  }
-}
 /* The panel is exactly the right half: the width left after both rails,
    split evenly with the grid, so the seam sits in the middle (on a foldable,
    on the hinge). Not the stored width, no resize handle, and the width is

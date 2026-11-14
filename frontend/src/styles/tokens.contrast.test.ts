@@ -129,6 +129,35 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
     });
   }
 
+  // #3045/#3055 — rows paint a --seg hover tint of --fg over the sidebar, and
+  // some stack a second one (a workspace section header's 5% under its
+  // button's --seg). --dim and --muted were 3.58:1 / 3.87:1 on that stack, the
+  // root of every "--dim below 4.5" finding verify-ui's C3 reported.
+  it("--dim and --muted clear AA on a hover tint, and on two stacked", () => {
+    const fg = resolve(vars, "--fg");
+    const sidebar = resolve(vars, "--sidebar");
+    const seg = Number(vars.get("--seg")!.match(/(\d+)%/)![1]);
+    const hovered = tint(fg, sidebar, seg);
+    const stacked = tint(fg, tint(fg, sidebar, 5), seg);
+    for (const [label, bg] of [
+      ["--seg over --sidebar", hovered],
+      ["--seg over a 5% header hover", stacked],
+    ] as const) {
+      for (const name of ["--dim", "--muted"]) {
+        expect(contrast(resolve(vars, name), bg), `${name} on ${label}`).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+    }
+  });
+
+  it("--muted stays a step stronger than --dim", () => {
+    const sidebar = resolve(vars, "--sidebar");
+    expect(contrast(resolve(vars, "--muted"), sidebar)).toBeGreaterThan(
+      contrast(resolve(vars, "--dim"), sidebar) + 0.5,
+    );
+  });
+
   it("--border is visibly stronger than the old ~1.1:1 hairline", () => {
     const sidebar = resolve(vars, "--sidebar");
     expect(contrast(resolve(vars, "--border"), sidebar)).toBeGreaterThanOrEqual(1.3);

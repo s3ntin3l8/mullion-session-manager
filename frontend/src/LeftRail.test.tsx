@@ -96,6 +96,21 @@ describe("LeftRail in Workspace mode", () => {
 describe("LeftRail in Tasks mode", () => {
   beforeEach(() => useDashboardStore.setState({ viewMode: "kanban" }));
 
+  it("shows the same separator under the mode switch as Workspace mode (#3055)", () => {
+    const sepAfterModes = (c: HTMLElement) => {
+      const nav = c.querySelector("nav.left-rail")!;
+      const kids = [...nav.children];
+      const at = kids.findIndex((el) => el.classList.contains("left-rail-modes"));
+      return kids[at + 1];
+    };
+    const tasks = renderRail({ middle: <span>CHIP</span> });
+    expect(sepAfterModes(tasks.container)).toHaveClass("left-rail-sep");
+    tasks.unmount();
+    useDashboardStore.setState({ viewMode: "list" });
+    const work = renderRail({ middle: <span>CHIP</span> });
+    expect(sepAfterModes(work.container)).toHaveClass("left-rail-sep");
+  });
+
   it("holds the mode switch, the statuses region and the bottom cluster", () => {
     const { container } = renderRail({ middle: <span>CHIP</span> });
     expect(modeButton(/^Tasks/)).toHaveAttribute("aria-pressed", "true");
