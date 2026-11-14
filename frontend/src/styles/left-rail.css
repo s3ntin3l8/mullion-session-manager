@@ -468,16 +468,8 @@
   flex: 1 1 auto;
   min-height: 0;
 }
-/* The right half's content fades in; its width never animates. The global
-   reduced-motion reset (tokens.css) covers this one too. */
-.fold-half-right {
-  animation: fold-half-in var(--motion-fade) var(--motion-ease);
-}
-@keyframes fold-half-in {
-  from {
-    opacity: 0;
-  }
-}
+/* The right half's arrival (a fade that settles) lives with the other
+   layout-change motion in styles/motion.css; its width never animates. */
 /* A grid pane whose session shows on the right half stands aside. */
 .fold-elsewhere {
   height: 100%;

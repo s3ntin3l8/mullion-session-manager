@@ -474,3 +474,40 @@ describe('ui/KebabMenu menuPlacement="auto"', () => {
     }
   });
 });
+
+// #3015 — the menu stays mounted while it leaves, then goes.
+describe("ui/KebabMenu exit", () => {
+  it("leaves the way it came, unreachable while it goes, then unmounts", async () => {
+    const { installExitAnimations } = await import("../test/exitAnimations.js");
+    const exits = installExitAnimations();
+    try {
+      const user = userEvent.setup();
+      render(<KebabMenu items={[{ key: "a", label: "Item", onClick: vi.fn() }]} />);
+      const trigger = screen.getByRole("button");
+      await user.click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu).toHaveAttribute("data-presence", "open");
+      expect(menu).toHaveAttribute("data-placement", "bottom");
+
+      await user.keyboard("{Escape}");
+      expect(menu).toBeInTheDocument();
+      expect(menu).toHaveAttribute("data-presence", "leaving");
+      expect(menu).toHaveAttribute("inert");
+      expect(trigger).toHaveFocus();
+
+      await exits.finishExits();
+      expect(menu).not.toBeInTheDocument();
+    } finally {
+      exits.restore();
+    }
+  });
+
+  it("marks an upward menu so it grows from the edge nearest its trigger", async () => {
+    const user = userEvent.setup();
+    render(
+      <KebabMenu items={[{ key: "a", label: "Item", onClick: vi.fn() }]} menuPlacement="top" />,
+    );
+    await user.click(screen.getByRole("button"));
+    expect(screen.getByRole("menu")).toHaveAttribute("data-placement", "top");
+  });
+});

@@ -137,6 +137,47 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
     );
   });
 
+  // #3015 — sheets and popovers are a translucent layer (--material) over
+  // whatever is behind them: a white web preview under the dark theme, a
+  // black terminal under the light one. Compositing is monotone, so pure white
+  // and pure black are the worst backdrops (blur and saturation stay inside
+  // that range). The invariant: over either, material is never closer to the
+  // theme's text than solid --chrome is. Then every colour that clears AA on
+  // --chrome clears it on material, whether it is listed here or not.
+  it("material over any backdrop is never closer to the text than --chrome", () => {
+    const raw = vars.get("--material") ?? "";
+    const m = raw.match(/^color-mix\(in srgb,\s*var\((--[\w-]+)\)\s+(\d+)%,\s*transparent\)$/);
+    expect(m, `--material is a translucent mix: ${raw}`).not.toBeNull();
+    const [, base, percent] = m!;
+    expect(Number(percent)).toBeLessThan(100);
+    const chrome = luminance(resolve(vars, "--chrome"));
+    // Light text (dark theme) wants a surface no lighter than --chrome; dark
+    // text (light theme) one no darker.
+    const lightText = luminance(resolve(vars, "--fg")) > chrome;
+    for (const backdrop of [
+      [255, 255, 255],
+      [0, 0, 0],
+    ] as Rgb[]) {
+      const surface = luminance(tint(resolve(vars, base), backdrop, Number(percent)));
+      const where = `--material over rgb(${backdrop.join(",")})`;
+      if (lightText) expect(surface, where).toBeLessThanOrEqual(chrome);
+      else expect(surface, where).toBeGreaterThanOrEqual(chrome);
+    }
+    // And so, for the text roles that sit on it:
+    for (const fg of ["--fg", "--muted", "--dim", "--accent", "--r"]) {
+      if (contrast(resolve(vars, fg), resolve(vars, "--chrome")) < 4.5) continue;
+      for (const backdrop of [
+        [255, 255, 255],
+        [0, 0, 0],
+      ] as Rgb[]) {
+        const surface = tint(resolve(vars, base), backdrop, Number(percent));
+        expect(contrast(resolve(vars, fg), surface), `${fg} on material`).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+    }
+  });
+
   it("defines eight graph lanes", () => {
     for (let i = 1; i <= 6; i++) expect(vars.has(`--lane-${i}`)).toBe(true);
     expect(vars.has("--lane-more")).toBe(true);

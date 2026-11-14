@@ -377,4 +377,30 @@ describe("useFocusTrap", () => {
     await user.click(screen.getByText("open"));
     expect(screen.getByText("opted-back-in")).toHaveFocus();
   });
+
+  // #3015 — an overlay that plays an exit is still mounted when its trap
+  // deactivates. If what was focused when the trap activated is inside the
+  // container (a field that autofocused as it mounted), restoring there would
+  // put focus back into the overlay that is leaving.
+  it("never restores focus into its own container", async () => {
+    function AutoFocusHarness() {
+      const [active, setActive] = useState(true);
+      const containerRef = useRef<HTMLDivElement>(null);
+      useFocusTrap({ active, containerRef });
+      return (
+        <div>
+          {/* Stays mounted when the trap deactivates, as a leaving overlay does. */}
+          <div ref={containerRef}>
+            <input aria-label="search" autoFocus />
+          </div>
+          <button onClick={() => setActive(false)}>close</button>
+        </div>
+      );
+    }
+    const user = userEvent.setup();
+    render(<AutoFocusHarness />);
+    expect(screen.getByLabelText("search")).toHaveFocus();
+    await user.click(screen.getByText("close"));
+    expect(screen.getByLabelText("search")).not.toHaveFocus();
+  });
 });

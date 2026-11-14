@@ -6,6 +6,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { useDismissExit } from "../hooks/usePresence.js";
 import { CloseIcon } from "./icons.js";
 
 // PR 24 pilot — the shared shell behind the `create-modal-*` family
@@ -122,6 +123,18 @@ export function Modal({
   suppressRestoreRef,
 }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // #3015 — Escape, the backdrop and the close button play the exit
+  // (styles/motion.css) before `onClose`; the caller unmounts a dialog that
+  // has already gone. A dialog that must not close right now (`closeDisabled`)
+  // skips it: its caller guards `onClose` and keeps it, and an exit that
+  // came back would only flicker.
+  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
+  // Not `inert` while leaving (the menus are): that would blur the focused
+  // control, and a caller that refuses the close would get its dialog back
+  // with focus stranded on <body>. motion.css's `pointer-events: none` on a
+  // leaving overlay is enough to keep a stray click from landing.
+  const requestClose = closeDisabled ? onClose : dismiss;
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: true,
     containerRef: modalRef,
@@ -134,7 +147,7 @@ export function Modal({
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      onClose();
+      requestClose();
       return;
     }
     onTrapKeyDown(e);
@@ -150,10 +163,15 @@ export function Modal({
     // that overrides `backdropClassName` to something that ISN'T a full-page
     // backdrop would need to override this too — none of the seven
     // `create-modal-*` target modals do.
-    <div className={backdropClassName} onClick={onClose}>
+    <div
+      ref={backdropRef}
+      className={`${backdropClassName} motion-scrim`}
+      data-presence={presence}
+      onClick={requestClose}
+    >
       <div
         ref={modalRef}
-        className={modalClassName}
+        className={`${modalClassName} motion-dialog`}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         role="dialog"
@@ -171,7 +189,7 @@ export function Modal({
             </span>
             <button
               className="create-modal-close"
-              onClick={closeDisabled ? undefined : onClose}
+              onClick={closeDisabled ? undefined : requestClose}
               aria-disabled={closeDisabled || undefined}
               aria-label="Close dialog"
             >

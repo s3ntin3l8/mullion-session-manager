@@ -287,13 +287,10 @@
   font-size: 0.75rem;
   cursor: pointer;
   touch-action: manipulation;
-  transition: transform var(--motion-press) var(--motion-ease-press);
+  /* Press feedback comes from styles/motion.css. */
 }
 .task-status-strip-entry:hover {
   color: var(--fg);
-}
-.task-status-strip-entry:active {
-  transform: scale(0.97);
 }
 .task-status-strip-count {
   font-variant-numeric: tabular-nums;

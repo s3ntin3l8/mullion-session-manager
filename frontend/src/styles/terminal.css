@@ -382,7 +382,7 @@
   box-shadow: 0 18px 44px -12px rgba(0, 0, 0, 0.65);
   padding: 5px;
   z-index: 20;
-  animation: cmuxPop 0.12s ease-out;
+  /* Enters and leaves from styles/motion.css. */
 }
 .pane-tab-overflow-item {
   display: flex;

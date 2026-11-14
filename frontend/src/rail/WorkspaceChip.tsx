@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { Workspace } from "../api/index.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { usePresence } from "../hooks/usePresence.js";
 import { useVisualViewportChange } from "../hooks/useVisualViewportChange.js";
 import { groupColor, useWorkspaceTree } from "../hooks/useWorkspaceTree.js";
 import type { WorkspaceLiveStatus } from "../hooks/useWorkspaceTree.js";
@@ -109,6 +110,8 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
     active: open && !sheet,
     containerRef: panelRef,
   });
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present: popoverPresent, state: popoverPresence } = usePresence(open && !sheet, panelRef);
   const onPanelKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
@@ -177,11 +180,13 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
           {open && <WorkspaceListContent onPick={pick} touch />}
         </BottomSheet>
       ) : (
-        open &&
+        popoverPresent &&
         pos &&
         createPortal(
           <div
             ref={panelRef}
+            data-presence={popoverPresence}
+            inert={popoverPresence === "leaving"}
             className={themeClassName(theme, "pane-tab-overflow-menu", "rail-ws-popover")}
             style={{ position: "fixed", top: pos.top, left: pos.left, maxHeight: pos.maxHeight }}
             role="dialog"

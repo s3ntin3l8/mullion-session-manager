@@ -373,3 +373,32 @@ describe("ui/CustomSelect's searchable menu (issue #2495)", () => {
     expect(option).toHaveAttribute("aria-label", LONG_BRANCH);
   });
 });
+
+// #3015 — the same leaving shape as the other menus (KebabMenu, PaneActionsMenu,
+// the notification panel, the workspace popover): mounted while its exit
+// plays, unreachable, then gone.
+describe("ui/CustomSelect exit", () => {
+  it("stays mounted while it leaves, then unmounts", async () => {
+    const { installExitAnimations } = await import("../test/exitAnimations.js");
+    const exits = installExitAnimations();
+    try {
+      const user = userEvent.setup();
+      render(<CustomSelect value="a" onChange={vi.fn()} options={OPTIONS} label="Pick" />);
+      const trigger = screen.getByRole("button", { name: "Pick" });
+      await user.click(trigger);
+      const menu = document.querySelector(".custom-select-menu") as HTMLElement;
+      expect(menu).toHaveAttribute("data-presence", "open");
+      expect(menu).toHaveAttribute("data-placement", "bottom");
+
+      await user.click(trigger);
+      expect(menu).toBeInTheDocument();
+      expect(menu).toHaveAttribute("data-presence", "leaving");
+      expect(menu).toHaveAttribute("inert");
+
+      await exits.finishExits();
+      expect(menu).not.toBeInTheDocument();
+    } finally {
+      exits.restore();
+    }
+  });
+});
