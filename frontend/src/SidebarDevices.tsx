@@ -63,6 +63,7 @@ export function SidebarDevices({ onOpenDevice, showHeader = true, empty }: Sideb
   // management surface (create/pair/edit-address/delete); this section is
   // start/stop + open.
   const devices = useDashboardStore(useShallow((s) => s.devices));
+  const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
   const startDevice = useDashboardStore((s) => s.startDevice);
   const stopDevice = useDashboardStore((s) => s.stopDevice);
@@ -107,7 +108,10 @@ export function SidebarDevices({ onOpenDevice, showHeader = true, empty }: Sideb
     deps: [refreshDevices],
   });
 
-  if (devices.length === 0) return empty ? <>{empty}</> : null;
+  // The empty state waits for the first fetch: the store starts at [] and the
+  // view can be the persisted active one, so without this a host that HAS
+  // devices would flash "no devices" on reload.
+  if (devices.length === 0) return empty && devicesLoaded ? <>{empty}</> : null;
 
   const runLifecycle = async (device: Device, kind: "start" | "stop") => {
     if (pendingId !== null) return;

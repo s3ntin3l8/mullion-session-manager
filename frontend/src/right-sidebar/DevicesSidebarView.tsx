@@ -1,3 +1,4 @@
+import { EmptyStateNote } from "../ui/EmptyState.js";
 import { SidebarDevices } from "../SidebarDevices.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
@@ -19,11 +20,7 @@ export function DevicesSidebarView({ actions }: RightSidebarViewProps) {
       <SidebarDevices
         showHeader={false}
         onOpenDevice={actions.onOpenDevice}
-        empty={
-          <div className="github-panel-empty-row">
-            No devices yet. Create one in Settings → Devices.
-          </div>
-        }
+        empty={<EmptyStateNote>No devices yet. Create one in Settings → Devices.</EmptyStateNote>}
       />
     </div>
   );

@@ -92,4 +92,15 @@ describe("DevicesSidebarView (#3012)", () => {
     renderView();
     expect(await screen.findByText(/No devices yet/)).toBeInTheDocument();
   });
+
+  it("does not claim there are no devices before the first fetch lands", () => {
+    db = [];
+    resetStore({ devices: [], devicesLoaded: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    renderView();
+    expect(screen.queryByText(/No devices yet/)).toBeNull();
+  });
 });
