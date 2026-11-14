@@ -320,6 +320,22 @@ describe("useFoldHalves", () => {
     expect(preferredPaneFor("phone")).toBe("session-2");
   });
 
+  // The right sidebar's per-session views (Browser, Dock; #3032) follow the
+  // active panel, so in the halves the active panel is the left half's pane:
+  // a right-half session made active in the grid (a new pane, a bare
+  // setActive) hands it back to the left.
+  it("keeps the active panel on the left half's pane", () => {
+    useDashboardStore.getState().noteLeftPane("session-1");
+    useDashboardStore.getState().moveToHalf("session-2", "right", ["session-1", "session-2"]);
+    const { rerender, props, panels, maximized } = setup();
+    act(() => void props.dockviewApi!.maximizeGroup(panels[1] as never));
+    expect(props.dockviewApi!.activePanel?.id).toBe("session-2");
+    rerender({ ...props, panelsVersion: 2 });
+    expect(maximized()).toBe("session-1");
+    expect(props.dockviewApi!.activePanel?.id).toBe("session-1");
+    expect(halves().shownRight).toBe("session-2");
+  });
+
   it("does not count a view put back on unfolding as used", () => {
     useDashboardStore.getState().noteLeftPane("session-1");
     setup();

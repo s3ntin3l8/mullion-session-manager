@@ -12,8 +12,9 @@ the same state need disjoint predicates. Derive any value they share, gated on
 membership in its source array, once before either block runs. A guard of the
 form `if (input !== lastInput)` terminates only when `input` is a stable
 reference (state-backed or memoized), not a fresh `.filter()` per render.
-`DockProjectGroup` in `frontend/src/dock/DockProjectGroup.tsx` holds the
-convergent form.
+`frontend/src/dock/useDockProject.ts` (the held-row merge) and
+`DockProjectGroup` in `frontend/src/dock/DockProjectGroup.tsx` (the selection
+reconciliation) hold the convergent form.
 
 **Breaks.** React's "too many re-renders" error. On a cold load, where a
 restored layout names a project while `projects` is still empty, the whole

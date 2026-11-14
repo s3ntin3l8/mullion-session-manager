@@ -541,6 +541,69 @@
       }
     },
     {
+      "name": "fold-browser-view",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Browser\"]"
+        },
+        {
+          "waitFor": ".browser-sidebar-view"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "fold-dock-view",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Dock\"]"
+        },
+        {
+          "waitFor": ".dock-sidebar-view"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "fold-devices-view",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Devices\"]"
+        },
+        {
+          "waitFor": ".devices-sidebar-view"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
       "name": "fold-two-halves",
       "path": "/",
       "tags": ["audit"],

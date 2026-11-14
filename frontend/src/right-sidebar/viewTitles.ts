@@ -10,4 +10,6 @@ export const VIEW_TITLES = {
   files: "Files",
   project: "Project",
   devices: "Devices",
+  browser: "Browser",
+  dock: "Dock",
 } as const;
