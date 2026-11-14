@@ -93,6 +93,15 @@ describe("BrowserSidebarView (#3012)", () => {
     expect(screen.getByTestId("browser-pane")).toHaveAttribute("data-session-id", "6");
   });
 
+  it("keeps the last eligible session while another project's session has focus", async () => {
+    bindings[5] = [{}];
+    useDashboardStore.setState({ activePanelId: "session-5" });
+    renderView();
+    expect(await screen.findByTestId("browser-pane")).toHaveAttribute("data-session-id", "5");
+    act(() => useDashboardStore.setState({ activePanelId: "session-9" }));
+    expect(screen.getByTestId("browser-pane")).toHaveAttribute("data-session-id", "5");
+  });
+
   it("ignores a session of another project and dock monitors", () => {
     useDashboardStore.setState({ activePanelId: "session-9" });
     const { unmount } = renderView();

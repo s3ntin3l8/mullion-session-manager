@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
@@ -30,7 +30,9 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
   // rendering a view the layout has no place for, and move the stored view
   // back to the default, or the sidebar toggle would reopen on it.
   const inBand = viewInBand(view, useCurrentLayoutBand());
-  useEffect(() => {
+  // A layout effect, so the close lands before the browser paints: no frame
+  // of the out-of-band view's header, no visible open-then-close.
+  useLayoutEffect(() => {
     if (inBand) return;
     useDashboardStore.getState().openRightSidebarView(DEFAULT_RIGHT_SIDEBAR_VIEW);
     onClose();

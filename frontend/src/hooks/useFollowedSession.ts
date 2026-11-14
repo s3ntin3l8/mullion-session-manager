@@ -15,13 +15,18 @@ import { useDashboardStore } from "../store/index.js";
 export function useFollowedSession(projectId: number): Session | null {
   const activePanelId = useDashboardStore((s) => s.activePanelId);
   const sessions = useDashboardStore((s) => s.sessions);
-  const derivedId = sessionIdFromPanelId(activePanelId);
-  const [lastId, setLastId] = useState<number | null>(derivedId);
-  if (derivedId != null && derivedId !== lastId) setLastId(derivedId);
-  const id = derivedId ?? lastId;
-  return (
-    sessions.find(
-      (s) => s.id === id && s.projectId === projectId && s.kind !== "dock" && s.status !== "killed",
-    ) ?? null
-  );
+  const eligible = (id: number | null): Session | null =>
+    id == null
+      ? null
+      : (sessions.find(
+          (s) =>
+            s.id === id && s.projectId === projectId && s.kind !== "dock" && s.status !== "killed",
+        ) ?? null);
+  // Only an eligible session is remembered: focusing another project's session
+  // or a dock monitor keeps showing the last eligible one, instead of dropping
+  // the view (and its browser connection) to "no session".
+  const focused = eligible(sessionIdFromPanelId(activePanelId));
+  const [lastId, setLastId] = useState<number | null>(focused?.id ?? null);
+  if (focused != null && focused.id !== lastId) setLastId(focused.id);
+  return focused ?? eligible(lastId);
 }
