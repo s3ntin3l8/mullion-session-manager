@@ -20,8 +20,8 @@ grants you anything.
 
 `MULLION_HOOK_TOKEN` gives you **session scope**: everything you need to act
 on yourself (get/rename/logs, the `browser` surface, `project actions`, your
-own MCP tools), but full-scope ops (`session list/create`, `session kill` of anything but your own
-child, `dock start/stop/list`, `preview *`, `project list/dock`, `agents list`) will 403 —
+own MCP tools, and `dock list/start/stop` for **your own project's** dock), but full-scope ops (`session list/create`, `session kill` of anything but your own
+child, `preview *`, `project list/dock`, `agents list`) will 403 —
 that's expected, not a bug. Run `mullion config` to see your resolved scope.
 One exception: if this host has in-app auth disabled entirely, every
 connection resolves to full scope regardless.
@@ -122,7 +122,7 @@ MCP tools. It is **never** enough for **full-scope** ops:
 | `project get_tooling`                               | full or session                     |
 | `project set_tooling`                               | **full only**                       |
 | `preview create/get/delete/list`                    | **full only**                       |
-| `dock start/stop/list`                              | **full only**                       |
+| `dock start/stop/list` (`docks.*`)                  | full or session; own project only   |
 | `agents list`                                       | **full only**                       |
 | `device list/get/action/start/terminate/discovered` | full or session                     |
 | `device create` (an emulator)                       | full or session                     |
@@ -265,30 +265,33 @@ resolves inside that same frame; pass `frame` again on the follow-up action
 or the lookup won't find it. Nested iframes (an iframe inside another
 iframe) aren't supported.
 
-## Dev servers and the dock — the honest, scope-limited version
+## Dev servers and the dock
 
-Dock controls (`dock start/stop/list`, `project dock`, and the MCP
-`start_dock_session`/`stop_dock_session` tools) are **full scope only** —
-`docs/socket-api.md` calls this deliberate: dock control is an
-operator-facing concept, not something a session needs to introspect or
-drive about itself. **On an install with authentication enabled, you cannot
-start or stop a dev server through the dock from inside a session.** Don't
-build a workflow that assumes you can.
+You can start, stop and inspect **your own project's** dock controls (the
+dev server among them) from a session: `mullion dock list`,
+`mullion dock start <controlId> [--branch <name>]`,
+`mullion dock stop <controlId> --control`, or the MCP tools
+`list_dock_controls` / `start_dock_session` / `stop_dock_session`. The
+project is always taken from your session, never from the request; another
+project's id is a 403, and an unknown control id is a 404. `--branch` /
+`branch` runs the control in a preview worktree of that branch.
 
-What you _can_ do for a dev-server-shaped task, at session scope:
+This is deliberately narrow: previews, devices, `project dock` (the merged
+operator view, including discovered Docker services), killing an arbitrary
+session and `session create` stay **full scope**. A control that came from
+Docker discovery is not agent-controllable. A dock session started before
+Mullion recorded which control it ran (#2494) is not found by `list`; stop it
+from the dashboard once.
+
+Reading a dock session's output and switching its branch in place are not
+available to a session yet; until then:
 
 - Read your own scrollback (`mullion session logs`, or the `get_scrollback`
-  MCP tool) — including a dev server's own startup banner if you started it
-  yourself as a plain foreground/background process in your own shell,
-  rather than through a dock control.
+  MCP tool) — including a dev server's startup banner if you started it
+  yourself as a plain process in your own shell.
 - `mullion project actions` — whatever the project's own launcher config
-  exposes as a one-shot action, distinct from a persistent dock monitor.
-- Drive the browser (above) against whatever's already listening, whether
-  that's a dock-managed dev server someone else started or one you started
-  yourself in this session's own shell.
-
-If auth is disabled (see the scope caveat above), this limitation doesn't
-apply — you're at full scope like everything else in that mode.
+  exposes as a one-shot action.
+- Drive the browser (above) against whatever's already listening.
 
 ## Spawning a child session
 

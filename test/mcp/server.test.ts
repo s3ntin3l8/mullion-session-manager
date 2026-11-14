@@ -192,6 +192,7 @@ describe("mcp/server.mjs (issue #271)", () => {
       "delete_device",
       "list_sessions",
       "start_dock_session",
+      "list_dock_controls",
       "spawn_child_session",
       "list_spawn_targets",
       "list_child_sessions",

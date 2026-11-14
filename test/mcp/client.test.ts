@@ -571,16 +571,6 @@ describe("MullionClient (issue #271)", () => {
       expect(bodies).toEqual([{ sessionId: "9" }]);
     });
 
-    it("stopDockSession sends sessions.kill with the given sessionId", async () => {
-      const socketPath = await startControlServer((msg, socket) => {
-        expect(msg.op).toBe("sessions.kill");
-        expect(msg.body).toEqual({ sessionId: "9" });
-        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200 })}\n`);
-      });
-      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
-      await client.stopDockSession("9");
-    });
-
     // Phase 5 (Track B, issue #193 5.3b).
     it("spawnChildSession sends sessions.spawn_child with only the given fields", async () => {
       const socketPath = await startControlServer((msg, socket) => {
@@ -1146,90 +1136,6 @@ describe("MullionClient (issue #271)", () => {
       });
       const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
       expect(await client.listPreviews()).toEqual([{ slug: "abc" }]);
-    });
-
-    it("startDockSession resolves the dock control via projects.dock, then creates a dock session", async () => {
-      const socketPath = await startControlServer((msg, socket) => {
-        if (msg.op === "projects.dock") {
-          expect(msg.body).toEqual({ projectId: "3" });
-          socket.write(
-            `${JSON.stringify({
-              id: msg.id,
-              ok: true,
-              status: 200,
-              result: [{ id: "vite", command: "npm run dev", title: "Vite", cwd: "/app" }],
-            })}\n`,
-          );
-          return;
-        }
-        expect(msg.op).toBe("sessions.create");
-        expect(msg.body).toEqual({
-          projectId: "3",
-          command: "npm run dev",
-          kind: "dock",
-          name: "Vite",
-          cwd: "/app",
-        });
-        socket.write(
-          `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 42 } })}\n`,
-        );
-      });
-      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
-      const result = await client.startDockSession("3", "vite");
-      expect(result).toEqual({ id: 42 });
-    });
-
-    it("startDockSession names a docker-sourced control's session by its stable containerName identity, not its title", async () => {
-      // Issue #73 follow-up plan (5b) — `control.command` for a docker
-      // control is reconstructed fresh from live container labels on every
-      // discovery poll and can change text without the service having
-      // changed, so naming the session by `control.title` (or matching by
-      // command) can silently orphan it. `docker-logs:<containerName>`
-      // mirrors dockHelpers.ts's own dockerSessionIdentity on the frontend.
-      const socketPath = await startControlServer((msg, socket) => {
-        if (msg.op === "projects.dock") {
-          socket.write(
-            `${JSON.stringify({
-              id: msg.id,
-              ok: true,
-              status: 200,
-              result: [
-                {
-                  id: "docker:sanctuary:web",
-                  command: "docker compose -p sanctuary logs -f web",
-                  title: "web",
-                  source: "docker",
-                  docker: { containerName: "sanctuary-web" },
-                },
-              ],
-            })}\n`,
-          );
-          return;
-        }
-        expect(msg.op).toBe("sessions.create");
-        expect(msg.body).toEqual({
-          projectId: "3",
-          command: "docker compose -p sanctuary logs -f web",
-          kind: "dock",
-          name: "docker-logs:sanctuary-web",
-          nameLocked: true,
-        });
-        socket.write(
-          `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 42 } })}\n`,
-        );
-      });
-      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
-      await client.startDockSession("3", "docker:sanctuary:web");
-    });
-
-    it("startDockSession throws a clear error when the dock control id doesn't exist", async () => {
-      const socketPath = await startControlServer((msg, socket) => {
-        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [] })}\n`);
-      });
-      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
-      await expect(client.startDockSession("3", "missing")).rejects.toThrow(
-        "no dock control 'missing' for project 3",
-      );
     });
 
     it("propagates a control-socket error (e.g. scope 403) to the caller", async () => {

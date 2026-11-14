@@ -708,6 +708,11 @@ export const sessions = sqliteTable(
     kind: text("kind", { enum: ["terminal", "dock"] })
       .notNull()
       .default("terminal"),
+    // #2494 — for a `kind: "dock"` session, the id of the dock control
+    // (`.crs/dock.json` controls[].id) it was launched from. Lets the server
+    // find "the running session of control X" without matching command text.
+    // Null for terminal sessions and for dock sessions started before this.
+    dockControlId: text("dock_control_id"),
     // "exited" (distinct from the user-initiated "killed") means the program
     // ended on its own — user typed `exit`, the process crashed — and was
     // caught by the reconciler in session-reconciler.ts rather than an

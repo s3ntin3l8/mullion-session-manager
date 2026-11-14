@@ -1246,15 +1246,33 @@ const previewCommands = {
   },
 };
 
+// #2494 — `list`/`start`/`stop` go through the narrow `docks.*` ops, which an
+// agent session may call for its OWN project: a lone control id means "my
+// project's"; `<projectId> <controlId>` names the project (full scope).
+// A docker-discovered control (and a raw session id) stays on the legacy
+// full-scope path.
 const dockCommands = {
-  async list(client) {
-    const result = await client.request("sessions.list", { kind: "dock" });
-    return { json: result };
+  async list(client, args = []) {
+    const body = args[0] !== undefined ? { projectId: args[0] } : {};
+    return { json: await client.request("docks.list", body) };
   },
   async start(client, args) {
-    const projectId = requireOne(args, "project id");
-    const dockId = args[1];
+    const hasProject = args[1] !== undefined;
+    const projectId = hasProject ? args[0] : undefined;
+    const dockId = hasProject ? args[1] : args[0];
     if (dockId === undefined) throw new CliUsageError("dock control id is required");
+    const branchFlag = args.indexOf("--branch");
+    const branch = branchFlag === -1 ? undefined : args[branchFlag + 1];
+    try {
+      const result = await client.request("docks.start", {
+        ...(projectId !== undefined ? { projectId } : {}),
+        dockControlId: dockId,
+        ...(branch !== undefined ? { branch } : {}),
+      });
+      return { json: result };
+    } catch (err) {
+      if (err?.status !== 404 || projectId === undefined || branch !== undefined) throw err;
+    }
     const controls = await client.request("projects.dock", { projectId });
     const control = controls.find((c) => c.id === dockId);
     if (!control) throw new CliUsageError(`no dock control '${dockId}' for project ${projectId}`);
@@ -1282,6 +1300,18 @@ const dockCommands = {
     return { json: result };
   },
   async stop(client, args) {
+    // `stop <controlId> --control` (own project) / `stop <projectId> <controlId>`,
+    // else a raw session id (full scope).
+    if (args.includes("--control")) {
+      const dockControlId = args.find((a) => a !== "--control");
+      if (dockControlId === undefined) throw new CliUsageError("dock control id is required");
+      return { json: await client.request("docks.stop", { dockControlId }) };
+    }
+    if (args[1] !== undefined) {
+      return {
+        json: await client.request("docks.stop", { projectId: args[0], dockControlId: args[1] }),
+      };
+    }
     const sessionId = requireOne(args, "session id");
     const result = await client.request("sessions.kill", { sessionId });
     return { json: result };

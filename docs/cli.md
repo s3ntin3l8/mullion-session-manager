@@ -242,10 +242,15 @@ $M browser screenshot $S --out /tmp/shot.png
 Sessions spawned from a project's dock controls (persistent monitors — dev
 servers, log tails — distinct from one-shot launchers).
 
-- `dock list` — sessions with `kind: "dock"`.
-- `dock start <projectId> <dockControlId>` — looks up the control via
-  `project dock`, then creates a session from its command/cwd.
-- `dock stop <sessionId>`
+- `dock list [<projectId>]` — the project's dock controls and the session
+  running each. Session scope: your own project (omit the id).
+- `dock start [<projectId>] <dockControlId> [--branch <name>]` — starts the
+  control (`docks.start`); a lone id is your own project's control. `--branch`
+  runs it in a preview worktree of that branch. A Docker-discovered control
+  needs full scope.
+- `dock stop <dockControlId> --control` (your own project) /
+  `dock stop <projectId> <dockControlId>` / `dock stop <sessionId>` (full scope
+  only: kills any session by id).
 
 ### device
 
