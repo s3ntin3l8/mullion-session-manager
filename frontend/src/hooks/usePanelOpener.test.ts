@@ -328,7 +328,7 @@ describe("usePanelOpener — onOpenSession", () => {
   // bare add. tabletPositioning's own branching (at/under the cap, grouping
   // by group.id not panel count) is covered directly in panelUtils.test.ts
   // — this only proves the wiring.
-  it("docks a new panel as its own column on tablet, under the pane cap", () => {
+  it("docks a new panel as its own column on tablet, under the column limit", () => {
     const api = mockDockviewApi();
     const { result } = setup({
       dockviewApi: api,

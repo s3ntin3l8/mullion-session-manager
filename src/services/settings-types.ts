@@ -5,14 +5,7 @@
 // every existing importer keeps its path. Types plus the `LOG_LEVELS`
 // constant: no defaults, no logic.
 import type { CacheDirId } from "./cache-storage.js";
-import type {
-  Theme,
-  CursorStyle,
-  SidebarDensity,
-  SoundName,
-  LayoutMode,
-  TabletPaneCap,
-} from "../shared/types.js";
+import type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode } from "../shared/types.js";
 
 export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -94,12 +87,10 @@ export interface AppSettings {
   sidebarDensity: SidebarDensity;
   // Tablet tier plan, PR 4 — "auto" resolves from live window width
   // (frontend); see shared/types.ts's own doc comment on LayoutMode for the
-  // full rationale. tabletPaneCap only takes effect once the resolved tier
-  // is "tablet" — a lower cap keeps each column comfortably clear of PR 2's
-  // TerminalPane font-shrink threshold, a higher one trades that off for
-  // more visible panes; see AppearanceSection.tsx's Settings copy.
+  // full rationale. (The tablet pane cap that sat beside it went with the
+  // two-halves layout, #3010; a stored value is dropped by deepMerge, which
+  // only walks known keys.)
   layoutMode: LayoutMode;
-  tabletPaneCap: TabletPaneCap;
   // Dragging a panel onto a pane's edge makes dockview halve only the target
   // (50/25/25 for a third pane); when on, the frontend evens out that row or
   // column afterwards, as the split buttons already do.

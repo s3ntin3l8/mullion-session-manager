@@ -76,38 +76,13 @@ vi.mock("../WorkspaceSwitcher.js", () => ({
   ),
 }));
 vi.mock("../PhoneNavigator.js", () => ({
-  PhoneNavigatorPanel: ({
-    tablet,
-    workspaces,
-  }: {
-    tablet?: boolean;
-    workspaces?: React.ReactNode;
-  }) => (
-    <div data-testid="navigator" data-tablet={String(!!tablet)}>
-      {workspaces}
-    </div>
+  PhoneNavigatorPanel: ({ workspaces }: { workspaces?: React.ReactNode }) => (
+    <div data-testid="navigator">{workspaces}</div>
   ),
 }));
 vi.mock("../Toolbar.js", () => ({
-  Toolbar: ({
-    onToggleSidebar,
-    notificationSheet,
-    mobileSessionSlot,
-  }: {
-    onToggleSidebar?: () => void;
-    notificationSheet?: boolean;
-    mobileSessionSlot?: React.ReactNode;
-  }) => (
-    <div data-testid="toolbar">
-      {onToggleSidebar && (
-        <button
-          data-testid="toggle-sidebar"
-          data-notif-sheet={String(!!notificationSheet)}
-          onClick={onToggleSidebar}
-        />
-      )}
-      {mobileSessionSlot}
-    </div>
+  Toolbar: ({ mobileSessionSlot }: { mobileSessionSlot?: React.ReactNode }) => (
+    <div data-testid="toolbar">{mobileSessionSlot}</div>
   ),
 }));
 // From 700px the left rail holds the sidebar toggle the top bar used to (#3009).
@@ -179,9 +154,7 @@ vi.mock("../launchers/SessionLauncher.js", () => ({
   },
 }));
 vi.mock("../MobileSessionBar.js", () => ({
-  MobileSessionBar: ({ tier, contextLabel }: { tier: string; contextLabel?: string }) => (
-    <span data-testid="session-bar" data-tier={tier} data-context={contextLabel ?? ""} />
-  ),
+  MobileSessionBar: () => <span data-testid="session-bar" />,
 }));
 vi.mock("../PaneHeaderActions.js", () => ({ PaneHeaderActions: () => null }));
 vi.mock("../CommandPalette.js", () => ({

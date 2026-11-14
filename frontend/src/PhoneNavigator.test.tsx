@@ -21,14 +21,17 @@ function header(over: Partial<Parameters<typeof PhoneNavigatorHeader>[0]> = {}) 
 
 describe("PhoneNavigatorHeader", () => {
   it("marks the selected tab and switches tabs", async () => {
-    const props = header({ tab: "devices" });
-    expect(screen.getByRole("button", { name: "Devices" })).toHaveAttribute("aria-pressed", "true");
+    const props = header({ tab: "settings" });
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // Devices are a right-sidebar view (#3012), not a navigator tab.
+    expect(screen.queryByRole("button", { name: "Devices" })).toBeNull();
     expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    expect(props.onTab).toHaveBeenCalledWith("settings");
     await userEvent.click(screen.getByRole("button", { name: "Projects" }));
     expect(props.onTab).toHaveBeenCalledWith("projects");
   });
@@ -118,12 +121,6 @@ describe("PhoneSettingsList", () => {
   });
 });
 
-vi.mock("./panels/registry.js", () => ({
-  KanbanBoardOverlay: ({ columnCount }: { columnCount?: number }) => (
-    <div data-cols={String(columnCount)}>BOARD</div>
-  ),
-}));
-
 describe("PhoneNavigatorPanel", () => {
   beforeEach(() => resetStore());
   function panel(over: Partial<Parameters<typeof PhoneNavigatorPanel>[0]> = {}) {
@@ -134,18 +131,15 @@ describe("PhoneNavigatorPanel", () => {
       onClose: vi.fn(),
       onSelectSetting: vi.fn(),
       sidebar: <div>SIDEBAR</div>,
-      onOpenSession: vi.fn(),
-      onSessionEnded: vi.fn(),
       ...over,
     };
     render(<PhoneNavigatorPanel {...props} />);
     return props;
   }
 
-  it("shows the sidebar by default and the board in place when Tasks is open", () => {
+  it("shows the sidebar by default", () => {
     panel();
     expect(screen.getByText("SIDEBAR")).toBeInTheDocument();
-    expect(screen.queryByText("BOARD")).toBeNull();
   });
 
   it("shows the workspaces slot above the sidebar on the Projects tab only", () => {
@@ -159,34 +153,11 @@ describe("PhoneNavigatorPanel", () => {
     expect(screen.queryByText("WORKSPACES")).toBeNull();
   });
 
-  it("keeps the board out of the tablet drawer: Tasks mode is the grid overlay (#3009)", () => {
-    useDashboardStore.getState().setViewMode("kanban");
-    const { unmount } = render(
-      <PhoneNavigatorPanel
-        navTab="projects"
-        setNavTab={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onClose={vi.fn()}
-        onSelectSetting={vi.fn()}
-        sidebar={<div>S</div>}
-        onOpenSession={vi.fn()}
-        onSessionEnded={vi.fn()}
-        tablet
-      />,
-    );
-    expect(screen.queryByText("BOARD")).toBeNull();
-    expect(screen.getByText("S")).toBeInTheDocument();
-    unmount();
-    panel();
-    expect(screen.getByText("BOARD")).toHaveAttribute("data-cols", "1");
-  });
-
-  it("shows the board and marks Tasks pressed while tasksOpen", () => {
+  it("keeps the board out of the drawer: Tasks mode is the grid overlay (#3009)", () => {
     useDashboardStore.getState().setViewMode("kanban");
     panel();
-    expect(screen.getByText("BOARD")).toBeInTheDocument();
-    expect(screen.queryByText("SIDEBAR")).toBeNull();
-    expect(screen.getByRole("button", { name: "Tasks" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("SIDEBAR")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tasks" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("shows the settings list on the Settings tab", () => {
@@ -194,27 +165,19 @@ describe("PhoneNavigatorPanel", () => {
     expect(screen.getByRole("button", { name: /Account/ })).toBeInTheDocument();
   });
 
-  it("Tasks tab opens the board; other tabs switching tab keeps the list view", async () => {
+  it("Tasks tab switches to Tasks mode; other tabs switch the tab", async () => {
     const open = panel();
     await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
     expect(open.onOpenTasks).toHaveBeenCalledTimes(1);
-    await userEvent.click(screen.getByRole("button", { name: "Devices" }));
-    expect(open.setNavTab).toHaveBeenCalledWith("devices");
-  });
-
-  it("switching away from an open Tasks board leaves Tasks", async () => {
-    useDashboardStore.getState().setViewMode("kanban");
-    const p = panel();
-    await userEvent.click(screen.getByRole("button", { name: "Projects" }));
-    expect(p.setNavTab).toHaveBeenCalledWith("projects");
-    expect(useDashboardStore.getState().viewMode).toBe("list");
+    expect(open.setNavTab).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(open.setNavTab).toHaveBeenCalledWith("settings");
   });
 });
 
 describe("sidebarPhoneSection", () => {
-  it("only maps Projects and Devices", () => {
+  it("only maps Projects", () => {
     expect(sidebarPhoneSection("projects")).toBe("projects");
-    expect(sidebarPhoneSection("devices")).toBe("devices");
     expect(sidebarPhoneSection("tasks")).toBeUndefined();
     expect(sidebarPhoneSection("settings")).toBeUndefined();
   });

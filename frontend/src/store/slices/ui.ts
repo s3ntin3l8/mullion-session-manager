@@ -359,13 +359,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
     },
 
-    cycleTheme: () => {
-      const current = get().settings.theme;
-      const next: AppSettings["theme"] =
-        current === "dark" ? "light" : current === "light" ? "system" : "dark";
-      get().updateSettings({ theme: next });
-    },
-
     setTerminalPrefs: (patch) => {
       get().updateSettings({ terminal: patch });
     },

@@ -72,14 +72,7 @@ export function MobileSessionSwitcher({
   onRenameCancel,
   showWorkspaceChip,
   onSelectWorkspace,
-  contextLabel,
-  sheetClassName,
 }: {
-  // Small label ahead of the session name in the trigger — the active
-  // workspace's name on tablet, where workspaces exist (phone has none).
-  contextLabel?: string;
-  // Extra class on the sheet (the tablet width cap).
-  sheetClassName?: string;
   // Open panes only, in dockview order: the swipe / `n/N` domain.
   items: MobileSessionItem[];
   // Every listed session, grouped — the sheet's content.
@@ -103,9 +96,7 @@ export function MobileSessionSwitcher({
   onRenameCancel: () => void;
   // Issue #1882 — the phone tier has no workspace switcher, so a row names
   // the workspace its session lives in, and a row whose session lives
-  // elsewhere offers to go there. Absent on the tablet tier, which HAS a
-  // workspace switcher (in the navigator's Projects tab) and so has no blind
-  // spot to cover.
+  // elsewhere offers to go there.
   showWorkspaceChip?: boolean;
   onSelectWorkspace?: (workspaceId: number) => void;
 }) {
@@ -226,7 +217,6 @@ export function MobileSessionSwitcher({
           setOpen(true);
         }}
       >
-        {contextLabel && <span className="mobile-session-context">{contextLabel}</span>}
         {active ? (
           <>
             <span className="mobile-session-dot" style={{ background: active.dotColor }} />
@@ -265,7 +255,6 @@ export function MobileSessionSwitcher({
         label="Sessions"
         closeLabel="Close session list"
         title={`Sessions (${listedRows.length})`}
-        sheetClassName={sheetClassName}
         backStack
         sheetRef={sheetRef}
         onEscape={() => {

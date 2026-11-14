@@ -565,9 +565,8 @@ export function NotificationBell({
     onTrapKeyDown(e);
   };
 
-  // The toolbar's mobile breakpoint (styles.css's max-width:699px block)
-  // changes .toolbar-lead's width, so the bell can move under the panel on a
-  // resize/orientation-change while it's open — recompute rather than leave
+  // A resize or orientation change can move the bell (the phone's top bar,
+  // the left rail) while the panel is open — recompute rather than leave
   // it anchored to a stale rect. Issue #1399 — same for an iOS visual-viewport
   // pan/resize: since #1398 `.app` (toolbar and bell included) tracks the
   // visual viewport's offsetTop, which moves without a window `resize`.

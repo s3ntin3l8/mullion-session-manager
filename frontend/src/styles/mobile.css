@@ -14,32 +14,14 @@
      this tier, so its styling has to be reachable at any width a
      coarse pointer shows up at, not just on the phone tier. */
 
-  /* `.toolbar-lead`'s own width-auto override, and the floating sidebar
-     drawer itself (`.sidebar-wrapper`/`.cmux-scrim`), moved to sidebar.css's
-     phone/tablet `data-tier` block (floating-sidebar redesign) — both now
-     apply on tablet too, not just the phone tier, so they live next
-     to the desktop-collapse rule they replace instead of
-     being split across two files. `.toolbar-center` stays
-     phone-only, deliberately, right here: tablet has the width to keep it
-     visible (this is the explicit decision, not an accidental inheritance
-     — `.toolbar-center`'s own `border-left` sitting right after the now-
-     auto-width lead icons, with no reserved-sidebar edge to align to, is
-     the same look phone already has and accepts). `.run-cmd-btn` used to be
-     phone-only too, for the same width reason; it is back now, icon-only
-     (issue #1880) — see its own rule below. */
-  .toolbar-center {
-    display: none !important;
-  }
   /* The command palette, restored on the phone tier (issue #1880).
      `.run-cmd-btn` was `display: none !important` here — a WIDTH decision
-     (the block comment above says so), not a verdict on the palette: the
-     phone's toolbar is [☰] [session switcher] [palette][bell], and the
-     palette's icon fits where the hidden label used to be.
+     (a width decision), not a verdict on the palette: the phone's toolbar
+     is [session switcher] [palette][bell], and the palette's icon fits.
 
-     Icon-only, like the tablet's compact picker (compact.css's
-     `.toolbar--compact-picker .run-cmd-btn`): the "Run command…" label and
-     the ⌘K hint do not fit a phone toolbar, and the button carries an
-     accessible name instead (Toolbar.tsx's `aria-label`).
+     Icon-only: the "Run command…" label and the ⌘K hint do not fit a phone
+     toolbar, and the button carries an accessible name instead
+     (Toolbar.tsx's `aria-label`).
 
      The button also takes the phone's own `.toolbar-icon-btn` class
      (Toolbar.tsx), so its SIZE and its touch-target behaviour come from the
@@ -62,11 +44,6 @@
   .run-cmd-btn .kbd {
     display: none;
   }
-  /* The version string is desktop chrome; on phone it costs ~50px of a
-     toolbar that already barely fits (it's still shown in Settings). */
-  .toolbar-version-label {
-    display: none !important;
-  }
   /* The actions group never gives up its width. It holds fixed-size touch
      targets (44px each on a coarse pointer), and the group clips what does
      not fit — so a group that could shrink would clip its LAST child first,
@@ -80,37 +57,10 @@
      and the padding) and the switcher keeps 148px; in Task view the
      palette's button is not rendered, so the actions take 60px and the
      switcher keeps 200px. Nothing is clipped in either view (issue #1880's
-     review).
-
-     Phone-only: on a coarse-pointer tablet the 44px buttons fill this
-     44px-tall group, and a clip would cut their focus rings. */
+     review). */
   .toolbar-actions {
     overflow: hidden;
     flex-shrink: 0;
-  }
-
-  /* Phone toolbar: [☰] [session switcher] [palette][bell]. The session
-     switcher (MobileSessionSwitcher.tsx) takes the space the hidden
-     .toolbar-center leaves; the palette's button is back on the phone
-     (issue #1880), and the bell sits at the right edge. New session, theme
-     and settings are not in the toolbar here at all: the session picker and
-     the navigator's Settings tab carry them, and Toolbar.tsx renders the ⋯
-     app menu only off the phone tier. */
-  .toolbar-mobile-session {
-    display: flex !important;
-  }
-  .toolbar-app-menu {
-    display: flex !important;
-  }
-  .toolbar-new-session-btn,
-  .toolbar-theme-btn,
-  .toolbar-settings-btn {
-    display: none !important;
-  }
-  .toolbar-lead {
-    padding-right: 4px;
-  }
-  .toolbar-actions {
     padding-left: 4px;
   }
 
@@ -225,8 +175,7 @@
      but not the bottom: in landscape on a notched phone, the home-indicator
      area could otherwise clip the last row of the nav list or scrolled
      section content. Same `env(safe-area-inset-bottom)` pattern already
-     used by `.sidebar-wrapper` elsewhere in this
-     file, added to each pane's own bottom edge rather than the fixed-size
+     used by the sidebar drawer (sidebar.css), added to each pane's own bottom edge rather than the fixed-size
      `.settings-modal` shell, since these are the parts that actually
      scroll. */
   .settings-content-body {
@@ -401,11 +350,10 @@
   }
 }
 
-/* Phone navigator (App.tsx / PhoneNavigator.tsx): below 700px the sidebar
-   drawer becomes a full-screen navigator under the toolbar — the ☰ button and
-   its own ✕ close it. The header/tabs/settings-row rules below are NOT
-   width-scoped: these components only mount on compact tiers, and a later
-   change in the tablet series renders the same navigator on tablet. */
+/* The navigator drawer (App.tsx / PhoneNavigator.tsx) from 700 to 1279px: the
+   left rail's sidebar button and the drawer's own ✕ close it. The phone has
+   no drawer since #3014. Not width-scoped: the navigator only mounts on the
+   tablet tier. */
 .phone-nav-header {
   flex: none;
   position: sticky;
@@ -501,19 +449,6 @@
 .phone-nav-settings-title {
   flex: 1;
 }
-:where(.app[data-tier="phone"]) {
-  .sidebar-wrapper {
-    width: 100vw !important;
-    box-shadow: none !important;
-  }
-  /* The navigator covers the whole viewport, so the scrim behind it is moot.
-     `&` keeps `.sb-open` on `.app` itself — a descendant combinator would
-     never match, because the class lives on the same element as data-tier. */
-  &.sb-open .cmux-scrim {
-    display: none !important;
-  }
-}
-
 /* Task board status strip, [New task][Filter] row and filter sheet
    (UnifiedBoard.tsx `phone`) — unscoped: they only render on compact tiers. */
 .task-card-sync-error-text {

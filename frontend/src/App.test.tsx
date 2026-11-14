@@ -228,28 +228,21 @@ describe("App tier wiring", () => {
   ] as const)("renders the session picker on %s: %s", (tier, expected) => {
     stubWidth(tier);
     render(<App />);
-    const bar = screen.queryByTestId("session-bar");
-    expect(!!bar).toBe(expected);
-    if (bar) expect(bar).toHaveAttribute("data-tier", tier);
-  });
-
-  it("gives the phone picker no workspace label (phone has no workspaces)", () => {
-    stubWidth("phone");
-    render(<App />);
-    expect(screen.getByTestId("session-bar")).toHaveAttribute("data-context", "");
+    expect(!!screen.queryByTestId("session-bar")).toBe(expected);
   });
 
   // The tablet gets the tabbed navigator in the drawer, with the workspace
   // switcher slot. The phone has neither (#3014).
-  it.each([["tablet", true, true]] as const)(
-    "renders the navigator on %s (tablet=%s, workspaces slot=%s)",
-    (tier, isTablet, hasWs) => {
-      stubWidth(tier);
-      render(<App />);
-      expect(screen.getByTestId("navigator")).toHaveAttribute("data-tablet", String(isTablet));
-      expect(!!screen.queryByTestId("workspace-switcher")).toBe(hasWs);
-    },
-  );
+  it("renders the navigator with the workspace switcher on tablet, none on the phone", () => {
+    stubWidth("tablet");
+    const { unmount } = render(<App />);
+    expect(screen.getByTestId("navigator")).toBeInTheDocument();
+    expect(screen.getByTestId("workspace-switcher")).toBeInTheDocument();
+    unmount();
+    stubWidth("phone");
+    render(<App />);
+    expect(screen.queryByTestId("navigator")).toBeNull();
+  });
 
   it("renders the plain sidebar + workspace switcher on desktop (no navigator)", () => {
     stubWidth("desktop");

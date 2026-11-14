@@ -26,20 +26,6 @@
   min-width: 0;
 }
 
-.toolbar-lead {
-  width: var(--sidebar-width, 288px);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 12px;
-  /* Issue #87 — floors at the existing 12px so a non-notched viewport keeps
-     its current spacing exactly (env() resolving to 0px must never win
-     against a real value here, only add to it). */
-  padding-left: max(12px, env(safe-area-inset-left));
-  height: 100%;
-}
-
 .toolbar-icon-btn {
   position: relative;
   width: 30px;
@@ -57,21 +43,6 @@
 .toolbar-icon-btn:hover {
   background: color-mix(in srgb, var(--fg) 10%, transparent);
   color: var(--fg);
-}
-
-/* Tasks-as-a-destination — Toolbar.tsx's own way back out of the board
-   (entering it now only happens from Sidebar.tsx's entry or the command
-   palette; this replaces issue #211's list/Kanban ViewModeToggle.tsx, which
-   used to render a segmented pair here unconditionally). Overrides
-   .toolbar-icon-btn's fixed 30x30 square — a "Back" label needs room the
-   plain icon buttons around it don't. */
-.toolbar-back-to-workspace {
-  width: auto;
-  gap: 6px;
-  padding: 0 10px 0 6px;
-  font-size: 0.75rem;
-  font-weight: 500;
-  font-family: inherit;
 }
 
 /* Phase 5 (Track B, issue #195 5.5b) — hierarchical/flat sidebar toggle
@@ -119,39 +90,13 @@
   box-sizing: content-box;
 }
 
-.toolbar-center {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0 16px;
-  height: 100%;
-  border-left: 1px solid var(--border);
-  min-width: 0;
-  overflow: hidden;
-}
-
-.toolbar-center-name {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.toolbar-center-count {
-  font-size: 0.6875rem;
-  color: var(--dim);
-  font-family: "Geist Mono", monospace;
-  flex-shrink: 0;
-}
-
 .toolbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 12px;
-  /* Issue #87 — same floor-at-12px reasoning as .toolbar-lead above. */
+  /* Issue #87 — floors at 12px so a non-notched viewport keeps its spacing
+     (env() resolving to 0px must never win against a real value). */
   padding-right: max(12px, env(safe-area-inset-right));
   height: 100%;
   margin-left: auto;
@@ -230,39 +175,15 @@
   outline-offset: 1px;
 }
 
-.toolbar-version-label {
-  font-family: "Geist Mono", monospace;
-  font-size: 0.6875rem;
-  color: var(--dim);
-  background: transparent;
-  border: none;
-  padding: 0 4px;
-  cursor: pointer;
-  border-radius: 5px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-}
-.toolbar-version-label:hover {
-  color: var(--muted);
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
-
-/* Phone and tablet (mobile.css / compact.css show them): the session switcher
-   slot between the lead icons and the actions, and the ⋯ app menu that holds
-   the actions the compact toolbar has no room for. */
+/* The phone's top bar (Toolbar.tsx, the only one since #3009): the session
+   picker fills it, between the bar's left edge and the actions. Its left inset
+   is the one the old lead group (with its hidden "+") left: the 12px floor
+   (issue #87) plus that group's 4px. */
 .toolbar-mobile-session {
-  display: none;
+  display: flex;
   flex: 1;
   min-width: 0;
   align-items: center;
-}
-.toolbar-app-menu {
-  display: none;
-}
-.toolbar-app-menu .kebab-trigger-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
+  padding-left: 16px;
+  padding-left: calc(max(12px, env(safe-area-inset-left)) + 4px);
 }

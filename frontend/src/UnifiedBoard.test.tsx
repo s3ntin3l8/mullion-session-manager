@@ -502,9 +502,7 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
   });
 });
 
-describe("UnifiedBoard tablet layout (columnCount 2)", () => {
-  const renderTablet = () =>
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone columnCount={2} />);
+describe("UnifiedBoard phone lanes", () => {
   const shownTitles = () =>
     Array.from(document.querySelectorAll(".kanban-column-title")).map((el) => el.textContent);
 
@@ -516,48 +514,9 @@ describe("UnifiedBoard tablet layout (columnCount 2)", () => {
     ];
   });
 
-  it("shows two adjacent columns starting at the default one, both chips pressed", () => {
-    renderTablet();
-    expect(shownTitles()).toHaveLength(2);
-    expect(shownTitles()[0]).toBe("In Progress");
-    expect(screen.getByRole("button", { name: /^In Progress/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    const pressed = screen
-      .getByRole("group", { name: "Task status" })
-      .querySelectorAll('[aria-pressed="true"]');
-    expect(pressed).toHaveLength(2);
-    expect(document.querySelector(".kanban-unified-columns")).toHaveClass(
-      "kanban-unified-columns--split",
-    );
-  });
-
-  it("keeps the pair put when a chip that is already on screen is picked", async () => {
-    renderTablet();
-    const before = shownTitles();
-    const second = screen
-      .getByRole("group", { name: "Task status" })
-      .querySelectorAll<HTMLElement>('[aria-pressed="true"]')[1]!;
-    await userEvent.click(second);
-    expect(shownTitles()).toEqual(before);
-  });
-
-  it("moves the window to a picked chip, clamped at the end", async () => {
-    renderTablet();
-    await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
-    expect(shownTitles()[0]).toBe("Ready");
-    await userEvent.click(screen.getByRole("button", { name: /^Failed/ }));
-    expect(shownTitles()).toHaveLength(2);
-    expect(shownTitles()[1]).toBe("Failed");
-  });
-
-  it("phone (columnCount 1) is never split: its Active segment stacks its two columns", () => {
+  it("the Active lane stacks its two columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
     expect(shownTitles()).toEqual(["In Progress", "Reviewing"]);
-    expect(document.querySelector(".kanban-unified-columns")).not.toHaveClass(
-      "kanban-unified-columns--split",
-    );
   });
 });
 
@@ -766,26 +725,6 @@ describe("UnifiedBoard phone layout", () => {
     const strip = screen.getByRole("group", { name: "Task status" });
     expect(strip).toHaveTextContent("Active3");
     expect(strip).toHaveTextContent("Done2");
-  });
-
-  it("on tablet, scrolls the selected chip into view, on mount and when the column changes", async () => {
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-      configurable: true,
-      value: scrollIntoView,
-    });
-    try {
-      render(
-        <UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone columnCount={2} />,
-      );
-      expect(scrollIntoView).toHaveBeenCalledTimes(1);
-      expect(scrollIntoView.mock.contexts[0]).toHaveTextContent("In Progress");
-      await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
-      expect(scrollIntoView).toHaveBeenCalledTimes(2);
-      expect(scrollIntoView.mock.contexts[1]).toHaveTextContent("Ready");
-    } finally {
-      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
-    }
   });
 
   it("switches column from the strip", async () => {

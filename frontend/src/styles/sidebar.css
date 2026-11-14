@@ -47,22 +47,21 @@
      takes its final size at once. */
 }
 
-/* Floating-sidebar redesign — phone and tablet tiers, not a raw viewport
-   width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
+/* The navigator drawer, tablet tier only (the phone has no drawer since
+   #3014), not a raw viewport width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
    wide window still floats the sidebar and a forced desktop on a narrow
    window stays docked (issue #1531). Was a `max-width: 1279.98px` query,
    which only matched the JS tier in `auto`. `:where()` adds no specificity,
    so a descendant rule written inside it (`.sidebar-wrapper`) still ties
-   the way that query did, and later files (mobile.css's full-bleed phone
-   drawer, compact.css's tablet width) win where they used to. An `&` rule
+   the way that query did, and a later file (compact.css's tablet width)
+   wins where it used to. An `&` rule
    does not: `&` expands to `:is(:where(...))`, so `&.sb-open .sidebar-wrapper`
    is one class lighter than the old `.app.sb-open .sidebar-wrapper`. Nothing
    else targets those state classes, so the computed result still matches. */
-:where(.app[data-tier="phone"], .app[data-tier="tablet"]) {
+:where(.app[data-tier="tablet"]) {
   .sidebar-wrapper {
     position: fixed !important;
-    /* Under the phone's top bar (inset-aware), or from 700px under only the
-       top safe-area inset, beside the left rail (#3009). */
+    /* Under the top safe-area inset, beside the left rail (#3009). */
     top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
     left: var(--left-rail-w, 0px);
     bottom: 0;
@@ -100,13 +99,6 @@
   &.sb-open .cmux-scrim {
     display: block !important;
   }
-
-  /* No reserved-sidebar-width column to line the toolbar's lead section up
-     with once the sidebar floats instead of docking — same treatment the
-     phone-only block already gave this before tablet shared the overlay. */
-  .toolbar-lead {
-    width: auto !important;
-  }
 }
 
 /* Desktop-only collapse — genuinely docked-sidebar-only behavior, unlike
@@ -121,20 +113,6 @@
     width: 0;
     border-right: none;
     overflow: hidden;
-  }
-
-  /* Toolbar tracks the collapsed sidebar (issue #90). Lead shrinks to fit
-     its three icons; the center divider is removed because there is no
-     longer a sidebar edge for it to line up with. */
-  &.sidebar-collapsed .toolbar-lead {
-    width: auto;
-  }
-  &.sidebar-collapsed .toolbar-center {
-    border-left: none;
-  }
-  /* Mirror the toggle glyph so its panel line reads as "collapsed". */
-  &.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
-    transform: scaleX(-1);
   }
 }
 

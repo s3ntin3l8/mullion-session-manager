@@ -954,8 +954,6 @@ export function App() {
     cursor: "col-resize",
   });
 
-  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
   // Whether any active session is Codex — gates the hook-trust banner below
   // (issue #259) so it only appears when it's actually relevant, not on
   // every load of a machine that merely has Codex installed.
@@ -963,10 +961,10 @@ export function App() {
     () => sessions.some((s) => s.status === "active" && CODEX_COMMAND_RE.test(s.command.trim())),
     [sessions],
   );
-  const paneCount = useMemo(() => dockviewApi?.panels.length ?? 0, [dockviewApi, panelsVersion]);
-  // Tiled-only count, for the empty-grid dropzone: paneCount above includes
-  // floating (peek) panels, so a lone floating panel would otherwise hide the
-  // "nothing tiled here" hint even though the grid itself is empty (#121).
+  // Tiled-only count, for the empty-grid dropzone: counting every panel would
+  // include floating (peek) panels, so a lone floating panel would otherwise
+  // hide the "nothing tiled here" hint even though the grid itself is empty
+  // (#121).
   const tiledPaneCount = useMemo(
     () => dockviewApi?.panels.filter(isTiledPanel).length ?? 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
@@ -1238,7 +1236,6 @@ export function App() {
       onOpenTasks={onOpenTasks}
       onOpenGit={onOpenGit}
       onOpenProjectSetup={onOpenProjectSetup}
-      onOpenDevice={onOpenDevice}
     />
   );
 
@@ -1253,7 +1250,6 @@ export function App() {
   // panes while the left sidebar is not showing.
   const mobileSessionSwitcher = isMobile ? (
     <MobileSessionBar
-      tier={layoutTier}
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
@@ -1309,12 +1305,7 @@ export function App() {
           onOpenTimeline={onOpenTimeline}
           onOpenBrowser={onOpenBrowser}
           onOpenLauncher={openGlobalLauncher}
-          onOpenSettings={openSettings}
-          activeWorkspaceName={activeWorkspace?.name ?? null}
-          paneCount={paneCount}
-          currentVersion={currentVersion}
           mobileSessionSlot={mobileSessionSwitcher}
-          phone
         />
       )}
       <div className="app-body" ref={appBodyRef}>
@@ -1392,28 +1383,18 @@ export function App() {
               {layoutTier === "desktop" && !sidebarCollapsed && (
                 <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
               )}
-              {/* Phone: workspaces don't exist as a concept — the session picker
-                  lists every session — and the drawer is a full-screen navigator
-                  with tabs instead of one long scroll. */}
+              {/* From 700 to 1279px the drawer is a navigator with tabs instead
+                  of one long scroll. */}
               {compact ? (
-                <>
-                  <PhoneNavigatorPanel
-                    tablet={!isMobile}
-                    workspaces={
-                      isMobile ? undefined : (
-                        <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-                      )
-                    }
-                    navTab={navTab}
-                    setNavTab={setNavTab}
-                    onOpenTasks={onOpenTasks}
-                    onClose={() => setSidebarOpen(false)}
-                    onSelectSetting={openSettingsFromNavigator}
-                    sidebar={sidebar}
-                    onOpenSession={onOpenSession}
-                    onSessionEnded={onSessionEnded}
-                  />
-                </>
+                <PhoneNavigatorPanel
+                  workspaces={<WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />}
+                  navTab={navTab}
+                  setNavTab={setNavTab}
+                  onOpenTasks={onOpenTasks}
+                  onClose={() => setSidebarOpen(false)}
+                  onSelectSetting={openSettingsFromNavigator}
+                  sidebar={sidebar}
+                />
               ) : (
                 <>
                   <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
@@ -1650,7 +1631,7 @@ export function App() {
                   <DockviewReact/> would drop dockviewApi and break future
                   addPanel/restore calls). Desktop-only — mobile shows its own
                   switcher instead of the tiled grid entirely. Gated on
-                  tiledPaneCount (not paneCount) so a floating peek panel
+                  tiledPaneCount (tiled panels only) so a floating peek panel
                   doesn't hide this hint while the grid itself is empty (#121). */}
               {!isMobile && tiledPaneCount === 0 && (
                 <div className="empty-grid-dropzone" style={{ position: "absolute", inset: 0 }}>
@@ -1677,7 +1658,6 @@ export function App() {
                   onOpenSession={onOpenSession}
                   onSessionEnded={onSessionEnded}
                   phone={isMobile}
-                  columnCount={isMobile ? 1 : undefined}
                 />
               )}
             </div>

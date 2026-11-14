@@ -138,27 +138,8 @@ describe("MobileSessionBar", () => {
     expect(dockviewApi.maximizeGroup).toHaveBeenCalledWith(panels[1]);
   });
 
-  it("on tablet, activates the panel in its own column without maximizing", async () => {
-    renderBar("session-1", { tier: "tablet", contextLabel: "Default" });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /shell/ }));
-    await user.click(screen.getByText("claude"));
-    expect(panels[1].api.setActive).toHaveBeenCalled();
-    expect(dockviewApi.maximizeGroup).not.toHaveBeenCalled();
-  });
-
-  it("on tablet, labels the trigger with the workspace and caps the sheet width", async () => {
-    renderBar("session-1", { tier: "tablet", contextLabel: "Default" });
-    expect(document.querySelector(".mobile-session-context")).toHaveTextContent("Default");
-    await userEvent.setup().click(screen.getByRole("button", { name: /shell/ }));
-    expect(screen.getByRole("dialog", { name: "Sessions" })).toHaveClass(
-      "mobile-session-sheet--tablet",
-    );
-  });
-
-  it("on phone, shows no workspace label and no tablet width cap", async () => {
+  it("shows no workspace label in the trigger and no width cap on the sheet", async () => {
     renderBar();
-    expect(document.querySelector(".mobile-session-context")).toBeNull();
     await userEvent.setup().click(screen.getByRole("button", { name: /shell/ }));
     expect(screen.getByRole("dialog", { name: "Sessions" })).not.toHaveClass(
       "mobile-session-sheet--tablet",
@@ -166,7 +147,7 @@ describe("MobileSessionBar", () => {
   });
 
   it("falls back to a bare setActive when there is no dockview api", async () => {
-    renderBar("session-1", { dockviewApi: null, tier: "tablet" });
+    renderBar("session-1", { dockviewApi: null });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /shell/ }));
     await user.click(screen.getByText("claude"));
@@ -301,27 +282,18 @@ describe("failed rename (audit finding 9)", () => {
   });
 
   // Issue #1882 — the phone tier has no workspace switcher, so a picker row
-  // names the workspace its session lives in. Tablet HAS a workspace
-  // switcher (in its navigator's Projects tab), so it needs no chip.
-  it("names the workspace on the phone tier only", async () => {
+  // names the workspace its session lives in.
+  it("names the workspace a session lives in", async () => {
     storeState.workspaces = [
       { id: 1, name: "Default", layout: { sessionId: 3 } },
       { id: 2, name: "Work", layout: null },
     ];
     storeState.activeWorkspaceId = 1;
 
-    // Phone: the chip is there.
-    const phone = renderBar("session-1", { tier: "phone" });
+    renderBar("session-1");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /shell/ }));
     // Session 3 lives in the current workspace's saved layout.
     expect(screen.getAllByText("Default").length).toBeGreaterThan(0);
-    phone.unmount();
-
-    // Tablet: it is not — the tablet's navigator has a workspace switcher,
-    // so the row would only repeat what that switcher already says.
-    renderBar("session-1", { tier: "tablet" });
-    await user.click(screen.getByRole("button", { name: /shell/ }));
-    expect(screen.queryByText("Default")).toBeNull();
   });
 });

@@ -504,10 +504,6 @@ export function KanbanBoardOverlay(props: {
   onSessionEnded: (session: Session) => void;
   // Phone tier: the board's one-column-at-a-time layout (see UnifiedBoard).
   phone?: boolean;
-  // How many status columns the compact board shows at once (see UnifiedBoard).
-  columnCount?: number;
-  // Phone: rendered inside the navigator (in flow) instead of as a grid overlay.
-  inline?: boolean;
 }) {
   const [resetKey, resetPanel] = useResetKey();
   const LazyUnifiedBoard = useRetriableLazy(loadUnifiedBoard, resetKey);
@@ -516,8 +512,8 @@ export function KanbanBoardOverlay(props: {
     // `region`); a <section> with an accessible name is the implicit region role.
     <section
       aria-label="Tasks"
-      className={props.inline ? "kanban-board-inline" : "kanban-board-overlay"}
-      style={props.inline ? undefined : { position: "absolute", inset: 0 }}
+      className="kanban-board-overlay"
+      style={{ position: "absolute", inset: 0 }}
     >
       <ErrorBoundary onReset={resetPanel}>
         <Suspense fallback={<LazyPanelFallback />}>
@@ -529,7 +525,6 @@ export function KanbanBoardOverlay(props: {
             onOpenSession={props.onOpenSession}
             onSessionEnded={props.onSessionEnded}
             phone={props.phone}
-            columnCount={props.columnCount}
           />
         </Suspense>
       </ErrorBoundary>

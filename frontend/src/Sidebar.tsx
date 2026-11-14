@@ -12,8 +12,7 @@ import type { VirtualItem } from "@tanstack/react-virtual";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { CreateProjectModal } from "./CreateProjectModal.js";
-import type { Device, Host, Project, Session } from "./api/index.js";
-import { SidebarDevices } from "./SidebarDevices.js";
+import type { Host, Project, Session } from "./api/index.js";
 import { projectSpansHosts } from "./lib/hostBadge.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { TextInput } from "./ui/primitives.js";
@@ -76,10 +75,11 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
 export interface SidebarProps {
-  // Phone navigator only: render just one of the sidebar's two areas (the
-  // full-screen navigator shows Projects and Devices as separate tabs).
-  // Unset — desktop and tablet — renders the whole sidebar exactly as before.
-  phoneSection?: "projects" | "devices";
+  // The navigator drawer's Projects tab (700 to 1279px) and the phone's hidden
+  // sidebar: the project tree without the Tasks entry, which the drawer and
+  // the phone's mode bar carry themselves. Unset (desktop) renders the whole
+  // sidebar. Devices are a right-sidebar view (#3012), not a section here.
+  phoneSection?: "projects";
   // Source Control lives in the right sidebar on desktop and tablet; only the
   // phone navigator (which has no right sidebar) still renders it here.
   showSourceControl: boolean;
@@ -104,9 +104,6 @@ export interface SidebarProps {
   // callback (for the palette's own entry) but never threaded it down to
   // Sidebar until now, so the project's own kebab menu can offer it too.
   onOpenProjectSetup: (projectId: number) => void;
-  // Issue #1326 — opens (or focuses) an Android device's video/input panel.
-  // See SidebarDevices.tsx for why this lives here rather than Settings.
-  onOpenDevice: (device: Device) => void;
   // Issue #1877 — the Dock's workspaceProjectIds (App.tsx, via
   // workspaceProjectIdsFromPanels): the projects with a session open in
   // the live layout. null means "do not scope" — the phone tier, which has
@@ -138,7 +135,6 @@ export function Sidebar({
   onOpenTasks,
   onOpenGit,
   onOpenProjectSetup,
-  onOpenDevice,
   workspaceProjectIds = null,
   openSessionIds = null,
   onOpenGlobalLauncher,
@@ -525,15 +521,10 @@ export function Sidebar({
           )}
         </button>
       )}
-      {/* Devices live in the right sidebar on tablet and desktop; only the phone
-          navigator's Devices tab (the right sidebar does not render there)
-          keeps this list, until a later phone slice moves it. */}
-      {phoneSection === "devices" && <SidebarDevices onOpenDevice={onOpenDevice} />}
-      {phoneSection !== "devices" && (
-        <>
-          <div className="sidebar-section-header">
-            <h3 className="sidebar-section-title">Projects</h3>
-            {/* Issue #1889 — this caption was the bare word "sessions":
+      <>
+        <div className="sidebar-section-header">
+          <h3 className="sidebar-section-title">Projects</h3>
+          {/* Issue #1889 — this caption was the bare word "sessions":
                 a label with no number, or a number that never got filled
                 in. It is the count now, with its unit, so it reads as the
                 total of the per-project numbers below it.
@@ -542,138 +533,138 @@ export function Sidebar({
                 declutter rule the per-project badge follows ("a project
                 with no sessions at all doesn't need a '0' sitting in its
                 header"). */}
-            {sectionSessionCount > 0 && (
-              <span className="sidebar-section-count">
-                <span className="sidebar-section-count-value">{sectionSessionCount}</span>{" "}
-                <span className="sidebar-section-count-unit">
-                  {sectionSessionCount === 1 ? "session" : "sessions"}
-                </span>
+          {sectionSessionCount > 0 && (
+            <span className="sidebar-section-count">
+              <span className="sidebar-section-count-value">{sectionSessionCount}</span>{" "}
+              <span className="sidebar-section-count-unit">
+                {sectionSessionCount === 1 ? "session" : "sessions"}
               </span>
-            )}
-            <HierarchyToggle />
-            <button
-              className="toolbar-icon-btn"
-              style={{ width: 22, height: 22 }}
-              title="Add project"
-              onClick={openAddProject}
-            >
-              <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
-            </button>
-          </div>
-          {/* The list below is the last-known-good one when a refresh
+            </span>
+          )}
+          <HierarchyToggle />
+          <button
+            className="toolbar-icon-btn"
+            style={{ width: 22, height: 22 }}
+            title="Add project"
+            onClick={openAddProject}
+          >
+            <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
+          </button>
+        </div>
+        {/* The list below is the last-known-good one when a refresh
               failed, which is the right thing to keep on screen — but the
               user has to be told it is stale, or a project added on another
               device silently never appears here. */}
-          {projectsError && projects.length > 0 && (
-            <ErrorText style={{ margin: "0 0 6px" }}>
-              Could not refresh projects — showing the last known list. {projectsError}
-            </ErrorText>
-          )}
-          {/* U3 — sticky at the top of the scrollable sidebar (see
+        {projectsError && projects.length > 0 && (
+          <ErrorText style={{ margin: "0 0 6px" }}>
+            Could not refresh projects — showing the last known list. {projectsError}
+          </ErrorText>
+        )}
+        {/* U3 — sticky at the top of the scrollable sidebar (see
         .sidebar-filter-bar's own `position: sticky` rule in styles.css) so
         it stays reachable while scrolled deep into a long session list —
         exactly the scenario ("past ~20 sessions") this filter exists for.
         Only shown once the section is actually listing a project — an empty
         dashboard, and a workspace with nothing tiled into it, have nothing
         to filter. */}
-          {treeProjects.length > 0 && (
-            <div className="sidebar-filter-bar">
-              <div className="sidebar-filter-search ui-input-wrap">
-                <SearchIcon size={13} strokeWidth={1.9} />
-                <TextInput
-                  small
-                  placeholder="Filter sessions…"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  aria-label="Filter sessions"
-                />
-                {searchQuery !== "" && (
-                  <button
-                    type="button"
-                    className="sidebar-filter-clear"
-                    title="Clear filter"
-                    onClick={() => setSearchQuery("")}
-                  >
-                    <CloseIcon size={10} />
-                  </button>
-                )}
-              </div>
-              <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
-                {SIDEBAR_FILTER_CHIPS.map((chip) => (
-                  <button
-                    key={chip.id}
-                    type="button"
-                    className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
-                    aria-pressed={selectedChips.has(chip.id)}
-                    onClick={() => toggleChip(chip.id)}
-                  >
-                    {chip.label}
-                  </button>
-                ))}
-              </div>
+        {treeProjects.length > 0 && (
+          <div className="sidebar-filter-bar">
+            <div className="sidebar-filter-search ui-input-wrap">
+              <SearchIcon size={13} strokeWidth={1.9} />
+              <TextInput
+                small
+                placeholder="Filter sessions…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                aria-label="Filter sessions"
+              />
+              {searchQuery !== "" && (
+                <button
+                  type="button"
+                  className="sidebar-filter-clear"
+                  title="Clear filter"
+                  onClick={() => setSearchQuery("")}
+                >
+                  <CloseIcon size={10} />
+                </button>
+              )}
             </div>
-          )}
-          {projects.length === 0 ? (
-            projectsError ? (
-              // The fetch FAILED — not "you have no projects". This used to
-              // render the "Welcome to Mullion" first-run state forever,
-              // which told a user with a working dashboard and a flaky
-              // connection that they had never added a project (audit
-              // finding 14).
-              <EmptyState>
-                <WarningTriangleIcon size={26} className="ui-empty-state-mark" />
-                <EmptyStateTitle>Could not load your projects</EmptyStateTitle>
-                <ErrorText style={{ marginBottom: 8 }}>{projectsError}</ErrorText>
-                <EmptyStateActions>
-                  <button
-                    className="ui-empty-state-btn-primary"
-                    onClick={() => {
-                      void useDashboardStore
-                        .getState()
-                        .refreshProjects()
-                        .catch(() => {});
-                    }}
-                  >
-                    <RefreshIcon size={12} strokeWidth={2} />
-                    Retry
-                  </button>
-                </EmptyStateActions>
-              </EmptyState>
-            ) : !projectsLoaded ? (
-              // Still loading — the first run's "Welcome to Mullion" is the
-              // wrong thing to show for a list that is on its way.
-              <EmptyState>
-                <MullionMark size={32} className="ui-empty-state-mark" />
-                <EmptyStateTitle>Loading projects…</EmptyStateTitle>
-              </EmptyState>
-            ) : (
-              <EmptyState>
-                <MullionMark size={32} className="ui-empty-state-mark" />
-                <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
-                <EmptyStateBody>
-                  Add a project folder to start — sessions run there and survive across restarts.
-                </EmptyStateBody>
-                <EmptyStateActions>
-                  <button
-                    className="ui-empty-state-btn-primary"
-                    onClick={() => setAddProjectOpen(true)}
-                  >
-                    <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-                    Add a project
-                  </button>
-                  <button
-                    className="ui-empty-state-btn-secondary"
-                    onClick={() => setDiscoverCollapsed(false)}
-                  >
-                    <SearchIcon size={12} strokeWidth={2} />
-                    Scan for repos
-                  </button>
-                </EmptyStateActions>
-              </EmptyState>
-            )
+            <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
+              {SIDEBAR_FILTER_CHIPS.map((chip) => (
+                <button
+                  key={chip.id}
+                  type="button"
+                  className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
+                  aria-pressed={selectedChips.has(chip.id)}
+                  onClick={() => toggleChip(chip.id)}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {projects.length === 0 ? (
+          projectsError ? (
+            // The fetch FAILED — not "you have no projects". This used to
+            // render the "Welcome to Mullion" first-run state forever,
+            // which told a user with a working dashboard and a flaky
+            // connection that they had never added a project (audit
+            // finding 14).
+            <EmptyState>
+              <WarningTriangleIcon size={26} className="ui-empty-state-mark" />
+              <EmptyStateTitle>Could not load your projects</EmptyStateTitle>
+              <ErrorText style={{ marginBottom: 8 }}>{projectsError}</ErrorText>
+              <EmptyStateActions>
+                <button
+                  className="ui-empty-state-btn-primary"
+                  onClick={() => {
+                    void useDashboardStore
+                      .getState()
+                      .refreshProjects()
+                      .catch(() => {});
+                  }}
+                >
+                  <RefreshIcon size={12} strokeWidth={2} />
+                  Retry
+                </button>
+              </EmptyStateActions>
+            </EmptyState>
+          ) : !projectsLoaded ? (
+            // Still loading — the first run's "Welcome to Mullion" is the
+            // wrong thing to show for a list that is on its way.
+            <EmptyState>
+              <MullionMark size={32} className="ui-empty-state-mark" />
+              <EmptyStateTitle>Loading projects…</EmptyStateTitle>
+            </EmptyState>
           ) : (
-            <>
-              {/* U3 — the live GitHub CI subscription used to live inside
+            <EmptyState>
+              <MullionMark size={32} className="ui-empty-state-mark" />
+              <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
+              <EmptyStateBody>
+                Add a project folder to start — sessions run there and survive across restarts.
+              </EmptyStateBody>
+              <EmptyStateActions>
+                <button
+                  className="ui-empty-state-btn-primary"
+                  onClick={() => setAddProjectOpen(true)}
+                >
+                  <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+                  Add a project
+                </button>
+                <button
+                  className="ui-empty-state-btn-secondary"
+                  onClick={() => setDiscoverCollapsed(false)}
+                >
+                  <SearchIcon size={12} strokeWidth={2} />
+                  Scan for repos
+                </button>
+              </EmptyStateActions>
+            </EmptyState>
+          )
+        ) : (
+          <>
+            {/* U3 — the live GitHub CI subscription used to live inside
             ProjectSection's own effect, one per mounted instance. Split out
             so it has exactly one owner regardless of which rendering path
             below is active (ProjectSection isn't mounted at all once
@@ -681,80 +672,79 @@ export function Sidebar({
             unconditionally (not just `visibleProjects`) since a filtered-out
             project's CI status should keep updating in the background, the
             same as it always has. */}
-              {projects.map((project) => (
-                <ProjectGitHubSubscription key={project.id} projectId={project.id} />
-              ))}
-              {treeProjects.length === 0 ? (
-                // Issue #1877 — the dashboard HAS projects; none of them are
-                // tiled into this workspace or pinned to the Dock. "Welcome
-                // to Mullion" would be a lie here (that state is the
-                // projects.length === 0 branch above). Same membership as
-                // the Dock's columns: a session open in the live layout, or
-                // a "+ Add project" pin.
-                <EmptyState>
-                  <EmptyStateTitle>Nothing tiled in this workspace</EmptyStateTitle>
-                  <EmptyStateBody>
-                    A project shows up here once one of its sessions is open in this layout, or you
-                    pin it from the Dock. Launch a session to put one here.
-                  </EmptyStateBody>
-                  <EmptyStateActions>
-                    <button className="ui-empty-state-btn-primary" onClick={onOpenGlobalLauncher}>
-                      <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-                      Launch a session
-                    </button>
-                  </EmptyStateActions>
-                </EmptyState>
-              ) : filterActive && visibleProjects.length === 0 ? (
-                <EmptyState>
-                  <EmptyStateTitle>No sessions match</EmptyStateTitle>
-                  <EmptyStateBody>
-                    Try a different search, or clear the status filters above.
-                  </EmptyStateBody>
-                </EmptyState>
-              ) : shouldVirtualize ? (
-                <VirtualizedProjectTree
-                  rows={flatRows}
+            {projects.map((project) => (
+              <ProjectGitHubSubscription key={project.id} projectId={project.id} />
+            ))}
+            {treeProjects.length === 0 ? (
+              // Issue #1877 — the dashboard HAS projects; none of them are
+              // tiled into this workspace or pinned to the Dock. "Welcome
+              // to Mullion" would be a lie here (that state is the
+              // projects.length === 0 branch above). Same membership as
+              // the Dock's columns: a session open in the live layout, or
+              // a "+ Add project" pin.
+              <EmptyState>
+                <EmptyStateTitle>Nothing tiled in this workspace</EmptyStateTitle>
+                <EmptyStateBody>
+                  A project shows up here once one of its sessions is open in this layout, or you
+                  pin it from the Dock. Launch a session to put one here.
+                </EmptyStateBody>
+                <EmptyStateActions>
+                  <button className="ui-empty-state-btn-primary" onClick={onOpenGlobalLauncher}>
+                    <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+                    Launch a session
+                  </button>
+                </EmptyStateActions>
+              </EmptyState>
+            ) : filterActive && visibleProjects.length === 0 ? (
+              <EmptyState>
+                <EmptyStateTitle>No sessions match</EmptyStateTitle>
+                <EmptyStateBody>
+                  Try a different search, or clear the status filters above.
+                </EmptyStateBody>
+              </EmptyState>
+            ) : shouldVirtualize ? (
+              <VirtualizedProjectTree
+                rows={flatRows}
+                hosts={hosts}
+                spansHostsByProject={spansHostsByProject}
+                openSessionIds={openSessionIdSet}
+                onOpenSession={onOpenSession}
+                onOpenSessionAsFloat={onOpenSessionAsFloat}
+                onSessionEnded={onSessionEnded}
+                onOpenProjectLauncher={onOpenProjectLauncher}
+                onToggleCollapsed={toggleProjectCollapsedVirtualized}
+                onOpenProjectSetup={onOpenProjectSetup}
+              />
+            ) : (
+              visibleProjects.map((project) => (
+                <ProjectSection
+                  key={project.id}
+                  project={project}
                   hosts={hosts}
-                  spansHostsByProject={spansHostsByProject}
-                  openSessionIds={openSessionIdSet}
-                  onOpenSession={onOpenSession}
                   onOpenSessionAsFloat={onOpenSessionAsFloat}
+                  sessions={filteredSessionsByProject.get(project.id) ?? []}
+                  allSessions={baseSessionsByProject.get(project.id) ?? []}
+                  spansHosts={spansHostsByProject.get(project.id) ?? false}
+                  onOpenSession={onOpenSession}
                   onSessionEnded={onSessionEnded}
-                  onOpenProjectLauncher={onOpenProjectLauncher}
-                  onToggleCollapsed={toggleProjectCollapsedVirtualized}
-                  onOpenProjectSetup={onOpenProjectSetup}
+                  onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                  onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
+                  hierarchicalView={hierarchicalView}
+                  forceExpanded={filterActive}
+                  openSessionIds={openSessionIdSet}
                 />
-              ) : (
-                visibleProjects.map((project) => (
-                  <ProjectSection
-                    key={project.id}
-                    project={project}
-                    hosts={hosts}
-                    onOpenSessionAsFloat={onOpenSessionAsFloat}
-                    sessions={filteredSessionsByProject.get(project.id) ?? []}
-                    allSessions={baseSessionsByProject.get(project.id) ?? []}
-                    spansHosts={spansHostsByProject.get(project.id) ?? false}
-                    onOpenSession={onOpenSession}
-                    onSessionEnded={onSessionEnded}
-                    onOpenLauncher={() => onOpenProjectLauncher(project.id)}
-                    onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
-                    hierarchicalView={hierarchicalView}
-                    forceExpanded={filterActive}
-                    openSessionIds={openSessionIdSet}
-                  />
-                ))
-              )}
-            </>
-          )}
-          {showSourceControl && <SourceControlSection onOpenGit={onOpenGit} />}
-          <DiscoverProjects
-            collapsed={discoverCollapsed}
-            onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
-            onOpenSettingsProjects={onOpenSettingsProjects}
-            hosts={hosts}
-          />
-        </>
-      )}
+              ))
+            )}
+          </>
+        )}
+        {showSourceControl && <SourceControlSection onOpenGit={onOpenGit} />}
+        <DiscoverProjects
+          collapsed={discoverCollapsed}
+          onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
+          onOpenSettingsProjects={onOpenSettingsProjects}
+          hosts={hosts}
+        />
+      </>
       {addProjectOpen && (
         <CreateProjectModal
           hosts={hosts}
