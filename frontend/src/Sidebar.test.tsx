@@ -1556,7 +1556,9 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
     renderSection();
     expect(screen.getByRole("button", { name: /Tasks/ })).toBeInTheDocument();
     expect(screen.getByText("Projects")).toBeInTheDocument();
-    expect(document.querySelector(".sidebar-devices")).not.toBeNull();
+    // Devices moved to the right sidebar (#3012): one home on desktop/tablet.
+    expect(document.querySelector(".sidebar-devices")).toBeNull();
+    expect(screen.queryByTestId("device-row-1")).toBeNull();
   });
 
   it("'projects' hides the Tasks entry and Devices, keeping the project tree", () => {
@@ -1571,6 +1573,8 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
     expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
     expect(screen.queryByText("Projects")).toBeNull();
     expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+    // The phone navigator's Devices tab is the only way to reach devices there.
+    expect(screen.getByTestId("device-row-1")).toBeInTheDocument();
   });
 
   // Issue #1877 — the phone tier has no workspaces. App passes null for the

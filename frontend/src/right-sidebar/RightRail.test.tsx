@@ -104,3 +104,14 @@ describe("RightRail Tasks tab", () => {
     ).toBeNull();
   });
 });
+
+describe("RightRail Devices entry (#3012)", () => {
+  it("lists Devices and opens the host-global view without a project", async () => {
+    useDashboardStore.setState({ rightSidebarOpen: false, rightSidebarView: "git" });
+    render(<RightRail projectId={null} />);
+    await userEvent.click(screen.getByRole("button", { name: "Devices" }));
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarView).toBe("devices");
+  });
+});

@@ -9,4 +9,5 @@ export const VIEW_TITLES = {
   tasks: "Tasks",
   files: "Files",
   project: "Project",
+  devices: "Devices",
 } as const;

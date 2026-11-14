@@ -1043,6 +1043,7 @@ export function App() {
       onOpenDockConfig,
       onOpenSkills,
       onOpenTasks,
+      onOpenDevice,
     }),
     [
       onOpenGit,
@@ -1055,6 +1056,7 @@ export function App() {
       onOpenDockConfig,
       onOpenSkills,
       onOpenTasks,
+      onOpenDevice,
     ],
   );
 

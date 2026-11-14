@@ -15,6 +15,7 @@ const actions = {
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
+  onOpenDevice: vi.fn(),
 };
 
 describe("ProjectSidebarView", () => {
