@@ -57,6 +57,7 @@ import {
   probeCollapsedSidebar,
   switchToLight,
   tabWalk,
+  tryFocusInside,
 } from "./lib/verify-ui-sidebar.mjs";
 import { judgeStates, parseColor, renderSample } from "./lib/color-math.mjs";
 
@@ -571,7 +572,7 @@ const CHECKS = [
       // Half 1, the phone: its sidebar mounts hidden in `.sidebar-host-hidden`.
       // That element is `hidden` (display: none) AND `inert`, so the UA rule
       // alone keeps Tab out: this half pins the attribute and that nothing in
-      // it takes focus, it does NOT prove `inert` works. Half 2 does.
+      // it takes focus (Tab and a direct focus() are both refused), it does NOT prove `inert` works. Half 2 does.
       const phone = await browser.newPage({ viewport: PHONE });
       await openApp(phone, demo);
       await phone.locator(".sidebar-host-hidden").waitFor({ state: "attached", timeout: 15_000 });
@@ -580,6 +581,7 @@ const CHECKS = [
         attribute: el.hasAttribute("inert"),
       }));
       const phoneWalk = await tabWalk(phone, ".sidebar-host-hidden");
+      const phoneFocus = await tryFocusInside(phone, ".sidebar-host-hidden");
       await phone.close();
 
       // Half 2, 1200px: the docked sidebar is collapsed by default and
@@ -603,6 +605,7 @@ const CHECKS = [
         phoneInert.attribute &&
         phoneWalk.inside === 0 &&
         phoneWalk.distinctOutside >= 3 &&
+        !phoneFocus.focused &&
         collapsed.inert.property &&
         collapsed.inert.attribute &&
         collapsed.walk.inside === 0 &&
@@ -619,12 +622,13 @@ const CHECKS = [
           ? "phone: hidden host inert, 0/30 Tab landings (attribute pin only); 1200px: collapsed " +
             "sidebar inert with visibility overridden, 0/30 landings, refuses focus, takes it " +
             `once inert is removed; opened from the rail, reached by Tab in ${opened.presses} presses`
-          : `phone=${JSON.stringify({ phoneInert, phoneWalk })} collapsed=${JSON.stringify(collapsed)} opened=${JSON.stringify(opened)}`,
+          : `phone=${JSON.stringify({ phoneInert, phoneWalk, phoneFocus })} collapsed=${JSON.stringify(collapsed)} opened=${JSON.stringify(opened)}`,
         evidence: {
           phoneViewport: PHONE,
           narrowViewport: narrow,
           phoneInert,
           phoneWalk,
+          phoneFocus,
           collapsed,
           opened,
         },
