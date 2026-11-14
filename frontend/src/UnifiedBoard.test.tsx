@@ -28,6 +28,7 @@ import type {
 } from "./api/index.js";
 import { makeProject, makeSession, makeTask } from "./test/fixtures.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
+import { boardStoreStubs } from "./test/boardStoreStubs.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
@@ -73,6 +74,7 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    ...boardStoreStubs,
     tasksError,
     taskMasterEnabled,
     kanbanOrder,

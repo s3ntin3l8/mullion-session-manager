@@ -1,4 +1,5 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
+import type { TaskStatus } from "../api/index.js";
 import type {
   ExistingInstructionsMode,
   ScaffoldConflict,
@@ -41,6 +42,7 @@ import type {
 } from "../api/index.js";
 import type { GithubIssueUi } from "./githubResources.js";
 import type { ReorderUpdate } from "../reorder.js";
+import type { StatusEntry as BoardStatusEntry } from "../unified-board/stackLayout.js";
 import type { KanbanColumnId } from "../kanban.js";
 import type { FoldHalvesState, Half, LastUsed } from "../lib/foldHalves.js";
 
@@ -971,6 +973,16 @@ export interface UiSlice {
   openTaskRequest: { taskId: number; nonce: number } | null;
   requestOpenTask: (taskId: number) => void;
   clearOpenTaskRequest: (nonce: number) => void;
+  // Tasks mode (#3026): the board's statuses with their counts under its
+  // current filters, published by UnifiedBoard so the left rail lists the same
+  // entries (it cannot reach the board's filtered tasks), and the one-shot
+  // request to jump to one of them. Each board layout consumes the request:
+  // stacked opens and scrolls to the section, lanes scrolls the lane in. The
+  // nonce lets the same status be requested twice in a row.
+  boardStatuses: BoardStatusEntry[];
+  setBoardStatuses: (entries: BoardStatusEntry[]) => void;
+  statusJumpRequest: { status: TaskStatus; nonce: number } | null;
+  requestStatusJump: (status: TaskStatus) => void;
   // Re-resolves `theme` whenever the OS-level color-scheme preference
   // changes, but only while settings.theme === "system" — a no-op the rest
   // of the time. Returns a cleanup function; called once from App.tsx

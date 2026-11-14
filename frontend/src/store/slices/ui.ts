@@ -269,6 +269,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     launcherRequest: null,
     openSessionRequest: null,
     openTaskRequest: null,
+    boardStatuses: [],
+    statusJumpRequest: null,
     foldHalves: parseFoldHalves(readJSON(STORAGE_KEYS.foldHalves, {})),
     focusedHalf: "left",
     foldHalvesActive: false,
@@ -672,6 +674,14 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     requestOpenTask: (taskId) => {
       set((state) => ({
         openTaskRequest: { taskId, nonce: (state.openTaskRequest?.nonce ?? 0) + 1 },
+      }));
+    },
+
+    setBoardStatuses: (entries) => set({ boardStatuses: entries }),
+
+    requestStatusJump: (status) => {
+      set((state) => ({
+        statusJumpRequest: { status, nonce: (state.statusJumpRequest?.nonce ?? 0) + 1 },
       }));
     },
 

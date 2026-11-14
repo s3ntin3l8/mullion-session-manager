@@ -479,6 +479,16 @@ The strip is on every layout, phone included.
   (the sections are flat), the facets panel is hidden, Hide done leaves Done
   and Failed as headers only, and cards can still be dragged within a section
   and between Backlog and Ready while both are open.
+- **Status list in the left rail** (`#3026`): in Tasks mode, from 700px, the
+  rail's middle region lists the board's statuses (a count over a short label,
+  a dot when a task there needs you), whichever layout the board shows,
+  including lanes on a wide desktop. The board publishes the entries it
+  derives from its filtered tasks (`boardStatuses` in the store), so the rail,
+  the stacked sections and the strip agree under every filter. A tap, on the
+  rail or on the stacked board's strip, raises the store's `statusJumpRequest`
+  (status plus nonce): the stacked board opens that section and scrolls to it,
+  the lanes scroll that lane into view. A request made before the board
+  mounted is not replayed. The strip stays on the stacked board as well.
 - **Phone** (`#2845`): the board is one status at a time, picked
   from a control under the toolbar. On a **phone** it is four joined segments —
   Backlog, Ready, **Active** (In progress, which holds the queued tasks, then

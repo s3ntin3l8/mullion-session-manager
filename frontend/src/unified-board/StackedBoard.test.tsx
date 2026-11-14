@@ -3,12 +3,14 @@
 // <UnifiedBoard> with a ResizeObserver the test drives, since the decision is
 // the board's own measured width and nothing else (not the tier, not the
 // device).
+import { useSyncExternalStore } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "../UnifiedBoard.js";
 import type { Project, Session, Task } from "../api/index.js";
 import { makeProject, makeTask } from "../test/fixtures.js";
+import { STORAGE_KEYS } from "../lib/persistedState.js";
 
 let tasks: Task[];
 let projects: Project[];
@@ -17,6 +19,17 @@ let selectedTaskId: number | null;
 const openRightSidebarTask = vi.fn();
 const requestOpenTask = vi.fn();
 const updateTask = vi.fn(async () => makeTask({}));
+// The jump request the left rail and the strip raise (#3026), with the
+// subscription a real store has, so a request re-renders the board.
+let jumpRequest: { status: string; nonce: number } | null = null;
+let publishedStatuses: unknown[] = [];
+const storeListeners = new Set<() => void>();
+let storeVersion = 0;
+const requestStatusJump = (status: string) => {
+  jumpRequest = { status, nonce: (jumpRequest?.nonce ?? 0) + 1 };
+  storeVersion += 1;
+  storeListeners.forEach((l) => l());
+};
 
 function storeState() {
   return {
@@ -46,11 +59,23 @@ function storeState() {
     gitBranchesByProject: {},
     prsByProject: {},
     mutedSessionIds: [] as number[],
+    statusJumpRequest: jumpRequest,
+    requestStatusJump,
+    setBoardStatuses: (entries: unknown[]) => {
+      publishedStatuses = entries;
+    },
   };
 }
 
 vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
+    useSyncExternalStore(
+      (l) => {
+        storeListeners.add(l);
+        return () => storeListeners.delete(l);
+      },
+      () => storeVersion,
+    );
     const state = storeState();
     return selector ? selector(state) : state;
   };
@@ -100,6 +125,8 @@ const original = {
 };
 
 beforeEach(() => {
+  jumpRequest = null;
+  publishedStatuses = [];
   projects = [makeProject({ id: 1, name: "demo" })];
   sessions = [];
   tasks = [
@@ -360,6 +387,80 @@ describe("UnifiedBoard stacked layout", () => {
     expect(screen.getByText("Someday")).toBeInTheDocument();
     const section = screen.getByRole("region", { name: "Backlog" });
     expect(scrollIntoView.mock.contexts.at(-1)).toBe(section);
+  });
+
+  it("a jump raised from outside the board (the rail) opens and scrolls to the section", () => {
+    boardWidth = 378;
+    renderBoard();
+    expect(header("Backlog")).toHaveAttribute("aria-expanded", "false");
+    scrollIntoView.mockClear();
+    act(() => requestStatusJump("backlog"));
+    expect(header("Backlog")).toHaveAttribute("aria-expanded", "true");
+    expect(scrollIntoView.mock.contexts.at(-1)).toBe(
+      screen.getByRole("region", { name: "Backlog" }),
+    );
+    // The same status again scrolls again (a new nonce).
+    scrollIntoView.mockClear();
+    act(() => requestStatusJump("backlog"));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay a jump that was requested before the board mounted", () => {
+    jumpRequest = { status: "backlog", nonce: 4 };
+    boardWidth = 378;
+    renderBoard();
+    expect(header("Backlog")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("scrolls the lane into view when the board shows lanes", () => {
+    boardWidth = 900;
+    renderBoard();
+    expect(layout()).toBe("lanes");
+    scrollIntoView.mockClear();
+    act(() => requestStatusJump("reviewing"));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toHaveAttribute("data-status", "reviewing");
+  });
+
+  it("with Group by, jumps to the lane's column that holds cards, not an empty chip", () => {
+    localStorage.setItem(STORAGE_KEYS.taskGroupBy, "project");
+    projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
+    tasks = [
+      makeTask({ id: 1, projectId: 1, status: "ready", title: "A" }),
+      makeTask({
+        id: 2,
+        projectId: 2,
+        status: "reviewing",
+        title: "B",
+        approvalState: "awaiting-human",
+      }),
+    ];
+    boardWidth = 900;
+    renderBoard();
+    scrollIntoView.mockClear();
+    act(() => requestStatusJump("reviewing"));
+    const target = scrollIntoView.mock.contexts[0] as HTMLElement;
+    expect(target).toHaveAttribute("data-status", "reviewing");
+    expect(target).not.toHaveClass("kanban-column-rail");
+    expect(target).toHaveTextContent("B");
+    localStorage.removeItem(STORAGE_KEYS.taskGroupBy);
+  });
+
+  it("does not publish statuses on the phone, which has no rail", () => {
+    boardWidth = 900;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+    expect(publishedStatuses).toEqual([]);
+  });
+
+  it("publishes its statuses, counts and needs-you flags for the rail", () => {
+    boardWidth = 900;
+    renderBoard();
+    expect(publishedStatuses).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "reviewing", count: 1, needsYou: true, needsYouCount: 1 }),
+        expect.objectContaining({ id: "backlog", count: 1, needsYou: false, needsYouCount: 0 }),
+      ]),
+    );
   });
 
   it("keeps the phone's own layout whatever the width", () => {

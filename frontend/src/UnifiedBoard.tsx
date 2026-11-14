@@ -47,12 +47,15 @@ import { needsYouReason } from "./github/taskMasterSummary.js";
 import { openEpicInSidebar } from "./lib/sidebarLinks.js";
 import { StackedBoard } from "./unified-board/StackedBoard.js";
 import { boardStacks, stackSections } from "./unified-board/stackLayout.js";
+import type { StackSection } from "./unified-board/stackLayout.js";
 import {
   MOTION_EASE,
   MOTION_FADE_MS,
   MOTION_LAYOUT_MS,
   prefersReducedMotion,
 } from "./lib/motion.js";
+
+const EMPTY_SECTIONS: StackSection[] = [];
 
 // The board's own width, measured (#3011): whether it stacks depends on the
 // room it has, not on the device or the tier, so a narrow desktop window and
@@ -236,10 +239,53 @@ export function UnifiedBoard({
   const stacked = !phone && boardStacks(boardWidth);
   const facetsShown =
     !phone && !stacked && facetsOpen(filterApi.facets, viewportWidth, projects.length);
-  const stackedSections = useMemo(
-    () => (stacked ? stackSections(visibleTasks) : []),
-    [stacked, visibleTasks],
-  );
+  // The statuses with their counts under the current filters: the stacked
+  // sections, and what the left rail lists in Tasks mode (#3026), so the two
+  // cannot drift. Published to the store for the rail.
+  const statusSections = useMemo(() => stackSections(visibleTasks), [visibleTasks]);
+  const stackedSections = stacked ? statusSections : EMPTY_SECTIONS;
+  useEffect(() => {
+    // The rail is not rendered on the phone: publish nothing there, and retract
+    // what a wider layout published before the window narrowed.
+    useDashboardStore.getState().setBoardStatuses(
+      (phone ? [] : statusSections).map((s) => ({
+        id: s.id,
+        title: s.title,
+        count: s.tasks.length,
+        needsYou: s.needsYou,
+        needsYouCount: s.needsYouCount,
+      })),
+    );
+  }, [statusSections, phone]);
+  useEffect(() => () => useDashboardStore.getState().setBoardStatuses([]), []);
+  // A jump to a status while the lanes show: scroll that lane into view. (The
+  // stacked board consumes the request itself, StackedBoard.tsx.) A request
+  // made before this board mounted is not replayed.
+  const statusJump = useDashboardStore((s) => s.statusJumpRequest);
+  const jumpHandledRef = useRef(statusJump?.nonce ?? 0);
+  useEffect(() => {
+    if (!statusJump || statusJump.nonce === jumpHandledRef.current) return;
+    jumpHandledRef.current = statusJump.nonce;
+    if (stacked || phone) return;
+    // Optional call: jsdom has no scrollIntoView.
+    // With Group by there is one lane per epic or project, so one column per
+    // status in each: prefer one holding cards over an empty rail chip.
+    const columns = rootRef.current?.querySelectorAll<HTMLElement>(
+      `.kanban-column[data-status="${statusJump.status}"]`,
+    );
+    const target =
+      Array.from(columns ?? []).find(
+        (el) =>
+          !el.classList.contains("kanban-column-is-empty") &&
+          !el.classList.contains("kanban-column-rail"),
+      ) ?? columns?.[0];
+    // Optional call: jsdom has no scrollIntoView.
+    target?.scrollIntoView?.({
+      inline: "start",
+      block: "nearest",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  }, [statusJump, stacked, phone]);
   const selectedTask =
     selectedTaskId !== null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null;
   const selectedStatus = selectedTask ? boardColumnOf(selectedTask.status) : null;
@@ -713,6 +759,7 @@ export function UnifiedBoard({
                           return (
                             <TaskColumn
                               key={column.id}
+                              status={column.id}
                               title={column.title}
                               projectsById={projectsById}
                               sessionsById={sessionsById}
