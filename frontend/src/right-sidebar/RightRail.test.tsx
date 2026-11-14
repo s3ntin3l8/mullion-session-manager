@@ -80,14 +80,15 @@ describe("RightRail Tasks tab", () => {
       ] as never,
     });
     const { unmount } = render(<RightRail projectId={4} />);
-    const btn = screen.getByRole("button", { name: "Tasks" });
-    // Only the one unarchived task of this project counts.
+    // Only the one unarchived task of this project counts. The count is in
+    // the button's name too (WCAG 2.5.3, #2886).
+    const btn = screen.getByRole("button", { name: "Tasks, 1" });
     expect(btn.textContent).toBe("1");
     unmount();
 
     useDashboardStore.setState({ taskMasterEnabled: false });
     render(<RightRail projectId={4} />);
-    expect(screen.queryByRole("button", { name: "Tasks" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
   });
 
   it("no longer folds tasks into the GitHub badge", () => {

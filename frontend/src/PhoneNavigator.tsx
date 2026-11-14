@@ -3,19 +3,17 @@ import { Fragment, useState } from "react";
 import { CloseIcon, ChevronRightIcon, SearchIcon } from "./ui/icons.js";
 import { filterSettingsSections, phoneSections } from "./settings/settingsSections.js";
 import type { SettingsSection } from "./settings/settingsSections.js";
-import { useDashboardStore } from "./store/index.js";
-import { KanbanBoardOverlay } from "./panels/registry.js";
-import type { Session } from "./api/index.js";
 import type { ReactNode } from "react";
 import { SearchInput } from "./ui/primitives.js";
 
-// Chrome for the compact-tier navigator (App.tsx renders it inside
-// `.sidebar-wrapper`, which mobile.css stretches to the whole viewport below
-// the toolbar on phone and compact.css makes a ~440px slide-over on tablet). The drawer's sections become tabs so each gets a
-// full-height list instead of one long scroll: Projects and Devices swap the
-// Sidebar's `phoneSection`; Settings shows the section list below; Tasks
-// shows the task board in place (App.tsx keeps the navigator open for it).
-export type PhoneNavTab = "projects" | "tasks" | "devices" | "settings";
+// Chrome for the navigator drawer from 700 to 1279px (App.tsx renders it
+// inside `.sidebar-wrapper`, which compact.css makes a ~440px slide-over; the
+// phone has no drawer since #3014). The drawer's sections become tabs so each
+// gets a full-height list instead of one long scroll: Projects is the
+// Sidebar's project tree (`phoneSection`); Settings shows the section list
+// below; Tasks switches to Tasks mode, the board over the grid (#3009).
+// Devices are a right-sidebar view (#3012), not a tab here.
+export type PhoneNavTab = "projects" | "tasks" | "settings";
 
 export function PhoneNavigatorHeader({
   tab,
@@ -48,13 +46,6 @@ export function PhoneNavigatorHeader({
           onClick={() => onTab("tasks")}
         >
           Tasks
-        </button>
-        <button
-          className="phone-nav-tab"
-          aria-pressed={tab === "devices"}
-          onClick={() => onTab("devices")}
-        >
-          Devices
         </button>
         <button
           className="phone-nav-tab"
@@ -109,10 +100,7 @@ export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSe
   );
 }
 
-// Header + body of the phone navigator. On the phone, viewMode === "kanban"
-// wins over the local tab, so Tasks can also be entered from outside
-// (palette). On the tablet the board is Tasks mode over the grid (#3009), so
-// the Tasks tab only switches to it, and the drawer closes.
+// Header + body of the navigator.
 export function PhoneNavigatorPanel({
   navTab,
   setNavTab,
@@ -120,49 +108,31 @@ export function PhoneNavigatorPanel({
   onClose,
   onSelectSetting,
   sidebar,
-  onOpenSession,
-  onSessionEnded,
   workspaces,
-  tablet = false,
 }: {
-  // Tablet only: the workspace switcher, shown at the top of the Projects tab
-  // (phone has no workspaces).
+  // The workspace switcher, shown at the top of the Projects tab.
   workspaces?: ReactNode;
-  // Tablet: the Tasks tab switches to Tasks mode instead of showing the board.
-  tablet?: boolean;
   navTab: PhoneNavTab;
   setNavTab: (tab: PhoneNavTab) => void;
   onOpenTasks: () => void;
   onClose: () => void;
   onSelectSetting: (section: SettingsSection) => void;
   sidebar: ReactNode;
-  onOpenSession: (session: Session) => void;
-  onSessionEnded: (session: Session) => void;
 }) {
-  const tasksOpen = useDashboardStore((st) => !tablet && st.viewMode === "kanban");
   return (
     <>
       <PhoneNavigatorHeader
-        tab={tasksOpen ? "tasks" : navTab}
+        tab={navTab}
         onTab={(t) => {
           if (t === "tasks") {
             onOpenTasks();
             return;
           }
           setNavTab(t);
-          if (tasksOpen) useDashboardStore.getState().setViewMode("list");
         }}
         onClose={onClose}
       />
-      {tasksOpen ? (
-        <KanbanBoardOverlay
-          inline
-          phone
-          columnCount={1}
-          onOpenSession={onOpenSession}
-          onSessionEnded={onSessionEnded}
-        />
-      ) : navTab === "settings" ? (
+      {navTab === "settings" ? (
         <PhoneSettingsList onSelect={onSelectSetting} />
       ) : (
         <>

@@ -40,7 +40,6 @@ import type {
   SidebarDensity,
   SoundName,
   LayoutMode,
-  TabletPaneCap,
   IssueTriageState,
   RelayReviewState,
   ReviewSummary,
@@ -2397,7 +2396,6 @@ export interface AppSettings {
   // Tablet tier plan (.claude/plans/another-thing-to-investigate-lively-
   // kitten.md, PR 4) — see shared/types.ts's own doc comment on LayoutMode.
   layoutMode: LayoutMode;
-  tabletPaneCap: TabletPaneCap;
   balancePanesOnDrop: boolean;
   projectRoots: string[];
   // Issue #2090 — opt-in (default off): map each project onto a host's

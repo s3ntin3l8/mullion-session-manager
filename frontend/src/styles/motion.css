@@ -40,7 +40,10 @@
   summary,
   .session-item,
   .task-card,
-  .rail-ws-row
+  .rail-ws-row,
+  .workspace-item,
+  .ws-section-header,
+  .ws-group-header
 ) {
   transition: scale var(--motion-press) var(--motion-ease-press);
 }
@@ -50,12 +53,16 @@
     .mobile-key-bar-btn,
     .device-toolbar button,
     .terminal-voice-btn,
+    .ws-row-btn,
     :has(.ws-drag-handle:active)
   ) {
   scale: 0.96;
   background-image: linear-gradient(var(--press-tint), var(--press-tint));
 }
 /* Wide things (rows, cards, list options) move less than a small button.
+   A workspace row and the WORKSPACES and group headers are containers, not
+   buttons (#2886): the row presses, and its one inner button (`.ws-row-btn`)
+   does not press again inside it.
    The same `:not()` list as above keeps this rule exactly as specific, so,
    coming later, it wins for a row that is also a button. */
 :is(
@@ -67,6 +74,8 @@
     .phone-more-row,
     .pane-tab-overflow-item,
     .workspace-item,
+    .ws-section-header,
+    .ws-group-header,
     .dock-monitor,
     .sidebar-device-row,
     .update-banner
@@ -76,6 +85,7 @@
     .mobile-key-bar-btn,
     .device-toolbar button,
     .terminal-voice-btn,
+    .ws-row-btn,
     :has(.ws-drag-handle:active)
   ) {
   scale: 0.98;

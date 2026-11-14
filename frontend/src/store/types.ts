@@ -821,17 +821,10 @@ export interface UiSlice {
   // The one write path for every preference: deep-merges `patch` into local
   // `settings` optimistically (so the UI reflects it immediately), then
   // fires a debounced PATCH /api/settings so a slider/number-field drag
-  // sends one request instead of one per tick. cycleTheme/setTerminalPrefs/
+  // sends one request instead of one per tick. setTerminalPrefs/
   // etc. below are thin wrappers over this for call sites that predate the
   // unified settings object.
   updateSettings: (patch: SettingsPatch) => void;
-  // Cycles the theme *preference* dark -> light -> system -> dark (issue
-  // #1432 — the old toggleTheme cycled the *resolved* theme dark<->light,
-  // which meant it could never land on, or leave, "system" without going
-  // through Settings). The Toolbar's quick toggle calls this; Settings'
-  // Theme segmented control (Dark/Light/System) still calls
-  // updateSettings({ theme: ... }) directly to jump to a specific value.
-  cycleTheme: () => void;
   setTerminalPrefs: (patch: Partial<TerminalPrefs>) => void;
   setHideEndedSessions: (value: boolean) => void;
   setShowTaskSessions: (value: boolean) => void;

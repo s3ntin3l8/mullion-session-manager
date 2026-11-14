@@ -615,25 +615,13 @@ vi.mock("../UnifiedBoard.js", () => ({
 
 describe("KanbanBoardOverlay", () => {
   const noop = () => {};
-  it("renders as an absolute grid overlay by default", async () => {
+  it("renders as an absolute grid overlay", async () => {
     const { container } = render(<KanbanBoardOverlay onOpenSession={noop} onSessionEnded={noop} />);
     expect(container.querySelector(".kanban-board-overlay")).not.toBeNull();
-    expect(container.querySelector(".kanban-board-inline")).toBeNull();
   });
-  it("renders in flow when inline (phone navigator)", () => {
-    const { container } = render(
-      <KanbanBoardOverlay inline onOpenSession={noop} onSessionEnded={noop} />,
-    );
-    expect(container.querySelector(".kanban-board-inline")).not.toBeNull();
-    expect(container.querySelector(".kanban-board-overlay")).toBeNull();
-  });
-  // #2873 — axe `region`: the board's content has to sit inside a landmark, in
-  // both placements (grid overlay and the phone navigator's in-flow board).
-  it.each([
-    ["overlay", false],
-    ["inline", true],
-  ])("puts the board inside a named Tasks region (%s)", async (_name, inline) => {
-    render(<KanbanBoardOverlay inline={inline} onOpenSession={noop} onSessionEnded={noop} />);
+  // #2873 — axe `region`: the board's content has to sit inside a landmark.
+  it("puts the board inside a named Tasks region", async () => {
+    render(<KanbanBoardOverlay onOpenSession={noop} onSessionEnded={noop} />);
     const region = screen.getByRole("region", { name: "Tasks" });
     expect(await within(region).findByTestId("board")).toBeInTheDocument();
   });

@@ -260,17 +260,6 @@
     width: 44px;
     height: 44px;
   }
-  /* Same specificity/source-order hazard the comment above documents —
-     .toolbar-back-to-workspace's own `width: auto` (toolbar.css) loses to
-     the plain .toolbar-icon-btn 44px bump above (equal one-class
-     specificity, later source) without this. ViewModeToggle.tsx used to be
-     the only way back to the workspace on mobile (Toolbar.tsx's own
-     comment); this button is what replaced it, so it has to stay reachable
-     here too, not squeezed into a 44px square its "Back" label can't fit. */
-  .toolbar-back-to-workspace {
-    width: auto;
-    height: 44px;
-  }
   /* The card itself is a drag-and-drop reorder handle (out of scope on
      touch — see the plan's "Explicitly out of scope"), not a tap target;
      this only guards against its own padding/border squeezing the nested

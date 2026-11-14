@@ -44,7 +44,6 @@ import type {
   SidebarDensity,
   SoundName,
   LayoutMode,
-  TabletPaneCap,
 } from "../../../src/shared/types.js";
 
 export type {
@@ -75,7 +74,6 @@ export type {
   SidebarDensity,
   SoundName,
   LayoutMode,
-  TabletPaneCap,
 };
 
 // TASK_STATUSES/LOCAL_HOST_ID are runtime VALUES (not type-only shapes —

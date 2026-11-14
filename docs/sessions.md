@@ -5,8 +5,10 @@ same choices (`frontend/src/launchers/useSessionLaunch.ts`):
 
 - **The New session launcher** — it only launches. It opens from a sidebar
   project's "+" (with that project preselected, still changeable), the
-  sidebar's "Launch a session" when a workspace is empty, and on the phone the
-  top bar's "+" and the session switcher's "New session".
+  sidebar's "Launch a session" when a workspace is empty, the left rail's "+"
+  under the open panes (on the two halves, the "+" of each half), the empty
+  workspace's "Launch a session" under a touch pointer, and on the phone the
+  session switcher's "New session".
 - **The command palette** (⌘K / Ctrl+K, and the left rail's command box) —
   commands, sessions and workspaces, plus every launcher by typing its name. A
   pane's split action still opens the palette scoped to that pane's project.

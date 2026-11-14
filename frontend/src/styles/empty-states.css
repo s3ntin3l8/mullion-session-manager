@@ -1023,6 +1023,12 @@
   font-size: 0.71875rem;
   color: var(--dim);
 }
+/* #2978 — the touch form of the hint above: two buttons at the 44px floor. */
+.empty-grid-actions > button {
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 0.8125rem;
+}
 
 /* Issue #211's Kanban board — an opaque overlay over .dockview-container
    (App.tsx), same positioning as .empty-grid-dropzone above but solid

@@ -47,22 +47,21 @@
      takes its final size at once. */
 }
 
-/* Floating-sidebar redesign — phone and tablet tiers, not a raw viewport
-   width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
+/* The navigator drawer, tablet tier only (the phone has no drawer since
+   #3014), not a raw viewport width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
    wide window still floats the sidebar and a forced desktop on a narrow
    window stays docked (issue #1531). Was a `max-width: 1279.98px` query,
    which only matched the JS tier in `auto`. `:where()` adds no specificity,
    so a descendant rule written inside it (`.sidebar-wrapper`) still ties
-   the way that query did, and later files (mobile.css's full-bleed phone
-   drawer, compact.css's tablet width) win where they used to. An `&` rule
+   the way that query did, and a later file (compact.css's tablet width)
+   wins where it used to. An `&` rule
    does not: `&` expands to `:is(:where(...))`, so `&.sb-open .sidebar-wrapper`
    is one class lighter than the old `.app.sb-open .sidebar-wrapper`. Nothing
    else targets those state classes, so the computed result still matches. */
-:where(.app[data-tier="phone"], .app[data-tier="tablet"]) {
+:where(.app[data-tier="tablet"]) {
   .sidebar-wrapper {
     position: fixed !important;
-    /* Under the phone's top bar (inset-aware), or from 700px under only the
-       top safe-area inset, beside the left rail (#3009). */
+    /* Under the top safe-area inset, beside the left rail (#3009). */
     top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
     left: var(--left-rail-w, 0px);
     bottom: 0;
@@ -100,13 +99,6 @@
   &.sb-open .cmux-scrim {
     display: block !important;
   }
-
-  /* No reserved-sidebar-width column to line the toolbar's lead section up
-     with once the sidebar floats instead of docking — same treatment the
-     phone-only block already gave this before tablet shared the overlay. */
-  .toolbar-lead {
-    width: auto !important;
-  }
 }
 
 /* Desktop-only collapse — genuinely docked-sidebar-only behavior, unlike
@@ -121,20 +113,6 @@
     width: 0;
     border-right: none;
     overflow: hidden;
-  }
-
-  /* Toolbar tracks the collapsed sidebar (issue #90). Lead shrinks to fit
-     its three icons; the center divider is removed because there is no
-     longer a sidebar edge for it to line up with. */
-  &.sidebar-collapsed .toolbar-lead {
-    width: auto;
-  }
-  &.sidebar-collapsed .toolbar-center {
-    border-left: none;
-  }
-  /* Mirror the toggle glyph so its panel line reads as "collapsed". */
-  &.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
-    transform: scaleX(-1);
   }
 }
 
@@ -229,7 +207,7 @@
   color: var(--dim);
   font-weight: 700;
   flex: 1;
-  /* This is an <h3> — the sidebar's section headings — and nothing resets
+  /* This is a heading (Projects is an <h2>, #2886) and nothing resets
      the UA's heading margins, so the default `margin: 1em 0` has to go or
      the header row gains a gap above and below the title. */
   margin: 0;
@@ -262,6 +240,43 @@
    base" posture as `.source-control-header` (empty-states.css) — Devices'
    and Tasks' own headers reuse the base class without a click handler, so
    the pointer cursor/hover can't live there. */
+/* #2886 — the one real button in a workspace row, group header or the
+   WORKSPACES header (WorkspaceSwitcher.tsx), which are no longer buttons
+   themselves. It looks like the text it wraps. */
+.ws-row-btn {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.ws-row-btn:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+/* On the active row's --accent-fill the accent ring disappears (the two are
+   one colour in the light theme), and this is where the palette puts focus
+   after a workspace switch: the ring takes the row's own text colour. */
+.workspace-item.active .ws-row-btn:focus-visible {
+  outline-color: currentColor;
+}
+.ws-section-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ws-group-toggle {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
 .ws-section-header {
   cursor: pointer;
 }

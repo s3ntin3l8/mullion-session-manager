@@ -739,12 +739,9 @@ describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
 
 // Tablet tier plan (PR 4) — layoutMode mirrors taskMaster.enabled's own
 // explicit-membership sanitization shape (see that describe block above);
-// tabletPaneCap is a two-value discrete set rather than a numeric range, so
-// it isn't a safeNumber candidate.
-describe("DEFAULT_SETTINGS.layoutMode / tabletPaneCap (tablet tier)", () => {
-  it("defaults to auto / 2", () => {
+describe("DEFAULT_SETTINGS.layoutMode (tablet tier)", () => {
+  it("defaults to auto", () => {
     expect(DEFAULT_SETTINGS.layoutMode).toBe("auto");
-    expect(DEFAULT_SETTINGS.tabletPaneCap).toBe(2);
   });
 
   it("accepts auto/phone/tablet/desktop for layoutMode and repairs an unknown string to the default", () => {
@@ -761,20 +758,15 @@ describe("DEFAULT_SETTINGS.layoutMode / tabletPaneCap (tablet tier)", () => {
     expect(sanitizeSettings(dirty).layoutMode).toBe(DEFAULT_SETTINGS.layoutMode);
   });
 
-  it("accepts 2 or 3 for tabletPaneCap and repairs any other value to 2", () => {
-    expect(mergeSettings({ tabletPaneCap: 3 }).tabletPaneCap).toBe(3);
-    expect(mergeSettings({ tabletPaneCap: 2 }).tabletPaneCap).toBe(2);
-
-    // tabletPaneCap only accepts 2 or 3, so 4 and -1 are deliberately
-    // OUT OF RANGE: sanitizeSettings is the thing under test, and its job
-    // is to repair exactly these values back to 2.
-    // @ts-expect-error -- deliberately invalid tabletPaneCap for the sanitizer
-    const dirty = { ...DEFAULT_SETTINGS, tabletPaneCap: 4 } as typeof DEFAULT_SETTINGS;
-    expect(sanitizeSettings(dirty).tabletPaneCap).toBe(2);
-
-    // @ts-expect-error -- deliberately invalid tabletPaneCap for the sanitizer
-    const negative = { ...DEFAULT_SETTINGS, tabletPaneCap: -1 } as typeof DEFAULT_SETTINGS;
-    expect(sanitizeSettings(negative).tabletPaneCap).toBe(2);
+  // #3016 — the tablet pane cap setting was removed with the two-halves
+  // layout (#3010). A value an older version stored, or an older cached client
+  // still PATCHes, is accepted and dropped rather than rejected or kept.
+  it("drops a stored or patched tabletPaneCap from an older version", () => {
+    const merged = mergeSettings({ layoutMode: "tablet", tabletPaneCap: 3 });
+    expect(merged.layoutMode).toBe("tablet");
+    expect(merged).not.toHaveProperty("tabletPaneCap");
+    const patched = deepMerge(merged, { tabletPaneCap: 2 }, DEFAULT_SETTINGS);
+    expect(patched).not.toHaveProperty("tabletPaneCap");
   });
 });
 

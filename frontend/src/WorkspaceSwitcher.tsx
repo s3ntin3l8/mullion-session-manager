@@ -195,31 +195,26 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
       {/* Sidebar declutter (issue #1465) — WORKSPACES gets the same
         collapse chevron every other sidebar section (Devices, each
         Project) already has, instead of always taking its ~5 rows of
-        space. P10 role="button"/tabIndex/Enter-Space/e.target guard
-        pattern, matching Sidebar.tsx's ProjectHeader — the nested "+" and
-        (while collapsed) attention/working dot already stop propagation or
-        carry no click handler, so the guard is only load-bearing for
-        keyboard activation of the nested "+" button. */}
-      <div
-        className="sidebar-section-header ws-section-header"
-        onClick={toggleSectionCollapsed}
-        role="button"
-        tabIndex={0}
-        aria-expanded={!sectionCollapsed}
-        aria-controls="workspaces-section-body"
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
+        space. The row is not itself a button (#2886, axe `nested-interactive`:
+        it holds the "+" button): the chevron and title are the disclosure
+        button, and a click anywhere else on the row still toggles. */}
+      <div className="sidebar-section-header ws-section-header" onClick={toggleSectionCollapsed}>
+        <button
+          type="button"
+          className="ws-row-btn ws-section-toggle"
+          aria-expanded={!sectionCollapsed}
+          aria-controls="workspaces-section-body"
+          onClick={(e) => {
+            e.stopPropagation();
             toggleSectionCollapsed();
-          }
-        }}
-      >
-        <ChevronDownIcon
-          size={12}
-          className={`ws-group-chevron${sectionCollapsed ? " collapsed" : ""}`}
-        />
-        <span className="sidebar-section-title">Workspaces</span>
+          }}
+        >
+          <ChevronDownIcon
+            size={12}
+            className={`ws-group-chevron${sectionCollapsed ? " collapsed" : ""}`}
+          />
+          <span className="sidebar-section-title">Workspaces</span>
+        </button>
         {/* Collapsing hides every workspace's own attention/working dot —
           this rolls them up into one aggregate so the signal survives
           collapse, same "signal survives collapse" treatment
@@ -451,35 +446,31 @@ function GroupSection({
         onClick={onToggleCollapsed}
         onDragOver={onHeaderDragOver}
         onDrop={onHeaderDrop}
-        // P10 — same role="button"/tabIndex/Enter-Space pattern as
-        // Sidebar.tsx's SessionRow/ProjectHeader (see SessionRow's own
-        // comment for the full rationale), including the
-        // `e.target !== e.currentTarget` guard: this header nests a color
-        // swatch button, a rename input/span, and a delete/kebab actions
-        // strip, all already stopping click propagation — the guard is what
-        // keeps tabbing to any of those and pressing Enter/Space from ALSO
-        // toggling this group's collapse state.
-        role="button"
-        tabIndex={0}
-        aria-expanded={!group.collapsed}
-        // Pairs aria-expanded with the collapsible region it governs,
-        // matching UnifiedBoard.tsx's own lane-collapse button
-        // (`aria-controls="kanban-lane-body"`) — the disclosure-button
-        // pattern the APG documents. The target only exists in the DOM
-        // while expanded (see the body div below), same as that precedent.
-        aria-controls={`ws-group-body-${group.id}`}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggleCollapsed();
-          }
-        }}
+        // Not itself a button (#2886, axe `nested-interactive`): it holds a
+        // color swatch button, a rename input and an actions strip. The
+        // chevron is the disclosure button; a click anywhere else on the
+        // header still toggles.
       >
-        <ChevronDownIcon
-          size={12}
-          className={`ws-group-chevron${group.collapsed ? " collapsed" : ""}`}
-        />
+        <button
+          type="button"
+          className="ws-row-btn ws-group-toggle"
+          aria-label={group.name}
+          aria-expanded={!group.collapsed}
+          // Pairs aria-expanded with the collapsible region it governs,
+          // matching UnifiedBoard.tsx's own lane-collapse button — the
+          // disclosure-button pattern the APG documents. The target only
+          // exists in the DOM while expanded (see the body div below).
+          aria-controls={`ws-group-body-${group.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleCollapsed();
+          }}
+        >
+          <ChevronDownIcon
+            size={12}
+            className={`ws-group-chevron${group.collapsed ? " collapsed" : ""}`}
+          />
+        </button>
         <button
           type="button"
           className="ws-group-color"
@@ -770,33 +761,12 @@ function WorkspaceItem({
       className={`workspace-item${active ? " active" : ""}${drag.isDragging ? " ws-dragging" : ""}${
         drag.isDimmed ? " ws-sibling-dim" : ""
       }`}
+      // Not itself a button (#2886, axe `nested-interactive`): the row holds
+      // a grip handle, a rename input and a delete/kebab strip. The name is
+      // the row's one button; a click anywhere else on the row still selects.
       onClick={onSelect}
       onDragOver={drag.onRowDragOver}
       onDrop={drag.onRowDrop}
-      // P10 — same role="button"/tabIndex/Enter-Space pattern as
-      // Sidebar.tsx's SessionRow (see that row's own comment for the full
-      // rationale), including the `e.target !== e.currentTarget` guard: this
-      // row nests a draggable grip handle, a rename input/span, and a
-      // delete/kebab actions strip, all already stopping click propagation —
-      // the guard is what keeps tabbing to any of those and pressing
-      // Enter/Space from ALSO switching to this workspace.
-      role="button"
-      tabIndex={0}
-      // The palette's focus fallback after a workspace switch lands here
-      // when the opener will not survive. Only the active row — a stale
-      // highlight is not a place to put the caret.
-      data-focus-fallback={active ? WORKSPACE_FOCUS_FALLBACK : undefined}
-      // Which workspace is currently in effect. `aria-current` is how a
-      // screen reader announces "you are here" in a list like this; the
-      // visual `.active` class alone says nothing to one.
-      aria-current={active ? "true" : undefined}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
     >
       <span
         className="ws-drag-handle"
@@ -849,8 +819,21 @@ function WorkspaceItem({
           }}
         />
       ) : (
-        <span
-          className="workspace-item-name"
+        <button
+          type="button"
+          className="ws-row-btn workspace-item-name"
+          // The palette's focus fallback after a workspace switch lands here
+          // when the opener will not survive. Only the active row — a stale
+          // highlight is not a place to put the caret.
+          data-focus-fallback={active ? WORKSPACE_FOCUS_FALLBACK : undefined}
+          // Which workspace is currently in effect. `aria-current` is how a
+          // screen reader announces "you are here" in a list like this; the
+          // visual `.active` class alone says nothing to one.
+          aria-current={active ? "true" : undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect();
+          }}
           onDoubleClick={(e) => {
             e.stopPropagation();
             suppressBlurRef.current = false;
@@ -859,7 +842,7 @@ function WorkspaceItem({
           }}
         >
           {workspace.name}
-        </span>
+        </button>
       )}
       {liveStatus === "attention" && (
         <span className="workspace-attn-dot" title="Session needs input" />
