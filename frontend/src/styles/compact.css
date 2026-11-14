@@ -8,12 +8,3 @@
   width: min(560px, 100%);
   align-self: center;
 }
-
-/* Navigator slide-over (PhoneNavigatorPanel inside .sidebar-wrapper) from 700
-   to 1279px: a ~440px panel. Width snaps (sidebar.css only transitions
-   transform). Not width-gated: the overlay this resizes is itself
-   `data-tier`, so a forced tablet on a wide window gets this width too
-   (issue #1531). */
-.app[data-tier="tablet"] .sidebar-wrapper {
-  width: min(440px, 60vw) !important;
-}

@@ -25,7 +25,7 @@ const THEME_LIGHT_CLASS = "light";
 //
 // The extra classes are appended after the theme classes. `false`/`null`/
 // `undefined` are dropped, so a call site can pass a conditional class
-// inline (`sidebarOpen && "sb-open"`) without building a string first.
+// inline (`sidebarCollapsed && "sidebar-collapsed"`) without building a string first.
 export function themeClassName(
   theme: Theme,
   ...extra: (string | false | null | undefined)[]

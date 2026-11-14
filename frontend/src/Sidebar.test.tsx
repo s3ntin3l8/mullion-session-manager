@@ -199,7 +199,7 @@ const NOOP_PROPS = {
 // mount VirtualizedProjectTree at all.
 function renderSidebar(
   props: Partial<typeof NOOP_PROPS> &
-    Partial<Pick<SidebarProps, "phoneSection" | "workspaceProjectIds" | "openSessionIds">> = {},
+    Partial<Pick<SidebarProps, "workspaceProjectIds" | "openSessionIds">> = {},
 ) {
   return render(
     <div className="sidebar-wrapper">
@@ -1195,10 +1195,10 @@ describe("Sidebar section header count (issue #1889)", () => {
     expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("3 sessions");
   });
 
-  it("counts the phone's Projects section too", () => {
+  it("counts a single session in the singular", () => {
     projects = [PROJECT];
     sessions = [makeSession({ id: 1 })];
-    renderSidebar({ phoneSection: "projects" });
+    renderSidebar();
 
     expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("1 session");
   });
@@ -1510,8 +1510,8 @@ describe("project-row New-session button (issue #730 — no launch from Task vie
   });
 });
 
-describe("Sidebar phoneSection (the navigator's Projects tab)", () => {
-  const renderSection = (phoneSection?: "projects") => {
+describe("Sidebar sections", () => {
+  const renderSection = () => {
     // SidebarDevices renders nothing without at least one device.
     devices = [
       {
@@ -1529,7 +1529,7 @@ describe("Sidebar phoneSection (the navigator's Projects tab)", () => {
     ] as unknown as typeof devices;
     return render(
       <div className="sidebar-wrapper">
-        <Sidebar {...NOOP_PROPS} phoneSection={phoneSection} />
+        <Sidebar {...NOOP_PROPS} />
       </div>,
     );
   };
@@ -1551,7 +1551,7 @@ describe("Sidebar phoneSection (the navigator's Projects tab)", () => {
     expect(screen.getByTestId("source-control")).toBeInTheDocument();
   });
 
-  it("renders everything when unset (desktop/tablet)", () => {
+  it("renders the Tasks entry and the project tree, with no Devices section", () => {
     renderSection();
     expect(screen.getByRole("button", { name: /Tasks/ })).toBeInTheDocument();
     expect(screen.getByText("Projects")).toBeInTheDocument();
@@ -1560,21 +1560,14 @@ describe("Sidebar phoneSection (the navigator's Projects tab)", () => {
     expect(screen.queryByTestId("device-row-1")).toBeNull();
   });
 
-  it("'projects' hides the Tasks entry and Devices, keeping the project tree", () => {
-    renderSection("projects");
-    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
-    expect(screen.getByText("Projects")).toBeInTheDocument();
-    expect(document.querySelector(".sidebar-devices")).toBeNull();
-  });
-
   // Issue #1877 — the phone tier has no workspaces. App passes null for the
   // scope props there; the tree must stay the full project list, not the
   // desktop's "only what's tiled" filter.
-  it("keeps every project on the phone projects tab when no workspace scope is passed", () => {
+  it("keeps every project when no workspace scope is passed (phone)", () => {
     projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
     render(
       <div className="sidebar-wrapper">
-        <Sidebar {...NOOP_PROPS} phoneSection="projects" />
+        <Sidebar {...NOOP_PROPS} />
       </div>,
     );
     expect(screen.getByText("alpha")).toBeInTheDocument();
@@ -1703,7 +1696,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
 
   it("does not mark sessions when no open-session set is passed (phone)", () => {
     sessions = [makeSession({ id: 7, projectId: 1, command: "claude code" })];
-    renderSidebar({ phoneSection: "projects" });
+    renderSidebar({ openSessionIds: null });
     expect(document.querySelector(".session-open-label")).toBeNull();
     expect(screen.getByRole("button", { name: "Open session claude code" })).toBeInTheDocument();
   });

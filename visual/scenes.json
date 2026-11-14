@@ -399,10 +399,10 @@
       "baseline": true
     },
     {
-      "name": "tablet-navigator",
+      "name": "desktop-narrow-sidebar",
       "path": "/",
       "tags": ["check", "audit"],
-      "viewports": ["tablet", "fold"],
+      "viewports": ["desktop-narrow"],
       "steps": [
         {
           "click": "role=button[name=\"Sidebar\"]"
@@ -701,6 +701,12 @@
     }
   ],
   "viewports": {
+    "desktop-narrow": {
+      "width": 1200,
+      "height": 800,
+      "scale": 1,
+      "mobile": false
+    },
     "tablet": {
       "width": 820,
       "height": 1180,

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import type { RefObject } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { DockviewGroupDropLocation, DockviewGroupPanel, Position } from "dockview";
 import { dropSessionPanel } from "../panelUtils.js";
@@ -7,14 +7,6 @@ import { useDashboardStore } from "../store/index.js";
 
 export interface UseDockviewDropParams {
   dockviewApi: DockviewApi | null;
-  // Must be the raw `useState` setter (stable identity forever) — same
-  // requirement as `useWorkspacePersistence`'s `setPanelsVersion` and
-  // `useMobileLayout`'s `setIsMobile` (see those hooks' own param comments).
-  // An inline wrapper (e.g. `(v) => setSidebarOpen(v)`) would get a fresh
-  // identity every render and, being read in these effects' dependency
-  // arrays, re-subscribe every dockview/native listener below on every
-  // render.
-  setSidebarOpen: Dispatch<SetStateAction<boolean>>;
 }
 
 export interface UseDockviewDropResult {
@@ -31,7 +23,7 @@ export interface UseDockviewDropResult {
 // Extracted from App.tsx (PR 34c of the hook-extraction series) — sidebar
 // session drag-to-dock: dragging a session row out of the Sidebar and
 // dropping it onto the dockview grid to open/dock its panel. Three effects,
-// all keyed off `dockviewApi`/`setSidebarOpen` only:
+// all keyed off `dockviewApi` only:
 //
 //   1. `onUnhandledDragOver` — shows drop indicators while dragging over the
 //      workspace and records the last hovered drop target.
@@ -49,8 +41,7 @@ export interface UseDockviewDropResult {
 // none of these three effects share state with the restore/mobile-layout
 // effects or with each other beyond `lastDropTargetRef` itself (owned
 // entirely inside this hook). Each effect is an independent subscription
-// keyed only on `dockviewApi` (plus `setSidebarOpen`, whose identity never
-// changes), so where App.tsx calls this hook relative to its other effects
+// keyed only on `dockviewApi`, so where App.tsx calls this hook relative to its other effects
 // has no observable effect on behavior. Effect 3 in particular reads
 // `dockviewRef.current` at setup time rather than depending on it directly —
 // that's safe regardless of call position because React attaches a
@@ -62,10 +53,7 @@ export interface UseDockviewDropResult {
 // occupied (right before the global keyboard shortcuts effect) purely to keep the diff
 // minimal and the file's effect ordering easy to audit — not because it's
 // required.
-export function useDockviewDrop({
-  dockviewApi,
-  setSidebarOpen,
-}: UseDockviewDropParams): UseDockviewDropResult {
+export function useDockviewDrop({ dockviewApi }: UseDockviewDropParams): UseDockviewDropResult {
   const dockviewRef = useRef<HTMLDivElement>(null);
   const lastDropTargetRef = useRef<{
     group: DockviewGroupPanel | undefined;
@@ -127,10 +115,9 @@ export function useDockviewDrop({
         position: event.position,
       });
       lastDropTargetRef.current = null;
-      setSidebarOpen(false);
     });
     return () => disposable.dispose();
-  }, [dockviewApi, setSidebarOpen]);
+  }, [dockviewApi]);
 
   // Handle the native drop event for sidebar session drag-to-dock onto
   // *empty grid space* (dockview has no group there to intercept the drop, so
@@ -191,7 +178,6 @@ export function useDockviewDrop({
 
       dropSessionPanel(dockviewApi, session, projects, lastDropTargetRef.current);
       lastDropTargetRef.current = null;
-      setSidebarOpen(false);
     };
 
     el.addEventListener("dragover", onDragOver);
@@ -204,7 +190,7 @@ export function useDockviewDrop({
       el.removeEventListener("dragend", onDragEndOrLeave);
       el.removeEventListener("dragleave", onDragEndOrLeave);
     };
-  }, [dockviewApi, setSidebarOpen]);
+  }, [dockviewApi]);
 
   return { dockviewRef };
 }

@@ -224,7 +224,7 @@ export function phoneSections(): typeof SECTIONS {
 }
 
 // The settings filter, shared by the desktop nav rail (Settings.tsx) and the
-// phone's navigator list (PhoneNavigator.tsx) so the two agree on what a
+// phone list (Settings.tsx, `phone`) so the two agree on what a
 // query finds (issue #1880). The phone's list had no filter at all, so
 // finding one of the sections meant scrolling; the desktop's had one.
 //

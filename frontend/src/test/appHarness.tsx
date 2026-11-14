@@ -75,11 +75,6 @@ vi.mock("../WorkspaceSwitcher.js", () => ({
     </span>
   ),
 }));
-vi.mock("../PhoneNavigator.js", () => ({
-  PhoneNavigatorPanel: ({ workspaces }: { workspaces?: React.ReactNode }) => (
-    <div data-testid="navigator">{workspaces}</div>
-  ),
-}));
 vi.mock("../Toolbar.js", () => ({
   Toolbar: ({ mobileSessionSlot }: { mobileSessionSlot?: React.ReactNode }) => (
     <div data-testid="toolbar">{mobileSessionSlot}</div>
@@ -94,17 +89,18 @@ vi.mock("../LeftRail.js", () => ({
     sidebarShown,
     middle,
   }: {
-    onToggleSidebar: () => void;
+    onToggleSidebar?: () => void;
     notificationSheet?: boolean;
     sidebarShown: boolean;
     middle?: React.ReactNode;
   }) => (
-    <nav data-testid="left-rail" data-sidebar-shown={String(sidebarShown)}>
-      <button
-        data-testid="toggle-sidebar"
-        data-notif-sheet={String(!!notificationSheet)}
-        onClick={onToggleSidebar}
-      />
+    <nav
+      data-testid="left-rail"
+      data-sidebar-shown={String(sidebarShown)}
+      data-notif-sheet={String(!!notificationSheet)}
+    >
+      {/* Like the real rail: no sidebar button where there is no sidebar. */}
+      {onToggleSidebar && <button data-testid="toggle-sidebar" onClick={onToggleSidebar} />}
       {middle}
     </nav>
   ),
@@ -246,17 +242,39 @@ export function stubWidth(tier: StubWidth, coarse = false) {
     })),
   );
 }
+// A real width in px (#3041's tests at 750, 1000 and 1200px): evaluates every
+// `min-width`/`max-width` clause of the query against it, so each band and
+// tier query in lib/layoutTier.ts answers as a browser at that width would.
+export function pxWidthMatches(px: number, query: string, coarse: boolean): boolean {
+  if (query === "(pointer: coarse)") return coarse;
+  const clauses = [...query.matchAll(/\((min|max)-width:\s*([\d.]+)px\)/g)];
+  if (clauses.length === 0) return false;
+  return clauses.every(([, kind, n]) => (kind === "min" ? px >= Number(n) : px <= Number(n)));
+}
+export function stubPxWidth(px: number, coarse = false) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: pxWidthMatches(px, query, coarse),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
 // A width that can change: `resize` fires the media queries' listeners (the
 // layout band follows them), the tier is set separately, as
 // useLayoutPresentation would, so the two can cross one commit apart.
-export function stubLiveWidth(initial: StubWidth) {
+export function stubLiveWidth(initial: StubWidth | number) {
   let width = initial;
   const listeners = new Set<() => void>();
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => ({
       get matches() {
-        return widthMatches(width, query, false);
+        return typeof width === "number"
+          ? pxWidthMatches(width, query, false)
+          : widthMatches(width, query, false);
       },
       media: query,
       addEventListener: (_: string, l: () => void) => listeners.add(l),
@@ -264,7 +282,7 @@ export function stubLiveWidth(initial: StubWidth) {
     })),
   );
   return {
-    resize(next: StubWidth) {
+    resize(next: StubWidth | number) {
       width = next;
       act(() => {
         for (const l of [...listeners]) l();
