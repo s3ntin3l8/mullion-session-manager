@@ -831,7 +831,9 @@
   font-size: 1rem;
   font-weight: 600;
 }
-/* A detail's own header (with its back arrow) takes the row's place. */
+/* A detail's own header (with its back arrow) takes the row's place. This
+   relies on RightSidebarPanel's order: the phone head, then the header row
+   holding the detail slot, as siblings. */
 .right-sidebar-phone-head:has(+ .right-sidebar-header .right-sidebar-detail-slot > *) {
   display: none;
 }
@@ -843,6 +845,9 @@
 }
 .right-sidebar-panel.phone .tasks-detail > .sb-actions-block {
   order: 99;
+  /* With the detail stretched to the panel (below), a short detail still
+     puts its actions at the bottom edge. */
+  margin-top: auto;
   position: sticky;
   bottom: 0;
   z-index: 1;
@@ -898,14 +903,11 @@
   border-color: var(--accent-solid);
   background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
 }
-/* A short detail still puts its actions at the bottom edge. */
+/* The detail fills the panel's height, so its actions can sit at the bottom. */
 .right-sidebar-panel.phone .right-sidebar-body:has(> .tasks-detail) {
   display: flex;
   flex-direction: column;
 }
 .right-sidebar-panel.phone .right-sidebar-body > .tasks-detail {
   flex: 1 0 auto;
-}
-.right-sidebar-panel.phone .tasks-detail > .sb-actions-block {
-  margin-top: auto;
 }

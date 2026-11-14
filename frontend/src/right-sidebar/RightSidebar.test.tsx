@@ -595,7 +595,10 @@ describe("RightSidebar on the phone", () => {
     renderSidebar("phone");
     open("devices");
     expect(screen.getByRole("heading", { name: "Devices" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Devices view" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Devices view" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    // Focus moves into it, on its back control.
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Back" }));
   });
 
   it("the back gesture closes the view", () => {
@@ -678,6 +681,19 @@ describe("RightSidebar on the phone", () => {
     const state = useDashboardStore.getState();
     expect(state.rightSidebarOpen).toBe(false);
     expect(state.viewMode).toBe("kanban");
+  });
+
+  it("a view closed and reopened at a task in one flush still treats the task as its entry", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    open("files");
+    act(() => {
+      useDashboardStore.getState().closeRightSidebar();
+      useDashboardStore.getState().openRightSidebarTask(7);
+    });
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
   it("the task's own back arrow also returns to the board, not to a task list", async () => {

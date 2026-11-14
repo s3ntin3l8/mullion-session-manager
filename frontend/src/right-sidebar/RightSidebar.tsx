@@ -9,9 +9,10 @@ import {
   useCoarsePointer,
 } from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
+import { useShallow } from "zustand/react/shallow";
 import { goSidebarBack } from "../sidebarBack.js";
 import { useDashboardStore } from "../store/index.js";
-import type { SidebarBack, ViewMode } from "../store/types.js";
+import type { DashboardState, SidebarBack } from "../store/types.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "../store/constants.js";
 import { RightRail } from "./RightRail.js";
 import { RightSidebarPanel } from "./RightSidebarPanel.js";
@@ -45,17 +46,18 @@ function PhoneBackEntry({ onBack }: { onBack: () => void }) {
 
 // The drill-in a view is showing (a task's detail, a PR or an issue), as the
 // sidebar history's own location type; null on a view's list.
-function useDrillIn(viewId: string, projectId: number | null): SidebarBack | null {
-  const taskId = useDashboardStore((s) => s.selectedTaskId);
-  const pr = useDashboardStore((s) =>
-    projectId === null ? null : (s.githubOpenPrByProject[projectId] ?? null),
-  );
-  const issue = useDashboardStore((s) =>
-    projectId === null ? null : (s.githubOpenIssueByProject[projectId] ?? null),
-  );
-  if (viewId === "tasks" && taskId !== null) return { kind: "task", taskId };
-  if (viewId === "github" && projectId !== null) {
+type DrillState = Pick<
+  DashboardState,
+  "rightSidebarView" | "selectedTaskId" | "githubOpenPrByProject" | "githubOpenIssueByProject"
+>;
+function drillOf(s: DrillState, projectId: number | null): SidebarBack | null {
+  if (s.rightSidebarView === "tasks" && s.selectedTaskId !== null) {
+    return { kind: "task", taskId: s.selectedTaskId };
+  }
+  if (s.rightSidebarView === "github" && projectId !== null) {
+    const pr = s.githubOpenPrByProject[projectId] ?? null;
     if (pr !== null) return { kind: "pr", projectId, number: pr };
+    const issue = s.githubOpenIssueByProject[projectId] ?? null;
     if (issue !== null) return { kind: "issue", projectId, number: issue };
   }
   return null;
@@ -193,24 +195,37 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   const view = RIGHT_SIDEBAR_VIEWS.find((v) => v.id === viewId) ?? RIGHT_SIDEBAR_VIEWS[0];
   const phone = tier === "phone";
   const phoneOpen = phone && open;
-  const viewMode = useDashboardStore((s) => s.viewMode);
-  const drill = useDrillIn(view.id, followedProjectId);
+  const drill = useDashboardStore(useShallow((s) => drillOf(s, followedProjectId)));
   const key = drillKey(drill);
-  // What the view opened at: its list (null), or a detail. Recorded as the
-  // panel opens, together with the mode it opened in.
-  const [openedAt, setOpenedAt] = useState<{ drill: string | null; mode: ViewMode } | null>(null);
-  if (phoneOpen && openedAt === null) setOpenedAt({ drill: key, mode: viewMode });
-  if (!phoneOpen && openedAt !== null) setOpenedAt(null);
-  const enteredAtDetail = openedAt !== null && openedAt.drill !== null;
+  // What the view opened at: its list (null) or a detail (its key). Read from
+  // the store's own transitions, not from renders: a closed-then-reopened view
+  // in one flush (a ?task= link on a cold start, the cross-link's return) never
+  // renders the closed state in between.
+  const [openedAt, setOpenedAt] = useState<string | null>(null);
+  const followedRef = useRef(followedProjectId);
   useEffect(() => {
-    if (!phoneOpen || openedAt === null) return;
-    // A mode change (a cross-link to a session, "Open task board") leaves the
-    // full screen: it would otherwise cover the mode it switched to.
-    if (viewMode !== openedAt.mode) close();
+    followedRef.current = followedProjectId;
+  });
+  useEffect(() => {
+    if (!phone) return;
+    return useDashboardStore.subscribe((s, prev) => {
+      if (!s.rightSidebarOpen) return;
+      if (!prev.rightSidebarOpen) {
+        setOpenedAt(drillKey(drillOf(s, followedRef.current)));
+        return;
+      }
+      // A mode change while the view is open (a cross-link to a session,
+      // "Open task board") leaves the full screen, which would otherwise cover
+      // the mode it switched to.
+      if (s.viewMode !== prev.viewMode) s.closeRightSidebar();
+    });
+  }, [phone]);
+  const enteredAtDetail = openedAt !== null;
+  useEffect(() => {
     // The detail it opened at was left for the list (its own Back, or the
     // gesture): there is no list to show, so close.
-    else if (enteredAtDetail && key === null) close();
-  }, [phoneOpen, openedAt, viewMode, enteredAtDetail, key, close]);
+    if (phoneOpen && enteredAtDetail && key === null) close();
+  }, [phoneOpen, enteredAtDetail, key, close]);
 
   // An action that opens a pane (a device, a file, the full Git panel) leaves
   // the phone's full screen first, or the pane would open behind it.
@@ -228,14 +243,29 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     [actions, close],
   );
 
+  // The full screen covers everything else: it is a modal dialog for
+  // assistive technology, and focus moves into it (its back control) as it
+  // opens, rather than staying on the board underneath.
+  const phoneRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!phoneOpen) return;
+    phoneRef.current?.querySelector<HTMLElement>(".right-sidebar-phone-back")?.focus();
+  }, [phoneOpen]);
+
   if (phone) {
     if (!phoneOpen) return null;
     return (
-      <aside className="right-sidebar-panel phone" aria-label={`${view.label} view`}>
+      <section
+        ref={phoneRef}
+        className="right-sidebar-panel phone"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${view.label} view`}
+      >
         {/* Registered before the drill-in below, so a view opened straight at
             a detail is under it on the stack. */}
         <PhoneBackEntry onBack={close} />
-        {drill !== null && key !== openedAt?.drill && (
+        {drill !== null && key !== openedAt && (
           <PhoneBackEntry key={key} onBack={() => leaveDrillIn(drill)} />
         )}
         <RightSidebarPanel
@@ -246,7 +276,7 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
           phone
           title={VIEW_TITLES[view.id as keyof typeof VIEW_TITLES] ?? view.label}
         />
-      </aside>
+      </section>
     );
   }
 

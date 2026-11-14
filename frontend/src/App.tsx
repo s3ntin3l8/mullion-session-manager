@@ -692,9 +692,9 @@ export function App() {
     restoredWorkspaceIdRef,
   });
 
-  // #2149 — a task push notification click opens that task: the sidebar's
-  // Tasks detail from 700px, the full-screen docked panel on phone (#3011).
-  useTaskNotificationOpen(isMobile);
+  // #2149 — a task push notification click opens that task in the sidebar's
+  // Tasks detail (#3011), which the phone shows full screen (#3014).
+  useTaskNotificationOpen();
 
   // Issue #2020 — resolves requestOpenTask (the desktop Tasks detail's
   // pop-out, and every "show me this task" on phone; the sidebar has no

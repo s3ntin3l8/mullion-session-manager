@@ -369,10 +369,10 @@ export function UnifiedBoard({
   };
 
   // A card click selects the task and shows its detail (#2843: the board no
-  // longer has a drawer of its own): in the right sidebar's Tasks view from
-  // 700px, in the full-screen docked panel on phone (#3011). useOpenTask owns that
-  // tier decision for every caller (this board, the GitHub and Git views'
-  // task chips, the issue view), so they cannot drift apart.
+  // longer has a drawer of its own): in the right sidebar's Tasks view (#3011),
+  // which the phone shows full screen (#3014). useOpenTask owns that for every
+  // caller (this board, the GitHub and Git views' task chips, the issue view),
+  // so they cannot drift apart.
   const openTask = useOpenTask();
 
   // Per-status counts (after the board's filters) for the phone strip, and

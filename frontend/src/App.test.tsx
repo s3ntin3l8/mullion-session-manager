@@ -1077,6 +1077,7 @@ describe("App task opening by tier (#3011)", () => {
       openTaskRequest: null,
       selectedTaskId: null,
       viewMode: "list",
+      rightSidebarOpen: false,
     });
     setLayoutMode("auto");
   });
@@ -1098,10 +1099,22 @@ describe("App task opening by tier (#3011)", () => {
     expect(state.viewMode).toBe("kanban");
   });
 
-  it("on the phone a task link still asks for the docked panel", () => {
+  // #3014 — the phone shows the sidebar's detail full screen, and a cold
+  // start with ?task= keeps it open (the "not at start" close is for the
+  // docked sidebar's persisted state only).
+  it("on the phone a task link opens the full-screen task over the board", () => {
     stubWidth("phone");
+    // A view left open by the docked sidebar is closed at start; the link's
+    // task then opens in the same flush and must stay open.
+    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarView: "git" });
     window.history.replaceState({}, "", "/?task=9");
-    render(<App />);
-    expect(useDashboardStore.getState().openTaskRequest?.taskId).toBe(9);
+    const { container } = render(<App />);
+    const state = useDashboardStore.getState();
+    expect(state.openTaskRequest).toBeNull();
+    expect(state.selectedTaskId).toBe(9);
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.viewMode).toBe("kanban");
+    expect(container.querySelector(".right-sidebar-panel.phone")).toBeTruthy();
+    act(() => useDashboardStore.getState().closeRightSidebar());
   });
 });
