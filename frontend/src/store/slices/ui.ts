@@ -135,6 +135,9 @@ export function __discardPendingSettingsPatchForTests(): void {
   pendingSettingsPatchDiscarder?.();
 }
 
+// LauncherRequest.seq — module-level so it keeps counting across a close.
+let launcherSeq = 0;
+
 export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set, get) => {
   // Closure-scoped (not React/store state) — accumulates across rapid
   // updateSettings() calls between debounce windows, same pattern
@@ -235,6 +238,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
     splitRequest: null,
+    launcherRequest: null,
     openSessionRequest: null,
     openTaskRequest: null,
     selectedTaskId: null,
@@ -520,6 +524,15 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     clearSplitRequest: () => {
       set({ splitRequest: null });
+    },
+
+    openLauncher: (target) => {
+      launcherSeq += 1;
+      set({ launcherRequest: { target: target ?? null, seq: launcherSeq } });
+    },
+
+    closeLauncher: () => {
+      set({ launcherRequest: null });
     },
 
     requestOpenSession: (sessionId) => {

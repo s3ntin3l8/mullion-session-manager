@@ -97,6 +97,21 @@ export interface TerminalPrefs {
 // handler reads it back to decide whether to add the new panel via a normal
 // open-or-focus or as a real split (`position: {referencePanel, direction}`).
 // Cleared on launch or on palette close, whichever comes first.
+// Issue #3013 — an open New session launcher (SessionLauncher.tsx). `target`
+// is where the session should land; today only the fold's two halves give it
+// a meaning (a later slice acts on it), so the launcher stores and passes it
+// through without acting on it. Null while the launcher is closed.
+export interface LauncherTarget {
+  half?: "left" | "right";
+}
+
+export interface LauncherRequest {
+  target: LauncherTarget | null;
+  // Distinct per open, so a surface that stays mounted between opens (the
+  // touch sheet) can start each one with fresh choices.
+  seq: number;
+}
+
 export interface SplitRequest {
   referencePanelId: string;
   direction: "right" | "below";
@@ -838,6 +853,12 @@ export interface UiSlice {
   setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
   requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
   clearSplitRequest: () => void;
+  // Issue #3013 — the New session launcher. The store cannot import
+  // `canLaunchTerminal` (panelUtils.ts imports the store), so the view-mode
+  // gate is applied where the launcher renders (SessionLauncherHost).
+  launcherRequest: LauncherRequest | null;
+  openLauncher: (target?: LauncherTarget) => void;
+  closeLauncher: () => void;
   // Issue #1429 — a desktop OS notification's onclick opens the session
   // directly (same destination the bell row/phone sheet/push click/deep
   // link all converged on) — but useAttentionNotifications.ts has no

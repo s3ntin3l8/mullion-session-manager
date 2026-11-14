@@ -408,8 +408,9 @@ Set it with the project API — `placement: "auto"` on `POST /api/projects`, or
 on `PATCH /api/projects/:id` to switch a project in or out.
 
 **Launching on a host from the launcher.** For a project that reaches more than
-one host (its own plus the `hostCwds` hosts), the session launcher shows an
-**On** chip next to the project. Its options are the project's own host (the
+one host (its own plus the `hostCwds` hosts), the New session launcher shows a
+**Host** choice in its Where row, next to the project (the command palette shows
+the same choice as an **On** chip). Its options are the project's own host (the
 default, "this server" when it is local — a launch you do not touch behaves as
 before), each `hostCwds` host by name, then **Auto**. A host that is offline or
 parked is listed but disabled. Choosing a host sends `targetHostId`; choosing

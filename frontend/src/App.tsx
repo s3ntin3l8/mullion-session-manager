@@ -17,6 +17,7 @@ import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
+import { SessionLauncherHost } from "./launchers/SessionLauncher.js";
 import type { SettingsSection } from "./Settings.js";
 import { SettingsLoadingFallback } from "./SettingsLoadingFallback.js";
 import { Dock } from "./Dock.js";
@@ -1104,7 +1105,7 @@ export function App() {
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
-      onNewSession={openGlobalLauncher}
+      onNewSession={() => useDashboardStore.getState().openLauncher()}
       onOpenSession={onOpenSession}
       // Issue #1882 — the phone tier has no workspace switcher, so a picker
       // row that names another workspace is the way back to it.
@@ -1495,6 +1496,13 @@ export function App() {
         onOpenDefault={onOpenBrowser}
         onBlank={onOpenBlankBrowser}
         onManage={(projectId) => onOpenDockConfig(projectId, "previews")}
+      />
+      {/* Issue #3013 — "New session" opens this launcher; ⌘K stays the palette. */}
+      <SessionLauncherHost
+        phone={isMobile}
+        panels={mobilePanels}
+        onLaunched={onOpenSession}
+        onOpenSession={onOpenSession}
       />
       {paletteOpen && (
         <CommandPalette

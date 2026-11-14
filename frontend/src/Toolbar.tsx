@@ -129,10 +129,8 @@ export function Toolbar({
         {!phone && bell}
         <button
           className="toolbar-icon-btn toolbar-new-session-btn"
-          onClick={onOpenLauncher}
-          title={
-            viewMode === "kanban" ? "New session (unavailable in Task view)" : "New session (⌘K)"
-          }
+          onClick={() => useDashboardStore.getState().openLauncher()}
+          title={viewMode === "kanban" ? "New session (unavailable in Task view)" : "New session"}
           disabled={viewMode === "kanban"}
         >
           <PlusIcon size={18} />
@@ -244,7 +242,7 @@ export function Toolbar({
                   key: "new",
                   label: "New session",
                   icon: <PlusIcon size={14} />,
-                  onClick: onOpenLauncher,
+                  onClick: () => useDashboardStore.getState().openLauncher(),
                   disabled: viewMode === "kanban",
                   // The launcher is a focus-trapped overlay of its own.
                   opensOverlay: true,
