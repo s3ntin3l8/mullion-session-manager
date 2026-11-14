@@ -19,6 +19,7 @@ import type { NotificationEvent, Project, Session } from "./api/index.js";
 import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
@@ -543,6 +544,8 @@ export function NotificationBell({
     active: !sheet && open,
     containerRef: panelRef,
   });
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present: panelPresent, state: panelPresence } = usePresence(!sheet && open, panelRef);
   // The phone sheet's own suppressRestore (a separate useFocusTrap instance,
   // above) — written to by BottomSheet during render, read by the phone
   // row-tap handlers below, same U7 race useFocusTrap.ts's own doc comment
@@ -720,12 +723,14 @@ export function NotificationBell({
           </div>
         </BottomSheet>
       )}
-      {open &&
+      {panelPresent &&
         !sheet &&
         pos &&
         createPortal(
           <div
             ref={panelRef}
+            data-presence={panelPresence}
+            inert={panelPresence === "leaving"}
             className={themeClassName(theme, "pane-tab-overflow-menu", "notif-panel")}
             style={{ position: "fixed", ...pos }}
             onClick={(e) => e.stopPropagation()}

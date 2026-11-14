@@ -5,6 +5,7 @@ import { useDashboardStore } from "../store/index.js";
 import { themeClassName } from "../store/theme.js";
 import { OverflowIcon } from "./icons.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { usePresence } from "../hooks/usePresence.js";
 import {
   useVisualViewportChange,
   visibleViewport,
@@ -115,6 +116,8 @@ export function KebabMenu({
     active: open,
     containerRef: menuRef,
   });
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present, state: presence } = usePresence(open, menuRef);
 
   const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
@@ -252,6 +255,7 @@ export function KebabMenu({
   // falls back to MENU_MAX_HEIGHT_FLOOR only then. A small *positive* gap is
   // used as-is: flooring it back up to 120px hid the menu behind the
   // keyboard, which is the bug this cap exists to fix.
+  let opensUpward = false;
   const getMenuStyle = (): React.CSSProperties | null => {
     const rect = triggerRect;
     if (!rect) return null;
@@ -266,7 +270,7 @@ export function KebabMenu({
     const visible = visibleViewport();
     const spaceAbove = rect.top - visible.top - 8;
     const spaceBelow = visible.bottom - rect.bottom - 8;
-    const opensUpward =
+    opensUpward =
       menuPlacement === "top" ||
       (menuPlacement === "auto" && menuHeight > spaceBelow && spaceAbove > spaceBelow);
     if (opensUpward) {
@@ -324,13 +328,16 @@ export function KebabMenu({
       >
         {trigger ?? <OverflowIcon size={15} />}
       </button>
-      {open &&
+      {present &&
         menuStyle &&
         createPortal(
           <div
             ref={menuRef}
             className={themeClassName(theme, "pane-tab-overflow-menu")}
             style={menuStyle}
+            data-presence={presence}
+            data-placement={opensUpward ? "top" : "bottom"}
+            inert={presence === "leaving"}
             role="menu"
             onKeyDown={onMenuKeyDown}
             onClick={(e) => e.stopPropagation()}

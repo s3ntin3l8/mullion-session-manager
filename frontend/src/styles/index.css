@@ -52,3 +52,6 @@
 @import "./session-launcher.css";
 /* New section — appended last so it cannot reorder any earlier rule (#3012). */
 @import "./companion-views.css";
+/* New section — appended last (#3015): the shared press, overlay and
+   material rules, which must sit above every component rule they refine. */
+@import "./motion.css";

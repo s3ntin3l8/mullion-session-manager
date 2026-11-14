@@ -137,6 +137,32 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
     );
   });
 
+  // #3015 — sheets and popovers are a translucent layer (--material) over
+  // whatever is behind them, which can be anything: a white web preview under
+  // the dark theme, a black terminal under the light one. So the text roles
+  // that sit on material must clear AA over the material composited onto
+  // pure white AND pure black. --dim is lifted to --muted on material
+  // (styles/motion.css), so it is not one of them.
+  it("--fg and --muted clear AA on material over any backdrop", () => {
+    const raw = vars.get("--material") ?? "";
+    const m = raw.match(/^color-mix\(in srgb,\s*var\((--[\w-]+)\)\s+(\d+)%,\s*transparent\)$/);
+    expect(m, `--material is a translucent mix: ${raw}`).not.toBeNull();
+    const [, base, percent] = m!;
+    expect(Number(percent)).toBeLessThan(100);
+    for (const backdrop of [
+      [255, 255, 255],
+      [0, 0, 0],
+    ] as Rgb[]) {
+      const surface = tint(resolve(vars, base), backdrop, Number(percent));
+      for (const fg of ["--fg", "--muted"]) {
+        expect(
+          contrast(resolve(vars, fg), surface),
+          `${fg} on --material over rgb(${backdrop.join(",")})`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it("defines eight graph lanes", () => {
     for (let i = 1; i <= 6; i++) expect(vars.has(`--lane-${i}`)).toBe(true);
     expect(vars.has("--lane-more")).toBe(true);

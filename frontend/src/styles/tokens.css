@@ -31,6 +31,10 @@
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   /* Press feedback. */
   --motion-ease-press: cubic-bezier(0, 0, 0.58, 1);
+  /* The blur behind material (sheets and popovers, styles/motion.css). The
+     motion study's value. One place to set it to `none` if a phone-class GPU
+     drops frames with it on. */
+  --material-blur: blur(22px) saturate(160%);
 }
 
 /* Design tokens ported 1:1 from the Claude Design "Cmux design integration"
@@ -123,6 +127,15 @@
   --track: color-mix(in srgb, var(--fg) 5%, transparent);
   --field: var(--sidebar);
   --seg: color-mix(in srgb, var(--fg) 11%, transparent);
+  /* Material (docs/motion.md): the translucent layer sheets and popovers sit
+     on, its light edge, and the tint a pressed control shows. 90% is the
+     most see-through --chrome gets while --fg and --muted keep 4.5:1 over a
+     pure white OR pure black backdrop (a web preview, a light terminal
+     scheme); tokens.contrast.test.ts holds it there. --dim does not survive
+     any translucency, so styles/motion.css lifts it to --muted on material. */
+  --material: color-mix(in srgb, var(--chrome) 90%, transparent);
+  --material-edge: color-mix(in srgb, #ffffff 9%, transparent);
+  --press-tint: color-mix(in srgb, var(--fg) 8%, transparent);
 }
 
 .cmux-root.light {
@@ -205,6 +218,10 @@
   --track: color-mix(in srgb, var(--fg) 5%, transparent);
   --field: #ffffff;
   --seg: color-mix(in srgb, var(--fg) 9%, transparent);
+  --material: color-mix(in srgb, var(--chrome) 90%, transparent);
+  /* On a light surface the edge of light is white, stronger than dark's. */
+  --material-edge: color-mix(in srgb, #ffffff 70%, transparent);
+  --press-tint: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
 * {

@@ -60,7 +60,8 @@ export default defineConfig({
     // strip's menu staying unclipped, ui/sidebar/TaskStatusBlock.test.tsx;
     // left-rail.css: only the rail's middle region scrolls, LeftRail.test.tsx;
     // companion-views.css: the Dock view's touch-size rows,
-    // right-sidebar/DockSidebarView.test.tsx).
+    // right-sidebar/DockSidebarView.test.tsx; motion.css and index.css: the
+    // shared press, overlay and material rules, styles/motion.test.ts).
     css: {
       include: [
         /styles\/tokens\.css/,
@@ -69,6 +70,8 @@ export default defineConfig({
         /styles\/task-board\.css/,
         /styles\/left-rail\.css/,
         /styles\/companion-views\.css/,
+        /styles\/motion\.css/,
+        /styles\/index\.css/,
       ],
     },
     maxWorkers,

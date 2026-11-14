@@ -23,7 +23,7 @@
   border-radius: 14px;
   box-shadow: 0 24px 70px -12px rgba(0, 0, 0, 0.6);
   overflow: hidden;
-  animation: cmuxPop 0.13s ease-out;
+  /* Enters and leaves from styles/motion.css (.motion-dialog). */
 }
 .cmd-palette-search {
   display: flex;
