@@ -102,6 +102,16 @@ describe("mullion dock", () => {
     });
   });
 
+  it("dock start rejects a repeated or dangling --branch", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    expect(
+      await runCommand(["dock", "start", "web", "--branch", "a", "--branch", "b"], { client, io }),
+    ).toBe(2);
+    expect(await runCommand(["dock", "start", "web", "--branch"], { client, io })).toBe(2);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("dock start errors clearly when the control id doesn't exist", async () => {
     const client = fakeClient({
       request: vi.fn(async (op: string) => {

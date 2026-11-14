@@ -20,13 +20,21 @@ export function createDockCommands({ CliUsageError, requireOne }) {
       return { json: await client.request("docks.list", { projectId: args[0] }) };
     },
     async start(client, rawArgs) {
-      const branchFlag = rawArgs.indexOf("--branch");
-      const branch = branchFlag === -1 ? undefined : rawArgs[branchFlag + 1];
-      // Positionals only: `--branch <name>` is not a project or control id.
-      const args =
-        branchFlag === -1
-          ? rawArgs
-          : rawArgs.filter((_, i) => i !== branchFlag && i !== branchFlag + 1);
+      // Split flags from positionals once: `--branch <name>` is not a project or control id.
+      const args = [];
+      let branch;
+      for (let i = 0; i < rawArgs.length; i++) {
+        if (rawArgs[i] !== "--branch") {
+          args.push(rawArgs[i]);
+          continue;
+        }
+        const value = rawArgs[++i];
+        if (value === undefined || value.startsWith("--")) {
+          throw new CliUsageError("--branch needs a branch name");
+        }
+        if (branch !== undefined) throw new CliUsageError("--branch given more than once");
+        branch = value;
+      }
       const hasProject = args[1] !== undefined;
       const projectId = hasProject ? args[0] : undefined;
       const dockId = hasProject ? args[1] : args[0];
