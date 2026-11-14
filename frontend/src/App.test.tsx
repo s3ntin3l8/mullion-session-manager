@@ -216,6 +216,12 @@ describe("App tier wiring", () => {
     },
   );
 
+  it("exposes a data-band next to data-tier", () => {
+    stubWidth("desktop");
+    const { container } = render(<App />);
+    expect(container.querySelector(".app")?.getAttribute("data-band")).toBe("desktop");
+  });
+
   it("lets an explicit layoutMode override the width", () => {
     stubWidth("desktop");
     setLayoutMode("tablet");

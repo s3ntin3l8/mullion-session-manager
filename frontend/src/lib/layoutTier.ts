@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import type { LayoutMode, TabletPaneCap } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
-import type { LayoutTier } from "./layoutTierTypes.js";
+import type { LayoutBand, LayoutTier } from "./layoutTierTypes.js";
 
 // Re-exported so the many `import type { LayoutTier } from "./lib/layoutTier.js"`
 // call sites keep working; the definition itself lives in layoutTierTypes.ts,
 // which has no imports, so a pure consumer can take the type without
 // dragging this module's React and store graph in behind it.
-export type { LayoutTier };
+export type { LayoutTier, LayoutBand };
 
 // Single home for tier/breakpoint logic (previously three separate literal
 // copies of "(max-width: 699px)" — panels/registry.tsx, panelUtils.ts,
@@ -36,6 +36,15 @@ export type { LayoutTier };
 export const PHONE_BREAKPOINT_QUERY = "(max-width: 699.98px)";
 export const TABLET_BREAKPOINT_QUERY = "(min-width: 700px) and (max-width: 1279.98px)";
 export const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1280px)";
+
+// The five bands (design section 9.1) refine the three tiers above: phone and
+// desktop reuse their queries, tablet splits at 800 and 1100. The 800 edge
+// agrees with RightSidebar's RIGHT_SIDEBAR_FULL_WIDTH_QUERY
+// ("(max-width: 799.98px)"). A band says nothing about the pointer: see
+// COARSE_POINTER_QUERY below, which varies independently of it.
+export const RAILS_FULL_BAND_QUERY = "(min-width: 700px) and (max-width: 799.98px)";
+export const RAILS_HALVES_BAND_QUERY = "(min-width: 800px) and (max-width: 1099.98px)";
+export const DESKTOP_NARROW_BAND_QUERY = "(min-width: 1100px) and (max-width: 1279.98px)";
 
 // Touch affordances (key bar, tab-strip panning, 44px hit targets) are
 // gated on pointer coarseness, NOT layout tier — a touchscreen laptop at
@@ -143,4 +152,53 @@ export function useLayoutContext(): LayoutContext {
   const tabletPaneCap = useDashboardStore((s) => s.settings.tabletPaneCap);
   const tier = useLayoutTier(layoutMode);
   return { tier, tabletPaneCap };
+}
+
+// An explicit layoutMode override has no real width, so it maps to the band
+// that behaves like today's forced tier: tablet is the two-halves rails layout.
+const OVERRIDE_BAND: Record<LayoutTier, LayoutBand> = {
+  phone: "phone",
+  tablet: "rails-halves",
+  desktop: "desktop",
+};
+
+// Pure counterpart of resolveLayoutTier for the five bands. Falls through to
+// "desktop" like resolveLayoutTier does.
+export function resolveLayoutBand(layoutMode: LayoutMode): LayoutBand {
+  if (layoutMode !== "auto") return OVERRIDE_BAND[layoutMode];
+  if (window.matchMedia(PHONE_BREAKPOINT_QUERY).matches) return "phone";
+  if (window.matchMedia(RAILS_FULL_BAND_QUERY).matches) return "rails-full";
+  if (window.matchMedia(RAILS_HALVES_BAND_QUERY).matches) return "rails-halves";
+  if (window.matchMedia(DESKTOP_NARROW_BAND_QUERY).matches) return "desktop-narrow";
+  return "desktop";
+}
+
+const BAND_BOUNDARY_QUERIES = [
+  PHONE_BREAKPOINT_QUERY,
+  RAILS_FULL_BAND_QUERY,
+  RAILS_HALVES_BAND_QUERY,
+  DESKTOP_NARROW_BAND_QUERY,
+  DESKTOP_BREAKPOINT_QUERY,
+];
+
+// Live-subscribed band, the five-way sibling of useLayoutTier. Listens on
+// every band's own query: any width crossing flips exactly one of them.
+export function useLayoutBand(layoutMode: LayoutMode): LayoutBand {
+  const [band, setBand] = useState(() => resolveLayoutBand(layoutMode));
+
+  useEffect(() => {
+    // Same external-system resync as useLayoutTier above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setBand(resolveLayoutBand(layoutMode));
+    if (layoutMode !== "auto") return;
+
+    const recompute = () => setBand(resolveLayoutBand(layoutMode));
+    const lists = BAND_BOUNDARY_QUERIES.map((q) => window.matchMedia(q));
+    for (const mq of lists) mq.addEventListener("change", recompute);
+    return () => {
+      for (const mq of lists) mq.removeEventListener("change", recompute);
+    };
+  }, [layoutMode]);
+
+  return band;
 }
