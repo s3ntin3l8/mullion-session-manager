@@ -384,7 +384,7 @@
   color: var(--muted);
   font-size: 0.8125rem;
 }
-/* Under a coarse pointer: touch-size rows (48px) and a 16px search field, so
+/* Under a coarse pointer: touch-size rows (48px) and a 1rem (16px) search field, so
    iOS does not zoom into it. */
 .rail-ws-list.touch .rail-ws-row {
   min-height: 48px;
@@ -392,5 +392,5 @@
 }
 .rail-ws-list.touch .rail-ws-search {
   min-height: 44px;
-  font-size: 16px;
+  font-size: 1rem;
 }
