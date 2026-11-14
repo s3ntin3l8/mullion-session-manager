@@ -6,7 +6,7 @@
 // TaskColumn.tsx's drop targets, TaskCard.tsx's drag source, and this
 // file's own `applyDrop`/`updateTask` call), and how a card click opens a task
 // (the board has no drawer of its own since #2843: it selects the task in the
-// sidebar, or opens the docked panel on phone and tablet).
+// sidebar from 700px, or opens the docked panel on the phone, #3011).
 // Per-region tests live in unified-board/TasksToolbar.test.tsx,
 // unified-board/TaskColumn.test.tsx, unified-board/TaskCard.test.tsx,
 // unified-board/TaskSessionSlot.test.tsx, and unified-board/LaneCard.test.tsx
@@ -28,6 +28,7 @@ import type {
 } from "./api/index.js";
 import { makeProject, makeSession, makeTask } from "./test/fixtures.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
+import { boardStoreStubs } from "./test/boardStoreStubs.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
@@ -73,6 +74,7 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    ...boardStoreStubs,
     tasksError,
     taskMasterEnabled,
     kanbanOrder,
@@ -99,7 +101,7 @@ function storeState() {
 
 vi.mock("./lib/layoutTier.js", async (importOriginal) => ({
   ...(await importOriginal<typeof layoutTierModule>()),
-  useLayoutContext: () => ({ tier: layoutTier, tabletPaneCap: 2 }),
+  useLayoutContext: () => ({ tier: layoutTier }),
 }));
 
 vi.mock("./store/index.js", () => {
@@ -359,7 +361,23 @@ describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
     expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
   });
 
-  it("phone and tablet: a card click asks for the full-screen docked panel instead", async () => {
+  // #3011 — from 700px (the 851px fold is the tablet tier) a card opens the
+  // right sidebar's detail; the docked panel is the phone's alone.
+  it("tablet (851px): a card click opens the sidebar detail, never the docked panel", async () => {
+    tasks = [makeTask({ id: 8, status: "in_progress", title: "Open on the fold" })];
+    layoutTier = "tablet";
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Open on the fold"));
+
+    expect(openRightSidebarTask).toHaveBeenCalledWith(8);
+    expect(requestOpenTask).not.toHaveBeenCalled();
+  });
+
+  // #3014 — the phone opens the sidebar's task detail, which it shows full
+  // screen over the board (RightSidebar.tsx).
+  it("phone: a card click opens the task in the sidebar's Tasks view, full screen", async () => {
     tasks = [makeTask({ id: 7, status: "in_progress", title: "Open on phone" })];
     layoutTier = "phone";
     const user = userEvent.setup();
@@ -367,9 +385,9 @@ describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
 
     await user.click(screen.getByText("Open on phone"));
 
-    expect(requestOpenTask).toHaveBeenCalledTimes(1);
-    expect(requestOpenTask).toHaveBeenCalledWith(7);
-    expect(openRightSidebarTask).not.toHaveBeenCalled();
+    expect(openRightSidebarTask).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarTask).toHaveBeenCalledWith(7);
+    expect(requestOpenTask).not.toHaveBeenCalled();
   });
 
   it("rings the card whose task the store has selected, and only that one", () => {
@@ -486,9 +504,7 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
   });
 });
 
-describe("UnifiedBoard tablet layout (columnCount 2)", () => {
-  const renderTablet = () =>
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone columnCount={2} />);
+describe("UnifiedBoard phone lanes", () => {
   const shownTitles = () =>
     Array.from(document.querySelectorAll(".kanban-column-title")).map((el) => el.textContent);
 
@@ -500,48 +516,9 @@ describe("UnifiedBoard tablet layout (columnCount 2)", () => {
     ];
   });
 
-  it("shows two adjacent columns starting at the default one, both chips pressed", () => {
-    renderTablet();
-    expect(shownTitles()).toHaveLength(2);
-    expect(shownTitles()[0]).toBe("In Progress");
-    expect(screen.getByRole("button", { name: /^In Progress/ })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    const pressed = screen
-      .getByRole("group", { name: "Task status" })
-      .querySelectorAll('[aria-pressed="true"]');
-    expect(pressed).toHaveLength(2);
-    expect(document.querySelector(".kanban-unified-columns")).toHaveClass(
-      "kanban-unified-columns--split",
-    );
-  });
-
-  it("keeps the pair put when a chip that is already on screen is picked", async () => {
-    renderTablet();
-    const before = shownTitles();
-    const second = screen
-      .getByRole("group", { name: "Task status" })
-      .querySelectorAll<HTMLElement>('[aria-pressed="true"]')[1]!;
-    await userEvent.click(second);
-    expect(shownTitles()).toEqual(before);
-  });
-
-  it("moves the window to a picked chip, clamped at the end", async () => {
-    renderTablet();
-    await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
-    expect(shownTitles()[0]).toBe("Ready");
-    await userEvent.click(screen.getByRole("button", { name: /^Failed/ }));
-    expect(shownTitles()).toHaveLength(2);
-    expect(shownTitles()[1]).toBe("Failed");
-  });
-
-  it("phone (columnCount 1) is never split: its Active segment stacks its two columns", () => {
+  it("the Active lane stacks its two columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
     expect(shownTitles()).toEqual(["In Progress", "Reviewing"]);
-    expect(document.querySelector(".kanban-unified-columns")).not.toHaveClass(
-      "kanban-unified-columns--split",
-    );
   });
 });
 
@@ -643,6 +620,101 @@ describe("UnifiedBoard phone layout", () => {
     expect(screen.queryByText("r1")).toBeNull();
   });
 
+  // #3014 — "Needs you" is a chip, not a lane; lanes holding such a task get a
+  // dot; the board opens on the first of them.
+  it("dots the lanes that hold a task needing you and opens on the first of them", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 2, status: "in_progress", title: "ip1" }),
+      makeTask({ id: 3, status: "reviewing", title: "rv1", approvalState: "awaiting-human" }),
+      makeTask({ id: 4, status: "failed", title: "f1" }),
+    ];
+    renderPhone();
+    const strip = screen.getByRole("group", { name: "Task status" });
+    const dotted = within(strip)
+      .getAllByRole("button")
+      .filter((b) => b.querySelector(".tasks-phone-strip-dot"))
+      .map((b) => b.textContent);
+    expect(dotted).toEqual(["Active2", "Done1"]);
+    expect(within(strip).getAllByRole("img", { name: "needs you" })).toHaveLength(2);
+    // Active is first in strip order among the dotted lanes.
+    expect(screen.getByRole("button", { name: /^Active/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens on a later lane when only it holds a task needing you", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 2, status: "in_progress", title: "ip1" }),
+      makeTask({ id: 4, status: "failed", title: "f1" }),
+    ];
+    renderPhone();
+    expect(screen.getByRole("button", { name: /^Done/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("f1")).toBeInTheDocument();
+  });
+
+  it("has no dots and keeps the usual opening lane when nothing needs you", () => {
+    renderPhone();
+    expect(document.querySelector(".tasks-phone-strip-dot")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Active/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("filters to the tasks needing you from the Needs you chip, and back", async () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 2, status: "reviewing", title: "rv1", approvalState: "awaiting-human" }),
+      makeTask({ id: 3, status: "in_progress", title: "ip1" }),
+    ];
+    renderPhone();
+    const chip = screen.getByRole("button", { name: /^Needs you/ });
+    expect(chip).toHaveTextContent("Needs you 1");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    // A chip, not a lane.
+    expect(
+      within(screen.getByRole("group", { name: "Task status" })).queryByRole("button", {
+        name: /Needs you/,
+      }),
+    ).toBeNull();
+    expect(screen.getByText("ip1")).toBeInTheDocument();
+    await userEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("rv1")).toBeInTheDocument();
+    expect(screen.queryByText("ip1")).toBeNull();
+    await userEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("ip1")).toBeInTheDocument();
+  });
+
+  it("swipes between lanes: left for the next, right for the previous", () => {
+    renderPhone();
+    const body = document.querySelector(".task-board-body")!;
+    const swipe = (from: number, to: number) => {
+      const ev = (type: string, x: number) =>
+        Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+          touches: type === "touchend" ? [] : [{ clientX: x, clientY: 200 }],
+        });
+      act(() => {
+        body.dispatchEvent(ev("touchstart", from));
+        body.dispatchEvent(ev("touchmove", (from + to) / 2));
+        body.dispatchEvent(ev("touchmove", to));
+        body.dispatchEvent(ev("touchend", to));
+      });
+    };
+    const pressed = () =>
+      within(screen.getByRole("group", { name: "Task status" }))
+        .getAllByRole("button")
+        .find((b) => b.getAttribute("aria-pressed") === "true")?.textContent;
+    expect(pressed()).toBe("Active1");
+    swipe(300, 100);
+    expect(pressed()).toBe("Done1");
+    // Past the last lane: stays.
+    swipe(300, 100);
+    expect(pressed()).toBe("Done1");
+    swipe(100, 300);
+    expect(pressed()).toBe("Active1");
+    swipe(100, 300);
+    expect(pressed()).toBe("Ready2");
+  });
+
   it("folds Reviewing into Active and Failed into Done in the segment counts", () => {
     tasks = [
       makeTask({ id: 1, status: "in_progress", title: "a" }),
@@ -655,26 +727,6 @@ describe("UnifiedBoard phone layout", () => {
     const strip = screen.getByRole("group", { name: "Task status" });
     expect(strip).toHaveTextContent("Active3");
     expect(strip).toHaveTextContent("Done2");
-  });
-
-  it("on tablet, scrolls the selected chip into view, on mount and when the column changes", async () => {
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-      configurable: true,
-      value: scrollIntoView,
-    });
-    try {
-      render(
-        <UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone columnCount={2} />,
-      );
-      expect(scrollIntoView).toHaveBeenCalledTimes(1);
-      expect(scrollIntoView.mock.contexts[0]).toHaveTextContent("In Progress");
-      await userEvent.click(screen.getByRole("button", { name: /^Ready/ }));
-      expect(scrollIntoView).toHaveBeenCalledTimes(2);
-      expect(scrollIntoView.mock.contexts[1]).toHaveTextContent("Ready");
-    } finally {
-      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
-    }
   });
 
   it("switches column from the strip", async () => {

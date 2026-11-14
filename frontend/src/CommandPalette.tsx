@@ -15,36 +15,27 @@ import {
   TerminalPromptIcon,
 } from "./ui/icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
-import { resolveSkipPermissions } from "./launchers/skipPermissions.js";
+import { buildSkipPermissionsAgentIds } from "./launchers/launcherList.js";
+import {
+  resolveInitialLaunchProjectId,
+  useLaunchModel,
+  useLaunchSession,
+  useLaunchTarget,
+  useProjectLaunchers,
+} from "./launchers/useSessionLaunch.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import type { PaletteEntry } from "./hooks/useCommandSearch.js";
 import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
 import type { PaletteCommand } from "./paletteCommands.js";
-import {
-  STORAGE_KEYS,
-  readJSON,
-  readNumber,
-  writeJSON,
-  writeNumber,
-} from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
 import { projectHostCount } from "./lib/hostBadge.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
-import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { PaletteRow } from "./command-palette/PaletteRow.js";
-import {
-  AUTO_VALUE,
-  OWN_HOST_VALUE,
-  buildHostTargetOptions,
-  describeAutoPreview,
-  rememberHostChoice,
-  resolveHostChoice,
-  withoutAutoChoices,
-} from "./command-palette/hostTarget.js";
-import type { PlacementPreview } from "./api/types.js";
+import { AUTO_VALUE, OWN_HOST_VALUE, describeAutoPreview } from "./command-palette/hostTarget.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
+import { useDismissExit } from "./hooks/usePresence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
 import {
@@ -52,12 +43,6 @@ import {
   WORKSPACE_FOCUS_FALLBACK_SELECTOR,
 } from "./paletteFocusTargets.js";
 import { ModelSelect } from "./settings/ModelPicker.js";
-import {
-  commandHasModelFlag,
-  commandModelCli,
-  useModelOptions,
-  type ModelCli,
-} from "./models/modelCatalogs.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to
@@ -90,24 +75,6 @@ function cancelDeferredWorkspaceFocus() {
     clearTimeout(deferredWorkspaceFocusTimer);
     deferredWorkspaceFocusTimer = null;
   }
-}
-
-// Expands Settings -> Session management's naming-pattern tokens
-// ({agent} {project} {n}) into a concrete session name at launch time — see
-// settings.sessions.namePattern (default "{agent} · {project}"). A falsy
-// result (empty pattern, or a pattern that expands to only whitespace)
-// yields `undefined` so callers fall back to the sessions route's own
-// "name ?? command" display convention rather than persisting an empty name.
-function expandSessionNamePattern(
-  pattern: string,
-  tokens: { agent: string; project: string; n: number },
-): string | undefined {
-  const expanded = pattern
-    .replaceAll("{agent}", tokens.agent)
-    .replaceAll("{project}", tokens.project)
-    .replaceAll("{n}", String(tokens.n))
-    .trim();
-  return expanded.length > 0 ? expanded : undefined;
 }
 
 interface CommandRowProps {
@@ -298,28 +265,18 @@ export function CommandPalette({
         activePanelId: s.activePanelId,
       })),
     );
-  const [targetProjectId] = useState<number | null>(() => {
-    if (scope === "project") return initialProjectId;
-    // Default to the focused pane's project; a killed session pane doesn't
-    // count, and neither does a stale id no longer in `projects`.
-    const paneProjectId =
-      activePanelId?.startsWith("session-") === true
-        ? (sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed")
-            ?.projectId ?? null)
-        : resolveActiveProjectId(activePanelId, sessions);
-    const pane = projects.find((p) => p.id === paneProjectId);
-    if (pane) return pane.id;
-    const stored = readNumber(STORAGE_KEYS.lastLaunchProjectId, 0);
-    return (projects.find((p) => p.id === stored) ?? projects[0] ?? null)?.id ?? null;
-  });
+  const [targetProjectId] = useState<number | null>(() =>
+    resolveInitialLaunchProjectId({
+      scope,
+      projectId: initialProjectId,
+      activePanelId,
+      sessions,
+      projects,
+    }),
+  );
   const [manualTargetProjectId, setManualTargetProjectId] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [projectIndex, setProjectIndex] = useState(0);
-  const [launchers, setLaunchers] = useState<Launcher[]>([]);
-  // The project whose GET /api/projects/:id/actions has settled — drives the
-  // options strip's loading placeholder (derived, so a project switch reads
-  // as "loading" again without a synchronous setState in the effect).
-  const [launchersLoadedFor, setLaunchersLoadedFor] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
   // Feed the search-only "Go to PR" / "Open session on branch" rows.
@@ -329,7 +286,6 @@ export function CommandPalette({
   const projectBranches = useDashboardStore((s) =>
     effectiveProjectId !== null ? s.gitBranchesByProject[effectiveProjectId]?.branches : undefined,
   );
-  const launchersLoaded = launchersLoadedFor === effectiveProjectId;
 
   // P11 — same posture as Settings.tsx: a fresh mount per open (this
   // component's own header comment above already says so), so `active: true`
@@ -371,6 +327,11 @@ export function CommandPalette({
   // any other input — this only changes what grabs focus on OPEN.
   const isCoarsePointer = useCoarsePointer();
   const modalRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // #3015 — the palette's own dismiss controls (Escape in the search field,
+  // the backdrop, the close button) play the exit before `onClose`. Running a
+  // command closes at once: the command's result is what the user looks at.
+  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
   const {
     onKeyDown: onTrapKeyDown,
     suppressRestore,
@@ -526,27 +487,32 @@ export function CommandPalette({
     onTrapKeyDown(e);
   };
 
-  // Issue #271, option 1 — the launcher's opt-in "isolate this session"
-  // toggle: launch directly into a fresh worktree instead of the target
-  // project's own cwd. Off by default; <WorktreeOptions> only fetches
-  // branches once the toggle is switched on, not on every palette open.
-  // `worktreeEnabled`/`worktreeBaseRef` stay lifted here (not owned by
-  // <WorktreeOptions>) because `launch()` below also reads them at launch
-  // time.
-  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
-  const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
-  // Issue #2237 — the launcher's host target. `rememberedHosts` mirrors the
-  // persisted project id -> choice map; the EFFECTIVE choice is derived from
-  // it against the current project/hosts so a host that has left the project
-  // falls back to the default (null = the project's own host).
-  const hosts = useDashboardStore((s) => s.hosts);
-  const [rememberedHosts, setRememberedHosts] = useState<Record<string, string>>(() =>
-    withoutAutoChoices(readJSON<Record<string, string>>(STORAGE_KEYS.lastLaunchHostByProject, {})),
+  // The project, host and worktree choice, and the launchers for the target
+  // project — shared with the New session launcher (launchers/useSessionLaunch.ts).
+  const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
+  const launchTarget = useLaunchTarget(target, sessions);
+  const {
+    hosts,
+    hostOptions,
+    showHostChip,
+    hostChoice,
+    placedElsewhere,
+    onHostChange,
+    autoPreview,
+    worktreeEnabled,
+    setWorktreeEnabled,
+    worktreeBaseRef,
+    setWorktreeBaseRef,
+  } = launchTarget;
+  // Seeded once per settled fetch for the target project (see
+  // `seedLauncherSelection` below, which needs the search state declared
+  // further down).
+  const seedLauncherSelectionRef = useRef<(fetched: Launcher[]) => void>(() => {});
+  const { launchers, loaded: launchersLoaded } = useProjectLaunchers(
+    effectiveProjectId,
+    (fetched) => seedLauncherSelectionRef.current(fetched),
   );
-  const [autoPreview, setAutoPreview] = useState<{
-    projectId: number;
-    preview: PlacementPreview | null;
-  } | null>(null);
+
   // The project drill-in and the "New workspace" name step. Declared up
   // here so "New workspace" `.run()` can open the name step without a ref:
   // the step's query reset needs setQuery, which does not exist until the
@@ -645,6 +611,35 @@ export function CommandPalette({
     launchers,
     hiddenAgents: settings.launchers.hiddenAgents,
     commands,
+  });
+
+  // Settings -> Launchers & agents "Default agent" — pre-select the matching
+  // launcher (by id, since a shell/agent launcher's id is `${kind}:${bin}`,
+  // e.g. "agent:claude" — see agent-detect.ts) so hitting Enter immediately
+  // launches it instead of whatever GET /api/projects/:id/actions listed
+  // first. Only on a genuine project switch (the hook runs this once per
+  // settled fetch) — re-seeding whenever the default itself changes would
+  // yank the selection out from under a mid-search user.
+  const seedLauncherSelection = (fetched: Launcher[]) => {
+    const defaultIndex = fetched.findIndex(
+      (l) => l.id === `agent:${settings.launchers.defaultAgent}`,
+    );
+    // A project switch mid-search (e.g. via the target picker while a
+    // query is already typed) can leave the Sessions/Workspaces groups
+    // occupying the front of the flattened `entries` list — resetting
+    // to 0 there lands on whichever group is actually first, rather
+    // than aiming this launcher-only `defaultIndex` at an unrelated
+    // flattened slot. On a blank query the Commands group leads the
+    // arrow list (it is painted above the launchers), so the seed adds
+    // that same lead — Enter still launches the default agent, and a
+    // list with no default agent still starts on the first launcher.
+    const commandLead = query.trim() === "" ? topCommands.length : 0;
+    setSelectedIndex(
+      query.trim() !== "" ? 0 : commandLead + (defaultIndex >= 0 ? defaultIndex : 0),
+    );
+  };
+  useEffect(() => {
+    seedLauncherSelectionRef.current = seedLauncherSelection;
   });
 
   // Blank query: the Commands group is painted above Launchers, but
@@ -808,72 +803,13 @@ export function CommandPalette({
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
-    // A fast project switch (1 -> 2 -> 3) must not let project 1's slower
-    // response overwrite project 3's launchers.
-    let ignore = false;
-    api
-      .listProjectActions(effectiveProjectId)
-      .then((fetched) => {
-        if (ignore) return;
-        setLaunchers(fetched);
-        setLaunchersLoadedFor(effectiveProjectId);
-        // Settings -> Launchers & agents "Default agent" — pre-select the
-        // matching launcher (by id, since a shell/agent launcher's id is
-        // `${kind}:${bin}`, e.g. "agent:claude" — see agent-detect.ts) so
-        // hitting Enter immediately launches it instead of defaulting to
-        // whatever GET /api/projects/:id/actions happened to list first.
-        const defaultIndex = fetched.findIndex(
-          (l) => l.id === `agent:${settings.launchers.defaultAgent}`,
-        );
-        // A project switch mid-search (e.g. via the target picker while a
-        // query is already typed) can leave the Sessions/Workspaces groups
-        // occupying the front of the flattened `entries` list — resetting
-        // to 0 there lands on whichever group is actually first, rather
-        // than aiming this launcher-only `defaultIndex` at an unrelated
-        // flattened slot. On a blank query the Commands group leads the
-        // arrow list (it is painted above the launchers), so the seed adds
-        // that same lead — Enter still launches the default agent, and a
-        // list with no default agent still starts on the first launcher.
-        const commandLead = query.trim() === "" ? topCommands.length : 0;
-        setSelectedIndex(
-          query.trim() !== "" ? 0 : commandLead + (defaultIndex >= 0 ? defaultIndex : 0),
-        );
-      })
-      .catch(() => {
-        if (ignore) return;
-        setLaunchers([]);
-        setLaunchersLoadedFor(effectiveProjectId);
-      });
-    return () => {
-      ignore = true;
-    };
-    // Only re-resolve the default on a genuine project switch — re-running
-    // this whenever `settings.launchers.defaultAgent` itself changes would
-    // yank the current selection out from under a mid-search user.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveProjectId]);
-
-  useEffect(() => {
-    if (effectiveProjectId === null) return;
     void useDashboardStore.getState().refreshProjectUrls(effectiveProjectId);
   }, [effectiveProjectId]);
 
-  const skipPermissionsAgentIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const id of settings.launchers.skipPermissionsAgents ?? []) {
-      ids.add(id);
-    }
-    for (const l of launchers) {
-      if (l.kind !== "agent") continue;
-      const id = normalizeAgentId(l.id);
-      if (l.skipPermissions === false) {
-        ids.delete(id);
-      } else if (l.skipPermissions === true) {
-        ids.add(id);
-      }
-    }
-    return ids;
-  }, [settings.launchers.skipPermissionsAgents, launchers]);
+  const skipPermissionsAgentIds = useMemo(
+    () => buildSkipPermissionsAgentIds(settings.launchers.skipPermissionsAgents, launchers),
+    [settings.launchers.skipPermissionsAgents, launchers],
+  );
 
   // Universal override — when checked, ALL agents launch with skip-permissions.
   // Per-agent config (settings / .crs/actions.json) is shown as a badge on the
@@ -886,163 +822,38 @@ export function CommandPalette({
   // Issue #1424 — per-session model override, shown in the options strip
   // below for whichever launcher is currently highlighted. Unlike
   // `skipPermissionsOverride` above, this does NOT persist across a launcher
-  // switch: it's keyed to the CLI it was picked for (`modelOverride.cli`),
-  // and read back as "no override" (falls through to the settings default)
-  // the moment `activeCli` no longer matches — moving the highlight from
-  // Claude to Codex must never carry a Claude model over to a Codex launch.
-  // No reset-on-close effect needed: the palette unmounts on close (App.tsx
-  // renders it behind `paletteOpen &&`), so a fresh mount already means
-  // fresh state.
-  const [modelOverride, setModelOverride] = useState<{
-    cli: ModelCli;
-    value: string | null;
-  } | null>(null);
-
+  // switch (see useLaunchModel). No reset-on-close effect needed: the palette
+  // unmounts on close, so a fresh mount already means fresh state.
   const activeLauncherCommand = navEntry?.type === "launcher" ? navEntry.launcher.command : null;
-  const activeCli = activeLauncherCommand !== null ? commandModelCli(activeLauncherCommand) : null;
-  // A command that already has its own --model (or codex's -m) flag keeps it
-  // — offering a picker that the backend would then silently ignore
-  // (buildModelFlag's own skip-if-present rule, hook-adapters/shared.ts)
-  // would be actively misleading.
-  const showModelPicker =
-    activeCli !== null &&
-    activeLauncherCommand !== null &&
-    !commandHasModelFlag(activeLauncherCommand, activeCli);
-  // Called unconditionally (rules of hooks) even when nothing is a
-  // model-capable launcher — "claude-code" is a safe, no-fetch fallback
-  // (useModelOptions never hits the network for it), and the result is
-  // simply not rendered when `showModelPicker` is false.
-  const modelCatalog = useModelOptions(activeCli ?? "claude-code");
-  const modelValue =
-    activeCli !== null && modelOverride?.cli === activeCli ? modelOverride.value : null;
-  const activeCliSettingsDefault =
-    activeCli === "claude-code"
-      ? settings.claudeCode?.defaultModel
-      : activeCli === "codex"
-        ? settings.codex?.defaultModel
-        : activeCli === "agy"
-          ? settings.agy?.defaultModel
-          : activeCli === "opencode"
-            ? settings.opencode?.implementerModel
-            : null;
-  const modelDefaultLabel = activeCliSettingsDefault
-    ? `Default (${activeCliSettingsDefault})`
-    : "CLI default";
+  const launchModel = useLaunchModel(activeLauncherCommand);
+  const showModelPicker = launchModel.show;
 
-  const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
-
-  // Issue #2237 — only a project reaching more than one host (its own plus
-  // its `hostCwds`) gets the chip; a single-host project launches as before.
-  const hostOptions = useMemo(
-    () => (target ? buildHostTargetOptions(target, hosts) : []),
-    [target, hosts],
-  );
-  const showHostChip = target !== null && projectHostCount(target, sessions) > 1;
-  const hostChoice = target
-    ? resolveHostChoice(rememberedHosts[String(target.id)], target, hosts, true)
-    : null;
-  // "Elsewhere" = a base ref from this host's branches is not safe: another
-  // host, or Auto. The project's own host (explicit, on an auto project) is not.
-  const placedElsewhere =
-    showHostChip && hostChoice !== null && (target === null || hostChoice !== target.hostId);
-  useEffect(() => {
-    if (!showHostChip || hostChoice !== AUTO_VALUE || effectiveProjectId === null) return;
-    let cancelled = false;
-    api
-      .getPlacementPreview(effectiveProjectId, "auto")
-      .then((preview) => {
-        if (!cancelled) setAutoPreview({ projectId: effectiveProjectId, preview });
-      })
-      .catch(() => {
-        if (!cancelled) setAutoPreview({ projectId: effectiveProjectId, preview: null });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [showHostChip, hostChoice, effectiveProjectId]);
-  const onHostChange = (value: string) => {
-    if (!target) return;
-    const next = rememberHostChoice(rememberedHosts, target, value);
-    setRememberedHosts(next);
-    writeJSON(STORAGE_KEYS.lastLaunchHostByProject, withoutAutoChoices(next));
-  };
-
-  // P9 — this used to be `void createSession(...).then(...)` with no
-  // `.catch` at all: a failed launch (a 4xx from a bad worktree base ref, a
-  // 503 from a dead remote host, ...) left the palette open showing nothing
-  // but a search box, with the only evidence anything went wrong being an
-  // unhandled rejection in the console. `launching`/`launchError` are new
-  // local state (same "an inline error near the control that triggered the
-  // request" shape as <WorktreeOptions>'s own branches-fetch error and
-  // UnifiedBoard.tsx's TasksToolbar) — critically, the failure path must NOT
-  // call onClose():
-  // closing on failure would unmount the very component about to render the
-  // error, hiding it from the user just as reliably as never catching the
-  // rejection did.
-  const [launching, setLaunching] = useState(false);
-  const [launchError, setLaunchError] = useState<string | null>(null);
-
-  const launch = (launcher: Launcher) => {
-    if (effectiveProjectId === null || launching) return;
-    writeNumber(STORAGE_KEYS.lastLaunchProjectId, effectiveProjectId);
-    const name = expandSessionNamePattern(settings.sessions.namePattern, {
-      agent: launcher.title,
-      project: target?.name ?? "",
-      n: sessions.filter((s) => s.projectId === effectiveProjectId).length + 1,
+  // P9 — a failed launch surfaces inline and leaves the palette open; see
+  // useLaunchSession for why the failure path must not close it.
+  const { launch: launchSession, launchError } = useLaunchSession({
+    target,
+    launchTarget,
+    onLaunched: (session) => {
+      onLaunched(session);
+      closeAfterAction();
+    },
+  });
+  const launch = (launcher: Launcher) =>
+    launchSession(launcher, {
+      model: launchModel.forLaunch(launcher.command),
+      skipPermissionsOverride,
     });
-    const trimmedBaseRef = worktreeBaseRef.trim();
-    // Issue #1424 — re-derive the launched launcher's own CLI here rather
-    // than trusting `activeCli` (computed from the currently highlighted
-    // row): `launch()` is also reachable from a row's onClick with whatever
-    // launcher that row represents, which onMouseEnter's setSelectedIndex
-    // makes the same row in practice, but this keeps the guarantee exact
-    // regardless of hover-event timing. Omitted (not sent) unless the
-    // override was set for this exact CLI and isn't the default option, so
-    // the backend resolves the settings default the same way it would if
-    // the picker had never rendered at all.
-    const launcherCli = commandModelCli(launcher.command);
-    const model =
-      modelOverride && modelOverride.cli === launcherCli && modelOverride.value !== null
-        ? modelOverride.value
-        : undefined;
-    setLaunching(true);
-    setLaunchError(null);
-    useDashboardStore
-      .getState()
-      .createSession(effectiveProjectId, launcher.command, {
-        // A launcher's cwd is a path on the project's own host; it means
-        // nothing on another one (and `isolate` excludes it).
-        cwd: placedElsewhere ? undefined : launcher.cwd,
-        name,
-        // A base ref picked here is unsafe on another host: send `isolate`
-        // and let the server cut the worktree from that host's default.
-        worktree:
-          worktreeEnabled && !placedElsewhere && trimmedBaseRef
-            ? { baseRef: trimmedBaseRef }
-            : undefined,
-        isolate: worktreeEnabled && placedElsewhere ? true : undefined,
-        targetHostId:
-          showHostChip && hostChoice !== null && hostChoice !== AUTO_VALUE ? hostChoice : undefined,
-        placement: showHostChip && hostChoice === AUTO_VALUE ? "auto" : undefined,
-        model,
-        skipPermissions: resolveSkipPermissions(launcher, settings, skipPermissionsOverride),
-      })
-      .then((session) => {
-        onLaunched(session);
-        closeAfterAction();
-      })
-      .catch((err: unknown) => {
-        console.debug("[CommandPalette] launch failed", err);
-        setLaunching(false);
-        setLaunchError(err instanceof Error ? err.message : "Failed to launch — try again.");
-      });
-  };
 
   return (
-    <div className="overlay-backdrop cmd-palette-backdrop" onClick={onClose}>
+    <div
+      ref={backdropRef}
+      className="overlay-backdrop cmd-palette-backdrop motion-scrim"
+      data-presence={presence}
+      onClick={dismiss}
+    >
       <div
         ref={modalRef}
-        className="cmd-palette"
+        className="cmd-palette motion-dialog"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onDialogKeyDown}
         role="dialog"
@@ -1133,7 +944,11 @@ export function CommandPalette({
                 return;
               }
               if (e.key === "Escape") {
-                onClose();
+                // Handled here: the global Escape (useGlobalShortcuts) would
+                // otherwise unmount the palette in the same batch, before its
+                // exit could play (#3015).
+                e.stopPropagation();
+                dismiss();
               } else if (e.key === "ArrowDown" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 openProjectPicker();
@@ -1179,7 +994,7 @@ export function CommandPalette({
           <button
             type="button"
             className="kbd kbd-btn"
-            onClick={onClose}
+            onClick={dismiss}
             aria-label="Close command palette"
             title="Close"
           >
@@ -1257,8 +1072,8 @@ export function CommandPalette({
               </div>
               {hostChoice === AUTO_VALUE && (
                 <div className="cmd-palette-target-hint indent">
-                  {autoPreview?.projectId === effectiveProjectId && autoPreview.preview
-                    ? describeAutoPreview(autoPreview.preview, hosts)
+                  {autoPreview
+                    ? describeAutoPreview(autoPreview, hosts)
                     : "Auto picks the host when you launch."}
                 </div>
               )}
@@ -1338,14 +1153,11 @@ export function CommandPalette({
               <ModelSelect
                 small
                 ariaLabel="Model for this session"
-                value={modelValue}
-                options={modelCatalog.options}
-                defaultLabel={modelDefaultLabel}
-                allowCustom={modelCatalog.allowCustom}
-                onChange={(v) => {
-                  if (activeCli === null) return;
-                  setModelOverride({ cli: activeCli, value: v });
-                }}
+                value={launchModel.value}
+                options={launchModel.catalog.options}
+                defaultLabel={launchModel.defaultLabel}
+                allowCustom={launchModel.catalog.allowCustom}
+                onChange={launchModel.setValue}
               />
             </div>
           </div>

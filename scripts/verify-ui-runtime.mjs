@@ -9,8 +9,9 @@
  *
  *   C1  where focus lands after a palette-initiated workspace switch
  *       (audit finding 43, deferred to #1884 — MEASURED here, not fixed)
- *   C2  that the `inert` drawer is genuinely unreachable by Tab on a
- *       phone-sized viewport
+ *   C2  that the phone's hidden sidebar host and the collapsed docked
+ *       sidebar (1200px) are unreachable by Tab, and that the rail's button
+ *       opens a sidebar Tab can reach. Only the 1200px half proves `inert`
  *   C3  the rendered contrast of the text-role tokens (--dim, --muted, --fg)
  *       over the tinted and hovered backgrounds (the shipped guard compares
  *       token against token, so it cannot see a semi-transparent tint layered
@@ -49,6 +50,15 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
 import { withDemo } from "./demo/with-demo.mjs";
+import {
+  openSidebarAndTab,
+  pinProjectIfTreeEmpty,
+  pinProjectInDock,
+  probeCollapsedSidebar,
+  switchToLight,
+  tabWalk,
+  tryFocusInside,
+} from "./lib/verify-ui-sidebar.mjs";
 import { judgeStates, parseColor, renderSample } from "./lib/color-math.mjs";
 
 const { values } = parseArgs({
@@ -130,8 +140,10 @@ const GUARDED_TARGETS = [
     selector: ".kbd",
     kind: "text",
     minRatio: 4.5,
-    scopes: ["app", "command palette"],
-    what: "the keycap chip (the toolbar's shortcut hint and the palette's)",
+    // The app chrome has no keycap on desktop since the top bar went (#3009):
+    // its "⌘K" hint was the only one. The palette's own chips remain.
+    scopes: ["command palette"],
+    what: "the keycap chip (the command palette's)",
   },
   {
     id: "kbd-btn",
@@ -170,7 +182,12 @@ async function openApp(page, demo, { waitForData = false } = {}) {
     // On the phone and tablet tiers the sidebar is a closed drawer, so the
     // project list is not rendered there and waiting for it would time out
     // on exactly the viewports C2 and C4 care about.
-    await page.locator(".project-row-name").first().waitFor({ state: "visible", timeout: 30_000 });
+    // Since #1877 the sidebar tree lists only projects tiled in the active
+    // workspace or pinned to the Dock, and the demo's workspace starts with
+    // nothing tiled — so pin one from the Dock, as a user would, or the tree
+    // is just an empty state and the checks below measure nothing.
+    const row = await pinProjectIfTreeEmpty(page);
+    await row.waitFor({ state: "visible", timeout: 30_000 });
   }
   // Let the first polls land so the DOM is not still filling up.
   await page.waitForTimeout(2000);
@@ -549,148 +566,71 @@ const CHECKS = [
 
   {
     id: "C2",
-    title: "the inert drawer is unreachable by Tab on a phone-sized viewport",
+    title:
+      "the hidden/collapsed sidebars are unreachable by Tab, and the rail's button opens a reachable one",
     async run({ browser, demo }) {
-      const page = await browser.newPage({ viewport: PHONE });
-      await openApp(page, demo);
-
-      const drawer = page.locator(".sidebar-wrapper");
-      await drawer.waitFor({ state: "attached", timeout: 15_000 });
-
-      // Precondition: the drawer really is inert. Without this the Tab walk
-      // below would pass for the wrong reason.
-      const inertState = await drawer.evaluate((el) => ({
-        property: el.inert === true,
-        attribute: el.hasAttribute("inert"),
-        visibility: globalThis.getComputedStyle(el).visibility,
-      }));
-      if (!inertState.property || !inertState.attribute) {
-        await page.close();
-        return {
-          status: "fail",
-          detail:
-            "the closed drawer is NOT inert (property=" +
-            `${inertState.property}, attribute=${inertState.attribute}) — ` +
-            "the Tab walk would have been meaningless",
-          evidence: { inertState },
-        };
-      }
-
-      // Start the walk from a known focusable element OUTSIDE the drawer.
-      const startFocus = await page.evaluate(() => {
-        const drawerEl = globalThis.document.querySelector(".sidebar-wrapper");
-        const focusable = Array.from(
-          globalThis.document.querySelectorAll(
-            "a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex='-1'])",
-          ),
-        ).filter((el) => {
-          if (drawerEl?.contains(el)) return false;
-          const r = el.getBoundingClientRect();
-          const cs = globalThis.getComputedStyle(el);
-          return r.width > 0 && r.height > 0 && cs.visibility !== "hidden";
-        });
-        focusable[0]?.focus();
-        return focusable[0]
-          ? { tag: focusable[0].tagName.toLowerCase(), className: focusable[0].className }
-          : null;
-      });
-
-      const landed = [];
-      let inDrawer = 0;
-      const outside = new Set();
-      for (let i = 0; i < 30; i++) {
-        await page.keyboard.press("Tab");
-        const where = await page.evaluate((selector) => {
-          const drawerEl = globalThis.document.querySelector(selector);
-          const el = globalThis.document.activeElement;
-          const tag = el ? el.tagName.toLowerCase() : "(none)";
-          const cls = el && typeof el.className === "string" ? el.className : "";
-          return {
-            tag,
-            className: cls,
-            inDrawer: drawerEl ? drawerEl.contains(el) : false,
-            key: `${tag}.${cls}`,
-          };
-        }, ".sidebar-wrapper");
-        landed.push(where);
-        if (where.inDrawer) inDrawer++;
-        else outside.add(where.key);
-      }
-
-      // `inert` also refuses focus directly, not just through the tab order:
-      // asking a descendant to take focus must not work while the drawer is
-      // closed. That is the sharper half of the property.
-      const focusWhileClosed = await drawer.evaluate((el) => {
-        const candidate = el.querySelector(
-          "button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex='-1'])",
-        );
-        if (!candidate) return { found: false, focused: false };
-        candidate.focus();
-        return { found: true, focused: globalThis.document.activeElement === candidate };
-      });
-
-      // Non-vacuity: the drawer must be REACHABLE once it is open, otherwise
-      // "unreachable" would be trivially true.
-      await page.locator('[title="Toggle sidebar"]').first().click();
-      await page.waitForTimeout(800);
-      const openedState = await drawer.evaluate((el) => ({
+      // Half 1, the phone: its sidebar mounts hidden in `.sidebar-host-hidden`.
+      // That element is `hidden` (display: none) AND `inert`, so the UA rule
+      // alone keeps Tab out: this half pins the attribute and that nothing in
+      // it takes focus (Tab and a direct focus() are both refused), it does NOT prove `inert` works. Half 2 does.
+      const phone = await browser.newPage({ viewport: PHONE });
+      await openApp(phone, demo);
+      await phone.locator(".sidebar-host-hidden").waitFor({ state: "attached", timeout: 15_000 });
+      const phoneInert = await phone.locator(".sidebar-host-hidden").evaluate((el) => ({
         property: el.inert === true,
         attribute: el.hasAttribute("inert"),
       }));
-      const focusWhenOpen = await drawer.evaluate((el) => {
-        const candidate = el.querySelector(
-          "button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex='-1'])",
-        );
-        if (!candidate) return { found: false, focused: false };
-        candidate.focus();
-        return { found: true, focused: globalThis.document.activeElement === candidate };
-      });
-      let reachedWhenOpen = false;
-      if (!openedState.property && !openedState.attribute) {
-        for (let i = 0; i < 12; i++) {
-          await page.keyboard.press("Tab");
-          const inside = await page.evaluate((selector) => {
-            const drawerEl = globalThis.document.querySelector(selector);
-            return drawerEl ? drawerEl.contains(globalThis.document.activeElement) : false;
-          }, ".sidebar-wrapper");
-          if (inside) {
-            reachedWhenOpen = true;
-            break;
-          }
-        }
-      }
-      await page.close();
+      const phoneWalk = await tabWalk(phone, ".sidebar-host-hidden");
+      const phoneFocus = await tryFocusInside(phone, ".sidebar-host-hidden");
+      await phone.close();
+
+      // Half 2, 1200px: the docked sidebar is collapsed by default and
+      // `inert`; see probeCollapsedSidebar for how `inert` is made the only
+      // guard and shown able to fail. Then the rail button opens it and Tab
+      // from a control outside it must get in.
+      const narrow = { width: 1200, height: 800 };
+      const closedPage = await browser.newPage({ viewport: narrow });
+      await openApp(closedPage, demo);
+      const collapsed = await probeCollapsedSidebar(closedPage);
+      await closedPage.close();
+      const openPage = await browser.newPage({ viewport: narrow });
+      await openApp(openPage, demo);
+      const toggle = openPage.locator("[data-toggle-sidebar]").first();
+      await toggle.waitFor({ state: "visible", timeout: 15_000 });
+      const opened = await openSidebarAndTab(openPage, toggle);
+      await openPage.close();
 
       const ok =
-        inDrawer === 0 &&
-        outside.size >= 3 &&
-        focusWhileClosed.found &&
-        !focusWhileClosed.focused &&
-        !openedState.property &&
-        !openedState.attribute &&
-        focusWhenOpen.focused &&
-        reachedWhenOpen;
+        phoneInert.property &&
+        phoneInert.attribute &&
+        phoneWalk.inside === 0 &&
+        phoneWalk.distinctOutside >= 3 &&
+        !phoneFocus.focused &&
+        collapsed.inert.property &&
+        collapsed.inert.attribute &&
+        collapsed.walk.inside === 0 &&
+        collapsed.walk.distinctOutside >= 3 &&
+        !collapsed.focusWhileCollapsed.focused &&
+        collapsed.controlFocusWithoutInert.focused &&
+        opened.pressedAfter === "true" &&
+        !opened.inert.property &&
+        !opened.inert.attribute &&
+        opened.reached;
       return {
         status: ok ? "pass" : "fail",
         detail: ok
-          ? `30 Tab presses, 0 landed in the inert drawer (${outside.size} distinct controls outside it); ` +
-            "a closed drawer refuses focus, an open one takes it"
-          : `landedInDrawer=${inDrawer}, distinctOutside=${outside.size}, ` +
-            `focusWhileClosed=${JSON.stringify(focusWhileClosed)}, ` +
-            `stillInertWhenOpen=${openedState.property}, focusWhenOpen=${JSON.stringify(focusWhenOpen)}, ` +
-            `reachedWhenOpen=${reachedWhenOpen}`,
+          ? "phone: hidden host inert, 0/30 Tab landings (attribute pin only); 1200px: collapsed " +
+            "sidebar inert with visibility overridden, 0/30 landings, refuses focus, takes it " +
+            `once inert is removed; opened from the rail, reached by Tab in ${opened.presses} presses`
+          : `phone=${JSON.stringify({ phoneInert, phoneWalk, phoneFocus })} collapsed=${JSON.stringify(collapsed)} opened=${JSON.stringify(opened)}`,
         evidence: {
-          viewport: PHONE,
-          inertState,
-          openedState,
-          tabPresses: landed.length,
-          landedInDrawer: inDrawer,
-          distinctOutsideDrawer: outside.size,
-          startFocus,
-          focusWhileClosed,
-          focusWhenOpen,
-          reachableWhenOpen: reachedWhenOpen,
-          landingSample: landed.slice(0, 5),
+          phoneViewport: PHONE,
+          narrowViewport: narrow,
+          phoneInert,
+          phoneWalk,
+          phoneFocus,
+          collapsed,
+          opened,
         },
       };
     },
@@ -910,14 +850,16 @@ const CHECKS = [
         };
       };
 
-      const themeButton = page.locator(".toolbar-theme-btn");
-
+      // The desktop shell has no top bar (#3009), so the theme is switched where
+      // a user switches it: the left rail's Settings button, then Appearance.
       for (const theme of themes) {
         if (theme === "light") {
-          const titleBefore = await themeButton.first().getAttribute("title");
-          await themeButton.first().click();
+          let switchError = null;
+          await switchToLight(page).catch((err) => {
+            switchError = String(err.message).split("\n")[0];
+          });
           // The theme switch is a PRECONDITION, not something to swallow. If
-          // the click did not switch the theme, the "light" pass would just
+          // the control did not switch the theme, the "light" pass would just
           // re-measure the dark theme and the run would look like it covered
           // both themes while covering one twice.
           const switched = await page
@@ -925,15 +867,23 @@ const CHECKS = [
             .waitFor({ state: "attached", timeout: 10_000 })
             .then(() => true)
             .catch(() => false);
+          // Close Settings and WAIT for it to be gone, so the light "app" scope
+          // measures the same surface the dark one did, not a modal over it.
+          await page.keyboard.press("Escape");
+          const settingsClosed = await page
+            .locator(".settings-modal")
+            .waitFor({ state: "detached", timeout: 10_000 })
+            .then(() => true)
+            .catch(() => false);
           await page.waitForTimeout(700);
-          const titleAfter = await themeButton.first().getAttribute("title");
           preconditions.push({
-            precondition: "the theme toggle switches to the light theme",
-            ok: switched,
-            titleBefore,
-            titleAfter,
+            precondition: "Settings → Appearance switches to the light theme",
+            ok: switched && settingsClosed,
+            switched,
+            settingsClosed,
+            switchError,
           });
-          if (!switched) break;
+          if (!switched || !settingsClosed) break;
         }
         // Scope 1: the app's own chrome (sidebar, dock, panes).
         scopes.push(await measure(theme, "app", ".cmux-root"));
@@ -1423,13 +1373,10 @@ async function runDockKillCheck({ browser, demo, project }) {
   const page = await browser.newPage({ viewport: DESKTOP });
   await openApp(page, demo, { waitForData: true });
 
-  // Put the project into the Dock's own rail.
-  const addProject = page.locator('[aria-label="Add project"]').first();
-  await addProject.waitFor({ state: "visible", timeout: 15_000 });
-  await addProject.click();
-  const option = page.getByRole("option", { name: project.name, exact: true }).first();
-  await option.waitFor({ state: "visible", timeout: 10_000 });
-  await option.click();
+  // Put the project into the Dock's own rail. openApp already pinned one
+  // project to make the sidebar tree render; if that was this one, its
+  // option is gone from the "+ Add project" list because it is in the rail.
+  await pinProjectInDock(page, project.name);
   await page.waitForTimeout(2000);
 
   const toggle = page.locator(

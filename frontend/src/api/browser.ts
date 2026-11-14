@@ -18,6 +18,13 @@ export const browserApi = {
       method: "DELETE",
     }),
 
+  // The browser bindings a session has (GET /api/sessions/:id/browser): one
+  // per target its browser pane has attached to, empty when the session has
+  // never opened a browser. Read before mounting a BrowserPane, because
+  // attaching one is what launches (and binds) the browser.
+  getSessionBrowserBindings: (sessionId: number) =>
+    request<unknown[]>(`/api/sessions/${sessionId}/browser`),
+
   getProjectPreviewTargets: (projectId: number) =>
     request<ProjectPreviewConfig>(`/api/projects/${projectId}/preview-targets`),
   saveProjectPreviewTargets: (projectId: number, config: ProjectPreviewConfig) =>

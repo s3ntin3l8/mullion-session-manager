@@ -19,10 +19,12 @@ import type { NotificationEvent, Project, Session } from "./api/index.js";
 import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
-import { panelPosition } from "./lib/notifPanelPosition.js";
+import { panelPosition, railPanelPosition } from "./lib/notifPanelPosition.js";
+import type { NotifPanelPosition } from "./lib/notifPanelPosition.js";
 import { TextInput } from "./ui/primitives.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
@@ -367,6 +369,8 @@ export function NotificationBell({
   onOpenBrowser,
   sheet = false,
   sheetClassName,
+  placement = "below",
+  triggerClassName = "toolbar-icon-btn",
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -389,6 +393,11 @@ export function NotificationBell({
   sheet?: boolean;
   // Extra class on the sheet (e.g. the tablet variant that caps its width).
   sheetClassName?: string;
+  // Where the popover opens: under the bell (the phone's top bar) or beside it,
+  // growing upward from its bottom edge (the left rail's bottom cluster, #3009).
+  placement?: "below" | "beside";
+  // The trigger's class: the top bar's icon button, or the rail's.
+  triggerClassName?: string;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -406,7 +415,7 @@ export function NotificationBell({
   const [open, setOpen] = useState(false);
   // Sheet only: which sessions' groups the feed shows.
   const [filter, setFilter] = useState<"needs" | "all">("all");
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<NotifPanelPosition | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -535,6 +544,8 @@ export function NotificationBell({
     active: !sheet && open,
     containerRef: panelRef,
   });
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present: panelPresent, state: panelPresence } = usePresence(!sheet && open, panelRef);
   // The phone sheet's own suppressRestore (a separate useFocusTrap instance,
   // above) — written to by BottomSheet during render, read by the phone
   // row-tap handlers below, same U7 race useFocusTrap.ts's own doc comment
@@ -554,17 +565,20 @@ export function NotificationBell({
     onTrapKeyDown(e);
   };
 
-  // The toolbar's mobile breakpoint (styles.css's max-width:699px block)
-  // changes .toolbar-lead's width, so the bell can move under the panel on a
-  // resize/orientation-change while it's open — recompute rather than leave
+  // A resize or orientation change can move the bell (the phone's top bar,
+  // the left rail) while the panel is open — recompute rather than leave
   // it anchored to a stale rect. Issue #1399 — same for an iOS visual-viewport
   // pan/resize: since #1398 `.app` (toolbar and bell included) tracks the
   // visual viewport's offsetTop, which moves without a window `resize`.
   const reposition = useCallback(() => {
     if (!btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
-    setPos(panelPosition(rect, window.innerWidth));
-  }, []);
+    setPos(
+      placement === "beside"
+        ? railPanelPosition(rect, window.innerWidth, window.innerHeight)
+        : panelPosition(rect, window.innerWidth),
+    );
+  }, [placement]);
   useVisualViewportChange(open, reposition);
 
   // Advances every session with at least one unread feed item to that
@@ -589,7 +603,7 @@ export function NotificationBell({
     <>
       <button
         ref={btnRef}
-        className="toolbar-icon-btn"
+        className={triggerClassName}
         title={
           unreadCount > 0 ? `Notifications — ${unreadCount} unread` : "No unread notifications"
         }
@@ -610,8 +624,7 @@ export function NotificationBell({
         onClick={(e) => {
           e.stopPropagation();
           if (!open && btnRef.current) {
-            const rect = btnRef.current.getBoundingClientRect();
-            setPos(panelPosition(rect, window.innerWidth));
+            reposition();
             openFilter();
           }
           setOpen((v) => !v);
@@ -709,14 +722,16 @@ export function NotificationBell({
           </div>
         </BottomSheet>
       )}
-      {open &&
+      {panelPresent &&
         !sheet &&
         pos &&
         createPortal(
           <div
             ref={panelRef}
+            data-presence={panelPresence}
+            inert={panelPresence === "leaving"}
             className={themeClassName(theme, "pane-tab-overflow-menu", "notif-panel")}
-            style={{ position: "fixed", top: pos.top, left: pos.left }}
+            style={{ position: "fixed", ...pos }}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={onPanelKeyDown}
             role="dialog"

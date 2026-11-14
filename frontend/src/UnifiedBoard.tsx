@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { useOpenTask } from "./hooks/useOpenTask.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
@@ -11,11 +12,10 @@ import {
   computeTaskReorder,
   absoluteDropIndex,
   PHONE_SEGMENTS,
-  defaultPhoneColumn,
-  defaultPhoneSegment,
   foldClaimedCounts,
+  openingPhoneSegment,
+  phoneSegmentsNeedingYou,
   phoneSegmentCount,
-  visibleColumnWindow,
 } from "./tasksBoard.js";
 import type { PhoneSegmentId } from "./tasksBoard.js";
 import { taskLinkedSessionIds, adhocSessionsByColumn } from "./boardLanes.js";
@@ -39,7 +39,54 @@ import {
   laneKeyOf,
 } from "./unified-board/taskLanes.js";
 import { AdhocLane } from "./unified-board/AdhocLane.js";
+import { PhoneLaneStrip } from "./unified-board/PhoneLaneStrip.js";
+import { usePhoneLaneSwipe } from "./unified-board/usePhoneLaneSwipe.js";
+import { needsYouReason } from "./github/taskMasterSummary.js";
 import { openEpicInSidebar } from "./lib/sidebarLinks.js";
+import { StackedBoard } from "./unified-board/StackedBoard.js";
+import { boardStacks, stackSections } from "./unified-board/stackLayout.js";
+import type { StackSection } from "./unified-board/stackLayout.js";
+import {
+  MOTION_EASE,
+  MOTION_FADE_MS,
+  MOTION_LAYOUT_MS,
+  prefersReducedMotion,
+} from "./lib/motion.js";
+
+const EMPTY_SECTIONS: StackSection[] = [];
+
+// The board's own width, measured (#3011): whether it stacks depends on the
+// room it has, not on the device or the tier, so a narrow desktop window and
+// an opening right sidebar stack it too. 0 until measured (and always in
+// jsdom), which keeps the lanes. `onBeforeChange` runs with the new width
+// before React re-renders, while the old layout is still on screen, so the
+// caller can note where things were.
+function useBoardWidth(
+  ref: RefObject<HTMLElement | null>,
+  onBeforeChange: (width: number) => void,
+): number {
+  const [width, setWidth] = useState(0);
+  const onBeforeChangeRef = useRef(onBeforeChange);
+  useLayoutEffect(() => {
+    onBeforeChangeRef.current = onBeforeChange;
+  });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Measured before the first paint, so a narrow board never shows its
+    // lanes for a frame and then stacks.
+    setWidth(el.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const next = el.getBoundingClientRect().width;
+      onBeforeChangeRef.current(next);
+      setWidth(next);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return width;
+}
 
 // The window's inner width, for the facets panel's "Auto" setting.
 function useViewportWidth(): number {
@@ -91,7 +138,6 @@ export function UnifiedBoard({
   onOpenSession,
   onSessionEnded,
   phone = false,
-  columnCount = 1,
   selectedTaskId: selectedTaskIdProp,
 }: {
   onOpenSession: (session: Session) => void;
@@ -100,9 +146,6 @@ export function UnifiedBoard({
   // sheet, no ad-hoc lane (the session picker covers those sessions), and
   // Android back closes the task detail. Unset elsewhere = the full board.
   phone?: boolean;
-  // With `phone`: how many adjacent status columns show at once (1 on phone,
-  // 2 on tablet, where the board has the width for a pair).
-  columnCount?: number;
   // The task whose card is ringed. Unset = the store's selection (the task the
   // right sidebar shows in detail, #2842); the board holds no selection of its own.
   selectedTaskId?: number | null;
@@ -176,7 +219,110 @@ export function UnifiedBoard({
   );
   const activeProjectIds = filters.projectIds;
   const viewportWidth = useViewportWidth();
-  const facetsShown = !phone && facetsOpen(filterApi.facets, viewportWidth, projects.length);
+  // Stacked (one section per status) while the board is too narrow for three
+  // lanes; the phone keeps its own one-column layout.
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Where the selected card was just before the board changed between lanes
+  // and stacked, so it can travel from there to its new place.
+  const travelFromRef = useRef<DOMRect | null>(null);
+  const stackedRef = useRef(false);
+  const boardWidth = useBoardWidth(rootRef, (next) => {
+    if (phone || boardStacks(next) === stackedRef.current) return;
+    travelFromRef.current = selectedCardRect(rootRef.current, selectedTaskId);
+  });
+  const stacked = !phone && boardStacks(boardWidth);
+  const facetsShown =
+    !phone && !stacked && facetsOpen(filterApi.facets, viewportWidth, projects.length);
+  // The statuses with their counts under the current filters: the stacked
+  // sections, and what the left rail lists in Tasks mode (#3026), so the two
+  // cannot drift. Published to the store for the rail.
+  const statusSections = useMemo(() => stackSections(visibleTasks), [visibleTasks]);
+  const stackedSections = stacked ? statusSections : EMPTY_SECTIONS;
+  useEffect(() => {
+    // The rail is not rendered on the phone: publish nothing there, and retract
+    // what a wider layout published before the window narrowed.
+    useDashboardStore.getState().setBoardStatuses(
+      (phone ? [] : statusSections).map((s) => ({
+        id: s.id,
+        title: s.title,
+        count: s.tasks.length,
+        needsYou: s.needsYou,
+        needsYouCount: s.needsYouCount,
+      })),
+    );
+  }, [statusSections, phone]);
+  useEffect(() => () => useDashboardStore.getState().setBoardStatuses([]), []);
+  // A jump to a status while the lanes show: scroll that lane into view. (The
+  // stacked board consumes the request itself, StackedBoard.tsx.) A request
+  // made before this board mounted is not replayed.
+  const statusJump = useDashboardStore((s) => s.statusJumpRequest);
+  const jumpHandledRef = useRef(statusJump?.nonce ?? 0);
+  useEffect(() => {
+    if (!statusJump || statusJump.nonce === jumpHandledRef.current) return;
+    jumpHandledRef.current = statusJump.nonce;
+    if (stacked || phone) return;
+    // Optional call: jsdom has no scrollIntoView.
+    // With Group by there is one lane per epic or project, so one column per
+    // status in each: prefer one holding cards over an empty rail chip.
+    const columns = rootRef.current?.querySelectorAll<HTMLElement>(
+      `.kanban-column[data-status="${statusJump.status}"]`,
+    );
+    const target =
+      Array.from(columns ?? []).find(
+        (el) =>
+          !el.classList.contains("kanban-column-is-empty") &&
+          !el.classList.contains("kanban-column-rail"),
+      ) ?? columns?.[0];
+    // Optional call: jsdom has no scrollIntoView.
+    target?.scrollIntoView?.({
+      inline: "start",
+      block: "nearest",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  }, [statusJump, stacked, phone]);
+  const selectedTask =
+    selectedTaskId !== null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null;
+  const selectedStatus = selectedTask ? boardColumnOf(selectedTask.status) : null;
+
+  // The selected card stays in view when the layout changes under it, and
+  // travels there (docs/motion.md: layout changes carry their content).
+  // The first measurement is where the board starts, not a change: nothing moves.
+  const measuredRef = useRef(false);
+  useLayoutEffect(() => {
+    const firstMeasurement = !measuredRef.current && boardWidth > 0;
+    if (boardWidth > 0) measuredRef.current = true;
+    if (stackedRef.current === stacked) return;
+    stackedRef.current = stacked;
+    if (firstMeasurement) return;
+    const from = travelFromRef.current;
+    travelFromRef.current = null;
+    const card = findCard(rootRef.current, selectedTaskId);
+    if (!card) return;
+    // Optional calls: jsdom has neither scrollIntoView nor animate.
+    card.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (typeof card.animate !== "function") return;
+    if (prefersReducedMotion() || !from) {
+      card.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: MOTION_FADE_MS,
+        easing: MOTION_EASE,
+      });
+      return;
+    }
+    const to = card.getBoundingClientRect();
+    if (!to.width) return;
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    card.animate(
+      [
+        {
+          transform: `translate(${dx}px, ${dy}px) scaleX(${from.width / to.width})`,
+          transformOrigin: "0 0",
+        },
+        { transform: "none", transformOrigin: "0 0" },
+      ],
+      { duration: MOTION_LAYOUT_MS, easing: MOTION_EASE },
+    );
+  }, [stacked, selectedTaskId, boardWidth]);
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -263,16 +409,13 @@ export function UnifiedBoard({
   };
 
   // A card click selects the task and shows its detail (#2843: the board no
-  // longer has a drawer of its own): in the sidebar's Tasks view on desktop,
-  // in the full-screen docked panel on phone and tablet. useOpenTask owns that
-  // tier decision for every caller (this board, the GitHub and Git views'
-  // task chips, the issue view), so they cannot drift apart.
+  // longer has a drawer of its own): in the right sidebar's Tasks view (#3011),
+  // which the phone shows full screen (#3014). useOpenTask owns that for every
+  // caller (this board, the GitHub and Git views' task chips, the issue view),
+  // so they cannot drift apart.
   const openTask = useOpenTask();
 
-  // Per-status counts (after the board's filters) for the phone strip, and
-  // which column the phone shows: the user's pick if it's still offered,
-  // else the first actionable one (tasksBoard.ts's defaultPhoneColumn).
-  const [phoneColumnChoice, setPhoneColumnChoice] = useState<TaskStatus | null>(null);
+  // Per-status counts (after the board's filters) for the phone's lane strip.
   const statusCounts = useMemo(() => {
     const counts = Object.fromEntries(TASK_COLUMNS.map((c) => [c.id, 0])) as Record<
       TaskStatus,
@@ -282,51 +425,38 @@ export function UnifiedBoard({
     // Queued tasks are listed under In progress (tasksBoard.ts BOARD_COLUMNS).
     return foldClaimedCounts(counts);
   }, [visibleTasks]);
-  const phoneColumns = BOARD_COLUMNS.filter(
-    (c) => !(hideDone && (c.id === "done" || c.id === "failed")),
-  );
-  const phoneColumn =
-    phoneColumnChoice !== null && phoneColumns.some((c) => c.id === phoneColumnChoice)
-      ? phoneColumnChoice
-      : defaultPhoneColumn(
-          statusCounts,
-          phoneColumns.map((c) => c.id),
-        );
-
-  // Phone proper (one column wide) shows four segments rather than a chip per
-  // status; tablet keeps the per-status window above (tasksBoard.ts).
-  const segmented = phone && columnCount === 1;
+  // The phone shows four lanes, one at a time (#3014).
   const [phoneSegmentChoice, setPhoneSegmentChoice] = useState<PhoneSegmentId | null>(null);
   const phoneSegments = PHONE_SEGMENTS.filter((seg) => !(hideDone && seg.id === "done"));
+  // Lanes holding a task that needs the owner get a dot, and the board opens
+  // on the first of them (#3014).
+  const segmentsNeedingYou = useMemo(
+    () => phoneSegmentsNeedingYou(visibleTasks, (t) => needsYouReason(t) !== null),
+    [visibleTasks],
+  );
   const phoneSegment =
     phoneSegmentChoice !== null && phoneSegments.some((seg) => seg.id === phoneSegmentChoice)
       ? phoneSegmentChoice
-      : defaultPhoneSegment(
+      : openingPhoneSegment(
           statusCounts,
           phoneSegments.map((seg) => seg.id),
+          segmentsNeedingYou,
         );
-  const visibleColumnIds: TaskStatus[] = segmented
-    ? [...(PHONE_SEGMENTS.find((seg) => seg.id === phoneSegment)?.statuses ?? [])]
-    : visibleColumnWindow(
-        phoneColumns.map((c) => c.id),
-        phoneColumn,
-        columnCount,
-      );
-
-  // Keep the selected chip visible: with all seven columns the strip
-  // overflows a phone, and the default pick (In Progress) is 4th. Optional
-  // call: jsdom has no scrollIntoView.
-  const stripRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // The four segments always fit; only the tablet's per-status chips scroll.
-    if (!phone || segmented) return;
-    stripRef.current
-      ?.querySelector<HTMLElement>('[aria-pressed="true"]')
-      ?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
-  }, [phone, segmented, phoneColumn]);
+  const lanesBodyRef = useRef<HTMLDivElement>(null);
+  usePhoneLaneSwipe(
+    lanesBodyRef,
+    phone,
+    phoneSegments.map((seg) => seg.id),
+    phoneSegment,
+    setPhoneSegmentChoice,
+  );
+  // The phone's current lane: the status columns it shows.
+  const visibleColumnIds: TaskStatus[] = [
+    ...(PHONE_SEGMENTS.find((seg) => seg.id === phoneSegment)?.statuses ?? []),
+  ];
 
   return (
-    <div className="kanban-unified">
+    <div className="kanban-unified" ref={rootRef} data-board-layout={stacked ? "stacked" : "lanes"}>
       <div className="kanban-unified-main">
         {!tasksLoaded && (
           <span className="visually-hidden" role="status">
@@ -364,50 +494,17 @@ export function UnifiedBoard({
               />
             }
           />
-          {segmented && (
-            <div
-              className="tasks-phone-strip tasks-phone-strip--segmented"
-              role="group"
-              aria-label="Task status"
-            >
-              {phoneSegments.map((segment) => (
-                <button
-                  key={segment.id}
-                  type="button"
-                  className="tasks-phone-strip-chip"
-                  aria-pressed={segment.id === phoneSegment}
-                  onClick={() => setPhoneSegmentChoice(segment.id)}
-                >
-                  {segment.title}
-                  <span className="tasks-phone-strip-count">
-                    {phoneSegmentCount(statusCounts, segment)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          {phone && !segmented && (
-            <div ref={stripRef} className="tasks-phone-strip" role="group" aria-label="Task status">
-              {phoneColumns.map((column) => (
-                <button
-                  key={column.id}
-                  type="button"
-                  className="tasks-phone-strip-chip"
-                  // "On screen", not "the one selected": `phone` here is the compact
-                  // board layout, so on tablet this strip shows and both columns
-                  // of the visible pair read as pressed.
-                  aria-pressed={visibleColumnIds.includes(column.id)}
-                  onClick={() => {
-                    // Picking a chip already on screen keeps the pair put.
-                    if (columnCount > 1 && visibleColumnIds.includes(column.id)) return;
-                    setPhoneColumnChoice(column.id);
-                  }}
-                >
-                  {column.title}
-                  <span className="tasks-phone-strip-count">{statusCounts[column.id]}</span>
-                </button>
-              ))}
-            </div>
+          {phone && (
+            <PhoneLaneStrip
+              lanes={phoneSegments.map((segment) => ({
+                id: segment.id,
+                title: segment.title,
+                count: phoneSegmentCount(statusCounts, segment),
+              }))}
+              current={phoneSegment}
+              needingYou={segmentsNeedingYou}
+              onSelect={setPhoneSegmentChoice}
+            />
           )}
           {dragError && (
             <div className="task-detail-error tasks-panel-drag-error" role="status">
@@ -523,79 +620,119 @@ export function UnifiedBoard({
               )}
             </EmptyStateNote>
           )}
-          <div className={`task-board-body${facetsShown ? " task-board-body--facets" : ""}`}>
+          <div
+            ref={lanesBodyRef}
+            className={`task-board-body${facetsShown ? " task-board-body--facets" : ""}`}
+          >
             {facetsShown && <TaskFacetsPanel api={filterApi} projects={projects} />}
-            <div className="task-board-lanes">
-              {lanes.map((lane) => {
-                const epicKey = groupBy === "epic" && lane.key !== NO_EPIC ? lane.key : null;
-                const sample = lane.tasks[0];
-                const progress = epicKey !== null ? epicProgress(tasks, epicKey) : null;
-                return (
-                  <section
-                    key={lane.key}
-                    className={grouped ? "task-lane" : "task-lane task-lane-flat"}
-                    aria-label={grouped ? lane.title : undefined}
-                  >
-                    {grouped && (
-                      <TaskLaneHeader
-                        title={lane.title}
-                        count={lane.tasks.length}
-                        colour={epicKey !== null ? `var(--lane-${epicColourSlot(epicKey)})` : null}
-                        progress={progress}
-                        href={epicKey !== null && sample ? epicUrl(sample) : null}
-                        onOpen={sample ? () => openEpicInSidebar(tasks, sample) : undefined}
-                      />
-                    )}
-                    <div
-                      className={`kanban-board tasks-board kanban-unified-columns${phone && columnCount > 1 ? " kanban-unified-columns--split" : ""}`}
+            {stacked ? (
+              <div className="task-board-lanes task-board-lanes--stacked">
+                <StackedBoard
+                  sections={stackedSections}
+                  selectedTaskId={selectedTaskId}
+                  selectedStatus={selectedStatus}
+                  hideDone={hideDone}
+                  renderBody={(section) => (
+                    <TaskColumn
+                      title={section.title}
+                      headless
+                      projectsById={projectsById}
+                      sessionsById={sessionsById}
+                      theme={theme}
+                      tasks={section.tasks}
+                      taskMasterEnabled={taskMasterEnabled}
+                      acceptsDrop={
+                        draggingTask !== null &&
+                        (boardColumnOf(draggingTask.status) === section.id ||
+                          (canDragToColumn(draggingTask.status) && canDragToColumn(section.id)))
+                      }
+                      onOpen={(task) => openTask(task.id)}
+                      onOpenSession={onOpenSession}
+                      onDrop={(draggedId, index) => applyDrop(draggedId, section.id, index)}
+                      onDragBegin={setDraggingId}
+                      onDragFinish={() => setDraggingId(null)}
+                      loading={!tasksLoaded}
+                      selectedTaskId={selectedTaskId}
+                    />
+                  )}
+                />
+              </div>
+            ) : (
+              <div className="task-board-lanes">
+                {lanes.map((lane) => {
+                  const epicKey = groupBy === "epic" && lane.key !== NO_EPIC ? lane.key : null;
+                  const sample = lane.tasks[0];
+                  const progress = epicKey !== null ? epicProgress(tasks, epicKey) : null;
+                  return (
+                    <section
+                      key={lane.key}
+                      className={grouped ? "task-lane" : "task-lane task-lane-flat"}
+                      aria-label={grouped ? lane.title : undefined}
                     >
-                      {(phone
-                        ? BOARD_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
-                        : BOARD_COLUMNS
-                      ).map((column) => {
-                        const columnTasks = boardColumnTasks(lane.tasks, column.id);
-                        // A card can only be dropped in its own lane: a lane is an epic or
-                        // a project, and dragging never changes either.
-                        const acceptsDrop =
-                          draggingTask !== null &&
-                          (!grouped || laneKeyOf(draggingTask, groupBy) === lane.key) &&
-                          (boardColumnOf(draggingTask.status) === column.id ||
-                            (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
-                        return (
-                          <TaskColumn
-                            key={column.id}
-                            title={column.title}
-                            projectsById={projectsById}
-                            sessionsById={sessionsById}
-                            theme={theme}
-                            tasks={columnTasks}
-                            taskMasterEnabled={taskMasterEnabled}
-                            acceptsDrop={acceptsDrop}
-                            onOpen={(task) => openTask(task.id)}
-                            onOpenSession={onOpenSession}
-                            onDrop={(draggedId, index) =>
-                              applyDrop(
-                                draggedId,
-                                column.id,
-                                index,
-                                lane.tasks,
-                                grouped ? lane.key : null,
-                              )
-                            }
-                            onDragBegin={setDraggingId}
-                            onDragFinish={() => setDraggingId(null)}
-                            collapsed={hideDone && (column.id === "done" || column.id === "failed")}
-                            loading={!tasksLoaded}
-                            rail={!phone}
-                            selectedTaskId={selectedTaskId}
-                          />
-                        );
-                      })}
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
+                      {grouped && (
+                        <TaskLaneHeader
+                          title={lane.title}
+                          count={lane.tasks.length}
+                          colour={
+                            epicKey !== null ? `var(--lane-${epicColourSlot(epicKey)})` : null
+                          }
+                          progress={progress}
+                          href={epicKey !== null && sample ? epicUrl(sample) : null}
+                          onOpen={sample ? () => openEpicInSidebar(tasks, sample) : undefined}
+                        />
+                      )}
+                      <div className="kanban-board tasks-board kanban-unified-columns">
+                        {(phone
+                          ? BOARD_COLUMNS.filter((c) => visibleColumnIds.includes(c.id))
+                          : BOARD_COLUMNS
+                        ).map((column) => {
+                          const columnTasks = boardColumnTasks(lane.tasks, column.id);
+                          // A card can only be dropped in its own lane: a lane is an epic or
+                          // a project, and dragging never changes either.
+                          const acceptsDrop =
+                            draggingTask !== null &&
+                            (!grouped || laneKeyOf(draggingTask, groupBy) === lane.key) &&
+                            (boardColumnOf(draggingTask.status) === column.id ||
+                              (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+                          return (
+                            <TaskColumn
+                              key={column.id}
+                              status={column.id}
+                              title={column.title}
+                              projectsById={projectsById}
+                              sessionsById={sessionsById}
+                              theme={theme}
+                              tasks={columnTasks}
+                              taskMasterEnabled={taskMasterEnabled}
+                              acceptsDrop={acceptsDrop}
+                              onOpen={(task) => openTask(task.id)}
+                              onOpenSession={onOpenSession}
+                              onDrop={(draggedId, index) =>
+                                applyDrop(
+                                  draggedId,
+                                  column.id,
+                                  index,
+                                  lane.tasks,
+                                  grouped ? lane.key : null,
+                                )
+                              }
+                              onDragBegin={setDraggingId}
+                              onDragFinish={() => setDraggingId(null)}
+                              collapsed={
+                                hideDone && (column.id === "done" || column.id === "failed")
+                              }
+                              loading={!tasksLoaded}
+                              rail={!phone}
+                              selectedTaskId={selectedTaskId}
+                            />
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -603,9 +740,24 @@ export function UnifiedBoard({
         laneColumns={laneColumns}
         projectsById={projectsById}
         kanbanOrder={kanbanOrder}
-        onOpenSession={onOpenSession}
+        // From 700px a tap on an ad-hoc session switches to Workspace mode and
+        // shows it there (#3011, design 9.6); the phone keeps its own route.
+        onOpenSession={
+          phone
+            ? onOpenSession
+            : (session) => useDashboardStore.getState().openSessionInWorkspace(session.id)
+        }
         onSessionEnded={onSessionEnded}
       />
     </div>
   );
+}
+
+function findCard(root: HTMLElement | null, taskId: number | null): HTMLElement | null {
+  if (!root || taskId === null) return null;
+  return root.querySelector<HTMLElement>(`[data-task-id="${taskId}"]`);
+}
+
+function selectedCardRect(root: HTMLElement | null, taskId: number | null): DOMRect | null {
+  return findCard(root, taskId)?.getBoundingClientRect() ?? null;
 }

@@ -1062,13 +1062,40 @@ describe("useWorkspacePersistence — issue #1426 (phone never saves)", () => {
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(api.toJSON).not.toHaveBeenCalled();
 
-    // Unfold: tier flips and the presentation hook lifts the taint.
-    layoutMode = "tablet";
+    // Unfold to a width that shows the grid (a forced "tablet" is now the
+    // two halves, #3010, which are read-only too), and the presentation hook
+    // lifts the taint.
+    layoutMode = "desktop";
     act(() => result.current.liftPhoneTaint());
     fireLayoutChange();
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
 
     expect(api.toJSON).toHaveBeenCalled();
+  });
+
+  // #3010 — the two halves (800-1099px; a forced "tablet" resolves to them)
+  // are a device-local view like the phone: maximizing the left half's group,
+  // hiding headers and adding a pane to show it on a half never reach the
+  // saved layout desktop shares.
+  it("never saves while the two halves are on screen, restore or edit", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "tablet";
+    const setPanelsVersion = makeSetPanelsVersion();
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "tablet",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0);
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS * 2);
+    expect(api.toJSON).not.toHaveBeenCalled();
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
   });
 
   it("resumes saving once the SAME workspace is restored again at a non-phone tier", () => {

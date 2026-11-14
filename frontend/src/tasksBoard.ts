@@ -182,30 +182,10 @@ export function absoluteDropIndex(
   return found === -1 ? full.length : found;
 }
 
-// Phone board: one column at a time. Opens on the first column that has
-// something to act on — In Progress, then Reviewing, then Ready — else the
-// first non-empty column in board order, else Ready (the natural place a new
-// task lands). `available` is the columns the phone strip offers (hide-done
-// removes Done/Failed from it).
-const PHONE_ACTIONABLE_ORDER: readonly TaskStatus[] = ["in_progress", "reviewing", "ready"];
-
-export function defaultPhoneColumn(
-  counts: Record<TaskStatus, number>,
-  available: readonly TaskStatus[],
-): TaskStatus {
-  const usable = (id: TaskStatus) => available.includes(id) && counts[id] > 0;
-  return (
-    PHONE_ACTIONABLE_ORDER.find(usable) ??
-    available.find((id) => counts[id] > 0) ??
-    (available.includes("ready") ? "ready" : (available[0] ?? "ready"))
-  );
-}
-
 // Phone board: four segments instead of one chip per status. Active folds In
 // Progress (which already holds the queued tasks) and Reviewing, Done folds
 // Failed, so the control fits a 390px phone without scrolling. A segment shows
 // all of its statuses' columns, stacked (mobile.css stacks .kanban-unified-columns).
-// Tablet keeps the per-status window above: it has the width for two columns.
 export type PhoneSegmentId = "backlog" | "ready" | "active" | "done";
 
 export const PHONE_SEGMENTS: readonly {
@@ -228,7 +208,7 @@ export function phoneSegmentCount(
 }
 
 // Opens on Active, then Ready, when they hold something (the same "what can I
-// act on" order the per-status phone board used), else the first non-empty
+// act on" order: In Progress, Reviewing, Ready), else the first non-empty
 // offered segment, else Ready (where a new task lands).
 export function defaultPhoneSegment(
   counts: Record<TaskStatus, number>,
@@ -247,17 +227,29 @@ export function defaultPhoneSegment(
   );
 }
 
-// Tablet shows `count` adjacent columns at once (phone shows one). Returns the
-// window of `count` columns that contains `selected`, starting at it and
-// clamped at the end — picking the last chip shows the last `count` columns.
-// A `selected` that isn't offered falls back to the first window.
-export function visibleColumnWindow(
-  columns: readonly TaskStatus[],
-  selected: TaskStatus,
-  count: number,
-): TaskStatus[] {
-  if (count >= columns.length) return [...columns];
-  const index = Math.max(0, columns.indexOf(selected));
-  const start = Math.min(index, columns.length - count);
-  return columns.slice(start, start + count);
+// The phone's lanes (#3014) that hold a task needing the owner, for the strip's
+// dot. `needsYou` is the one definition (taskMasterSummary.ts's needsYouReason),
+// passed in so this module stays free of it.
+export function phoneSegmentsNeedingYou(
+  tasks: readonly Task[],
+  needsYou: (task: Task) => boolean,
+): Set<PhoneSegmentId> {
+  const out = new Set<PhoneSegmentId>();
+  for (const task of tasks) {
+    if (!needsYou(task)) continue;
+    const column = boardColumnOf(task.status);
+    const segment = PHONE_SEGMENTS.find((s) => s.statuses.includes(column));
+    if (segment) out.add(segment.id);
+  }
+  return out;
+}
+
+// The lane the phone board opens on (#3014): the first lane, in strip order,
+// that holds a task needing the owner; without one, defaultPhoneSegment.
+export function openingPhoneSegment(
+  counts: Record<TaskStatus, number>,
+  available: readonly PhoneSegmentId[],
+  needingYou: ReadonlySet<PhoneSegmentId>,
+): PhoneSegmentId {
+  return available.find((id) => needingYou.has(id)) ?? defaultPhoneSegment(counts, available);
 }

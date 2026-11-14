@@ -163,6 +163,18 @@
   background: transparent;
   border-bottom: 0;
 }
+/* #2979 — in the header row the title is the only context for what the
+   detail shows, and Back, Open on GitHub and Close leave a half-width sidebar
+   little room: it wraps to a second line before it is cut. */
+.sb-vh--bare .sb-vh-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
 /* The context strip under the drawer's header row (SidebarHeader). */
 .sb-strip {
   display: flex;
@@ -228,7 +240,7 @@
 }
 .sb-chev {
   color: var(--muted);
-  transition: transform 0.12s;
+  transition: transform var(--motion-fade) var(--motion-ease);
 }
 .sb-chev--closed {
   transform: rotate(-90deg);

@@ -627,7 +627,9 @@ export function IssueDetailView({
               <TaskStatusBlock
                 task={link.task}
                 actions={
-                  hasStripActions(link.task) ? <TaskActions task={link.task} overflow /> : undefined
+                  hasStripActions(link.task) ? (
+                    <TaskActions task={link.task} overflow confirmApprove />
+                  ) : undefined
                 }
                 onOpenTask={() =>
                   useDashboardStore

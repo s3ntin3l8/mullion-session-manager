@@ -1,4 +1,5 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
+import type { TaskStatus } from "../api/index.js";
 import type {
   ExistingInstructionsMode,
   ScaffoldConflict,
@@ -41,7 +42,9 @@ import type {
 } from "../api/index.js";
 import type { GithubIssueUi } from "./githubResources.js";
 import type { ReorderUpdate } from "../reorder.js";
+import type { StatusEntry as BoardStatusEntry } from "../unified-board/stackLayout.js";
 import type { KanbanColumnId } from "../kanban.js";
+import type { FoldHalvesState, Half, LastUsed } from "../lib/foldHalves.js";
 
 // "list" is today's per-project sidebar tree (Sidebar.tsx); "kanban" is the
 // unified task/session board (UnifiedBoard.tsx — originally issue #211's
@@ -53,6 +56,13 @@ import type { KanbanColumnId } from "../kanban.js";
 // UI preference (localStorage, no backend field) — same for
 // hierarchicalView below (Phase 5 Track B, issue #195 5.5b: flat
 // vs hierarchical child-session nesting).
+//
+// The two values are also the app's two first-level modes (#3009): "list" is
+// Workspace mode (the grid, the left sidebar, the Dock) and "kanban" is Tasks
+// mode (the board full size beside the right sidebar). The names predate the
+// modes and every entry point already writes them, so they were kept rather
+// than renamed. The value is remembered per device (crs.viewMode) and restored
+// at start.
 export type ViewMode = "list" | "kanban";
 
 /** Where the right sidebar's Back goes after a cross-link between the Tasks
@@ -86,6 +96,23 @@ export interface TerminalPrefs {
   fontSize: number;
   cursorStyle: AppSettings["terminal"]["cursorStyle"];
   scrollback: number;
+}
+
+// Issue #3013 — an open New session launcher (SessionLauncher.tsx). `target`
+// is where the session should land: `projectId` preselects the project (a
+// sidebar project's "+"); `half` is the fold's left or right half, which a
+// later slice acts on — until then it is stored and passed through only.
+// Null while the launcher is closed.
+export interface LauncherTarget {
+  half?: "left" | "right";
+  projectId?: number;
+}
+
+export interface LauncherRequest {
+  target: LauncherTarget | null;
+  // Distinct per open, so a surface that stays mounted between opens (the
+  // touch sheet) can start each one with fresh choices.
+  seq: number;
 }
 
 // A pane's split-right/split-down action (PaneHeaderActions.tsx, a dockview
@@ -692,9 +719,8 @@ export interface UiSlice {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   // Right sidebar: `rightSidebarView` is the last-active view id (kept while
-  // closed so toggling reopens it), `rightSidebarOpen` whether the drawer is
-  // showing, `rightSidebarPinned` whether it docks (desktop only) instead of
-  // overlaying the grid.
+  // closed so toggling reopens it), `rightSidebarOpen` whether the panel is
+  // showing. The panel is always docked (#3006).
   rightSidebarView: string;
   rightSidebarProjectRequest: { projectId: number; nonce: number } | null;
   /** A one-shot "show History scoped to this" request (Source Control's View
@@ -710,10 +736,13 @@ export interface UiSlice {
    *  views and so a session row can open it before the panel is mounted. */
   githubOpenPrByProject: Record<number, number | null>;
   rightSidebarOpen: boolean;
-  rightSidebarPinned: boolean;
   rightSidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment.
   viewMode: ViewMode;
+  /** Set when "Open session in Workspace" switched from Tasks to Workspace
+   *  (#3014): the phone's back gesture then returns to Tasks, reopening the
+   *  task the switch came from. Cleared by any other mode change. */
+  crossLinkReturn: { taskId: number | null } | null;
   // Phase 5 (Track B, issue #195 5.5b) — see ViewMode's own doc comment.
   // Only meaningful in "list" viewMode — the unified board's ad-hoc lane
   // cards (UnifiedBoard.tsx) always render flat regardless of this flag.
@@ -792,17 +821,10 @@ export interface UiSlice {
   // The one write path for every preference: deep-merges `patch` into local
   // `settings` optimistically (so the UI reflects it immediately), then
   // fires a debounced PATCH /api/settings so a slider/number-field drag
-  // sends one request instead of one per tick. cycleTheme/setTerminalPrefs/
+  // sends one request instead of one per tick. setTerminalPrefs/
   // etc. below are thin wrappers over this for call sites that predate the
   // unified settings object.
   updateSettings: (patch: SettingsPatch) => void;
-  // Cycles the theme *preference* dark -> light -> system -> dark (issue
-  // #1432 — the old toggleTheme cycled the *resolved* theme dark<->light,
-  // which meant it could never land on, or leave, "system" without going
-  // through Settings). The Toolbar's quick toggle calls this; Settings'
-  // Theme segmented control (Dark/Light/System) still calls
-  // updateSettings({ theme: ... }) directly to jump to a specific value.
-  cycleTheme: () => void;
   setTerminalPrefs: (patch: Partial<TerminalPrefs>) => void;
   setHideEndedSessions: (value: boolean) => void;
   setShowTaskSessions: (value: boolean) => void;
@@ -829,9 +851,46 @@ export interface UiSlice {
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;
-  setRightSidebarPinned: (value: boolean) => void;
   setRightSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
+  /** The mode switch's keyboard path (#3009): Workspace to Tasks and back. */
+  toggleViewMode: () => void;
+  /** "Open session in Workspace" from a task (#3009): switch to Workspace mode
+   *  and open the session there. The right sidebar's task stays selected;
+   *  useClearTaskSelectionOnProjectChange keeps a task whose project the
+   *  sidebar moves to. */
+  openSessionInWorkspace: (sessionId: number) => void;
+  /** Back from a cross-link (#3014): Tasks mode again, with the task the
+   *  switch came from opened in the right sidebar. A no-op without one. */
+  returnFromCrossLink: () => void;
+  /** #3010 — per workspace, which panes show on which half between 800 and
+   *  1099px. Device-local (crs.foldHalves), never in the saved layout. */
+  foldHalves: Record<number, FoldHalvesState>;
+  /** Which half has focus there: what the key bar and keyboard address. */
+  focusedHalf: Half;
+  /** Moves a pane of the active workspace to a half; `openIds` are its open
+   *  tiled panes (a move that would empty the left half is refused). */
+  moveToHalf: (panelId: string, half: Half, openIds: readonly string[]) => void;
+  /** A right-rail session as a view tab: show it, or hide it if showing. */
+  toggleRightPane: (panelId: string) => void;
+  /** Shows a right-half pane, or closes the right half (null). */
+  showRightPane: (panelId: string | null) => void;
+  /** Records the pane shown on the left half; `used` (default) also makes
+   *  it the one used last. */
+  noteLeftPane: (panelId: string, used?: boolean) => void;
+  noteHalfUsed: (used: LastUsed) => void;
+  /** Forgets panes of the active workspace that were closed. */
+  forgetFoldPanes: (closedIds: readonly string[]) => void;
+  /** Remembers the terminal panes open while the halves show. */
+  noteFoldOpen: (openIds: readonly string[]) => void;
+  /** Drops a deleted workspace's halves assignment. */
+  forgetFoldHalvesWorkspace: (workspaceId: number) => void;
+  setFocusedHalf: (half: Half) => void;
+  /** Whether the halves are on screen right now (800-1099px). Runtime only:
+   *  App sets it; the terminal pane wrapper reads it so a session shown on
+   *  the right half is not also mounted in the grid. */
+  foldHalvesActive: boolean;
+  setFoldHalvesActive: (active: boolean) => void;
   setHierarchicalView: (value: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
   // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,
@@ -841,6 +900,14 @@ export interface UiSlice {
   setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
   requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
   clearSplitRequest: () => void;
+  // Issue #3013 — the New session launcher. The store cannot import
+  // `canLaunchTerminal` (panelUtils.ts imports the store), so the view-mode
+  // gate is applied where the launcher renders (SessionLauncherHost).
+  launcherRequest: LauncherRequest | null;
+  openLauncher: (target?: LauncherTarget) => void;
+  // With a `seq`, closes only that open (a stale launch must not close a
+  // launcher opened after it); without one, closes whatever is open.
+  closeLauncher: (seq?: number) => void;
   // Issue #1429 — a desktop OS notification's onclick opens the session
   // directly (same destination the bell row/phone sheet/push click/deep
   // link all converged on) — but useAttentionNotifications.ts has no
@@ -899,6 +966,16 @@ export interface UiSlice {
   openTaskRequest: { taskId: number; nonce: number } | null;
   requestOpenTask: (taskId: number) => void;
   clearOpenTaskRequest: (nonce: number) => void;
+  // Tasks mode (#3026): the board's statuses with their counts under its
+  // current filters, published by UnifiedBoard so the left rail lists the same
+  // entries (it cannot reach the board's filtered tasks), and the one-shot
+  // request to jump to one of them. Each board layout consumes the request:
+  // stacked opens and scrolls to the section, lanes scrolls the lane in. The
+  // nonce lets the same status be requested twice in a row.
+  boardStatuses: BoardStatusEntry[];
+  setBoardStatuses: (entries: BoardStatusEntry[]) => void;
+  statusJumpRequest: { status: TaskStatus; nonce: number } | null;
+  requestStatusJump: (status: TaskStatus) => void;
   // Re-resolves `theme` whenever the OS-level color-scheme preference
   // changes, but only while settings.theme === "system" — a no-op the rest
   // of the time. Returns a cleanup function; called once from App.tsx

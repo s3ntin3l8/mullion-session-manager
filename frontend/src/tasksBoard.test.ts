@@ -6,15 +6,15 @@ import {
   orderTasksForColumn,
   computeTaskReorder,
   absoluteDropIndex,
-  defaultPhoneColumn,
   defaultPhoneSegment,
   PHONE_SEGMENTS,
   phoneSegmentCount,
-  visibleColumnWindow,
   BOARD_COLUMNS,
   boardColumnOf,
   boardColumnTasks,
   foldClaimedCounts,
+  openingPhoneSegment,
+  phoneSegmentsNeedingYou,
 } from "./tasksBoard.js";
 import type { PhoneSegmentId } from "./tasksBoard.js";
 import type { Task, TaskStatus } from "./api/index.js";
@@ -273,48 +273,6 @@ describe("absoluteDropIndex", () => {
   });
 });
 
-describe("defaultPhoneColumn", () => {
-  const ALL = TASK_COLUMNS.map((c) => c.id);
-  const counts = (over: Partial<Record<TaskStatus, number>> = {}) =>
-    ({
-      backlog: 0,
-      ready: 0,
-      claimed: 0,
-      in_progress: 0,
-      reviewing: 0,
-      done: 0,
-      failed: 0,
-      ...over,
-    }) as Record<TaskStatus, number>;
-
-  it("prefers In Progress, then Reviewing, then Ready", () => {
-    expect(defaultPhoneColumn(counts({ in_progress: 1, reviewing: 3, ready: 2 }), ALL)).toBe(
-      "in_progress",
-    );
-    expect(defaultPhoneColumn(counts({ reviewing: 1, ready: 2 }), ALL)).toBe("reviewing");
-    expect(defaultPhoneColumn(counts({ ready: 2, backlog: 5 }), ALL)).toBe("ready");
-  });
-
-  it("falls back to the first non-empty column in board order", () => {
-    expect(defaultPhoneColumn(counts({ done: 2, failed: 1 }), ALL)).toBe("done");
-    expect(defaultPhoneColumn(counts({ backlog: 1, claimed: 1 }), ALL)).toBe("backlog");
-  });
-
-  it("opens on Ready when the board is empty", () => {
-    expect(defaultPhoneColumn(counts(), ALL)).toBe("ready");
-  });
-
-  it("only considers the columns the strip offers", () => {
-    const noDone = ALL.filter((id) => id !== "done" && id !== "failed");
-    expect(defaultPhoneColumn(counts({ done: 4 }), noDone)).toBe("ready");
-    expect(defaultPhoneColumn(counts({ done: 4, backlog: 1 }), noDone)).toBe("backlog");
-  });
-
-  it("degrades to the first available column when Ready isn't offered", () => {
-    expect(defaultPhoneColumn(counts(), ["done", "failed"])).toBe("done");
-  });
-});
-
 describe("phone segments", () => {
   const counts = (over: Partial<Record<TaskStatus, number>> = {}): Record<TaskStatus, number> => ({
     backlog: 0,
@@ -357,33 +315,6 @@ describe("phone segments", () => {
     expect(defaultPhoneSegment(counts({ done: 4 }), noDone)).toBe("ready");
     expect(defaultPhoneSegment(counts({ done: 4, backlog: 1 }), noDone)).toBe("backlog");
     expect(defaultPhoneSegment(counts(), ["done"])).toBe("done");
-  });
-});
-
-describe("visibleColumnWindow", () => {
-  const COLS: TaskStatus[] = ["ready", "in_progress", "reviewing", "done"];
-
-  it("starts the window at the selected column", () => {
-    expect(visibleColumnWindow(COLS, "in_progress", 2)).toEqual(["in_progress", "reviewing"]);
-    expect(visibleColumnWindow(COLS, "ready", 2)).toEqual(["ready", "in_progress"]);
-  });
-
-  it("clamps at the end so the last chip shows the last `count` columns", () => {
-    expect(visibleColumnWindow(COLS, "done", 2)).toEqual(["reviewing", "done"]);
-    expect(visibleColumnWindow(COLS, "reviewing", 3)).toEqual(["in_progress", "reviewing", "done"]);
-  });
-
-  it("returns every column when count covers them all", () => {
-    expect(visibleColumnWindow(COLS, "reviewing", 4)).toEqual(COLS);
-    expect(visibleColumnWindow(COLS, "reviewing", 9)).toEqual(COLS);
-  });
-
-  it("falls back to the first window when the selection isn't offered (hide-done)", () => {
-    expect(visibleColumnWindow(["ready", "in_progress"], "done", 1)).toEqual(["ready"]);
-  });
-
-  it("is a single column for count 1 (phone)", () => {
-    expect(visibleColumnWindow(COLS, "reviewing", 1)).toEqual(["reviewing"]);
   });
 });
 
@@ -436,5 +367,48 @@ describe("Claimed folded into In progress (#2841)", () => {
       failed: 7,
     };
     expect(foldClaimedCounts(counts)).toEqual({ ...counts, claimed: 0, in_progress: 7 });
+  });
+});
+
+// #3014 — the phone board's dots and its opening lane.
+describe("phoneSegmentsNeedingYou", () => {
+  const needs = (t: Task) => t.title === "needs";
+  it("maps each task needing you to its lane, Claimed into Active", () => {
+    const set = phoneSegmentsNeedingYou(
+      [
+        makeTask({ id: 1, status: "claimed", title: "needs" }),
+        makeTask({ id: 2, status: "failed", title: "needs" }),
+        makeTask({ id: 3, status: "ready", title: "fine" }),
+      ],
+      needs,
+    );
+    expect([...set].sort()).toEqual(["active", "done"]);
+  });
+  it("is empty when nothing needs you", () => {
+    expect(phoneSegmentsNeedingYou([makeTask({ status: "ready" })], needs).size).toBe(0);
+  });
+});
+
+describe("openingPhoneSegment", () => {
+  const counts = Object.fromEntries(
+    TASK_COLUMNS.map((c) => [c.id, c.id === "ready" ? 2 : c.id === "in_progress" ? 1 : 0]),
+  ) as Record<TaskStatus, number>;
+  const all: PhoneSegmentId[] = ["backlog", "ready", "active", "done"];
+  it("opens on the first lane, in strip order, holding a task that needs you", () => {
+    expect(openingPhoneSegment(counts, all, new Set<PhoneSegmentId>(["done", "ready"]))).toBe(
+      "ready",
+    );
+  });
+  it("skips a lane that is not offered", () => {
+    expect(
+      openingPhoneSegment(
+        counts,
+        ["backlog", "ready", "active"],
+        new Set<PhoneSegmentId>(["done"]),
+      ),
+    ).toBe("active");
+  });
+  it("falls back to the usual default without one", () => {
+    expect(openingPhoneSegment(counts, all, new Set())).toBe(defaultPhoneSegment(counts, all));
   });
 });

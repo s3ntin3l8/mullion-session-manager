@@ -618,13 +618,6 @@ export type SoundName = "ping" | "chime" | "blip";
 // motivating case: a foldable), and let a tier be reproduced in a desktop
 // browser for testing.
 export type LayoutMode = "auto" | "phone" | "tablet" | "desktop";
-// Simultaneous tiled panes on the tablet tier before a newly-opened panel
-// docks as a tab into the active group instead of its own column. User-
-// configurable because the tradeoff against terminal readability (a
-// narrower column trips the font-shrink from PR 2's TerminalPane fix sooner)
-// depends on the device's actual unfolded/tablet width, which this backend
-// has no way to know.
-export type TabletPaneCap = 2 | 3;
 
 // ---------------------------------------------------------------------------
 // mullion-links.ts — IssueTriageState

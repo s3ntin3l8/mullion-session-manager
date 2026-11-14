@@ -25,6 +25,7 @@ import type {
   Task,
 } from "../api/index.js";
 import { makeHost, makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import { boardStoreStubs } from "../test/boardStoreStubs.js";
 
 let sessions: Session[];
 let hosts: Host[];
@@ -60,6 +61,7 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    ...boardStoreStubs,
     taskMasterEnabled,
     kanbanOrder,
     setKanbanColumnOrder,
@@ -88,7 +90,7 @@ function storeState() {
 // tests assert the desktop path (selection in the sidebar's Tasks view).
 vi.mock("../lib/layoutTier.js", async (importOriginal) => ({
   ...(await importOriginal<typeof layoutTierModule>()),
-  useLayoutContext: () => ({ tier: "desktop" as const, tabletPaneCap: 2 }),
+  useLayoutContext: () => ({ tier: "desktop" as const }),
 }));
 
 vi.mock("../store/index.js", () => {

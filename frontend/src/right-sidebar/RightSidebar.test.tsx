@@ -1,13 +1,24 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RightSidebar } from "./RightSidebar.js";
+import {
+  COARSE_POINTER_QUERY,
+  RAILS_HALVES_BAND_QUERY,
+  RIGHT_SIDEBAR_FULL_WIDTH_QUERY,
+  TABLET_BREAKPOINT_QUERY,
+} from "../lib/layoutTier.js";
 import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import type { GitStatus, Project } from "../api/index.js";
 import type { GitHubPrPhase } from "../api/types.js";
+import { BottomSheet } from "../ui/BottomSheet.js";
+import { makeTask } from "../test/fixtures.js";
+import { EMPTY_FOLD_HALVES } from "../lib/foldHalves.js";
+import type { FoldHalvesState } from "../lib/foldHalves.js";
 
 const PROJECT = { id: 1, name: "demo", cwd: "/x/demo", hostId: "local" } as Project;
 
@@ -35,6 +46,7 @@ const actions = {
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
+  onOpenDevice: vi.fn(),
 };
 
 function renderSidebar(tier: LayoutTier = "desktop") {
@@ -53,14 +65,26 @@ beforeEach(() => {
     rightSidebarProjectRequest: null,
     followedProjectId: null,
     rightSidebarOpen: false,
-    rightSidebarPinned: false,
     rightSidebarWidth: 340,
     prsByProject: {},
     defaultBranchCiByProject: {},
   });
 });
 
+// Make exactly these media queries match. narrowWindow: a window too narrow
+// to dock the panel.
+function matchQueries(...queries: string[]) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: queries.includes(query),
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
+const narrowWindow = () => matchQueries(RIGHT_SIDEBAR_FULL_WIDTH_QUERY);
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   resetPhoneBackStackForTests();
   vi.clearAllMocks();
   useDashboardStore.setState({ projects: [], gitStatuses: {} });
@@ -111,7 +135,7 @@ describe("RightSidebar", () => {
     expect(writes).not.toContain(null);
   });
 
-  it("renders nothing on phone", () => {
+  it("renders nothing on phone while no view is open", () => {
     const { container } = renderSidebar("phone");
     expect(container.firstChild).toBeNull();
   });
@@ -183,7 +207,8 @@ describe("RightSidebar", () => {
       },
     });
     renderSidebar();
-    expect(screen.getByRole("button", { name: "Git" }).textContent).toContain("2");
+    // The badge's count is part of the button's name (WCAG 2.5.3, #2886).
+    expect(screen.getByRole("button", { name: "Git, 2" }).textContent).toContain("2");
   });
 
   it("shows an alert badge, not a count, on conflicts", () => {
@@ -291,23 +316,42 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().rightSidebarView).toBe("github");
   });
 
-  it("floats unpinned over the grid: scrim click and Escape both dismiss it", async () => {
-    const user = userEvent.setup();
+  it("is docked at every width where it renders: no scrim, and Escape leaves it open (#3006)", () => {
+    for (const tier of ["desktop", "tablet"] as const) {
+      useDashboardStore.setState({ rightSidebarOpen: true });
+      const { container, unmount } = renderSidebar(tier);
+
+      expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
+      expect(container.querySelector(".right-sidebar-panel.full")).toBeNull();
+      expect(container.querySelector(".right-sidebar-scrim")).toBeNull();
+      expect(container.querySelector(".right-sidebar-resize-handle")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /pin sidebar/i })).toBeNull();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      unmount();
+    }
+  });
+
+  it("covers the workspace where the window is too narrow to dock, and Escape closes it there", () => {
+    narrowWindow();
     useDashboardStore.setState({ rightSidebarOpen: true });
-    const { container } = renderSidebar();
-    expect(container.querySelector(".right-sidebar-panel.overlay")).toBeTruthy();
+    const { container } = renderSidebar("tablet");
+    const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
 
-    await user.click(container.querySelector(".right-sidebar-scrim") as HTMLElement);
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(panel.classList.contains("full")).toBe(true);
+    // No inline width: the stylesheet stretches it to the rail.
+    expect(panel.style.width).toBe("");
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+    expect(container.querySelector(".right-sidebar-scrim")).toBeNull();
 
-    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
   it("leaves an Escape that came from inside a terminal (or was already handled) alone", () => {
+    narrowWindow();
     useDashboardStore.setState({ rightSidebarOpen: true });
-    renderSidebar();
+    renderSidebar("tablet");
     const xterm = document.createElement("div");
     xterm.className = "xterm";
     const textarea = document.createElement("textarea");
@@ -336,42 +380,7 @@ describe("RightSidebar", () => {
     expect(panel.style.width).toBe("420px");
   });
 
-  it("docks when pinned on desktop: no scrim, and Escape leaves it open", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
-    const { container } = renderSidebar("desktop");
-
-    expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
-    expect(container.querySelector(".right-sidebar-scrim")).toBeNull();
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
-  });
-
-  it("ignores a saved pin on tablet: overlay, no pin button, no resize handle", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
-    const { container } = renderSidebar("tablet");
-
-    expect(container.querySelector(".right-sidebar-panel.overlay")).toBeTruthy();
-    expect(container.querySelector(".right-sidebar-scrim")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /pin sidebar/i })).toBeNull();
-    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
-    // The saved preference itself is untouched.
-    expect(useDashboardStore.getState().rightSidebarPinned).toBe(true);
-  });
-
-  it("the pin button toggles and persists the pinned flag", async () => {
-    const user = userEvent.setup();
-    useDashboardStore.setState({ rightSidebarOpen: true });
-    renderSidebar();
-
-    await user.click(screen.getByRole("button", { name: "Pin sidebar" }));
-    expect(useDashboardStore.getState().rightSidebarPinned).toBe(true);
-    expect(localStorage.getItem("crs.rightSidebarPinned")).toBe("1");
-
-    await user.click(screen.getByRole("button", { name: "Unpin sidebar" }));
-    expect(useDashboardStore.getState().rightSidebarPinned).toBe(false);
-  });
-
-  it("tablet: a rightward swipe on the open drawer dismisses it", () => {
+  it("tablet: a swipe on the open panel does not close it (#3006)", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
     const { container } = renderSidebar("tablet");
     const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
@@ -385,7 +394,7 @@ describe("RightSidebar", () => {
     touch("touchstart", 100);
     touch("touchmove", 200);
 
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
   });
 
   it("desktop: the drawer has no swipe gesture", () => {
@@ -405,38 +414,63 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
   });
 
-  it("tablet: the back gesture closes the floating drawer", () => {
+  it("the back gesture leaves a docked panel alone and closes one that covers the workspace", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
-    renderSidebar("tablet");
-
+    const docked = renderSidebar("tablet");
     act(() => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    docked.unmount();
 
+    narrowWindow();
+    renderSidebar("tablet");
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
-  it("closes the drawer when the tier changes to phone, or a floating one goes tablet → desktop", () => {
+  it("does not open a view at start on the phone from the docked sidebar's persisted state", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
-    const { rerender } = renderSidebar("tablet");
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    const { container } = renderSidebar("phone");
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("closes the panel when the tier changes to phone, and keeps it through tablet → desktop", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { rerender, container } = renderSidebar("tablet");
 
     rerender(<RightSidebar tier="desktop" actions={actions} />);
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
 
-    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
     rerender(<RightSidebar tier="phone" actions={actions} />);
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
-  it("keeps a pinned drawer open when going tablet → desktop (it docks)", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
-    const { rerender, container } = renderSidebar("tablet");
+  it("has no resize handle under a touch pointer, which could not drag it", () => {
+    matchQueries(COARSE_POINTER_QUERY);
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { container } = renderSidebar("tablet");
 
-    rerender(<RightSidebar tier="desktop" actions={actions} />);
-
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
     expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+  });
+
+  it("a forced desktop tier on a narrow window keeps Escape but stays off the back stack", () => {
+    narrowWindow();
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    renderSidebar("desktop");
+
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
   it("the close button closes the drawer", async () => {
@@ -492,6 +526,19 @@ describe("RightSidebar", () => {
     expect(screen.getByText("No projects yet.")).toBeTruthy();
   });
 
+  it("shows the Devices view with no project picker and no 'No projects yet' state (host-global)", () => {
+    useDashboardStore.setState({
+      projects: [],
+      rightSidebarOpen: true,
+      rightSidebarView: "devices",
+      devices: [],
+    });
+    renderSidebar();
+    expect(screen.getByRole("complementary", { name: "Devices sidebar" })).toBeTruthy();
+    expect(screen.queryByText("No projects yet.")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
+  });
+
   it("falls back to the first registered view when the stored view id is unknown", () => {
     useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarView: "gone" });
     renderSidebar();
@@ -499,7 +546,7 @@ describe("RightSidebar", () => {
   });
 
   it("dragging the left handle resizes (inverted) and commits a clamped width", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
+    useDashboardStore.setState({ rightSidebarOpen: true });
     const { container } = renderSidebar("desktop");
     const handle = container.querySelector(".right-sidebar-resize-handle") as HTMLElement;
     const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
@@ -511,5 +558,446 @@ describe("RightSidebar", () => {
 
     expect(useDashboardStore.getState().rightSidebarWidth).toBe(390);
     expect(localStorage.getItem("crs.rightSidebarWidth")).toBe("390");
+  });
+});
+
+// #3010 — the two halves between 800 and 1099px.
+describe("RightSidebar in the two halves", () => {
+  const half = <div data-testid="right-half-session">session</div>;
+  const rail = <button type="button">Right half session</button>;
+
+  it("is exactly the right half: no stored width, no resize handle", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarWidth: 520 });
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    const panel = container.querySelector(".right-sidebar-panel.docked") as HTMLElement;
+    expect(panel).toHaveClass("half");
+    expect(panel.style.width).toBe("");
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+  });
+
+  it("shows the right half's session while no view covers it, and the view over it", () => {
+    useDashboardStore.setState({ rightSidebarOpen: false });
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+    expect(container.querySelector('[aria-label="Right half"]')).toHaveClass("half");
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
+    act(() => useDashboardStore.setState({ rightSidebarOpen: false }));
+    expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+  });
+
+  it("lists the right half's sessions in the rail, below the views", () => {
+    render(<RightSidebar tier="tablet" actions={actions} halves railSessions={rail} />);
+    const nav = screen.getByRole("navigation", { name: "Right sidebar" });
+    const buttons = [...nav.querySelectorAll("button")];
+    expect(buttons.at(-1)).toHaveTextContent("Right half session");
+  });
+
+  it("renders no right half outside the halves", () => {
+    useDashboardStore.setState({ rightSidebarOpen: false });
+    render(<RightSidebar tier="desktop" actions={actions} rightHalf={half} />);
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
+  });
+
+  // #3032's Browser and Dock views exist in this band, and show on the right
+  // half like any other view: the panel is exactly the half.
+  it.each([
+    ["browser", ".browser-sidebar-view"],
+    ["dock", ".dock-sidebar-view"],
+  ])("shows the %s view on the right half", (view, selector) => {
+    matchQueries(TABLET_BREAKPOINT_QUERY, RAILS_HALVES_BAND_QUERY);
+    act(() => useDashboardStore.getState().openRightSidebarView(view));
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    const panel = container.querySelector(".right-sidebar-panel.docked.half");
+    expect(panel?.querySelector(selector)).toBeTruthy();
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
+    const nav = screen.getByRole("navigation", { name: "Right sidebar" });
+    expect(within(nav).getByRole("button", { name: "Browser" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "Dock" })).toBeInTheDocument();
+    act(() => useDashboardStore.getState().closeRightSidebar());
+  });
+
+  // Design 9.2 — folding (halves → phone) and unfolding again.
+  describe("folding and unfolding", () => {
+    const halvesProps = { actions, halves: true, rightHalf: half, railSessions: rail };
+    const fold = (lastUsed: FoldHalvesState["lastUsed"], viewMode: "list" | "kanban" = "list") => {
+      useDashboardStore.setState({
+        viewMode,
+        activeWorkspaceId: 1,
+        foldHalves: { 1: { ...EMPTY_FOLD_HALVES, lastUsed } },
+      });
+      useDashboardStore.getState().openRightSidebarView("git");
+      const r = render(<RightSidebar tier="tablet" {...halvesProps} />);
+      r.rerender(<RightSidebar tier="phone" actions={actions} />);
+      return r;
+    };
+    afterEach(() => {
+      useDashboardStore.setState({
+        rightSidebarOpen: false,
+        viewMode: "list",
+        foldHalves: {},
+        activeWorkspaceId: null,
+      });
+    });
+
+    it("keeps the view full screen when it was used last, and on the right half after", () => {
+      const { container, rerender } = fold({ kind: "view" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(container.querySelector(".right-sidebar-panel.phone")).toBeTruthy();
+      rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+      expect(container.querySelector(".right-sidebar-panel.docked.half")).toBeTruthy();
+      expect(screen.queryByTestId("right-half-session")).toBeNull();
+    });
+
+    it("closes the view for the phone when a session was used last, and brings it back", () => {
+      const { container, rerender } = fold({ kind: "pane", panelId: "session-3" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      expect(container.querySelector(".right-sidebar-panel")).toBeNull();
+      rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+      const state = useDashboardStore.getState();
+      expect(state.rightSidebarOpen).toBe(true);
+      expect(state.rightSidebarView).toBe("git");
+    });
+
+    it("brings the view back when unfolding to 700-799px instead", () => {
+      const { rerender } = fold({ kind: "pane", panelId: "session-3" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      rerender(<RightSidebar tier="tablet" actions={actions} band="rails-full" />);
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    });
+
+    it("in Tasks mode keeps the task's sidebar open through the fold", () => {
+      const { container } = fold({ kind: "pane", panelId: "session-3" }, "kanban");
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(container.querySelector(".right-sidebar-panel.phone")).toBeTruthy();
+    });
+
+    it("a view opened and closed on the phone is not brought back on unfolding", () => {
+      const { rerender } = fold({ kind: "pane", panelId: "session-3" });
+      act(() => useDashboardStore.getState().openRightSidebarView("files"));
+      act(() => useDashboardStore.getState().closeRightSidebar());
+      rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+    });
+
+    describe("back after a fold", () => {
+      const popBack = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      beforeEach(() => {
+        resetPhoneBackStackForTests();
+        vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+        vi.spyOn(window.history, "back").mockImplementation(() => {});
+        useDashboardStore.setState({
+          selectedTaskId: null,
+          sidebarHistory: [],
+          taskMasterEnabled: true,
+          tasks: [makeTask({ id: 7, projectId: 1, status: "in_progress", title: "Fix focus" })],
+        });
+      });
+      afterEach(() => {
+        vi.restoreAllMocks();
+        useDashboardStore.setState({ selectedTaskId: null, tasks: [] });
+      });
+
+      it("a task kept open in Tasks mode closes back to the board", () => {
+        useDashboardStore.setState({ viewMode: "kanban", activeWorkspaceId: 1 });
+        act(() => useDashboardStore.getState().openRightSidebarTask(7));
+        const { rerender } = render(<RightSidebar tier="tablet" {...halvesProps} />);
+        rerender(<RightSidebar tier="phone" actions={actions} />);
+        expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+        popBack();
+        const state = useDashboardStore.getState();
+        expect(state.rightSidebarOpen).toBe(false);
+        expect(state.viewMode).toBe("kanban");
+      });
+
+      it("forgets where an earlier phone stretch opened the view", () => {
+        useDashboardStore.setState({
+          viewMode: "kanban",
+          activeWorkspaceId: 1,
+          foldHalves: { 1: { ...EMPTY_FOLD_HALVES, lastUsed: { kind: "view" } } },
+        });
+        const { rerender } = render(<RightSidebar tier="phone" actions={actions} />);
+        // On the phone, a task opened from the board: its entry point.
+        act(() => useDashboardStore.getState().openRightSidebarTask(7));
+        rerender(<RightSidebar tier="tablet" {...halvesProps} />);
+        // Back on the halves, the task list; then fold with the view kept.
+        act(() => useDashboardStore.getState().selectTask(null));
+        rerender(<RightSidebar tier="phone" actions={actions} />);
+        expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+        expect(screen.getByRole("dialog", { name: "Tasks view" })).toBeInTheDocument();
+      });
+    });
+
+    it("counts working in a view on the right half as using it", () => {
+      useDashboardStore.setState({
+        activeWorkspaceId: 1,
+        foldHalves: {
+          1: { ...EMPTY_FOLD_HALVES, lastUsed: { kind: "pane", panelId: "session-3" } },
+        },
+      });
+      act(() => useDashboardStore.getState().openRightSidebarView("git"));
+      const { container } = render(<RightSidebar tier="tablet" {...halvesProps} />);
+      fireEvent.pointerDown(container.querySelector(".right-sidebar-panel.docked.half")!);
+      expect(useDashboardStore.getState().foldHalves[1]?.lastUsed).toEqual({ kind: "view" });
+    });
+
+    it("a fold from outside the halves closes the view, as the phone does", () => {
+      useDashboardStore.setState({
+        activeWorkspaceId: 1,
+        foldHalves: { 1: { ...EMPTY_FOLD_HALVES, lastUsed: { kind: "view" } } },
+        rightSidebarOpen: true,
+      });
+      const { rerender } = render(<RightSidebar tier="tablet" actions={actions} />);
+      rerender(<RightSidebar tier="phone" actions={actions} />);
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    });
+  });
+});
+
+// #3014 — the phone has no rail: the mode bar's "more" sheet opens a view,
+// which shows full screen with a header naming it and a back control.
+describe("RightSidebar on the phone", () => {
+  const popBack = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+  const open = (view: string) => act(() => useDashboardStore.getState().openRightSidebarView(view));
+
+  beforeEach(() => {
+    resetPhoneBackStackForTests();
+    vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    useDashboardStore.setState({
+      viewMode: "list",
+      crossLinkReturn: null,
+      selectedTaskId: null,
+      sidebarHistory: [],
+      taskMasterEnabled: true,
+      tasks: [makeTask({ id: 7, projectId: 1, status: "in_progress", title: "Fix focus" })],
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useDashboardStore.setState({ rightSidebarOpen: false, selectedTaskId: null, tasks: [] });
+  });
+
+  it("shows an opened view full screen, named, with a back control that closes it", async () => {
+    const { container } = renderSidebar("phone");
+    open("git");
+    const panel = container.querySelector(".right-sidebar-panel.phone");
+    expect(panel).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Source Control" })).toBeInTheDocument();
+    // No rail and no close button on the phone; back is the way out.
+    expect(container.querySelector(".right-rail")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close sidebar" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("reuses the view's own component for the current session's project", () => {
+    renderSidebar("phone");
+    open("devices");
+    expect(screen.getByRole("heading", { name: "Devices" })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Devices view" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    // Focus moves into it, on its back control.
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Back" }));
+  });
+
+  it("keeps Tab inside the full screen and returns focus on close", async () => {
+    const outside = document.createElement("button");
+    outside.textContent = "outside";
+    document.body.appendChild(outside);
+    outside.focus();
+    renderSidebar("phone");
+    open("git");
+    const dialog = screen.getByRole("dialog", { name: "Git view" });
+    const back = within(dialog).getByRole("button", { name: "Back" });
+    expect(document.activeElement).toBe(back);
+    // Shift+Tab from the first control wraps to the last one, inside.
+    await userEvent.tab({ shift: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
+  it("moves focus to the detail's back control on a drill-in, and back on leaving it", () => {
+    const { container } = renderSidebar("phone");
+    open("tasks");
+    act(() => useDashboardStore.getState().selectTask(7));
+    const slot = container.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    expect(slot.contains(document.activeElement)).toBe(true);
+    act(() => useDashboardStore.getState().selectTask(null));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back" }));
+  });
+
+  it("a view reached with no way back is a fresh entry point", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    // Another view, no sidebar history: its list must stay open.
+    act(() => useDashboardStore.getState().openRightSidebarView("git"));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(screen.getByRole("dialog", { name: "Git view" })).toBeInTheDocument();
+  });
+
+  it("a task's PR link keeps the task as the way back", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    act(() => useDashboardStore.getState().openRightSidebarPr(1, 5));
+    popBack();
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.rightSidebarView).toBe("tasks");
+    expect(state.selectedTaskId).toBe(7);
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("the back gesture closes the view", () => {
+    renderSidebar("phone");
+    open("files");
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("closes a sheet, then a drill-in, then the view, in that order", () => {
+    function Sheet() {
+      const [shown, setShown] = useState(true);
+      return (
+        <BottomSheet
+          open={shown}
+          onClose={() => setShown(false)}
+          label="A sheet"
+          closeLabel="Close"
+          title="A sheet"
+          backStack
+        >
+          <p>sheet body</p>
+        </BottomSheet>
+      );
+    }
+    const { rerender } = renderSidebar("phone");
+    open("tasks");
+    // Drill in from the list: the task's detail.
+    act(() => useDashboardStore.getState().selectTask(7));
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+    // A sheet opens over it.
+    rerender(
+      <>
+        <RightSidebar tier="phone" actions={actions} />
+        <Sheet />
+      </>,
+    );
+    expect(screen.getByRole("dialog", { name: "A sheet" })).toBeInTheDocument();
+
+    popBack();
+    expect(screen.queryByRole("dialog", { name: "A sheet" })).toBeNull();
+    expect(useDashboardStore.getState().selectedTaskId).toBe(7);
+
+    popBack();
+    expect(useDashboardStore.getState().selectedTaskId).toBeNull();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(screen.queryByTestId("task-detail-view")).toBeNull();
+
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("back from a PR in the GitHub view returns to its list, then closes the view", () => {
+    renderSidebar("phone");
+    open("github");
+    act(() => useDashboardStore.getState().setGithubOpenPr(1, 5));
+    expect(useDashboardStore.getState().githubOpenPrByProject[1]).toBe(5);
+    popBack();
+    expect(useDashboardStore.getState().githubOpenPrByProject[1] ?? null).toBeNull();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("an action that opens a pane leaves the full screen first, in Workspace mode too", async () => {
+    const card = document.createElement("button");
+    document.body.appendChild(card);
+    card.focus();
+    renderSidebar("phone");
+    open("github");
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open GitHub panel" }));
+    expect(actions.onOpenGitHub).toHaveBeenCalledWith(1);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    // Focus belongs to the pane being opened, not back on what had it before.
+    expect(document.activeElement).not.toBe(card);
+    card.remove();
+  });
+
+  it("a task opened from the board is a full screen whose back returns to the board", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+    popBack();
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(false);
+    expect(state.viewMode).toBe("kanban");
+  });
+
+  it("a view closed and reopened at a task in one flush still treats the task as its entry", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    open("files");
+    act(() => {
+      useDashboardStore.getState().closeRightSidebar();
+      useDashboardStore.getState().openRightSidebarTask(7);
+    });
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("the task's own back arrow also returns to the board, not to a task list", async () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    const { container } = renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    // The detail's header (in the header's detail slot) carries the back
+    // arrow; the view's own header row steps aside for it (right-sidebar.css).
+    const slot = container.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    await userEvent.click(within(slot).getByRole("button", { name: "Back" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("puts the task's main actions in the block the phone pins to the bottom", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    const { container } = renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    expect(
+      container.querySelector(".right-sidebar-panel.phone .tasks-detail > .sb-actions-block"),
+    ).toBeTruthy();
+  });
+
+  it("a cross-link to a session leaves the full screen, and back returns to the task", () => {
+    useDashboardStore.setState({ viewMode: "kanban", requestOpenSession: vi.fn() });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    act(() => useDashboardStore.getState().openSessionInWorkspace(3));
+    let state = useDashboardStore.getState();
+    expect(state.viewMode).toBe("list");
+    expect(state.rightSidebarOpen).toBe(false);
+    expect(state.crossLinkReturn).toEqual({ taskId: 7 });
+    // App registers this with the back stack (App.test.tsx); here, its effect.
+    act(() => useDashboardStore.getState().returnFromCrossLink());
+    state = useDashboardStore.getState();
+    expect(state.viewMode).toBe("kanban");
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.selectedTaskId).toBe(7);
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
   });
 });

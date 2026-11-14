@@ -19,6 +19,17 @@ export function sessionDisplayTitle(session: Session): string {
       : session.command;
 }
 
+/**
+ * The title a pane's tab shows, without the project suffix: an explicit
+ * rename, else the program's last title, else the launch name, else the
+ * command. sessionDisplayTitle skips the launch name, so a session that never
+ * set a title showed its command path in the rail (#3010).
+ */
+export function sessionPaneTitle(session: Session): string {
+  if (session.nameLocked && session.name) return session.name;
+  return session.lastTitle || session.name || session.command;
+}
+
 // U3 — the sidebar's own search box, reusing CommandPalette.tsx's (U2,
 // #581) plain case-insensitive substring matcher rather than growing a
 // second one (matchQuery.ts's own header comment covers why it's a plain

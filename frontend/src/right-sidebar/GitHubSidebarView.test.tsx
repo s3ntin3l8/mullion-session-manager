@@ -57,6 +57,7 @@ const actions = {
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
+  onOpenDevice: vi.fn(),
 };
 const subscribe = vi.fn();
 const unsubscribe = vi.fn();

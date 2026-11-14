@@ -137,6 +137,25 @@ describe("settings route", () => {
     await app.close();
   });
 
+  // #3016 — the tablet pane cap setting is gone. An older cached client still
+  // PATCHes it alongside a real field: the request succeeds, the real field
+  // lands, and the stale key is dropped rather than stored.
+  it("accepts and drops a tabletPaneCap from an older client", async () => {
+    const app = await buildApp();
+    const patched = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { tabletPaneCap: 3, layoutMode: "tablet" },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().layoutMode).toBe("tablet");
+    expect(patched.json()).not.toHaveProperty("tabletPaneCap");
+    const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(fetched.json()).not.toHaveProperty("tabletPaneCap");
+    await app.inject({ method: "PATCH", url: "/api/settings", payload: { layoutMode: "auto" } });
+    await app.close();
+  });
+
   it("round-trips a runway provider map with list targets, replacing it wholesale (#2054)", async () => {
     const app = await buildApp();
 

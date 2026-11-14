@@ -29,6 +29,30 @@ Open a preview using **Preview ▾** in a project's Dock header (see [`dock.md`]
 an empty pane with the address bar focused, for typing an arbitrary URL
 directly).
 
+## The Browser view in the right sidebar (below 1100px)
+
+Where the window is between 700 and 1099px wide (the rails layouts, among
+them a foldable unfolded), the right rail has a **Browser** view. On a phone
+the "⋯" sheet lists it with the rail's other views, and it opens full screen
+for the current session's project. The view shows the agent
+browser of the session the right sidebar follows, the same CDP-streamed page
+as a session's "Open Agent Browser" pane. The page fills the view under the
+pane's own address bar (back, forward, the address, reload). From 1100px the
+view is not registered and the agent browser stays a grid pane.
+
+The session it shows is the one whose pane has focus, or the last one that
+had focus while a pane that is not a session's (Settings, a Git panel) has
+it. Only a session of the project the sidebar follows counts.
+
+Opening the agent browser launches it, so the view does not open one by
+itself: it asks for the session's browser bindings first
+(`GET /api/sessions/:id/browser`). A session with one shows its page; a
+session without one shows "… has no browser yet." and an **Open browser**
+button, which does what "Open Agent Browser" does.
+
+On a touch screen a one-finger drag on the page scrolls it (in the view and
+in the grid pane); a tap clicks.
+
 ## Why the proxy exists (and when you need it)
 
 A plain iframe pointing at `http://localhost:5173` works fine as long as

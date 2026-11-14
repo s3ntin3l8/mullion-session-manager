@@ -155,7 +155,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   sidebarDensity: "comfortable",
   layoutMode: "auto",
-  tabletPaneCap: 2,
   balancePanesOnDrop: true,
   projectRoots: [],
   autoDetectHostCheckouts: false,

@@ -155,6 +155,7 @@ describe("TaskDetailView keyboard access in the real right sidebar", () => {
     onOpenDockConfig: vi.fn(),
     onOpenSkills: vi.fn(),
     onOpenTasks: vi.fn(),
+    onOpenDevice: vi.fn(),
   };
 
   it("focuses the portalled Back button when a card selects a task, so Enter does not land on <body>", () => {
@@ -166,7 +167,6 @@ describe("TaskDetailView keyboard access in the real right sidebar", () => {
       sessions: [],
       rightSidebarView: "tasks",
       rightSidebarOpen: true,
-      rightSidebarPinned: false,
       rightSidebarWidth: 340,
       rightSidebarProjectRequest: null,
       followedProjectId: null,
@@ -398,7 +398,7 @@ describe("TaskDetailView", () => {
 
   it("shows the review state and opens the worker and reviewer sessions", async () => {
     const user = userEvent.setup();
-    const requestOpenSession = vi.fn();
+    const openSessionInWorkspace = vi.fn();
     const t = task({
       status: "reviewing",
       approvalState: "awaiting-human",
@@ -411,7 +411,7 @@ describe("TaskDetailView", () => {
     const sessions = [7, 8].map(
       (id) => ({ id, sessionStatus: "idle", sessionStatusDetail: null }) as unknown as Session,
     );
-    setTasks([t], { sessions, requestOpenSession });
+    setTasks([t], { sessions, openSessionInWorkspace });
     renderDetail(t.id);
     expect(screen.getByText("REVIEWING")).toBeTruthy();
     expect(screen.getByText(/Approve to merge/)).toBeTruthy();
@@ -419,9 +419,9 @@ describe("TaskDetailView", () => {
     expect(screen.getByText(/2 auto-returns \(limit reached\)/)).toBeTruthy();
     expect(screen.getByText("REQUEST_CHANGES")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^worker/ }));
-    expect(requestOpenSession).toHaveBeenCalledWith(7);
+    expect(openSessionInWorkspace).toHaveBeenCalledWith(7);
     await user.click(screen.getByRole("button", { name: /^reviewer/ }));
-    expect(requestOpenSession).toHaveBeenCalledWith(8);
+    expect(openSessionInWorkspace).toHaveBeenCalledWith(8);
   });
 
   it("returns to the pull request it was reached from, otherwise to the list", async () => {
@@ -510,5 +510,52 @@ describe("TaskDetailView", () => {
       "step",
     );
     expect(screen.getByText("IN PROGRESS")).toBeTruthy();
+  });
+});
+
+// A window of the fold's 851px, by matchMedia (the tablet tier, the rails band).
+function stubTablet() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches:
+        (!/min-width: ([\d.]+)px/.exec(query) ||
+          851 >= Number(/min-width: ([\d.]+)px/.exec(query)![1])) &&
+        (!/max-width: ([\d.]+)px/.exec(query) ||
+          851 <= Number(/max-width: ([\d.]+)px/.exec(query)![1])) &&
+        query.includes("width"),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
+
+describe("TaskDetailView in the right sidebar from 700px (#3011)", () => {
+  it("puts Approve behind a confirm step: the first press arms, the second approves", async () => {
+    const user = userEvent.setup();
+    const approveTask = vi.fn().mockResolvedValue({});
+    const t = task({ status: "reviewing" });
+    setTasks([t], { approveTask });
+    render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
+    expect(approveTask).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Confirm approve/ }));
+    expect(approveTask).toHaveBeenCalledWith(t.id);
+  });
+
+  it("offers the docked-panel pop-out from 1100px only", () => {
+    const t = task({ status: "ready" });
+    setTasks([t]);
+    const { unmount } = render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Pop out to a docked panel" })).toBeInTheDocument();
+    unmount();
+    stubTablet();
+    try {
+      render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Pop out to a docked panel" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

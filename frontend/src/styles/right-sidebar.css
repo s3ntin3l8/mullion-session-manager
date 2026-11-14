@@ -98,35 +98,24 @@
   container-type: inline-size;
   container-name: sidebar-frame;
 }
-.right-sidebar-panel.overlay {
+/* Always docked (#3006): the panel is a flex sibling of the grid and pushes
+   it. It never takes more than leaves the workspace about 400px beside the
+   40px rail. */
+.right-sidebar-panel.docked {
+  max-width: calc(100vw - 440px);
+}
+/* Too narrow to dock (RIGHT_SIDEBAR_FULL_WIDTH_QUERY): an open view covers
+   the workspace up to the rail. No scrim; the rail tab or Escape closes it. */
+.right-sidebar-panel.docked.full {
   position: fixed;
-  top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
+  top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
+  /* Clear of the left rail, so the mode switch stays reachable (#3009). */
+  left: var(--left-rail-w);
   right: 40px;
   bottom: 0;
-  max-width: 84vw;
+  max-width: none;
   z-index: 46;
-  box-shadow: 0 0 50px rgba(0, 0, 0, 0.45);
-}
-.right-sidebar-scrim {
-  position: fixed;
-  top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
-  left: 0;
-  /* Stops at the rail (not the viewport edge) so rail buttons stay clickable
-     while the drawer is open — matches .right-sidebar-panel.overlay's right. */
-  right: 40px;
-  bottom: 0;
-  z-index: 45;
-}
-/* A file row being dragged (lib/fileDrag.ts): let the drop reach whatever is
-   under the floating drawer — a terminal pane — instead of the scrim. */
-.file-dragging .right-sidebar-scrim {
-  pointer-events: none;
-}
-/* Dim the scrim on the tiers where this drawer is an overlay. Width used to
-   decide that, so a forced desktop on a narrow window dimmed a docked panel
-   and a forced tablet on a wide window did not (issue #1531). */
-:where(.app[data-tier="phone"], .app[data-tier="tablet"]) .right-sidebar-scrim {
-  background: rgba(0, 0, 0, 0.3);
+  border-left: 0;
 }
 
 .right-sidebar-resize-handle {
@@ -203,20 +192,23 @@
 }
 /* The thin context strip under the header row, and the slot a pushed detail
    view's header fills. While the detail slot has content it replaces the picker,
-   toolbar and strip, so a detail never stacks a second header bar. */
+   toolbar and strip, so a detail never stacks a second header bar. The switch
+   is DetailHeader's `data-sidebar-detail` on the panel, not `:has()` (#2979):
+   a WebView without `:has()` would otherwise hide the detail's Back. */
 .right-sidebar-detail-slot {
   display: none;
   flex: 1;
   min-width: 0;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *) > .right-sidebar-detail-slot {
+[data-sidebar-detail] .right-sidebar-header > .right-sidebar-detail-slot {
   display: flex;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *)
+[data-sidebar-detail]
+  .right-sidebar-header
   > :is(.right-sidebar-follow-glyph, .settings-dropdown, .right-sidebar-toolbar-slot) {
   display: none;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *) + .right-sidebar-strip-slot {
+[data-sidebar-detail] .right-sidebar-strip-slot {
   display: none;
 }
 .right-sidebar-strip-slot:empty {
@@ -319,4 +311,55 @@
 .project-sidebar-row-sub {
   font-size: 0.6875rem;
   color: var(--muted);
+}
+
+/* Touch: the header and rail controls are what opens and closes the panel
+   now, so they get a taller target (#3006). Outside the two halves the rail
+   is 40px wide, so a rail button is 44px tall and 30px wide; between 800 and
+   1099px the rail matches the left one, 48px with 48px targets on touch
+   (#3010, the block at the end of this file). */
+@media (pointer: coarse) {
+  .right-sidebar-icon-btn,
+  .right-sidebar-header .sb-ibtn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .right-rail-btn {
+    min-height: 44px;
+  }
+}
+
+/* ---- Two halves, 800-1099px (#3010) -------------------------------------- */
+/* The right rail matches the left one: 48px, and its buttons the left rail's
+   40px; on touch, 48px targets. */
+.app[data-band="rails-halves"] .right-rail {
+  /* Border included, like the left rail, so the halves come out equal. */
+  width: calc(48px + env(safe-area-inset-right));
+  padding-right: env(safe-area-inset-right);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.app[data-band="rails-halves"] .right-rail-btn {
+  width: 40px;
+  flex-shrink: 0;
+}
+@media (pointer: coarse) {
+  .app[data-band="rails-halves"] .right-rail-btn,
+  .app[data-band="rails-halves"] .right-rail .left-rail-btn {
+    min-height: 48px;
+  }
+}
+/* The panel is exactly the right half: the width left after both rails,
+   split evenly with the grid, so the seam sits in the middle (on a foldable,
+   on the hinge). Not the stored width, no resize handle, and the width is
+   never animated (a terminal reflows on every step; docs/motion.md). */
+.app.halves-band .grid-area,
+.app.halves-band .right-sidebar-panel.docked.half {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+  transition: none;
 }

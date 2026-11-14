@@ -134,14 +134,12 @@ afterEach(() => {
 describe("useDockviewDrop", () => {
   describe("onUnhandledDragOver effect", () => {
     it("does not subscribe when dockviewApi is null", () => {
-      expect(() =>
-        renderHook(() => useDockviewDrop({ dockviewApi: null, setSidebarOpen: vi.fn() })),
-      ).not.toThrow();
+      expect(() => renderHook(() => useDockviewDrop({ dockviewApi: null }))).not.toThrow();
     });
 
     it("ignores a native event that isn't a real DragEvent", () => {
       const { api, fireUnhandledDragOver } = makeMockApi();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen: vi.fn() }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       const accept = vi.fn();
       fireUnhandledDragOver({ nativeEvent: new Event("dragover"), accept });
@@ -151,7 +149,7 @@ describe("useDockviewDrop", () => {
 
     it("ignores a DragEvent whose dataTransfer doesn't carry the mullion session type", () => {
       const { api, fireUnhandledDragOver } = makeMockApi();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen: vi.fn() }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       const accept = vi.fn();
       const nativeEvent = new FakeDragEvent("dragover", makeDataTransfer({ "text/plain": "x" }));
@@ -162,7 +160,7 @@ describe("useDockviewDrop", () => {
 
     it("accepts and records the drop target for a matching drag", () => {
       const { api, fireUnhandledDragOver, fireDidDrop } = makeMockApi();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen: vi.fn() }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       const accept = vi.fn();
       const nativeEvent = new FakeDragEvent(
@@ -195,14 +193,12 @@ describe("useDockviewDrop", () => {
 
   describe("onDidDrop effect", () => {
     it("does not subscribe when dockviewApi is null", () => {
-      expect(() =>
-        renderHook(() => useDockviewDrop({ dockviewApi: null, setSidebarOpen: vi.fn() })),
-      ).not.toThrow();
+      expect(() => renderHook(() => useDockviewDrop({ dockviewApi: null }))).not.toThrow();
     });
 
     it("ignores a drop with no session id in dataTransfer", () => {
       const { api, fireDidDrop } = makeMockApi();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen: vi.fn() }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       fireDidDrop({ nativeEvent: new FakeDragEvent("drop", makeDataTransfer()) });
 
@@ -211,7 +207,7 @@ describe("useDockviewDrop", () => {
 
     it("ignores a drop whose native event isn't a real DragEvent", () => {
       const { api, fireDidDrop } = makeMockApi();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen: vi.fn() }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       // A non-DragEvent nativeEvent forces `dt` to null regardless of what a
       // (nonexistent, on this branch) dataTransfer would have said — mirrors
@@ -223,7 +219,7 @@ describe("useDockviewDrop", () => {
 
     it("ignores a drop with a non-numeric session id", () => {
       const { api, fireDidDrop } = makeMockApi();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen: vi.fn() }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       fireDidDrop({
         nativeEvent: new FakeDragEvent(
@@ -238,8 +234,7 @@ describe("useDockviewDrop", () => {
     it("activates an already-open panel instead of re-adding it", () => {
       const { api, fireDidDrop, addExistingPanel } = makeMockApi();
       const panel = addExistingPanel("session-42");
-      const setSidebarOpen = vi.fn();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       fireDidDrop({
         nativeEvent: new FakeDragEvent(
@@ -250,16 +245,12 @@ describe("useDockviewDrop", () => {
 
       expect(panel.api.setActive).toHaveBeenCalledTimes(1);
       expect(dropSessionPanel).not.toHaveBeenCalled();
-      // Only the native-drop handler's success path and the sidebar's own
-      // session-row click close the sidebar — the existing-panel
-      // short-circuit intentionally leaves it as-is.
-      expect(setSidebarOpen).not.toHaveBeenCalled();
     });
 
     it("does nothing when the dropped session id has no matching session in the store", () => {
       const { api, fireDidDrop } = makeMockApi();
       sessions = [];
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen: vi.fn() }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       fireDidDrop({
         nativeEvent: new FakeDragEvent(
@@ -276,8 +267,7 @@ describe("useDockviewDrop", () => {
       const session = makeSession({ id: 5 });
       sessions = [session];
       projects = [{ id: 1, name: "proj" }];
-      const setSidebarOpen = vi.fn();
-      renderHook(() => useDockviewDrop({ dockviewApi: api, setSidebarOpen }));
+      renderHook(() => useDockviewDrop({ dockviewApi: api }));
 
       const group = { id: "g1" };
       fireDidDrop({
@@ -294,7 +284,6 @@ describe("useDockviewDrop", () => {
         location: "edge",
         position: "top",
       });
-      expect(setSidebarOpen).toHaveBeenCalledWith(false);
     });
   });
 
@@ -311,10 +300,9 @@ describe("useDockviewDrop", () => {
     // exactly like the real onReady transition) reproduces that same
     // ref-already-populated-before-effects invariant rather than working
     // around a real ordering gap.
-    function renderWithAttachedContainer(el: HTMLDivElement, setSidebarOpen = vi.fn()) {
+    function renderWithAttachedContainer(el: HTMLDivElement) {
       const rendered = renderHook(
-        ({ dockviewApi }: { dockviewApi: DockviewApi | null }) =>
-          useDockviewDrop({ dockviewApi, setSidebarOpen }),
+        ({ dockviewApi }: { dockviewApi: DockviewApi | null }) => useDockviewDrop({ dockviewApi }),
         { initialProps: { dockviewApi: null as DockviewApi | null } },
       );
       rendered.result.current.dockviewRef.current = el;
@@ -323,9 +311,7 @@ describe("useDockviewDrop", () => {
 
     it("does not throw and attaches no listeners when dockviewRef.current is null", () => {
       const addEventListenerSpy = vi.spyOn(EventTarget.prototype, "addEventListener");
-      expect(() =>
-        renderHook(() => useDockviewDrop({ dockviewApi: null, setSidebarOpen: vi.fn() })),
-      ).not.toThrow();
+      expect(() => renderHook(() => useDockviewDrop({ dockviewApi: null }))).not.toThrow();
       // Nothing in this render ever assigns dockviewRef.current, so the
       // effect's own `if (!el) return` guard should have fired without
       // registering any of the four listeners.
@@ -338,7 +324,7 @@ describe("useDockviewDrop", () => {
       const addSpy = vi.spyOn(el, "addEventListener");
       const { rerender } = renderWithAttachedContainer(el);
 
-      // The effect's dependency array is [dockviewApi, setSidebarOpen] — a
+      // The effect's dependency array is [dockviewApi] — a
       // bare ref write triggers no re-render/re-run on its own, so the test
       // drives the same dockviewApi identity change the real onReady
       // transition produces.
@@ -358,10 +344,9 @@ describe("useDockviewDrop", () => {
         handlers[type] = cb as (e: Record<string, unknown>) => void;
       }) as typeof el.addEventListener);
       const removeSpy = vi.spyOn(el, "removeEventListener");
-      const setSidebarOpen = vi.fn();
       const { rerender, unmount } = renderHook(
         ({ dockviewApi }: { dockviewApi: DockviewApi | null }) => {
-          const result = useDockviewDrop({ dockviewApi, setSidebarOpen });
+          const result = useDockviewDrop({ dockviewApi });
           result.dockviewRef.current = el;
           return result;
         },
@@ -370,7 +355,7 @@ describe("useDockviewDrop", () => {
       // Force the effect to (re-)run now that dockviewRef.current is set,
       // same reasoning as renderWithAttachedContainer above.
       rerender({ dockviewApi });
-      return { handlers, removeSpy, setSidebarOpen, unmount, el };
+      return { handlers, removeSpy, unmount, el };
     }
 
     it("preventDefaults dragover only for a matching drag, and is a no-op otherwise", () => {
@@ -522,12 +507,12 @@ describe("useDockviewDrop", () => {
       expect(dropSessionPanel).not.toHaveBeenCalled();
     });
 
-    it("drop: docks onto empty grid space using the last tracked target, then closes the sidebar", () => {
+    it("drop: docks onto empty grid space using the last tracked target", () => {
       const { api } = makeMockApi();
       const session = makeSession({ id: 11 });
       sessions = [session];
       projects = [{ id: 1, name: "proj" }];
-      const { handlers, setSidebarOpen } = attachAndGetHandlers(api);
+      const { handlers } = attachAndGetHandlers(api);
 
       handlers.drop({
         dataTransfer: makeDataTransfer({ "application/x-mullion-session": "11" }),
@@ -538,7 +523,6 @@ describe("useDockviewDrop", () => {
       // target is still null — same as a drop that never crossed a group's
       // own droptarget overlay.
       expect(dropSessionPanel).toHaveBeenCalledWith(api, session, projects, null);
-      expect(setSidebarOpen).toHaveBeenCalledWith(false);
     });
 
     it("removes all four listeners on unmount", () => {

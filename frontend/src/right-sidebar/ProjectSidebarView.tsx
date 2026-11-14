@@ -5,7 +5,7 @@ import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarActions, RightSidebarViewProps } from "./views.js";
 
 interface ProjectRow {
-  key: Exclude<keyof RightSidebarActions, "onOpenFile">;
+  key: Exclude<keyof RightSidebarActions, "onOpenFile" | "onOpenDevice">;
   title: string;
   subtitle: string;
   icon: ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;

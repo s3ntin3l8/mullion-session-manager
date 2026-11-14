@@ -1,24 +1,10 @@
 import type { ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
-import {
-  AppearanceIcon,
-  ChevronLeftIcon,
-  GridIcon,
-  LayersIcon,
-  MoonIcon,
-  PlusIcon,
-  SearchIcon,
-  SidebarToggleIcon,
-  SunIcon,
-  GearIcon,
-} from "./ui/icons.js";
+import { SearchIcon } from "./ui/icons.js";
 import { NotificationBell } from "./NotificationBell.js";
-import { KebabMenu } from "./ui/KebabMenu.js";
-import type { AppSettings, Session } from "./api/index.js";
-import type { SettingsSection } from "./Settings.js";
+import type { Session } from "./api/index.js";
 
 interface ToolbarProps {
-  onToggleSidebar: () => void;
   onOpenSession: (session: Session) => void;
   // Issue #270 — passed straight through to NotificationBell; see its own
   // prop doc for why this is distinct from onOpenSession.
@@ -28,177 +14,44 @@ interface ToolbarProps {
   // wires to the sidebar's own "Preview" action.
   onOpenBrowser: (projectId: number) => void;
   onOpenLauncher: () => void;
-  onOpenSettings: (section?: SettingsSection) => void;
-  activeWorkspaceName: string | null;
-  paneCount: number;
-  currentVersion: string | null;
-  // Phone and tablet (mobile.css / compact.css show `.toolbar-mobile-session`):
-  // App's MobileSessionSwitcher, in place of the hidden `.toolbar-center`.
+  // App's MobileSessionSwitcher: the session picker that fills the bar.
   mobileSessionSlot?: ReactNode;
-  // Phone tier: the bell renders its feed as a bottom sheet.
-  phone?: boolean;
-  // Render the notifications feed as a bottom sheet without the full phone
-  // toolbar layout — set for touch tablets. (`phone` implies it.)
-  notificationSheet?: boolean;
 }
 
-const THEME_LABELS: Record<AppSettings["theme"], string> = {
-  dark: "Dark",
-  light: "Light",
-  system: "System",
-};
-
-// Shared between the theme button and the ⋯ menu's theme row (Hermes
-// review, PR #1449) — a single place to update if the Theme union ever
-// grows beyond these three.
-function themeIcon(pref: AppSettings["theme"], size: number) {
-  if (pref === "light") return <SunIcon size={size} />;
-  if (pref === "system") return <AppearanceIcon size={size} />;
-  return <MoonIcon size={size} />;
-}
-
-// Ported 1:1 from the design's toolbar: sidebar toggle, attention bell with
-// count badge, "+" new-session (opens the global command palette), a
-// centered active-workspace/pane-count summary, "Run command… ⌘K", theme
-// toggle, and the settings gear. Global keyboard shortcuts (⌘K, ⌘,, Esc) are
-// wired once from App.tsx (they need to work regardless of toolbar focus).
+// The phone's top bar (#3009, #3014): [session picker] [palette] [bell]. From
+// 700px there is no top bar; its controls live on the left rail (LeftRail.tsx).
+// New session is the picker's own row, Settings and the theme the mode bar's
+// "more" sheet. Global keyboard shortcuts (⌘K, ⌘,, Esc) are wired once from
+// App.tsx.
 export function Toolbar({
-  onToggleSidebar,
   onOpenSession,
   onOpenTimeline,
   onOpenBrowser,
   onOpenLauncher,
-  onOpenSettings,
-  activeWorkspaceName,
-  paneCount,
-  currentVersion,
   mobileSessionSlot,
-  phone,
-  notificationSheet = false,
 }: ToolbarProps) {
-  // P1 perf fix — the plan's own audit didn't cite this file by line, but
-  // it's the identical whole-store-subscription defect (`useDashboardStore()`
-  // with no selector) in one of the four components its own App.tsx finding
-  // names as dragged along by App's re-renders; fixed here for the same
-  // reason as the cited call sites. `cycleTheme` is a pure action-caller
-  // (only used inside the theme button's onClick below) — see the
-  // getState() call at that call site instead of subscribing to it here.
-  // Selecting the *preference* (dark/light/system) rather than the resolved
-  // `theme` field (always dark or light) — the button needs to show
-  // "System" as its own state (issue #1432), which the resolved value can't
-  // distinguish.
-  const themePreference = useDashboardStore((s) => s.settings.theme);
-  const nextThemePreference =
-    themePreference === "dark" ? "light" : themePreference === "light" ? "system" : "dark";
-  // Tasks is an install-wide board, not a workspace view — reading viewMode
-  // here (rather than threading it through a list/Kanban toggle, issue #211's
-  // now-removed ViewModeToggle.tsx) lets the toolbar say so honestly: the
-  // workspace name/pane-count this row otherwise shows would be describing a
-  // scope Tasks doesn't have. Entering Tasks now only happens from the
-  // sidebar's own entry (Sidebar.tsx) or the command palette; this is only
-  // the way back out, mirroring Dock.tsx's own contextual-chrome posture.
+  // Tasks is an install-wide board, not a workspace view, and has no palette
+  // on purpose (issue #730).
   const viewMode = useDashboardStore((s) => s.viewMode);
 
-  const bell = (
-    <NotificationBell
-      onOpenSession={onOpenSession}
-      onOpenTimeline={onOpenTimeline}
-      onOpenBrowser={onOpenBrowser}
-      sheet={phone || notificationSheet}
-      sheetClassName={!phone && notificationSheet ? "mobile-notif-sheet--tablet" : undefined}
-    />
-  );
-
-  // Off phone, the picker takes over the centre (workspace name / pane count).
-  // Tasks view included: on compact tiers the board lives in the navigator, so
-  // there is no centre Back button to keep.
-  const compactPicker = !phone && !!mobileSessionSlot;
   return (
-    <div className={`toolbar${compactPicker ? " toolbar--compact-picker" : ""}`}>
-      <div className="toolbar-lead">
-        <button
-          className="toolbar-icon-btn"
-          onClick={onToggleSidebar}
-          title="Toggle sidebar"
-          data-toggle-sidebar
-        >
-          <SidebarToggleIcon size={17} />
-        </button>
-        {/* Phone: the bell sits at the right edge (below), so the lead is
-            just the navigator toggle. */}
-        {!phone && bell}
-        <button
-          className="toolbar-icon-btn toolbar-new-session-btn"
-          onClick={onOpenLauncher}
-          title={
-            viewMode === "kanban" ? "New session (unavailable in Task view)" : "New session (⌘K)"
-          }
-          disabled={viewMode === "kanban"}
-        >
-          <PlusIcon size={18} />
-        </button>
-      </div>
-      <div className="toolbar-center">
-        {viewMode === "kanban" ? (
-          <>
-            <LayersIcon size={14} />
-            <span className="toolbar-center-name">Tasks</span>
-            {/* Desktop-only Back button — sits behind the Tasks title. The
-                phone has no toolbar escape hatch: `.toolbar-center` is
-                `display: none` on the phone tier (mobile.css), and the
-                phone's Task view lives in the navigator drawer, where
-                picking another tab leaves Task view (PhoneNavigator.tsx).
-                tablet.css:217-227 keeps this button's own
-                `width: auto; height: 44px` override on coarse pointers, so
-                its "Back" label still fits. */}
-            <button
-              className="toolbar-icon-btn toolbar-back-to-workspace"
-              onClick={() => useDashboardStore.getState().setViewMode("list")}
-              title="Back to workspace"
-            >
-              <ChevronLeftIcon size={17} />
-              <span>Back</span>
-            </button>
-          </>
-        ) : (
-          activeWorkspaceName !== null && (
-            <>
-              <GridIcon size={15} />
-              <span className="toolbar-center-name">{activeWorkspaceName}</span>
-              <span className="toolbar-center-count">
-                {paneCount} pane{paneCount === 1 ? "" : "s"}
-              </span>
-            </>
-          )
-        )}
-      </div>
+    <div className="toolbar">
       {mobileSessionSlot && <div className="toolbar-mobile-session">{mobileSessionSlot}</div>}
       <div className="toolbar-actions">
-        {/* The phone's palette button is OMITTED in Task view, not disabled
-            there. The Task view has no palette on purpose (issue #730), and a
-            disabled control explains itself only through its `title` — which
-            touch never shows. A dead grey icon that cannot be pressed is
-            worse than no icon at all (issue #1880's review). The desktop
-            keeps its disabled button: a mouse user gets the reason on
-            hover. */}
-        {!(phone && viewMode === "kanban") && (
+        {/* The palette button is OMITTED in Task view, not disabled there. A
+            disabled control explains itself only through its `title`, which
+            touch never shows: a dead grey icon that cannot be pressed is
+            worse than no icon at all (issue #1880's review). */}
+        {viewMode !== "kanban" && (
           <button
-            className={`run-cmd-btn${phone ? " toolbar-icon-btn" : ""}`}
+            className="run-cmd-btn toolbar-icon-btn"
             onClick={onOpenLauncher}
-            title={
-              viewMode === "kanban"
-                ? "Command palette (unavailable in Task view)"
-                : "Command palette"
-            }
-            // Phone shows this button icon-only (mobile.css drops the
-            // "Run command…" label and the ⌘K hint), so the visible text that
-            // names it on desktop is not there to name it here (issue #1880).
-            // The phone has no keyboard to speak of, so the palette's own name
-            // is the honest one — and it is the name the tooltip already uses.
-            // Desktop keeps the visible label as its accessible name: an
-            // aria-label there would override the visible text (WCAG 2.5.3).
-            aria-label={phone ? "Command palette" : undefined}
-            disabled={viewMode === "kanban"}
+            title="Command palette"
+            // Icon-only (mobile.css drops the "Run command…" label and the ⌘K
+            // hint), so the visible text that would name it is not there to
+            // name it (issue #1880). The palette's own name is the honest one,
+            // and it is the name the tooltip already uses.
+            aria-label="Command palette"
           >
             <SearchIcon size={14} strokeWidth={1.9} />
             <span className="run-cmd-label" style={{ fontSize: "0.75rem" }}>
@@ -207,66 +60,14 @@ export function Toolbar({
             <span className="kbd">⌘K</span>
           </button>
         )}
-        <button
-          className="toolbar-icon-btn toolbar-theme-btn"
-          onClick={() => useDashboardStore.getState().cycleTheme()}
-          title={`Theme: ${THEME_LABELS[themePreference]} (click for ${THEME_LABELS[nextThemePreference]})`}
-        >
-          {themeIcon(themePreference, 16)}
-        </button>
-        {currentVersion !== null && (
-          <button
-            className="toolbar-version-label"
-            onClick={() => onOpenSettings("server")}
-            title={`Version ${currentVersion}`}
-          >
-            v{currentVersion}
-          </button>
-        )}
-        <button
-          className="toolbar-icon-btn toolbar-settings-btn"
-          onClick={() => onOpenSettings()}
-          title="Settings (⌘,)"
-        >
-          <GearIcon size={18} />
-        </button>
-        {phone && bell}
-        {/* Phone only (mobile.css): the actions the phone toolbar has no
-            room for. Not rendered on the phone tier: New session lives in
-            the session picker, and Settings (with the theme control) in the
-            navigator's Settings tab. */}
-        {!phone && (
-          <span className="toolbar-app-menu">
-            <KebabMenu
-              title="Menu"
-              items={[
-                {
-                  key: "new",
-                  label: "New session",
-                  icon: <PlusIcon size={14} />,
-                  onClick: onOpenLauncher,
-                  disabled: viewMode === "kanban",
-                  // The launcher is a focus-trapped overlay of its own.
-                  opensOverlay: true,
-                },
-                {
-                  key: "theme",
-                  label: `Theme: ${THEME_LABELS[themePreference]}`,
-                  icon: themeIcon(themePreference, 14),
-                  onClick: () => useDashboardStore.getState().cycleTheme(),
-                },
-                {
-                  key: "settings",
-                  label: currentVersion !== null ? `Settings · v${currentVersion}` : "Settings",
-                  icon: <GearIcon size={14} />,
-                  onClick: () => onOpenSettings(),
-                  // The Settings modal is a focus-trapped overlay of its own.
-                  opensOverlay: true,
-                },
-              ]}
-            />
-          </span>
-        )}
+        {/* The bell sits at the right edge and renders its feed as a bottom
+            sheet. */}
+        <NotificationBell
+          onOpenSession={onOpenSession}
+          onOpenTimeline={onOpenTimeline}
+          onOpenBrowser={onOpenBrowser}
+          sheet
+        />
       </div>
     </div>
   );

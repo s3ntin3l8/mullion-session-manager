@@ -21,6 +21,7 @@ import type {
   Task,
 } from "../api/index.js";
 import { makeSession, makeProject, makeTask } from "../test/fixtures.js";
+import { boardStoreStubs } from "../test/boardStoreStubs.js";
 
 let sessions: Session[];
 let projects: Project[];
@@ -39,6 +40,7 @@ const setKanbanColumnOrder = vi.fn((columnId: string, order: number[]) => {
   kanbanOrder = { ...kanbanOrder, [columnId]: order };
 });
 const setViewMode = vi.fn();
+const openSessionInWorkspace = vi.fn();
 const deleteSession = vi.fn(async () => {});
 const refreshTasks = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
@@ -50,11 +52,13 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    ...boardStoreStubs,
     taskMasterEnabled,
     kanbanOrder,
     setKanbanColumnOrder,
     deleteSession,
     setViewMode,
+    openSessionInWorkspace,
     hideEndedSessions,
     refreshTasks,
     updateTask,
@@ -127,6 +131,7 @@ beforeEach(() => {
   hideEndedSessions = false;
   setKanbanColumnOrder.mockClear();
   setViewMode.mockClear();
+  openSessionInWorkspace.mockClear();
   deleteSession.mockClear();
   refreshTasks.mockClear();
   updateTask.mockClear();
@@ -325,11 +330,9 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     expect(setKanbanColumnOrder).not.toHaveBeenCalled();
   });
 
-  it("calls the board's own onOpenSession prop on a lane card click, unwrapped", async () => {
-    // Issue: the setViewMode-before-onOpenSession invariant this used to
-    // assert has moved to usePanelOpener.ts's own leaveTaskView — see that
-    // hook's own tests. UnifiedBoard just forwards whatever onOpenSession
-    // it's given straight through to LaneCard now.
+  // #3011 (design 9.6) — from 700px a tap on an ad-hoc session switches to
+  // Workspace mode and shows it there, through the store's cross-link.
+  it("a lane card tap from 700px switches to Workspace mode and shows the session", async () => {
     sessions = [makeSession({ id: 1, projectId: 1, command: "click-me" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
@@ -337,7 +340,19 @@ describe("UnifiedBoard ad-hoc session lane", () => {
 
     await user.click(screen.getByText("click-me"));
 
+    expect(openSessionInWorkspace).toHaveBeenCalledWith(1);
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
+  it("the phone board forwards a lane card tap to its own onOpenSession prop, unwrapped", async () => {
+    sessions = [makeSession({ id: 1, projectId: 1, command: "click-me" })];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    renderExpanded(<UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={vi.fn()} phone />);
+
+    await user.click(screen.getByText("click-me"));
+
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
-    expect(setViewMode).not.toHaveBeenCalled();
+    expect(openSessionInWorkspace).not.toHaveBeenCalled();
   });
 });

@@ -194,6 +194,7 @@
     "ref": ".claude/skills/mullion-review-invariants/references/frontend-state-and-effects.md",
     "paths": [
       "frontend/src/dock/DockProjectGroup.tsx",
+      "frontend/src/dock/useDockProject.ts",
       "frontend/src/dock/useDockGithubStatus.ts",
       "frontend/src/GitHubPanel.tsx",
       "frontend/src/FileEditorPanel.tsx",

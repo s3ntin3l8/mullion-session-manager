@@ -176,3 +176,55 @@ describe("ui/Modal", () => {
     expect(document.querySelector(".create-modal-backdrop")).not.toBeInTheDocument();
   });
 });
+
+// #3015 — Escape, the backdrop and the close button play the exit first.
+describe("ui/Modal exit", () => {
+  it("leaves the way it came before it asks the caller to close", async () => {
+    const { installExitAnimations } = await import("../test/exitAnimations.js");
+    const exits = installExitAnimations();
+    try {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      render(
+        <Modal onClose={onClose} title="T">
+          <p>body</p>
+        </Modal>,
+      );
+      const backdrop = document.querySelector(".create-modal-backdrop") as HTMLElement;
+      expect(backdrop).toHaveClass("motion-scrim");
+      expect(document.querySelector(".create-modal")).toHaveClass("motion-dialog");
+      expect(backdrop).toHaveAttribute("data-presence", "open");
+
+      await user.click(screen.getByRole("button", { name: "Close dialog" }));
+      expect(backdrop).toHaveAttribute("data-presence", "leaving");
+      expect(onClose).not.toHaveBeenCalled();
+
+      await exits.finishExits();
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      exits.restore();
+    }
+  });
+
+  it("closes at once while closeDisabled (the caller keeps it)", async () => {
+    const { installExitAnimations } = await import("../test/exitAnimations.js");
+    const exits = installExitAnimations();
+    try {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      render(
+        <Modal onClose={onClose} title="T" closeDisabled>
+          <p>body</p>
+        </Modal>,
+      );
+      await user.keyboard("{Escape}");
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(document.querySelector(".create-modal-backdrop")).toHaveAttribute(
+        "data-presence",
+        "open",
+      );
+    } finally {
+      exits.restore();
+    }
+  });
+});

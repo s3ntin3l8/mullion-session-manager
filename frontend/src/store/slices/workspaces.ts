@@ -26,6 +26,8 @@ export const createWorkspacesSlice: StateCreator<DashboardState, [], [], Workspa
 
   deleteWorkspace: async (id) => {
     await api.deleteWorkspace(id);
+    // #3010 — its device-local halves assignment goes with it.
+    get().forgetFoldHalvesWorkspace(id);
     await get().refreshWorkspaces();
   },
 

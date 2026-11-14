@@ -369,12 +369,28 @@ unresolved dependency state.
 The task board and the session board (originally two separate surfaces —
 issue #211's session-only Kanban view and this section's own dockview
 panel) have merged into one unified Kanban view (`frontend/src/
-UnifiedBoard.tsx`). Command Palette → Integrations → **Tasks**, the
-sidebar's own Tasks nav entry (badge count of tasks needing a decision
-right now — `ready` + `reviewing`), or the list/Kanban toggle in the
-toolbar all switch to it — it's an overlay over the dockview grid, not a
-panel, so toggling back to list view instantly restores whatever was
-tiled underneath. Task status columns are the board; a task with a linked
+UnifiedBoard.tsx`). It is the app's **Tasks mode**; the grid is
+**Workspace mode** (`#3009`). From 700px wide the left rail's mode switch
+(the Tasks entry shows how many tasks need you, as the board's "Needs me"
+filter counts them), Ctrl/⌘ + Alt + **O**, Command Palette → Integrations →
+**Tasks** and the sidebar's own Tasks nav entry (badge count of tasks needing a
+decision right now — `ready` + `reviewing`) all switch to it. Tasks mode
+shows the board full size beside the right sidebar, without the left sidebar
+or the Dock. It's an overlay over the dockview grid, not a panel, so switching
+back to Workspace instantly restores whatever was tiled underneath. The last
+mode is remembered per device. A task's worker or reviewer pill in the
+sidebar's task detail opens that session in Workspace mode and keeps the task
+open in the sidebar. The phone (`#3014`) has no drawer: a mode bar at the
+bottom (Workspace, Tasks with the needs-you count, and "⋯"), hidden while the
+on-screen keyboard is up, switches modes. Its board shows one lane at a time
+(Backlog, Ready, Active, Done) under a strip naming each lane with its count;
+swipe between lanes. "Needs you" is a filter chip there, a dot marks each lane
+holding such a task, and the board opens on the first of them. A task opens
+full screen with its actions at the bottom. "⋯" lists the right sidebar's
+views, each opening full screen, then Settings. The back gesture closes a
+sheet, then a detail inside a view, then the view; it switches mode only to
+return to Tasks after a task's session pill took you to Workspace. Task
+status columns are the board; a task with a linked
 worker or review session renders that session's live status nested on its
 own card, and any session not owned by a task collects in the **ad-hoc
 sessions strip** beneath the columns (`#2845`,
@@ -449,16 +465,42 @@ The strip is on every layout, phone included.
   card can be dragged between Backlog and Ready inside its lane, never into
   another lane (that would change its parent or project). The phone board stays
   flat. **Card density** (`crs.taskDensity`): Compact (default) or Comfortable.
-- **Phone and tablet** (`#2845`): the board is one status at a time, picked
-  from a control under the toolbar. On a **phone** it is four joined segments —
+- **Stacked when narrow** (`#3011`): when the board's own measured width has
+  room for fewer than three lanes (under 540px: three 160px lanes, their gaps
+  and padding), it lists one section per status instead: Reviewing, In
+  progress, Ready, Failed (only while it holds a task), then Backlog and Done
+  collapsed. Each header carries the count and a dot when a task in it needs
+  you; a strip of the statuses on top jumps to one and opens it. The decision
+  follows the board's width, not the device, so the fold's board stacks when a
+  task opens beside it and goes back to lanes when the sidebar closes, and a
+  narrow desktop window stacks too. The selected card stays in view across the
+  switch (its section opens if it was folded) and travels to its new place;
+  under reduced motion it fades in place. In stacked mode Group by is ignored
+  (the sections are flat), the facets panel is hidden, Hide done leaves Done
+  and Failed as headers only, and cards can still be dragged within a section
+  and between Backlog and Ready while both are open.
+- **Status list in the left rail** (`#3026`): in Tasks mode, from 700px, the
+  rail's middle region lists the board's statuses (a count over a short label,
+  a dot when a task there needs you), whichever layout the board shows,
+  including lanes on a wide desktop. The board publishes the entries it
+  derives from its filtered tasks (`boardStatuses` in the store), so the rail,
+  the stacked sections and the strip agree under every filter. A tap, on the
+  rail or on the stacked board's strip, raises the store's `statusJumpRequest`
+  (status plus nonce): the stacked board opens that section and scrolls to it,
+  the lanes scroll that lane into view. A request made before the board
+  mounted is not replayed. The strip stays on the stacked board as well.
+- **Phone** (`#2845`): the board is one lane at a time, picked
+  from a strip under the top bar: four joined segments —
   Backlog, Ready, **Active** (In progress, which holds the queued tasks, then
   Reviewing, stacked) and **Done** (Done, then Failed) — each with a count; it
-  opens on Active, then Ready, when they hold something, and Hide Done & Failed
-  removes the Done segment. On a **tablet** (the compact tier, two columns wide)
-  it is the per-status chips with two adjacent columns side by side. Both keep
-  the same compact card, show the filters in the filter sheet, ignore Group by
-  (the board stays flat) and keep empty columns as full columns rather than
-  rails. Tapping a card opens its detail full-screen.
+  opens on the first segment holding a task that needs you (a dot marks each
+  such segment, `#3014`), else on Active, then Ready, when they hold
+  something; swipe between segments; and Hide Done & Failed removes the Done
+  segment. From 700px the board is full size in Tasks mode (the old
+  two-column variant in the tablet's navigator is gone, `#3016`). The phone keeps the same compact card, shows the
+  filters in the filter sheet, ignores Group by (the board stays flat) and keeps
+  empty columns as full columns rather than rails. Tapping a card opens its
+  detail full-screen.
 - Cards show the title; the linked **issue** number and the **PR** number as
   links to GitHub, the resolved agent name and the time in status; the owning
   **project** (always, since it is what tells one project's `#310` from
@@ -510,12 +552,14 @@ approval` (generic on purpose, no title: a notification tray is outside the
   board rings the selected card. The detail carries the worker session's
   embedded timeline and — when a review agent is configured — a distinct
   "Review" card with the review agent's own timeline, its captured findings
-  text, and (once the task has auto-returned) a round indicator. Phone and
-  tablet have no usable right rail (phone renders none; tablet floats it over
-  the navigator the board sits in), so a card there opens the full-screen
-  docked task detail instead. A task notification click opens the same detail
-  the same way, and the PR and issue chips in the GitHub and Git views show the
-  task in the Tasks view too.
+  text, and (once the task has auto-returned) a round indicator. From 700px
+  every card, task chip and notification opens here (`#3011`). The phone shows
+  this same detail full screen over the board, with its actions at the bottom
+  (`#3014`); a task notification there still opens the full-screen docked task
+  detail. Elsewhere a notification click opens the sidebar's detail, and the PR and issue
+  chips in the GitHub and Git views show the task in the Tasks view too.
+- Tapping an ad-hoc session in the strip under the board switches to
+  Workspace mode and shows that session there (`#3011`).
 - **The review checks the diff against the issue's Scope.** The reviewer
   reports each Scope checkbox as `met`, `partial`, `missing` or `deviated`,
   shown as a "Scope check" section in the review and on the PR. A `missing` or
@@ -645,7 +689,11 @@ edge, with the collapse chevron on the right.
 
 The detail does not depend on the list: a backlog, done, archived or
 other-project task opens too, and Back returns to the list with its filter and
-scroll position. The icon in the header pops the task out to a docked panel.
+scroll position. From 1100px the icon in the header pops the task out to a
+docked panel; the rails bands below that do not offer it (`#3011`). **Approve** in the
+sidebar (the task detail, and the task strip in a PR's or an issue's detail)
+sits behind a confirm step: the first press arms it ("Confirm approve", with a
+countdown), the second approves.
 
 ### Board actions
 
@@ -1048,7 +1096,7 @@ mapping each one to its Settings key and explaining what it actually gates.
 | Per-task time budget                  | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `in_progress` task that's been running longer than this, measured from `claimedAt` (stamped at dispatch, when the worker spell actually starts, not at enqueue — time spent queued never counts). One exception: a task past its deadline whose worker has already finished — cleanly, or stuck behind a stale background shell job past `SHELL_TAIL_GRACE_MS` (5 minutes) — with commits on the branch is handed to the normal `→ reviewing` gate instead of force-failed, so completed work isn't thrown away purely because the handoff was a few minutes late; see [`tasks-internals.md`](tasks-internals.md#the-no-commits-gate-and-turn-finished-check). A second exception: a task still inside its rate-limit grace window (`lastRateLimitAt` within `rateLimitGraceMinutes`) is not force-failed for the budget; the budget applies again once that window has elapsed (#2930). `0` = unlimited.                                                                                                                                                                                                                                                              |
 | Runtime kill-switch                   | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops the watcher picking new candidates off `ready`; it does **not** stop dispatch draining the queue — a task a human already queued (or that was auto-claimed before the pause) still dispatches once a slot is free, same as if the toggle were off. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual-launch CommandPalette and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual launches (the New session launcher and the command palette) and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Task Master reviews (Hermes)          | `settings.reviewRelay.taskMasterReviewer`    | — (no env equivalent; default `false`)         | Settings → Review relay → Connection → "Task Master reviews". Allows `hermes` as a review agent at every tier (task, project, install-wide), run on the relay's Hermes connection (same URL and key; Test connection sits beside it). The board card and task drawer then show a "Hermes review · running / finished / could not be sent" badge in place of a review-session link. See [`tasks-internals.md`](tasks-internals.md#hermes-as-the-review-agent).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)            | How long the reconciler holds a `reviewing` task whose PR has CI still `in_progress` or not yet registered before spawning the review agent anyway. `0` disables waiting. See [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Rate-limit grace window               | `settings.taskMaster.rateLimitGraceMinutes`  | `MULLION_TASK_RATE_LIMIT_GRACE_MINUTES` (`5`)  | How long the reconciler holds a task alive after the agent reports a subscription-quota `rate_limit` failure (Claude Code's weekly limit, opencode go's quota, agy's `RESOURCE_EXHAUSTED`) before falling through to the normal fail path. Max 1440 (24h); `0` opts out. Durable on the task row, so it survives the session's own error-state TTL clearing — see [`tasks-internals.md`](tasks-internals.md#rate-limit-grace) for the full mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |

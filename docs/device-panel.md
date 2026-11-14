@@ -274,19 +274,21 @@ deliberately a **separate** implementation from `PtyManager`/
   current Chromium-based browser; shows an explicit "unsupported" state
   otherwise.
 
-**Wired into the dashboard UI (issue #1326, lifecycle rework).** The sidebar
-shows a "Devices" section, above Projects, listing every device row that still
-exists — active _and_ stopped. There's no manual expand/collapse for it; the
-section simply doesn't render at all while there are zero devices (see below).
+**Wired into the dashboard UI (issue #1326, lifecycle rework).** The right
+sidebar has a **Devices** view (the rail's device icon on tablet and desktop;
+on the phone the mode bar's "⋯" sheet opens it full screen) listing every
+device row that still exists — active _and_ stopped. It is host-global, so it
+shows no project picker. With zero devices it shows a short empty state that
+points at Settings → Devices (see below). If the first fetch of the list
+fails, it says "Couldn't load devices." until a later poll succeeds.
 A row's status dot reflects its live state, a stopped row renders dimmed with
 a **Start** control (an active row gets **Stop** instead), and clicking the row
 itself opens (or focuses) that device's panel via `openDevicePanel`
 (`panelUtils.ts`) — deliberately starting it first when it was stopped, since a
-panel pointed at a stopped device is just a 404ing websocket. The section
-renders nothing while there are zero devices, so it stays out of the way on a
-host that never touches Android; its poll runs unconditionally regardless, so a
-device created purely through the CLI/MCP surface below (no panel ever opened)
-still makes the section appear without a reload.
+panel pointed at a stopped device is just a 404ing websocket. The view
+polls while it is open (even at zero devices), so a device created purely
+through the CLI/MCP surface below (no panel ever opened) still appears without
+a reload.
 
 Settings → Devices is the lifecycle surface — create, pair, and, on _every_
 row regardless of status: start, stop, edit a physical device's adb address,
@@ -303,7 +305,7 @@ existing emulator (see the reattach behavior above) rather than requiring a
 manual `systemctl --user stop` first. A restored layout that points at a
 device which has since been stopped or deleted closes that panel instead of
 restarting the device as a side effect of a page load — reopening it from the
-sidebar (which now lists stopped rows) starts it deliberately.
+Devices view (which lists stopped rows) starts it deliberately.
 
 Pairing a phone from Settings (issue #1379) uses **Pair a phone or tablet**,
 which opens `PairDeviceDialog.tsx` (the emulator flow sits behind its own

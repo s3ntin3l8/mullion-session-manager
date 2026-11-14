@@ -1,6 +1,12 @@
-import { useRef } from "react";
-import type { ReactNode, RefObject, KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef } from "react";
+import type {
+  ReactNode,
+  RefObject,
+  MutableRefObject,
+  KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { useDismissExit } from "../hooks/usePresence.js";
 import { CloseIcon } from "./icons.js";
 
 // PR 24 pilot — the shared shell behind the `create-modal-*` family
@@ -91,6 +97,11 @@ export interface ModalProps {
   // reach it regardless). Not `disabled`: that would drop focus out of the
   // dialog the moment the button was the last focusable thing in it.
   closeDisabled?: boolean;
+  // Receives the focus trap's `suppressRestore` — same contract as
+  // BottomSheet's prop of the same name. A caller whose action moves focus on
+  // purpose (the New session launcher focusing the new terminal) calls it
+  // before closing, so the trap's restore-to-opener doesn't win the race.
+  suppressRestoreRef?: MutableRefObject<(() => void) | null>;
 }
 
 export function Modal({
@@ -109,18 +120,34 @@ export function Modal({
   footerClassName = "create-modal-footer",
   headerContent,
   closeDisabled = false,
+  suppressRestoreRef,
 }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
-  const { onKeyDown: onTrapKeyDown } = useFocusTrap({
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // #3015 — Escape, the backdrop and the close button play the exit
+  // (styles/motion.css) before `onClose`; the caller unmounts a dialog that
+  // has already gone. A dialog that must not close right now (`closeDisabled`)
+  // skips it: its caller guards `onClose` and keeps it, and an exit that
+  // came back would only flicker.
+  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
+  // Not `inert` while leaving (the menus are): that would blur the focused
+  // control, and a caller that refuses the close would get its dialog back
+  // with focus stranded on <body>. motion.css's `pointer-events: none` on a
+  // leaving overlay is enough to keep a stray click from landing.
+  const requestClose = closeDisabled ? onClose : dismiss;
+  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: true,
     containerRef: modalRef,
     initialFocusRef,
   });
+  useEffect(() => {
+    if (suppressRestoreRef) suppressRestoreRef.current = suppressRestore;
+  }, [suppressRestoreRef, suppressRestore]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      onClose();
+      requestClose();
       return;
     }
     onTrapKeyDown(e);
@@ -136,10 +163,15 @@ export function Modal({
     // that overrides `backdropClassName` to something that ISN'T a full-page
     // backdrop would need to override this too — none of the seven
     // `create-modal-*` target modals do.
-    <div className={backdropClassName} onClick={onClose}>
+    <div
+      ref={backdropRef}
+      className={`${backdropClassName} motion-scrim`}
+      data-presence={presence}
+      onClick={requestClose}
+    >
       <div
         ref={modalRef}
-        className={modalClassName}
+        className={`${modalClassName} motion-dialog`}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         role="dialog"
@@ -157,7 +189,7 @@ export function Modal({
             </span>
             <button
               className="create-modal-close"
-              onClick={closeDisabled ? undefined : onClose}
+              onClick={closeDisabled ? undefined : requestClose}
               aria-disabled={closeDisabled || undefined}
               aria-label="Close dialog"
             >

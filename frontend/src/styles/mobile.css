@@ -14,32 +14,14 @@
      this tier, so its styling has to be reachable at any width a
      coarse pointer shows up at, not just on the phone tier. */
 
-  /* `.toolbar-lead`'s own width-auto override, and the floating sidebar
-     drawer itself (`.sidebar-wrapper`/`.cmux-scrim`), moved to sidebar.css's
-     phone/tablet `data-tier` block (floating-sidebar redesign) — both now
-     apply on tablet too, not just the phone tier, so they live next
-     to the desktop-collapse rule they replace instead of
-     being split across two files. `.toolbar-center` stays
-     phone-only, deliberately, right here: tablet has the width to keep it
-     visible (this is the explicit decision, not an accidental inheritance
-     — `.toolbar-center`'s own `border-left` sitting right after the now-
-     auto-width lead icons, with no reserved-sidebar edge to align to, is
-     the same look phone already has and accepts). `.run-cmd-btn` used to be
-     phone-only too, for the same width reason; it is back now, icon-only
-     (issue #1880) — see its own rule below. */
-  .toolbar-center {
-    display: none !important;
-  }
   /* The command palette, restored on the phone tier (issue #1880).
      `.run-cmd-btn` was `display: none !important` here — a WIDTH decision
-     (the block comment above says so), not a verdict on the palette: the
-     phone's toolbar is [☰] [session switcher] [palette][bell], and the
-     palette's icon fits where the hidden label used to be.
+     (a width decision), not a verdict on the palette: the phone's toolbar
+     is [session switcher] [palette][bell], and the palette's icon fits.
 
-     Icon-only, like the tablet's compact picker (compact.css's
-     `.toolbar--compact-picker .run-cmd-btn`): the "Run command…" label and
-     the ⌘K hint do not fit a phone toolbar, and the button carries an
-     accessible name instead (Toolbar.tsx's `aria-label`).
+     Icon-only: the "Run command…" label and the ⌘K hint do not fit a phone
+     toolbar, and the button carries an accessible name instead
+     (Toolbar.tsx's `aria-label`).
 
      The button also takes the phone's own `.toolbar-icon-btn` class
      (Toolbar.tsx), so its SIZE and its touch-target behaviour come from the
@@ -62,11 +44,6 @@
   .run-cmd-btn .kbd {
     display: none;
   }
-  /* The version string is desktop chrome; on phone it costs ~50px of a
-     toolbar that already barely fits (it's still shown in Settings). */
-  .toolbar-version-label {
-    display: none !important;
-  }
   /* The actions group never gives up its width. It holds fixed-size touch
      targets (44px each on a coarse pointer), and the group clips what does
      not fit — so a group that could shrink would clip its LAST child first,
@@ -80,37 +57,10 @@
      and the padding) and the switcher keeps 148px; in Task view the
      palette's button is not rendered, so the actions take 60px and the
      switcher keeps 200px. Nothing is clipped in either view (issue #1880's
-     review).
-
-     Phone-only: on a coarse-pointer tablet the 44px buttons fill this
-     44px-tall group, and a clip would cut their focus rings. */
+     review). */
   .toolbar-actions {
     overflow: hidden;
     flex-shrink: 0;
-  }
-
-  /* Phone toolbar: [☰] [session switcher] [palette][bell]. The session
-     switcher (MobileSessionSwitcher.tsx) takes the space the hidden
-     .toolbar-center leaves; the palette's button is back on the phone
-     (issue #1880), and the bell sits at the right edge. New session, theme
-     and settings are not in the toolbar here at all: the session picker and
-     the navigator's Settings tab carry them, and Toolbar.tsx renders the ⋯
-     app menu only off the phone tier. */
-  .toolbar-mobile-session {
-    display: flex !important;
-  }
-  .toolbar-app-menu {
-    display: flex !important;
-  }
-  .toolbar-new-session-btn,
-  .toolbar-theme-btn,
-  .toolbar-settings-btn {
-    display: none !important;
-  }
-  .toolbar-lead {
-    padding-right: 4px;
-  }
-  .toolbar-actions {
     padding-left: 4px;
   }
 
@@ -225,8 +175,7 @@
      but not the bottom: in landscape on a notched phone, the home-indicator
      area could otherwise clip the last row of the nav list or scrolled
      section content. Same `env(safe-area-inset-bottom)` pattern already
-     used by `.sidebar-wrapper` elsewhere in this
-     file, added to each pane's own bottom edge rather than the fixed-size
+     used elsewhere for the home-indicator inset, added to each pane's own bottom edge rather than the fixed-size
      `.settings-modal` shell, since these are the parts that actually
      scroll. */
   .settings-content-body {
@@ -401,119 +350,6 @@
   }
 }
 
-/* Phone navigator (App.tsx / PhoneNavigator.tsx): below 700px the sidebar
-   drawer becomes a full-screen navigator under the toolbar — the ☰ button and
-   its own ✕ close it. The header/tabs/settings-row rules below are NOT
-   width-scoped: these components only mount on compact tiers, and a later
-   change in the tablet series renders the same navigator on tablet. */
-.phone-nav-header {
-  flex: none;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--chrome);
-  border-bottom: 1px solid var(--border);
-}
-.phone-nav-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 4px 0 16px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--muted);
-}
-.phone-nav-tabs {
-  display: flex;
-  gap: 6px;
-  padding: 6px 12px 10px;
-  overflow-x: auto;
-}
-.phone-nav-tab {
-  flex: 1 0 auto;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 0.875rem;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-.phone-nav-tab[aria-pressed="true"],
-.phone-nav-tab.current {
-  color: var(--fg);
-  border-color: var(--accent-solid);
-  background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
-}
-.phone-nav-settings {
-  padding-bottom: 12px;
-}
-/* The Settings tab's filter (issue #1880). The phone list showed every
-   section unfiltered, so finding one of them meant scrolling past all of
-   them; the desktop rail has had this box since the search index landed.
-   Same shape as the desktop's `.settings-nav-search`, sized for a phone:
-   the input is 16px so iOS does not zoom the page on focus. */
-.phone-nav-settings-search {
-  margin: 10px 12px 8px;
-}
-/* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
-.phone-nav-settings-search > .ui-input {
-  font-size: 1rem;
-}
-.phone-nav-settings-empty {
-  padding: 16px;
-  font-size: 0.78125rem;
-  color: var(--dim);
-}
-.phone-nav-settings-group {
-  padding: 12px 16px 4px;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.phone-nav-settings-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 48px;
-  padding: 0 16px;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 0.9375rem;
-  text-align: left;
-  cursor: pointer;
-}
-.phone-nav-settings-row:active {
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-.phone-nav-settings-icon {
-  display: flex;
-  color: var(--muted);
-}
-.phone-nav-settings-title {
-  flex: 1;
-}
-:where(.app[data-tier="phone"]) {
-  .sidebar-wrapper {
-    width: 100vw !important;
-    box-shadow: none !important;
-  }
-  /* The navigator covers the whole viewport, so the scrim behind it is moot.
-     `&` keeps `.sb-open` on `.app` itself — a descendant combinator would
-     never match, because the class lives on the same element as data-tier. */
-  &.sb-open .cmux-scrim {
-    display: none !important;
-  }
-}
-
 /* Task board status strip, [New task][Filter] row and filter sheet
    (UnifiedBoard.tsx `phone`) — unscoped: they only render on compact tiers. */
 .task-card-sync-error-text {
@@ -678,4 +514,235 @@
   .settings-nav-search input {
     font-size: 1rem;
   }
+}
+
+/* ============================================================ */
+/* Phone shell without the drawer (#3014)                        */
+/* ============================================================ */
+
+/* The mode bar: full width under the key bar, the last row of .app's column.
+   It owns the bottom safe-area inset while it shows, so the key bar and the
+   grid body drop theirs (tablet.css gives them one under a coarse pointer).
+   While the on-screen keyboard is up the bar is not rendered
+   (useKeyboardUp) and they keep their own. */
+.phone-mode-bar {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 6px max(8px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom))
+    max(8px, env(safe-area-inset-right));
+  /* A clear gap from the key bar above it, so two stacked bars do not invite
+     mis-taps (design section 4, option B). */
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 0 0 var(--bg);
+  background: var(--chrome);
+}
+:root:not([data-keyboard="up"]) .app.mode-bar .grid-area-body,
+:root:not([data-keyboard="up"]) .app.mode-bar .mobile-key-bar {
+  padding-bottom: 0;
+}
+.phone-mode-btn {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color var(--motion-press) var(--motion-ease-press);
+}
+.phone-mode-btn.active {
+  color: var(--fg);
+  background: var(--seg);
+}
+.phone-mode-btn.phone-mode-more {
+  flex: 0 0 56px;
+}
+.phone-mode-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.6875rem;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The "more" sheet: the phone's right rail, rows at touch size. */
+.phone-more-list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 calc(8px + env(safe-area-inset-bottom));
+}
+.phone-more-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+.phone-more-row:last-child {
+  border-bottom: 0;
+}
+.phone-more-row:active {
+  background: var(--seg);
+}
+.phone-more-label {
+  flex: 1;
+}
+.phone-more-badge {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--seg);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 18px;
+  text-align: center;
+}
+.phone-more-badge.alert {
+  min-width: 8px;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  background: var(--r);
+}
+
+/* A right-sidebar view opened from the sheet: full screen, over the top bar
+   and the mode bar, with a header row that names it and a back control. */
+.right-sidebar-panel.phone {
+  position: fixed;
+  top: var(--shell-top, 0px);
+  bottom: var(--kb-inset, 0px);
+  left: 0;
+  right: 0;
+  z-index: 47;
+  border-left: 0;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.right-sidebar-phone-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 52px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.right-sidebar-phone-back {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.right-sidebar-phone-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+/* A detail's own header (with its back arrow) takes the row's place: the
+   phone head sits in the panel DetailHeader marks (#2979). */
+[data-sidebar-detail] .right-sidebar-phone-head {
+  display: none;
+}
+/* A task's main actions in thumb reach: last, and pinned to the bottom edge
+   while the detail scrolls (design frame 3b). */
+.right-sidebar-panel.phone .tasks-detail {
+  display: flex;
+  flex-direction: column;
+}
+.right-sidebar-panel.phone .tasks-detail > .sb-actions-block {
+  order: 99;
+  /* With the detail stretched to the panel (below), a short detail still
+     puts its actions at the bottom edge. */
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+/* The lane strip (design frame 3a): lane names with counts, the lane on
+   screen underlined, a dot on each lane holding a task that needs you. */
+.app[data-tier="phone"] .tasks-phone-strip--segmented {
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip,
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip:first-child,
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip:last-child {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  gap: 4px;
+}
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip[aria-pressed="true"] {
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent-solid);
+}
+.tasks-phone-strip-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--y);
+}
+.tasks-phone-needs-chip {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.tasks-phone-needs-chip.attention {
+  color: var(--fg);
+}
+.tasks-phone-needs-chip[aria-pressed="true"] {
+  color: var(--fg);
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
+}
+/* The detail fills the panel's height, so its actions can sit at the bottom. */
+.right-sidebar-panel.phone .right-sidebar-body:has(> .tasks-detail) {
+  display: flex;
+  flex-direction: column;
+}
+.right-sidebar-panel.phone .right-sidebar-body > .tasks-detail {
+  flex: 1 0 auto;
 }

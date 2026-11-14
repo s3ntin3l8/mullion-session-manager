@@ -343,7 +343,11 @@
   background: var(--sidebar);
   padding: 8px 9px;
   cursor: pointer;
-  transition: border-color 0.1s;
+  /* Restates styles/motion.css's press transition, which this rule's own
+     `transition` would otherwise replace. */
+  transition:
+    border-color var(--motion-press) var(--motion-ease-press),
+    scale var(--motion-press) var(--motion-ease-press);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -1019,6 +1023,12 @@
   font-size: 0.71875rem;
   color: var(--dim);
 }
+/* #2978 — the touch form of the hint above: two buttons at the 44px floor. */
+.empty-grid-actions > button {
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 0.8125rem;
+}
 
 /* Issue #211's Kanban board — an opaque overlay over .dockview-container
    (App.tsx), same positioning as .empty-grid-dropzone above but solid
@@ -1125,7 +1135,7 @@
   border-radius: 9px;
   background: var(--sidebar);
   overflow: hidden;
-  transition: border-color 0.1s;
+  transition: border-color var(--motion-press) var(--motion-ease-press);
 }
 .kanban-card-drop-target {
   border-color: var(--accent-solid);

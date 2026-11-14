@@ -40,13 +40,12 @@ export const STORAGE_KEYS = {
   // header, not one per item.
   workspacesSectionCollapsed: "crs.workspacesSectionCollapsed",
   sidebarWidth: "crs.sidebarWidth",
-  // Right sidebar (icon rail + view drawer): which view was last active,
-  // whether it is open, whether it is pinned (docked, pushing the grid) vs.
-  // an overlay, and the drawer width. `rightSidebarOpen` is only honored on
-  // load when pinned — an unpinned overlay never reopens itself on reload.
+  // Right sidebar (icon rail + view panel): which view was last active,
+  // whether it is open, and the panel width. The panel is always docked, so
+  // it reopens on load as it was left. `crs.rightSidebarPinned` was the old
+  // dock-or-float choice; a stored value is ignored (#3006).
   rightSidebarView: "crs.rightSidebarView",
   rightSidebarOpen: "crs.rightSidebarOpen",
-  rightSidebarPinned: "crs.rightSidebarPinned",
   rightSidebarWidth: "crs.rightSidebarWidth",
   themeHint: "crs.themeHint",
   dismissedUpdateVersion: "crs.dismissedUpdateVersion",
@@ -55,6 +54,9 @@ export const STORAGE_KEYS = {
   // dismissed; the notice returns only once the generator's output changes.
   dismissedConventionsNotice: "crs.dismissedConventionsNotice",
   viewMode: "crs.viewMode",
+  // #3010 — which panes show on which half between 800 and 1099px, per
+  // workspace (lib/foldHalves.ts). Device-local: never in the saved layout.
+  foldHalves: "crs.foldHalves",
   hierarchicalView: "crs.hierarchicalView",
   dockCollapsed: "crs.dockCollapsed",
   dockHeight: "crs.dockHeight",

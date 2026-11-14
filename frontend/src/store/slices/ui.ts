@@ -6,10 +6,12 @@ import { resolveTaskMaster } from "../../taskConfig.js";
 import {
   STORAGE_KEYS,
   readBool,
+  readJSON,
   readMutedSessionIds,
   readString,
   removeItem,
   writeBool,
+  writeJSON,
   writeMutedSessionIds,
   writeNumber,
   writeString,
@@ -31,6 +33,18 @@ import {
   resolveTheme,
 } from "../helpers.js";
 import type { DashboardState, UiSlice } from "../types.js";
+import {
+  EMPTY_FOLD_HALVES,
+  moveToHalf,
+  noteOpen,
+  noteShownLeft,
+  noteUsed,
+  parseFoldHalves,
+  forgetPanes,
+  showRight,
+  toggleRight,
+} from "../../lib/foldHalves.js";
+import type { FoldHalvesState } from "../../lib/foldHalves.js";
 import {
   currentSidebarLocation,
   pruneSidebarHistory,
@@ -135,6 +149,9 @@ export function __discardPendingSettingsPatchForTests(): void {
   pendingSettingsPatchDiscarder?.();
 }
 
+// LauncherRequest.seq — module-level so it keeps counting across a close.
+let launcherSeq = 0;
+
 export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set, get) => {
   // Closure-scoped (not React/store state) — accumulates across rapid
   // updateSettings() calls between debounce windows, same pattern
@@ -209,7 +226,18 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     writeString(STORAGE_KEYS.themeHint, resolveTheme(next.theme));
   }
 
-  const rightSidebarPinned = readBool(STORAGE_KEYS.rightSidebarPinned, false);
+  // #3010 — applies one change to the active workspace's halves and keeps
+  // the device-local copy in step. A no-op change writes nothing.
+  const updateFoldHalves = (change: (h: FoldHalvesState) => FoldHalvesState) => {
+    const { activeWorkspaceId, foldHalves } = get();
+    if (activeWorkspaceId === null) return;
+    const before = foldHalves[activeWorkspaceId] ?? EMPTY_FOLD_HALVES;
+    const after = change(before);
+    if (after === before) return;
+    const next = { ...foldHalves, [activeWorkspaceId]: after };
+    writeJSON(STORAGE_KEYS.foldHalves, next);
+    set({ foldHalves: next });
+  };
 
   return {
     settings: DEFAULT_SETTINGS,
@@ -218,10 +246,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
     showTaskSessions: DEFAULT_SETTINGS.sessions.showTaskSessions,
-    // Desktop-only persistent collapse (distinct from the mobile-only
-    // `sidebarOpen` overlay flag App.tsx owns locally — different semantics
-    // per breakpoint: mobile is a closed-by-default overlay, desktop is an
-    // open-by-default panel the user can choose to hide).
+    // The docked left sidebar's persistent collapse from 1280px: open by
+    // default. From 1100 to 1279px App.tsx keeps its own, collapsed-by-default
+    // flag instead, and below 1100px there is no left sidebar (#3041).
     sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
     rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
@@ -230,16 +257,22 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     rightSidebarBranchRequest: null,
     rightSidebarPruneRequest: null,
     githubOpenPrByProject: {},
-    rightSidebarPinned,
-    // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
-    rightSidebarOpen: rightSidebarPinned && readBool(STORAGE_KEYS.rightSidebarOpen, false),
+    // The panel is always docked (#3006), so it comes back the way it was left.
+    rightSidebarOpen: readBool(STORAGE_KEYS.rightSidebarOpen, false),
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
+    crossLinkReturn: null,
     hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
     splitRequest: null,
+    launcherRequest: null,
     openSessionRequest: null,
     openTaskRequest: null,
+    boardStatuses: [],
+    statusJumpRequest: null,
+    foldHalves: parseFoldHalves(readJSON(STORAGE_KEYS.foldHalves, {})),
+    focusedHalf: "left",
+    foldHalvesActive: false,
     selectedTaskId: null,
     taskSelectionSeq: 0,
     sidebarHistory: [],
@@ -325,13 +358,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         : patch;
       if (patchTimer) clearTimeout(patchTimer);
       patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
-    },
-
-    cycleTheme: () => {
-      const current = get().settings.theme;
-      const next: AppSettings["theme"] =
-        current === "dark" ? "light" : current === "light" ? "system" : "dark";
-      get().updateSettings({ theme: next });
     },
 
     setTerminalPrefs: (patch) => {
@@ -497,11 +523,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       });
     },
 
-    setRightSidebarPinned: (value) => {
-      writeBool(STORAGE_KEYS.rightSidebarPinned, value);
-      set({ rightSidebarPinned: value });
-    },
-
     setRightSidebarWidth: (value) => {
       const clamped = clampRightSidebarWidth(value);
       writeNumber(STORAGE_KEYS.rightSidebarWidth, clamped);
@@ -510,7 +531,59 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     setViewMode: (value) => {
       writeString(STORAGE_KEYS.viewMode, value);
-      set({ viewMode: value });
+      // Only a real switch forgets a cross-link: opening the session it asked
+      // for calls this again with "list" (usePanelOpener's leaveTaskView).
+      set((s) => ({
+        viewMode: value,
+        crossLinkReturn: s.viewMode === value ? s.crossLinkReturn : null,
+      }));
+    },
+
+    toggleViewMode: () => {
+      get().setViewMode(get().viewMode === "kanban" ? "list" : "kanban");
+    },
+
+    openSessionInWorkspace: (sessionId) => {
+      const { viewMode, selectedTaskId } = get();
+      get().setViewMode("list");
+      // Only a real switch is a cross-link: from Workspace there is no Tasks
+      // mode to return to.
+      if (viewMode === "kanban") set({ crossLinkReturn: { taskId: selectedTaskId } });
+      // #3010 — the cross-link lands on the left half (design frame 2c),
+      // whichever half the session was on.
+      get().moveToHalf(`session-${sessionId}`, "left", []);
+      get().requestOpenSession(sessionId);
+    },
+
+    returnFromCrossLink: () => {
+      const link = get().crossLinkReturn;
+      if (!link) return;
+      get().setViewMode("kanban");
+      if (link.taskId !== null) get().openRightSidebarTask(link.taskId, null);
+    },
+
+    moveToHalf: (panelId, half, openIds) =>
+      updateFoldHalves((h) => moveToHalf(h, panelId, half, openIds)),
+    toggleRightPane: (panelId) => updateFoldHalves((h) => toggleRight(h, panelId)),
+    showRightPane: (panelId) => updateFoldHalves((h) => showRight(h, panelId)),
+    noteLeftPane: (panelId, used = true) =>
+      updateFoldHalves((h) => noteShownLeft(h, panelId, used)),
+    noteHalfUsed: (used) => updateFoldHalves((h) => noteUsed(h, used)),
+    forgetFoldPanes: (closedIds) => updateFoldHalves((h) => forgetPanes(h, closedIds)),
+    noteFoldOpen: (openIds) => updateFoldHalves((h) => noteOpen(h, openIds)),
+    forgetFoldHalvesWorkspace: (workspaceId) => {
+      const { foldHalves } = get();
+      if (!(workspaceId in foldHalves)) return;
+      const next = { ...foldHalves };
+      delete next[workspaceId];
+      writeJSON(STORAGE_KEYS.foldHalves, next);
+      set({ foldHalves: next });
+    },
+    setFocusedHalf: (half) => {
+      if (get().focusedHalf !== half) set({ focusedHalf: half });
+    },
+    setFoldHalvesActive: (active) => {
+      if (get().foldHalvesActive !== active) set({ foldHalvesActive: active });
     },
 
     setHierarchicalView: (value) => {
@@ -528,6 +601,16 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     clearSplitRequest: () => {
       set({ splitRequest: null });
+    },
+
+    openLauncher: (target) => {
+      launcherSeq += 1;
+      set({ launcherRequest: { target: target ?? null, seq: launcherSeq } });
+    },
+
+    closeLauncher: (seq) => {
+      if (seq !== undefined && get().launcherRequest?.seq !== seq) return;
+      set({ launcherRequest: null });
     },
 
     requestOpenSession: (sessionId) => {
@@ -583,6 +666,14 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     requestOpenTask: (taskId) => {
       set((state) => ({
         openTaskRequest: { taskId, nonce: (state.openTaskRequest?.nonce ?? 0) + 1 },
+      }));
+    },
+
+    setBoardStatuses: (entries) => set({ boardStatuses: entries }),
+
+    requestStatusJump: (status) => {
+      set((state) => ({
+        statusJumpRequest: { status, nonce: (state.statusJumpRequest?.nonce ?? 0) + 1 },
       }));
     },
 

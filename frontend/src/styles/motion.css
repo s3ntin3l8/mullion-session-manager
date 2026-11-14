@@ -1,0 +1,319 @@
+/* ============================================================ */
+/* Motion and material, shared (docs/motion.md, #3015)            */
+/* ============================================================ */
+/* The rules every surface shares, in one place rather than per component:
+   press feedback, how an overlay enters and leaves, the material sheets and
+   popovers sit on, and content that arrives in place. Only the tokens from
+   tokens.css; only `opacity`, `scale` and `translate` animate (cheap on a
+   phone-class GPU, and none of them changes a box a terminal measures).
+
+   `scale`/`translate` are the individual transform properties, not
+   `transform`: they compose with whatever `transform` a component already
+   uses (the board's card travel, a rotated chevron, a positioned popover)
+   instead of replacing it.
+
+   Reduced motion: the reset at the end of tokens.css zeroes every transition
+   here and shortens every animation to 0.01ms, so a press snaps and an
+   overlay appears and goes at once. lib/presence.ts skips the wait for an
+   exit under reduced motion too. Nothing here needs its own variant. */
+
+/* ---- Press feedback: on touch-down, not on release ---------------------- */
+/* Every control: a small scale over --motion-press, and a tint layered over
+   whatever background the control already has (a background-image, so the
+   control's own background colour is untouched). `:active` starts on pointer
+   down. The transition sits in `:where()` (zero specificity) so a component
+   that declares its own `transition` keeps it; such a control still scales
+   on press, it just does not ease into it.
+
+   Left out: controls whose pointerdown calls preventDefault() to keep focus
+   in the terminal (the phone key bar, the device toolbar, the voice mic) — on touch
+   browsers that strands `:active` after the finger lifts (tablet.css's
+   .mobile-key-bar-btn comment); the key bar has its own JS-driven press
+   state. Disabled controls do not answer, and a row whose drag handle is
+   being pressed stays still: it is the drag image the browser captures. */
+:where(
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"],
+  summary,
+  .session-item,
+  .task-card,
+  .rail-ws-row,
+  .workspace-item,
+  .ws-section-header,
+  .ws-group-header
+) {
+  transition: scale var(--motion-press) var(--motion-ease-press);
+}
+:is(button, [role="button"], [role="tab"], [role="menuitem"], [role="option"], summary):active:not(
+    :disabled,
+    [aria-disabled="true"],
+    .mobile-key-bar-btn,
+    .device-toolbar button,
+    .terminal-voice-btn,
+    .ws-row-btn,
+    :has(.ws-drag-handle:active)
+  ) {
+  scale: 0.96;
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
+}
+/* Wide things (rows, cards, list options) move less than a small button.
+   A workspace row and the WORKSPACES and group headers are containers, not
+   buttons (#2886): the row presses, and its one inner button (`.ws-row-btn`)
+   does not press again inside it.
+   The same `:not()` list as above keeps this rule exactly as specific, so,
+   coming later, it wins for a row that is also a button. */
+:is(
+    .session-item,
+    .task-card,
+    .rail-ws-row,
+    [role="menuitem"],
+    [role="option"],
+    .phone-more-row,
+    .pane-tab-overflow-item,
+    .workspace-item,
+    .ws-section-header,
+    .ws-group-header,
+    .dock-monitor,
+    .sidebar-device-row,
+    .update-banner
+  ):active:not(
+    :disabled,
+    [aria-disabled="true"],
+    .mobile-key-bar-btn,
+    .device-toolbar button,
+    .terminal-voice-btn,
+    .ws-row-btn,
+    :has(.ws-drag-handle:active)
+  ) {
+  scale: 0.98;
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
+}
+
+/* ---- Overlays enter from where they belong and leave the same way -------- */
+/* `data-presence` is set by hooks/usePresence.ts: "open" while shown,
+   "leaving" while the exit plays (it unmounts when that animation finishes).
+   Popovers and menus grow out of their trigger; dialogs and the command
+   palette settle in over a scrim that fades. */
+@keyframes motionPopIn {
+  from {
+    opacity: 0;
+    scale: 0.97;
+    translate: 0 var(--motion-pop-y, -4px);
+  }
+}
+@keyframes motionPopOut {
+  to {
+    opacity: 0;
+    scale: 0.97;
+    translate: 0 var(--motion-pop-y, -4px);
+  }
+}
+@keyframes motionDialogIn {
+  from {
+    opacity: 0;
+    scale: 0.985;
+    translate: 0 8px;
+  }
+}
+@keyframes motionDialogOut {
+  to {
+    opacity: 0;
+    scale: 0.985;
+    translate: 0 8px;
+  }
+}
+@keyframes motionFadeIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes motionFadeOut {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Popovers and menus: the ⋯ menus (KebabMenu, PaneActionsMenu, PaneTab), the
+   notification panel and the workspace list all share this class. */
+.pane-tab-overflow-menu,
+.custom-select-menu {
+  animation: motionPopIn var(--motion-fade) var(--motion-ease);
+  transform-origin: top center;
+}
+/* A menu that opens upward (KebabMenu's "top"/"auto" placement) grows from
+   its bottom edge, toward the trigger it came from. */
+.pane-tab-overflow-menu[data-placement="top"],
+.custom-select-menu[data-placement="top"] {
+  transform-origin: bottom center;
+  --motion-pop-y: 4px;
+}
+.pane-tab-overflow-menu[data-presence="leaving"],
+.custom-select-menu[data-presence="leaving"] {
+  animation: motionPopOut var(--motion-fade) var(--motion-ease) forwards;
+}
+
+/* Dialogs: the scrim fades, the dialog settles in. */
+.motion-scrim {
+  animation: motionFadeIn var(--motion-fade) var(--motion-ease);
+}
+.motion-dialog {
+  animation: motionDialogIn var(--motion-fade) var(--motion-ease);
+}
+.motion-scrim[data-presence="leaving"] {
+  animation: motionFadeOut var(--motion-fade) var(--motion-ease) forwards;
+}
+.motion-scrim[data-presence="leaving"] .motion-dialog {
+  animation: motionDialogOut var(--motion-fade) var(--motion-ease) forwards;
+}
+/* Leaving: still on screen, no longer something to tap. */
+[data-presence="leaving"] {
+  pointer-events: none;
+}
+
+/* ---- Material: layers above content ------------------------------------- */
+/* Sheets and popovers are a translucent layer with a blur and a light edge;
+   rails and sidebars stay solid (they are on screen all the time, and a
+   permanent backdrop-filter over a repainting terminal costs every frame).
+   The blur only exists while a sheet or popover is open. */
+.mobile-session-sheet,
+.pane-tab-overflow-menu {
+  background: var(--material);
+  -webkit-backdrop-filter: var(--material-blur);
+  backdrop-filter: var(--material-blur);
+}
+/* The notification feed's sticky group header matches its panel (#1229), so
+   it moves to material with it instead of showing as a solid band. */
+.notif-panel .notif-group-header {
+  background: var(--material);
+}
+/* The light edge: on the side the layer came from. */
+.mobile-session-sheet {
+  border-top-color: var(--material-edge);
+}
+.pane-tab-overflow-menu {
+  border-color: var(--material-edge);
+}
+/* Reduced transparency: a solid surface, no blur, the theme's own border. */
+@media (prefers-reduced-transparency: reduce) {
+  .mobile-session-sheet,
+  .pane-tab-overflow-menu {
+    background: var(--chrome);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .notif-panel .notif-group-header {
+    background: var(--chrome);
+  }
+  .mobile-session-sheet {
+    border-top-color: var(--border);
+  }
+  .pane-tab-overflow-menu {
+    border-color: var(--border);
+  }
+}
+
+/* ---- Soft edges where content scrolls under a header -------------------- */
+/* The board's lanes (under the filter row) and the lists inside sheets and
+   popovers (under their headers) fade out over their top 16px instead of
+   being cut off by a hard line. Only once they are scrolled: at rest the
+   first row is never masked, so nothing is harder to read; the header's own
+   border stays. Driven by the scroll position itself (a scroll timeline), so
+   nothing runs while the list is still. Where scroll timelines are not
+   supported there is no mask at all. */
+@property --scroll-edge {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes scrollEdgeIn {
+  to {
+    --scroll-edge: 16px;
+  }
+}
+@supports (animation-timeline: scroll()) {
+  .task-board-lanes,
+  .mobile-session-list,
+  .mobile-notif-scroll,
+  .tasks-phone-filter-body,
+  .rail-ws-scroll,
+  .notif-feed-scroll {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-edge));
+    mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-edge));
+    animation: scrollEdgeIn auto linear both;
+    animation-timeline: scroll(self);
+    animation-range: 0 24px;
+  }
+}
+
+/* ---- Layout changes carry their content --------------------------------- */
+/* A box that can hold a terminal is never animated in size: the sidebar and
+   the halves snap to their final width at once (a width animation would
+   re-flow the terminal and resize its PTY every frame). Only what is inside
+   them moves, and only with opacity and translate, which never change a box
+   a terminal measures. */
+@keyframes motionArrive {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+/* A right-sidebar view arriving, or replacing another (RightSidebarPanel keys
+   its body by the view, so each view mounts fresh); between 800 and 1099px
+   that is the right half's view. A session arriving on the right half
+   (App.tsx keys RightHalfPane by the session) does the same. The half itself,
+   like the sidebar, is at its final width at once (right-sidebar.css). */
+.motion-arrive,
+.fold-half-right {
+  animation: motionArrive var(--motion-fade) var(--motion-ease);
+}
+/* The mode switch. Into Tasks the board mounts over the grid and fades in;
+   back to Workspace the grid underneath (which stayed mounted) fades back in,
+   and so does the Dock, which remounts. Opacity only: all three can hold a
+   terminal. The workspace side keys on the mode attribute App.tsx already
+   sets, with its own keyframe name so the animation restarts on each switch
+   back. */
+@keyframes motionModeIn {
+  from {
+    opacity: 0;
+  }
+}
+.kanban-board-overlay {
+  animation: motionFadeIn var(--motion-fade) var(--motion-ease);
+}
+.app[data-mode="workspace"] .dockview-container .dv-shell,
+.app[data-mode="workspace"] .dock {
+  animation: motionModeIn var(--motion-fade) var(--motion-ease);
+}
+
+/* Reduced motion: the layout-change fades become nothing rather than the
+   reset's 0.01ms. Every one of these can hold a terminal, and tokens.css's
+   reset explains why a near-zero transition leaves xterm's WebGL text canvas
+   at half resolution; an animation that short is not worth that risk. */
+@media (prefers-reduced-motion: reduce) {
+  .motion-arrive,
+  .fold-half-right,
+  .kanban-board-overlay,
+  .app[data-mode="workspace"] .dockview-container .dv-shell,
+  .app[data-mode="workspace"] .dock {
+    animation: none;
+  }
+}
+
+/* ---- Rails: the selected entry's marker grows in ------------------------ */
+/* The bar on the rail's outer edge (left-rail.css, right-sidebar.css) grows
+   from its middle when an entry becomes the selected one, instead of
+   appearing (the motion study's rail). Scale only; the entry's own box and
+   the rail never change size. */
+@keyframes motionMarkIn {
+  from {
+    opacity: 0;
+    scale: 1 0;
+  }
+}
+.left-rail-btn.active::before,
+.right-rail-btn.active::after {
+  animation: motionMarkIn var(--motion-fade) var(--motion-ease);
+}

@@ -1,0 +1,286 @@
+/* ============================================================ */
+/* New session launcher (launchers/SessionLauncher.tsx, #3013). */
+/* One body, two shells: a `create-modal` dialog on a fine       */
+/* pointer, a bottom sheet on a coarse one. Under a coarse       */
+/* pointer every target is at least 48px.                        */
+/* ============================================================ */
+.create-modal.session-launcher {
+  width: 640px;
+}
+.session-launcher-body {
+  gap: 0;
+  padding: 0;
+}
+.session-launcher-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 18px 0;
+  min-height: 0;
+}
+.session-launcher-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+}
+.session-launcher-filter .ui-input {
+  flex: 1;
+}
+.session-launcher-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-launcher-heading {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.session-launcher-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.session-launcher-where .cmd-palette-worktree-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.session-launcher-project {
+  min-width: 0;
+  max-width: 100%;
+}
+.session-launcher-hint {
+  font-size: 0.71875rem;
+  color: var(--dim);
+}
+.session-launcher-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+}
+.session-launcher-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 64px;
+  padding: 10px 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.78125rem;
+  cursor: pointer;
+}
+.session-launcher-tile:hover {
+  background: var(--surface-hover);
+}
+.session-launcher-tile.on {
+  border-color: var(--accent-solid);
+  box-shadow: inset 0 0 0 1px var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 10%, var(--surface));
+}
+.session-launcher-tile:focus-visible,
+.session-launcher-row:focus-visible,
+.session-launcher-tabs [role="tab"]:focus-visible,
+.session-launcher-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.session-launcher-tile-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--b);
+}
+.session-launcher-tile-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-launcher-tile-flag {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  font-size: 0.625rem;
+  color: var(--o);
+}
+.session-launcher-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+.session-launcher-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.session-launcher-option-text {
+  display: flex;
+  flex-direction: column;
+}
+.session-launcher-option-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.session-launcher-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.session-launcher-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 4px 6px;
+  border: none;
+  border-bottom: 1px solid var(--border-soft);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+.session-launcher-row:hover {
+  background: var(--surface-hover);
+}
+.session-launcher-row-icon {
+  color: var(--g);
+}
+.session-launcher-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.session-launcher-row-title,
+.session-launcher-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-launcher-row-sub {
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+.session-launcher-row-badge {
+  font-size: 0.625rem;
+  color: var(--muted);
+}
+.session-launcher-error {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.session-launcher-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin: 0 -18px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--chrome);
+}
+.session-launcher-keys {
+  margin-right: auto;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+
+/* Touch: the sheet. */
+.session-launcher-sheet {
+  max-height: min(88dvh, 760px);
+}
+.session-launcher-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.session-launcher-tabs [role="tab"] {
+  flex: 1;
+  min-height: 48px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.session-launcher-tabs [role="tab"].on {
+  color: var(--fg);
+  border-bottom-color: var(--accent-solid);
+}
+.session-launcher-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.session-launcher-existing {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 18px;
+}
+.session-launcher-empty {
+  padding: 12px 0;
+}
+.session-launcher-sheet .session-launcher-tile {
+  min-height: 72px;
+}
+.session-launcher-sheet .session-launcher-row,
+.session-launcher-sheet .session-launcher-option,
+.session-launcher-sheet .cmd-palette-worktree-toggle,
+.session-launcher-sheet .settings-dropdown select,
+.session-launcher-sheet .session-launcher-launch {
+  min-height: 48px;
+}
+.session-launcher-sheet .session-launcher-launch {
+  flex: 1;
+  justify-content: center;
+  font-size: 0.875rem;
+}
+/* The switch's own knob is small; the hit area around it is 48px. */
+.session-launcher-sheet .session-launcher-switch::after {
+  content: "";
+  position: absolute;
+  /* 22px tall, 38px wide (.settings-toggle) -> 48px and more. */
+  inset: -13px;
+}
+.session-launcher-sheet .cmd-palette-worktree-toggle {
+  font-size: 0.8125rem;
+}
+/* The inactive tab panel stays mounted; `display: flex` above would otherwise
+   beat the `hidden` attribute. */
+.session-launcher-panel[hidden] {
+  display: none;
+}

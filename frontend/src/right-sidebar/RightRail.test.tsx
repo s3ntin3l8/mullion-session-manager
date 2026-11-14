@@ -80,14 +80,15 @@ describe("RightRail Tasks tab", () => {
       ] as never,
     });
     const { unmount } = render(<RightRail projectId={4} />);
-    const btn = screen.getByRole("button", { name: "Tasks" });
-    // Only the one unarchived task of this project counts.
+    // Only the one unarchived task of this project counts. The count is in
+    // the button's name too (WCAG 2.5.3, #2886).
+    const btn = screen.getByRole("button", { name: "Tasks, 1" });
     expect(btn.textContent).toBe("1");
     unmount();
 
     useDashboardStore.setState({ taskMasterEnabled: false });
     render(<RightRail projectId={4} />);
-    expect(screen.queryByRole("button", { name: "Tasks" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
   });
 
   it("no longer folds tasks into the GitHub badge", () => {
@@ -102,5 +103,16 @@ describe("RightRail Tasks tab", () => {
     expect(
       screen.getByRole("button", { name: "GitHub" }).querySelector(".right-rail-badge"),
     ).toBeNull();
+  });
+});
+
+describe("RightRail Devices entry (#3012)", () => {
+  it("lists Devices and opens the host-global view without a project", async () => {
+    useDashboardStore.setState({ rightSidebarOpen: false, rightSidebarView: "git" });
+    render(<RightRail projectId={null} />);
+    await userEvent.click(screen.getByRole("button", { name: "Devices" }));
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarView).toBe("devices");
   });
 });
