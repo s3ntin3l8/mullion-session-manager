@@ -261,6 +261,45 @@ describe("PaneActionsMenu", () => {
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
+  // #3053 — a fold half's header has no "x": its menu closes the pane.
+  it("offers Close pane above Kill session only when given onClose, and leaves the session running", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="half-header-btn"
+        onClose={onClose}
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    const close = items.indexOf("Close pane");
+    expect(close).toBeGreaterThanOrEqual(0);
+    expect(close).toBeLessThan(items.findIndex((t) => t?.startsWith("Kill session")));
+    await user.click(screen.getByRole("menuitem", { name: "Close pane" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(deleteSession).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    // A tab strip has its own "x": no Close pane there.
+    rerender(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+    await user.click(screen.getByTitle("More…"));
+    expect(screen.queryByRole("menuitem", { name: "Close pane" })).toBeNull();
+  });
+
   // Issue: narrow headers overflow — fallback for PaneHeaderActions.tsx's
   // own split-right/split-down buttons, which hide entirely below a certain
   // group width; this menu item is what keeps split reachable from a pane

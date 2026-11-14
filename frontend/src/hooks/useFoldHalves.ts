@@ -177,7 +177,22 @@ export function useFoldHalves({
   // the right, or the shown pane closing.
   useEffect(() => {
     if (!active || !dockviewApi || !isRestored()) return;
-    const halves = currentHalves();
+    let halves = currentHalves();
+    // #3053 — the left half is never empty while a pane is open. moveToHalf
+    // refuses a move that would empty it, but closing the last left pane, or
+    // a stale stored assignment on load, can leave every tiled pane on the
+    // right: the right half's shown pane (else its first) moves left. On load
+    // only once the remembered panes are back, which may include a left one.
+    if (reopenedFor.current === activeWorkspaceId) {
+      const tiled = dockviewApi.panels.filter(isTiledPanel);
+      if (tiled.length > 0 && tiled.every((p) => halfOf(halves, p.id) === "right")) {
+        const promote = tiled.find((p) => p.id === halves.shownRight) ?? tiled[0]!;
+        const store = useDashboardStore.getState();
+        store.moveToHalf(promote.id, "left", []);
+        store.setFocusedHalf("left");
+        halves = currentHalves();
+      }
+    }
     const current = dockviewApi.activePanel;
     // The active panel's own group must be the maximized one: a bare
     // setActive() elsewhere can leave another group maximized on screen.
@@ -209,7 +224,7 @@ export function useFoldHalves({
     dockviewApi.maximizeGroup(target);
     useDashboardStore.getState().noteLeftPane(target.id, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- panelsVersion is the layout-change signal
-  }, [active, dockviewApi, panelsVersion, activeWorkspaceId, rightKey, retryTick]);
+  }, [active, dockviewApi, panelsVersion, activeWorkspaceId, rightKey, retryTick, sessionsLoaded]);
 
   // Opening a sidebar view is "using" it, for the phone after folding. Not
   // when unfolding put back a view the fold closed (markViewRestored): the

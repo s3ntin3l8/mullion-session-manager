@@ -336,6 +336,50 @@ describe("useFoldHalves", () => {
     expect(halves().shownRight).toBe("session-2");
   });
 
+  // #3053 — the left half is never empty: closing its last pane moves the
+  // right half's shown session over, rather than leaving a lone session with
+  // no header on the right.
+  it("moves the right half's shown pane left when the left half's last pane closes", () => {
+    useDashboardStore.getState().noteLeftPane("session-1");
+    useDashboardStore
+      .getState()
+      .moveToHalf("session-2", "right", ["session-1", "session-2", "session-3"]);
+    useDashboardStore
+      .getState()
+      .moveToHalf("session-3", "right", ["session-1", "session-2", "session-3"]);
+    const { rerender, props, panels, maximized } = setup({
+      ids: ["session-1", "session-2", "session-3"],
+    });
+    act(() => useDashboardStore.getState().setFocusedHalf("right"));
+    act(() => void panels.splice(0, 1));
+    rerender({ ...props, panelsVersion: 2 });
+    // session-3 was shown on the right (moved there last).
+    expect(halves().right).toEqual(["session-2"]);
+    expect(halves().shownLeft).toBe("session-3");
+    expect(maximized()).toBe("session-3");
+    expect(useDashboardStore.getState().focusedHalf).toBe("left");
+  });
+
+  it("on load, waits for the remembered panes before moving a right pane left", () => {
+    // A stale assignment: the only pane in the restored layout is on the
+    // right, and a remembered left one is still to be reopened.
+    useDashboardStore.getState().moveToHalf("session-2", "right", ["session-1", "session-2"]);
+    useDashboardStore.getState().noteFoldOpen(["session-1", "session-2"]);
+    const { rerender, props, maximized } = setup({ ids: ["session-2"], sessionsLoaded: false });
+    expect(halves().right).toEqual(["session-2"]);
+    rerender({ ...props, sessionsLoaded: true });
+    // session-1 came back on the left: nothing to move.
+    expect(halves().right).toEqual(["session-2"]);
+    expect(maximized()).toBe("session-1");
+  });
+
+  it("on load, moves a stale right-only assignment's pane left", () => {
+    useDashboardStore.getState().moveToHalf("session-2", "right", ["session-1", "session-2"]);
+    setup({ ids: ["session-2"] });
+    expect(halves().right).toEqual([]);
+    expect(halves().shownLeft).toBe("session-2");
+  });
+
   it("does not count a view put back on unfolding as used", () => {
     useDashboardStore.getState().noteLeftPane("session-1");
     setup();

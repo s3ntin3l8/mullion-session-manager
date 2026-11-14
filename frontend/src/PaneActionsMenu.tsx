@@ -16,6 +16,7 @@ import {
   OverflowIcon,
   RenameIcon,
   BotIcon,
+  CloseIcon,
   SplitDownIcon,
   SplitRightIcon,
 } from "./ui/icons.js";
@@ -78,6 +79,9 @@ export interface PaneActionsMenuProps {
   // — both use the same OverflowIcon glyph, only the surrounding button
   // chrome differs by breakpoint.
   triggerClassName: string;
+  // #3053 — "Close pane" above Kill, for a surface with no "x" of its own
+  // (a fold half's header). Detaches the view; the session keeps running.
+  onClose?: () => void;
 }
 
 export function PaneActionsMenu({
@@ -86,6 +90,7 @@ export function PaneActionsMenu({
   containerApi,
   onRename,
   triggerClassName,
+  onClose,
 }: PaneActionsMenuProps) {
   const sessionId = params?.sessionId;
   const session = useDashboardStore((s) => s.sessions.find((sess) => sess.id === sessionId));
@@ -624,6 +629,16 @@ export function PaneActionsMenu({
                 <span style={{ flex: 1 }}>
                   {muted ? "Unmute notifications" : "Mute notifications"}
                 </span>
+              </button>
+            )}
+            {onClose && (
+              <button
+                className="pane-tab-overflow-item"
+                role="menuitem"
+                onClick={() => closeMenuAfterAction(onClose)}
+              >
+                <CloseIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Close pane</span>
               </button>
             )}
             {session && (

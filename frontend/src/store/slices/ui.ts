@@ -52,6 +52,9 @@ import {
   sameSidebarTarget,
 } from "../sidebarHistory.js";
 
+// Right sidebar views that are not reopened on load, though left open (#3053).
+const NOT_RESTORED_OPEN_VIEWS: readonly string[] = ["browser", "dock"];
+
 // State patch that clears the transient drill-ins when the right sidebar is
 // about to start showing `view` from closed or from another view: the GitHub
 // PR/issue for "github", and the selected task on every such change (#2973),
@@ -239,6 +242,11 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     set({ foldHalves: next });
   };
 
+  const storedRightSidebarView = readString(
+    STORAGE_KEYS.rightSidebarView,
+    DEFAULT_RIGHT_SIDEBAR_VIEW,
+  );
+
   return {
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
@@ -251,14 +259,19 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     // flag instead, and below 1100px there is no left sidebar (#3041).
     sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
-    rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
+    rightSidebarView: storedRightSidebarView,
     rightSidebarProjectRequest: null,
     rightSidebarHistoryRequest: null,
     rightSidebarBranchRequest: null,
     rightSidebarPruneRequest: null,
     githubOpenPrByProject: {},
-    // The panel is always docked (#3006), so it comes back the way it was left.
-    rightSidebarOpen: readBool(STORAGE_KEYS.rightSidebarOpen, false),
+    // The panel is always docked (#3006), so it comes back the way it was left,
+    // except a Browser or Dock view (#3053): those are views only on the two
+    // halves, where an open one covers the right half, so a fresh start shows
+    // the half and leaves the view a tap away on the rail.
+    rightSidebarOpen:
+      readBool(STORAGE_KEYS.rightSidebarOpen, false) &&
+      !NOT_RESTORED_OPEN_VIEWS.includes(storedRightSidebarView),
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
     crossLinkReturn: null,
