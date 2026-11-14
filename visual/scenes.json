@@ -229,6 +229,27 @@
       }
     },
     {
+      "name": "phone-more",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": ".phone-mode-more"
+        },
+        {
+          "waitFor": ".phone-more-row"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      }
+    },
+    {
       "name": "session-list",
       "path": "/",
       "tags": ["presentation", "check", "audit"],
@@ -259,7 +280,7 @@
           "wait": 800
         },
         {
-          "click": ".mobile-session-row:has-text(\"mobile demo\")"
+          "click": ".mobile-session-row:has-text(\"mobile-demo.sh\")"
         }
       ],
       "settle": ".xterm-screen",
@@ -280,7 +301,7 @@
           "wait": 800
         },
         {
-          "click": ".mobile-session-row:has-text(\"mobile demo\")"
+          "click": ".mobile-session-row:has-text(\"mobile-demo.sh\")"
         }
       ],
       "settle": ".xterm-screen",
@@ -363,7 +384,7 @@
     {
       "name": "tablet-workspace",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -378,7 +399,7 @@
     {
       "name": "tablet-navigator",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -396,7 +417,7 @@
     {
       "name": "tablet-tasks-list",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -414,7 +435,7 @@
     {
       "name": "tablet-tasks-detail",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -438,7 +459,7 @@
     {
       "name": "tablet-tasks-reopen",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -474,7 +495,7 @@
     {
       "name": "tablet-tasks-board",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -495,7 +516,7 @@
     {
       "name": "tablet-tasks-stacked",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -525,7 +546,7 @@
     {
       "name": "tablet-notifications",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -543,7 +564,7 @@
     {
       "name": "fold-browser-view",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -564,7 +585,7 @@
     {
       "name": "fold-dock-view",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -585,7 +606,7 @@
     {
       "name": "fold-devices-view",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -606,7 +627,7 @@
     {
       "name": "fold-two-halves",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -616,7 +637,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"Add login rate limiting\")"
+          "click": ".session-launcher-row:has-text(\"fake-agent.sh\")"
         },
         {
           "wait": 800
@@ -628,7 +649,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"Dark mode palette\")"
+          "click": ".session-launcher-row:has-text(\"dark-mode-palette.sh\")"
         },
         {
           "wait": 800
@@ -639,7 +660,7 @@
     {
       "name": "fold-view-over-half",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -649,7 +670,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"Add login rate limiting\")"
+          "click": ".session-launcher-row:has-text(\"fake-agent.sh\")"
         },
         {
           "wait": 800
@@ -661,7 +682,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"Dark mode palette\")"
+          "click": ".session-launcher-row:has-text(\"dark-mode-palette.sh\")"
         },
         {
           "wait": 800
