@@ -531,7 +531,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set({ launcherRequest: { target: target ?? null, seq: launcherSeq } });
     },
 
-    closeLauncher: () => {
+    closeLauncher: (seq) => {
+      if (seq !== undefined && get().launcherRequest?.seq !== seq) return;
       set({ launcherRequest: null });
     },
 

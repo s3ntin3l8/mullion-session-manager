@@ -279,3 +279,8 @@
 .session-launcher-sheet .cmd-palette-worktree-toggle {
   font-size: 0.8125rem;
 }
+/* The inactive tab panel stays mounted; `display: flex` above would otherwise
+   beat the `hidden` attribute. */
+.session-launcher-panel[hidden] {
+  display: none;
+}

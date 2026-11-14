@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MutableRefObject, ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { normalizeAgentId } from "../api/index.js";
@@ -74,6 +74,13 @@ export function SessionLauncherHost({
   if (request !== null && request !== shown) setShown(request);
   const suppressRestoreRef = useRef<(() => void) | null>(null);
   const close = () => useDashboardStore.getState().closeLauncher();
+  // A request made (or left open) outside a workspace view is dropped, not
+  // parked: otherwise it would pop up unprompted on the way back.
+  useEffect(() => {
+    if (request !== null && !canLaunchTerminal(viewMode)) {
+      useDashboardStore.getState().closeLauncher(request.seq);
+    }
+  }, [request, viewMode]);
   const pickerPanels = useMemo<PickerPanel[]>(
     () =>
       panels.map((panel) => ({
@@ -110,6 +117,16 @@ export function SessionLauncherHost({
   );
 }
 
+// After a launch (or an Open existing pick) settles: close the launcher and
+// keep focus off the opener — but only if the launcher is still the open the
+// action came from. A launch that outlives its launcher (closed mid-flight,
+// then opened again) must not close the new one or steal its focus restore.
+function finishOpen(seq: number, suppressRestoreRef: MutableRefObject<(() => void) | null>) {
+  if (useDashboardStore.getState().launcherRequest?.seq !== seq) return;
+  suppressRestoreRef.current?.();
+  useDashboardStore.getState().closeLauncher(seq);
+}
+
 interface SurfaceProps {
   onClose: () => void;
   onLaunched: (session: Session, target: LauncherTarget | null) => void;
@@ -137,8 +154,7 @@ function LauncherDialog({
         coarse={false}
         filterRef={filterRef}
         onLaunched={(session) => {
-          suppressRestoreRef.current?.();
-          onClose();
+          finishOpen(request.seq, suppressRestoreRef);
           onLaunched(session, request.target);
         }}
       />
@@ -172,10 +188,6 @@ function LauncherSheet({
   }
   const tabsId = useId();
   const target = request?.target ?? null;
-  const finish = () => {
-    suppressRestoreRef.current?.();
-    onClose();
-  };
   return (
     <BottomSheet
       open={open}
@@ -232,9 +244,12 @@ function LauncherSheet({
           Open existing
         </button>
       </div>
-      {request !== null && tab === "new" && (
+      {/* Both panels stay mounted (the inactive one `hidden`), so switching
+          tabs keeps the New session choices and an in-flight launch's guard. */}
+      {request !== null && (
         <div
           role="tabpanel"
+          hidden={tab !== "new"}
           id={`${tabsId}-new`}
           aria-labelledby={`${tabsId}-new-tab`}
           className="session-launcher-body session-launcher-panel"
@@ -244,15 +259,16 @@ function LauncherSheet({
             key={request.seq}
             coarse
             onLaunched={(session) => {
-              finish();
+              finishOpen(request.seq, suppressRestoreRef);
               onLaunched(session, target);
             }}
           />
         </div>
       )}
-      {request !== null && tab === "open" && (
+      {request !== null && (
         <div
           role="tabpanel"
+          hidden={tab !== "open"}
           id={`${tabsId}-open`}
           aria-labelledby={`${tabsId}-open-tab`}
           className="session-launcher-panel session-launcher-existing"
@@ -260,7 +276,7 @@ function LauncherSheet({
           <OpenExistingList
             panels={panels}
             onOpen={(session) => {
-              finish();
+              finishOpen(request.seq, suppressRestoreRef);
               onOpenSession(session, target);
             }}
           />
@@ -622,9 +638,13 @@ function LauncherNewSession({
         <button
           type="button"
           className="sb-btn sb-btn--primary session-launcher-launch"
-          disabled={!selected || launching}
+          // `aria-disabled`, not `disabled`, while a launch is in flight: a
+          // disabled button drops focus out of the dialog, and a failed launch
+          // would leave Tab and Escape with nothing to act on.
+          disabled={!selected}
+          aria-disabled={launching || undefined}
           onClick={() => {
-            if (selected) launchAgent(selected);
+            if (selected && !launching) launchAgent(selected);
           }}
         >
           {launching ? "Launching…" : selected ? `Launch ${selected.title}` : "Launch"}

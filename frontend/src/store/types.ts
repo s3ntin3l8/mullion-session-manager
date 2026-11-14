@@ -88,15 +88,6 @@ export interface TerminalPrefs {
   scrollback: number;
 }
 
-// A pane's split-right/split-down action (PaneHeaderActions.tsx, a dockview
-// `rightHeaderActionsComponent`) can't receive custom props from App.tsx —
-// dockview owns that component's render — so it signals intent through the
-// store instead (same reason PaneTab.tsx already reads/writes the store
-// directly). App.tsx reacts to a new `splitRequest` by opening the command
-// palette scoped to the reference panel's project; the palette's own launch
-// handler reads it back to decide whether to add the new panel via a normal
-// open-or-focus or as a real split (`position: {referencePanel, direction}`).
-// Cleared on launch or on palette close, whichever comes first.
 // Issue #3013 — an open New session launcher (SessionLauncher.tsx). `target`
 // is where the session should land; today only the fold's two halves give it
 // a meaning (a later slice acts on it), so the launcher stores and passes it
@@ -112,6 +103,15 @@ export interface LauncherRequest {
   seq: number;
 }
 
+// A pane's split-right/split-down action (PaneHeaderActions.tsx, a dockview
+// `rightHeaderActionsComponent`) can't receive custom props from App.tsx —
+// dockview owns that component's render — so it signals intent through the
+// store instead (same reason PaneTab.tsx already reads/writes the store
+// directly). App.tsx reacts to a new `splitRequest` by opening the command
+// palette scoped to the reference panel's project; the palette's own launch
+// handler reads it back to decide whether to add the new panel via a normal
+// open-or-focus or as a real split (`position: {referencePanel, direction}`).
+// Cleared on launch or on palette close, whichever comes first.
 export interface SplitRequest {
   referencePanelId: string;
   direction: "right" | "below";
@@ -858,7 +858,9 @@ export interface UiSlice {
   // gate is applied where the launcher renders (SessionLauncherHost).
   launcherRequest: LauncherRequest | null;
   openLauncher: (target?: LauncherTarget) => void;
-  closeLauncher: () => void;
+  // With a `seq`, closes only that open (a stale launch must not close a
+  // launcher opened after it); without one, closes whatever is open.
+  closeLauncher: (seq?: number) => void;
   // Issue #1429 — a desktop OS notification's onclick opens the session
   // directly (same destination the bell row/phone sheet/push click/deep
   // link all converged on) — but useAttentionNotifications.ts has no

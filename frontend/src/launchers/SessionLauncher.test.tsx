@@ -160,11 +160,14 @@ describe("SessionLauncher — desktop dialog", () => {
     expect(within(dialog).queryByText("Open existing")).toBeNull();
   });
 
-  it("does not open outside a workspace view", () => {
+  it("does not open outside a workspace view, and does not pop up on the way back", () => {
     vi.stubGlobal("fetch", mockFetch());
     useDashboardStore.setState({ viewMode: "kanban" });
     renderHost();
     openLauncher();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(useDashboardStore.getState().launcherRequest).toBeNull();
+    act(() => useDashboardStore.setState({ viewMode: "list" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -235,8 +238,53 @@ describe("SessionLauncher — desktop dialog", () => {
     expect(onLaunched).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
     expect(useDashboardStore.getState().launcherRequest).not.toBeNull();
-    // The in-flight guard resets: the launch can be retried.
-    expect(screen.getByRole("button", { name: "Launch claude" })).toBeEnabled();
+    // The in-flight guard resets: the launch can be retried. Focus stayed on
+    // the button (it is never `disabled`), so Tab and Escape still work.
+    const launchButton = screen.getByRole("button", { name: "Launch claude" });
+    expect(launchButton).toBeEnabled();
+    expect(launchButton).not.toHaveAttribute("aria-disabled");
+    expect(launchButton).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(useDashboardStore.getState().launcherRequest).toBeNull();
+  });
+
+  it("a launch that outlives its launcher does not close one opened after it", async () => {
+    let resolveCreate: (() => void) | null = null;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [CLAUDE, BASH]));
+      if (url.endsWith("/models")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        return new Promise<Response>((resolve) => {
+          resolveCreate = () =>
+            resolve(
+              jsonResponse(201, {
+                id: 42,
+                projectId: PROJECT.id,
+                command: "claude",
+                status: "active",
+              }),
+            );
+        });
+      }
+      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost();
+    openLauncher();
+
+    await user.click(await screen.findByRole("button", { name: "Launch claude" }));
+    await waitFor(() => expect(resolveCreate).not.toBeNull());
+    await user.keyboard("{Escape}");
+    openLauncher();
+    await screen.findByRole("dialog", { name: "New session" });
+
+    await act(async () => resolveCreate!());
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
+    expect(useDashboardStore.getState().launcherRequest).not.toBeNull();
+    expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
   });
 });
 
@@ -544,6 +592,20 @@ describe("SessionLauncher — touch sheet", () => {
     await user.click(screen.getByRole("button", { name: "Launch codex" }));
     await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
     expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
+  });
+
+  it("keeps the New session choices across a tab switch", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    await user.click(await screen.findByRole("radio", { name: "codex" }));
+    await user.click(screen.getByRole("tab", { name: "Open existing" }));
+    expect(screen.queryByRole("radio", { name: "codex" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "New session" }));
+    expect(screen.getByRole("radio", { name: "codex" })).toHaveAttribute("aria-checked", "true");
   });
 
   it("starts each open on New session", async () => {
