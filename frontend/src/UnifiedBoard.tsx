@@ -245,6 +245,8 @@ export function UnifiedBoard({
   const statusSections = useMemo(() => stackSections(visibleTasks), [visibleTasks]);
   const stackedSections = stacked ? statusSections : EMPTY_SECTIONS;
   useEffect(() => {
+    // The rail is not rendered on the phone: nothing to publish for.
+    if (phone) return;
     useDashboardStore.getState().setBoardStatuses(
       statusSections.map((s) => ({
         id: s.id,
@@ -254,7 +256,7 @@ export function UnifiedBoard({
         needsYouCount: s.needsYouCount,
       })),
     );
-  }, [statusSections]);
+  }, [statusSections, phone]);
   useEffect(() => () => useDashboardStore.getState().setBoardStatuses([]), []);
   // A jump to a status while the lanes show: scroll that lane into view. (The
   // stacked board consumes the request itself, StackedBoard.tsx.) A request
@@ -266,13 +268,23 @@ export function UnifiedBoard({
     jumpHandledRef.current = statusJump.nonce;
     if (stacked || phone) return;
     // Optional call: jsdom has no scrollIntoView.
-    rootRef.current
-      ?.querySelector<HTMLElement>(`.kanban-column[data-status="${statusJump.status}"]`)
-      ?.scrollIntoView?.({
-        inline: "start",
-        block: "nearest",
-        behavior: prefersReducedMotion() ? "auto" : "smooth",
-      });
+    // With Group by there is one lane per epic or project, so one column per
+    // status in each: prefer one holding cards over an empty rail chip.
+    const columns = rootRef.current?.querySelectorAll<HTMLElement>(
+      `.kanban-column[data-status="${statusJump.status}"]`,
+    );
+    const target =
+      Array.from(columns ?? []).find(
+        (el) =>
+          !el.classList.contains("kanban-column-is-empty") &&
+          !el.classList.contains("kanban-column-rail"),
+      ) ?? columns?.[0];
+    // Optional call: jsdom has no scrollIntoView.
+    target?.scrollIntoView?.({
+      inline: "start",
+      block: "nearest",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
   }, [statusJump, stacked, phone]);
   const selectedTask =
     selectedTaskId !== null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null;

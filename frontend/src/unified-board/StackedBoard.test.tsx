@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "../UnifiedBoard.js";
 import type { Project, Session, Task } from "../api/index.js";
 import { makeProject, makeTask } from "../test/fixtures.js";
+import { STORAGE_KEYS } from "../lib/persistedState.js";
 
 let tasks: Task[];
 let projects: Project[];
@@ -419,6 +420,36 @@ describe("UnifiedBoard stacked layout", () => {
     act(() => requestStatusJump("reviewing"));
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(scrollIntoView.mock.contexts[0]).toHaveAttribute("data-status", "reviewing");
+  });
+
+  it("with Group by, jumps to the lane's column that holds cards, not an empty chip", () => {
+    localStorage.setItem(STORAGE_KEYS.taskGroupBy, "project");
+    projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
+    tasks = [
+      makeTask({ id: 1, projectId: 1, status: "ready", title: "A" }),
+      makeTask({
+        id: 2,
+        projectId: 2,
+        status: "reviewing",
+        title: "B",
+        approvalState: "awaiting-human",
+      }),
+    ];
+    boardWidth = 900;
+    renderBoard();
+    scrollIntoView.mockClear();
+    act(() => requestStatusJump("reviewing"));
+    const target = scrollIntoView.mock.contexts[0] as HTMLElement;
+    expect(target).toHaveAttribute("data-status", "reviewing");
+    expect(target).not.toHaveClass("kanban-column-rail");
+    expect(target).toHaveTextContent("B");
+    localStorage.removeItem(STORAGE_KEYS.taskGroupBy);
+  });
+
+  it("does not publish statuses on the phone, which has no rail", () => {
+    boardWidth = 900;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+    expect(publishedStatuses).toEqual([]);
   });
 
   it("publishes its statuses, counts and needs-you flags for the rail", () => {

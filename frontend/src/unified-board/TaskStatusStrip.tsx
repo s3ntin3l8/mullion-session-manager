@@ -1,14 +1,5 @@
 import type { TaskStatus } from "../api/index.js";
-
-export interface StatusStripEntry {
-  id: TaskStatus;
-  title: string;
-  count: number;
-  /** A task in this status needs the owner: the entry carries a dot. */
-  needsYou: boolean;
-  /** How many of the status's tasks need the owner (the rail names it). */
-  needsYouCount: number;
-}
+import type { StatusEntry } from "./stackLayout.js";
 
 // The statuses of the stacked board with their counts, each one a jump to
 // that status (#3011). Its own component, fed by props, so the left rail can
@@ -19,7 +10,7 @@ export function TaskStatusStrip({
   onJump,
   label = "Jump to status",
 }: {
-  statuses: readonly StatusStripEntry[];
+  statuses: readonly StatusEntry[];
   onJump: (id: TaskStatus) => void;
   label?: string;
 }) {

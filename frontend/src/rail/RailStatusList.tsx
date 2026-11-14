@@ -6,6 +6,9 @@ import { useDashboardStore } from "../store/index.js";
 // board's own (UnifiedBoard publishes them with its filtered counts, the same
 // ones its stacked sections and strip show), and a tap raises the store's
 // jump request, which the board consumes whichever layout it shows.
+// The rail is 40px wide at 9px text: the long titles get a shorter word.
+const SHORT_LABEL: Partial<Record<string, string>> = { reviewing: "Review", in_progress: "Active" };
+
 export function RailStatusList() {
   const statuses = useDashboardStore((s) => s.boardStatuses);
   if (statuses.length === 0) return null;
@@ -29,7 +32,7 @@ export function RailStatusList() {
             {s.count}
           </span>
           <span className="rail-status-label" aria-hidden="true">
-            {s.title}
+            {SHORT_LABEL[s.id] ?? s.title}
           </span>
           {s.needsYou && <span className="rail-status-dot" aria-hidden="true" />}
         </button>

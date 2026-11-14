@@ -123,6 +123,8 @@ describe("LeftRail in Tasks mode", () => {
       expect(within(list).getByRole("button", { name: "Ready, 1 task" })).toBeInTheDocument();
       expect(within(list).getByRole("button", { name: "Done, 0 tasks" })).toBeInTheDocument();
       expect(list.querySelectorAll(".rail-status-dot")).toHaveLength(1);
+      // The long titles get a shorter visible word; the name stays whole.
+      expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent("Review");
       expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent("2");
     });
 

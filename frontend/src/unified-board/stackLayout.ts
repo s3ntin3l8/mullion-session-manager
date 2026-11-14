@@ -47,6 +47,17 @@ export const STACK_ORDER: readonly TaskStatus[] = (Object.keys(STACK_RANK) as Ta
 
 const COLLAPSED_BY_DEFAULT: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["backlog", "done"]);
 
+/** One status of the board: the entry the strip, the left rail and the sections list. */
+export interface StatusEntry {
+  id: TaskStatus;
+  title: string;
+  count: number;
+  /** A task in this status needs the owner: the entry carries a dot. */
+  needsYou: boolean;
+  /** How many of the status's tasks need the owner (the rail names it). */
+  needsYouCount: number;
+}
+
 export interface StackSection {
   id: TaskStatus;
   title: string;

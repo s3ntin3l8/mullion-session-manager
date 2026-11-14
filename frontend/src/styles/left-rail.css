@@ -558,7 +558,7 @@
   overflow: hidden;
   font-size: 0.5625rem;
   line-height: 1.1;
-  text-overflow: clip;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .rail-status-dot {

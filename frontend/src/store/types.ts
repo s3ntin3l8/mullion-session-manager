@@ -42,7 +42,7 @@ import type {
 } from "../api/index.js";
 import type { GithubIssueUi } from "./githubResources.js";
 import type { ReorderUpdate } from "../reorder.js";
-import type { StatusStripEntry as BoardStatusEntry } from "../unified-board/TaskStatusStrip.js";
+import type { StatusEntry as BoardStatusEntry } from "../unified-board/stackLayout.js";
 import type { KanbanColumnId } from "../kanban.js";
 import type { FoldHalvesState, Half, LastUsed } from "../lib/foldHalves.js";
 
