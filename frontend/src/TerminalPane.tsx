@@ -1085,6 +1085,8 @@ export function TerminalPane(props: {
     const oscColorSubs = OSC_COLOR_IDENTS.map(([ident, key]) =>
       term.parser.registerOscHandler(ident, (data) => {
         if (data !== "?") return false;
+        // Read only: the query is consumed, never answered.
+        if (readOnlyRef.current) return true;
         if (bag.ws?.readyState !== WebSocket.OPEN) return true;
         const hex = term.options.theme?.[key];
         if (typeof hex !== "string") return true;
@@ -1755,16 +1757,19 @@ export function TerminalPane(props: {
     // drains them when the connection is restored — otherwise a theme
     // toggle during a reconnect would be silently lost.
     if (theme !== prevThemeRef.current) {
-      const dec997Notification = theme === "light" ? "\x1b[?997;2n" : "\x1b[?997;1n";
-      const oscPush =
-        `\x1b]10;${xtermTheme.foreground}\x07` +
-        `\x1b]11;${xtermTheme.background}\x07` +
-        dec997Notification;
-      const ws = wsRef.current;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(new TextEncoder().encode(oscPush));
-      } else {
-        pendingOscRef.current = oscPush;
+      // Read only: nothing is written to the PTY, a theme push included.
+      if (!readOnlyRef.current) {
+        const dec997Notification = theme === "light" ? "\x1b[?997;2n" : "\x1b[?997;1n";
+        const oscPush =
+          `\x1b]10;${xtermTheme.foreground}\x07` +
+          `\x1b]11;${xtermTheme.background}\x07` +
+          dec997Notification;
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(new TextEncoder().encode(oscPush));
+        } else {
+          pendingOscRef.current = oscPush;
+        }
       }
       prevThemeRef.current = theme;
     }

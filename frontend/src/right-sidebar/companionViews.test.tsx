@@ -124,5 +124,8 @@ describe("Browser and Dock registration (#3012)", () => {
     render(<RightSidebar tier="desktop" actions={actions} />);
     expect(screen.queryByTestId("browser-view")).toBeNull();
     await waitFor(() => expect(useDashboardStore.getState().rightSidebarOpen).toBe(false));
+    // The sidebar toggle must not reopen on a view that is not here.
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    expect(localStorage.getItem("crs.rightSidebarView")).toContain("git");
   });
 });

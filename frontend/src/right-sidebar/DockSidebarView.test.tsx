@@ -5,11 +5,13 @@ import userEvent from "@testing-library/user-event";
 import { DockSidebarView } from "./DockSidebarView.js";
 import type { RightSidebarActions } from "./views.js";
 import { useDashboardStore } from "../store/index.js";
+import { ApiError } from "../api/index.js";
 import type { GitBranchesResult, Session } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { makeProject, makeSession } from "../test/fixtures.js";
 import { mockFetch } from "../test/mockFetch.js";
 import { resetStore } from "../test/resetStore.js";
+import companionCss from "../styles/companion-views.css?raw";
 
 // The log itself is a TerminalPane; here it is a stand-in that records its
 // props. That the real one does not register as a terminal input target is
@@ -188,6 +190,32 @@ describe("DockSidebarView (#3012)", () => {
     expect(deleteSession).toHaveBeenCalledWith(7);
   });
 
+  it("shows a port-in-use refusal with the holder's two actions", async () => {
+    createSession.mockRejectedValueOnce(
+      new ApiError("Port 5173 is in use by session 12", 409, "port_in_use", {
+        port: 5173,
+        holderSessionId: 12,
+      }),
+    );
+    const requestOpenSession = vi.fn();
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 12, projectId: 1, command: "vite" })],
+      requestOpenSession,
+    });
+    renderView();
+    await userEvent.click(await screen.findByRole("button", { name: /^dev, stopped/ }));
+    const group = screen.getByRole("group", { name: "dev actions" });
+    await userEvent.click(within(group).getByRole("button", { name: "Start" }));
+    expect(await within(group).findByRole("alert")).toHaveTextContent(
+      "Port 5173 is in use by session 12",
+    );
+    await userEvent.click(within(group).getByRole("button", { name: "Open holder" }));
+    expect(requestOpenSession).toHaveBeenCalledWith(12);
+    await userEvent.click(within(group).getByRole("button", { name: "Stop holder and start" }));
+    expect(deleteSession).toHaveBeenCalledWith(12);
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+  });
+
   it("shows a running row's log, read only", async () => {
     useDashboardStore.setState({ sessions: [dockSession(7, null, "npm run dev")] });
     renderView();
@@ -274,6 +302,17 @@ describe("DockSidebarView (#3012)", () => {
     ]);
     await userEvent.click(within(sheet).getByRole("button", { name: "Restart stack" }));
     await waitFor(() => expect(calls).toContain("stack-restart"));
+  });
+
+  it("gives the stack sheet's rows and the view's rows touch size (at least 48px)", () => {
+    const minHeight = (selector: string) => {
+      const rule = companionCss.match(
+        new RegExp(`\\n${selector.replace(".", "\\.")} \\{([^}]*)\\}`),
+      );
+      return Number(/min-height: (\d+)px/.exec(rule?.[1] ?? "")?.[1]);
+    };
+    expect(minHeight(".dock-view-sheet-row")).toBeGreaterThanOrEqual(48);
+    expect(minHeight(".dock-view-row")).toBeGreaterThanOrEqual(48);
   });
 
   it("asks for a second tap before stopping a whole stack", async () => {

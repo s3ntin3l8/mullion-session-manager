@@ -113,14 +113,18 @@ function latestTerm(): MockTerm {
 }
 
 let wsSend: ReturnType<typeof vi.fn>;
+let openHandlers: Array<() => void>;
 function stubSocket() {
   wsSend = vi.fn();
+  openHandlers = [];
   const socket = {
     readyState: 1,
     binaryType: "",
     send: wsSend,
     close: vi.fn(),
-    addEventListener: vi.fn(),
+    addEventListener: vi.fn((type: string, handler: () => void) => {
+      if (type === "open") openHandlers.push(handler);
+    }),
   };
   vi.stubGlobal(
     "WebSocket",
@@ -185,6 +189,35 @@ describe("TerminalPane readOnly (#3012)", () => {
     wsSend.mockClear();
     onData("rm -rf /\r");
     expect(wsSend).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing but resizes to the PTY: no theme push, no colour reply", () => {
+    useDashboardStore.setState({ theme: "dark" });
+    renderPane({ readOnly: true });
+    act(() => openHandlers.forEach((open) => open()));
+    act(() => useDashboardStore.setState({ theme: "light" }));
+    const term = latestTerm() as MockTerm & {
+      parser: { registerOscHandler: ReturnType<typeof vi.fn> };
+    };
+    // A program asking for the background colour gets no answer.
+    const osc11 = term.parser.registerOscHandler.mock.calls.find((c) => c[0] === 11)!;
+    expect((osc11[1] as (data: string) => boolean)("?")).toBe(true);
+    // Every frame sent since mount is a JSON control message (a resize),
+    // never bytes for the PTY.
+    const frames = wsSend.mock.calls.map((c) => c[0] as unknown);
+    expect(frames.length).toBeGreaterThan(0);
+    for (const frame of frames) {
+      expect(typeof frame).toBe("string");
+      expect(JSON.parse(frame as string)).toMatchObject({ type: "resize" });
+    }
+  });
+
+  it("pushes the theme to the PTY without readOnly (the control)", () => {
+    useDashboardStore.setState({ theme: "dark" });
+    renderPane();
+    act(() => openHandlers.forEach((open) => open()));
+    act(() => useDashboardStore.setState({ theme: "light" }));
+    expect(wsSend.mock.calls.some((c) => typeof c[0] !== "string")).toBe(true);
   });
 
   it("asks for no on-screen keyboard and accepts no text", () => {

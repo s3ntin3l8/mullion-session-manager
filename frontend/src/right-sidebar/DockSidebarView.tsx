@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DockControl } from "../api/index.js";
 import { TerminalPane } from "../TerminalPane.js";
+import { useDashboardStore } from "../store/index.js";
 import { isStartable } from "../dockerServiceStatus.js";
 import { dockRowKey, imagePillLabel } from "../dock/dockHelpers.js";
 import { useDockProject } from "../dock/useDockProject.js";
@@ -308,7 +309,13 @@ function StackSheet({
 }
 
 export function DockSidebarView({ projectId, actions }: RightSidebarViewProps) {
-  const dock = useDockProject(projectId, { autoAttach: false });
+  // "Open holder" on a port-in-use row opens the session that holds the port,
+  // the way the other sidebar views open a session (the store's request,
+  // which App turns into a pane).
+  const dock = useDockProject(projectId, {
+    autoAttach: false,
+    onOpenSession: (session) => useDashboardStore.getState().requestOpenSession(session.id),
+  });
   const {
     configuredControls,
     ungroupedDockerControls,

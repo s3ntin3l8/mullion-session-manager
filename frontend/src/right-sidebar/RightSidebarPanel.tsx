@@ -3,6 +3,8 @@ import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
 import { useCheckoutTarget } from "../hooks/useCheckoutTarget.js";
+import { useDashboardStore } from "../store/index.js";
+import { DEFAULT_RIGHT_SIDEBAR_VIEW } from "../store/constants.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 import {
   SidebarRepoTitleContext,
@@ -25,10 +27,13 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
   // A view that does not exist in this band (Browser and Dock from 1100px)
   // can still be the persisted one, or stay open across a resize. Its rail
   // button is gone, so nothing could close it: close it here instead of
-  // rendering a view the layout has no place for.
+  // rendering a view the layout has no place for, and move the stored view
+  // back to the default, or the sidebar toggle would reopen on it.
   const inBand = viewInBand(view, useCurrentLayoutBand());
   useEffect(() => {
-    if (!inBand) onClose();
+    if (inBand) return;
+    useDashboardStore.getState().openRightSidebarView(DEFAULT_RIGHT_SIDEBAR_VIEW);
+    onClose();
   }, [inBand, onClose]);
   const { checkoutSessionId, choice } = useCheckoutTarget(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
