@@ -64,13 +64,18 @@ export function LeftRail({
           onClick={() => setViewMode("list")}
         >
           <GridIcon size={17} />
-          <span className="left-rail-label">Work</span>
+          <span className="left-rail-label" aria-hidden="true">
+            Work
+          </span>
         </button>
         <button
           type="button"
           className={`left-rail-btn left-rail-mode${tasksMode ? " active" : ""}`}
           aria-pressed={tasksMode}
-          aria-label={needsYou > 0 ? `Tasks, ${needsYouText}` : "Tasks"}
+          // A stable name, so voice control and screen readers find "Tasks"
+          // whatever the count; the count is the button's description.
+          aria-label="Tasks"
+          aria-describedby={needsYou > 0 ? "left-rail-needs-you" : undefined}
           title={
             needsYou > 0 ? `Tasks: ${needsYouText} (Ctrl/⌘ + Alt + O)` : "Tasks (Ctrl/⌘ + Alt + O)"
           }
@@ -83,6 +88,11 @@ export function LeftRail({
           {needsYou > 0 && (
             <span className="left-rail-badge" aria-hidden="true">
               {needsYou > 99 ? "99+" : needsYou}
+            </span>
+          )}
+          {needsYou > 0 && (
+            <span id="left-rail-needs-you" className="visually-hidden">
+              {needsYouText}
             </span>
           )}
         </button>

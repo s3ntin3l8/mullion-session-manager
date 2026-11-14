@@ -127,7 +127,8 @@ describe("LeftRail needs-you count", () => {
     });
     const { container } = renderRail();
     const tasks = modeButton(/^Tasks/);
-    expect(tasks).toHaveAccessibleName("Tasks, 2 need you");
+    expect(tasks).toHaveAccessibleName("Tasks");
+    expect(tasks).toHaveAccessibleDescription("2 need you");
     expect(tasks).toHaveAttribute("title", expect.stringContaining("2 need you"));
     expect(container.querySelector(".left-rail-badge")).toHaveTextContent("2");
   });
@@ -136,13 +137,14 @@ describe("LeftRail needs-you count", () => {
     useDashboardStore.setState({ tasks: [makeTask({ id: 3, status: "in_progress" })] });
     const { container } = renderRail();
     expect(modeButton(/^Tasks/)).toHaveAccessibleName("Tasks");
+    expect(modeButton(/^Tasks/)).not.toHaveAttribute("aria-describedby");
     expect(container.querySelector(".left-rail-badge")).toBeNull();
     act(() =>
       useDashboardStore.setState({
         tasks: [makeTask({ id: 3, status: "failed", failureReason: "boom" })],
       }),
     );
-    expect(modeButton(/^Tasks/)).toHaveAccessibleName("Tasks, 1 needs you");
+    expect(modeButton(/^Tasks/)).toHaveAccessibleDescription("1 needs you");
     expect(modeButton(/^Tasks/)).toHaveAttribute("title", expect.stringContaining("1 needs you"));
   });
 
