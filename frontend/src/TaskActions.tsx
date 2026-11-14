@@ -14,6 +14,7 @@ import {
 } from "./unified-board/awaitingMerge.js";
 import { taskReReviewEligible } from "./github/prNextStep.js";
 import { parseWorkflowChange } from "./workflowChange.js";
+import { ConfirmButton } from "./ui/ConfirmButton.js";
 
 // What each review action does, said once for the buttons' tooltips and the
 // confirm step's hint — the three of them are easy to confuse.
@@ -47,12 +48,18 @@ const GIVE_UP_HINT =
 export function TaskActions({
   task,
   overflow = false,
+  confirmApprove = false,
 }: {
   task: Task;
   /** Epic #2847: keep the primary action inline and put the rest (Re-review,
    * Reject, Give up, Move to Backlog) behind a `⋯` menu, as the shared status
    * strip in the GitHub sidebar does. Same buttons, same handlers. */
   overflow?: boolean;
+  /** #3011 — Approve sits behind a confirm step (the first press arms it, the
+   * second approves), like killing a session. The right sidebar's task detail
+   * asks for it: from 700px that is where every task opens, one tap away from
+   * a card. */
+  confirmApprove?: boolean;
 }) {
   const {
     taskMasterEnabled,
@@ -334,40 +341,54 @@ export function TaskActions({
     );
   }
 
+  const approve = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await approveTask(task.id);
+    } catch (err) {
+      // #1020 — branch on the 409's machine-readable `code` (per
+      // api/client.ts's guidance), not the message text. Only the
+      // tracking-epic warning surfaces the advisory confirmation; any
+      // other 409 falls through to the generic error path.
+      if (
+        err instanceof ApiError &&
+        err.statusCode === 409 &&
+        err.code === "tracking-epic-with-open-sub-issues"
+      ) {
+        setTrackingEpicWarning(err.message);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Failed to approve task");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="task-detail-actions">
-      {!parseWorkflowChange(task.workflowChange) && (
-        <button
-          className="notif-gate-btn notif-gate-approve"
-          disabled={submitting || !taskMasterEnabled}
-          title={APPROVE_HINT}
-          onClick={async () => {
-            setSubmitting(true);
-            setError(null);
-            try {
-              await approveTask(task.id);
-            } catch (err) {
-              // #1020 — branch on the 409's machine-readable `code` (per
-              // api/client.ts's guidance), not the message text. Only the
-              // tracking-epic warning surfaces the advisory confirmation; any
-              // other 409 falls through to the generic error path.
-              if (
-                err instanceof ApiError &&
-                err.statusCode === 409 &&
-                err.code === "tracking-epic-with-open-sub-issues"
-              ) {
-                setTrackingEpicWarning(err.message);
-              } else {
-                setError(err instanceof ApiError ? err.message : "Failed to approve task");
-              }
-            } finally {
-              setSubmitting(false);
-            }
-          }}
-        >
-          Approve task
-        </button>
-      )}
+      {!parseWorkflowChange(task.workflowChange) &&
+        (confirmApprove ? (
+          <ConfirmButton
+            className="notif-gate-btn notif-gate-approve"
+            variant="neutral"
+            disabled={submitting || !taskMasterEnabled}
+            title={APPROVE_HINT}
+            armedLabel="Confirm approve"
+            onConfirm={() => void approve()}
+          >
+            Approve task
+          </ConfirmButton>
+        ) : (
+          <button
+            className="notif-gate-btn notif-gate-approve"
+            disabled={submitting || !taskMasterEnabled}
+            title={APPROVE_HINT}
+            onClick={() => void approve()}
+          >
+            Approve task
+          </button>
+        ))}
       {/* Issue #1345 — visible only for exactly the state the backend
           route will actually accept (taskReReviewEligible mirrors its
           checks): a finished review of any verdict, with its findings

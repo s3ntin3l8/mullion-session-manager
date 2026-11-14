@@ -34,6 +34,7 @@ export function TaskColumn({
   loading = false,
   rail = false,
   selectedTaskId = null,
+  headless = false,
 }: {
   title: string;
   tasks: Task[];
@@ -61,6 +62,9 @@ export function TaskColumn({
   rail?: boolean;
   // The task the detail view is showing; its card is ringed.
   selectedTaskId?: number | null;
+  // The stacked board's sections draw their own header (title, count, the
+  // needs-you dot, the fold), so the column renders its body only.
+  headless?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
   // Which blocked stacks the user has opened, by stack key. Local to the column: a
@@ -205,7 +209,7 @@ export function TaskColumn({
     <div
       className={`kanban-column${tasks.length === 0 && !pending ? " kanban-column-is-empty" : ""}`}
     >
-      {header}
+      {!headless && header}
       <div
         className={`kanban-column-body${dropTarget ? " kanban-card-drop-target" : ""}`}
         onDragOver={(e) => {

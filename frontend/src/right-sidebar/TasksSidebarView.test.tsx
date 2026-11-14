@@ -26,6 +26,25 @@ const task = (o: Partial<Task>): Task =>
   }) as Task;
 
 const actions = { onOpenTasks: vi.fn() } as unknown as RightSidebarActions;
+
+// A window of the fold's 851px, by matchMedia (the tablet tier, the rails band).
+function stubTablet() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches:
+        (!/min-width: ([\d.]+)px/.exec(query) ||
+          851 >= Number(/min-width: ([\d.]+)px/.exec(query)![1])) &&
+        (!/max-width: ([\d.]+)px/.exec(query) ||
+          851 <= Number(/max-width: ([\d.]+)px/.exec(query)![1])) &&
+        query.includes("width"),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
+
 const renderView = () => render(<TasksSidebarView projectId={4} actions={actions} />);
 
 beforeEach(() => {
@@ -211,6 +230,18 @@ describe("TasksSidebarView", () => {
     await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Open task board" }));
     expect(actions.onOpenTasks).toHaveBeenCalled();
+  });
+
+  // #3011 — on the tablet tier the sidebar's detail is the one task detail:
+  // there is no docked panel to pop a task out to.
+  it("offers no pop-out on the tablet tier", () => {
+    stubTablet();
+    try {
+      renderView();
+      expect(screen.queryByRole("button", { name: "Pop out to a docked panel" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("refreshes tasks from the header", async () => {

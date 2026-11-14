@@ -512,3 +512,50 @@ describe("TaskDetailView", () => {
     expect(screen.getByText("IN PROGRESS")).toBeTruthy();
   });
 });
+
+// A window of the fold's 851px, by matchMedia (the tablet tier, the rails band).
+function stubTablet() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches:
+        (!/min-width: ([\d.]+)px/.exec(query) ||
+          851 >= Number(/min-width: ([\d.]+)px/.exec(query)![1])) &&
+        (!/max-width: ([\d.]+)px/.exec(query) ||
+          851 <= Number(/max-width: ([\d.]+)px/.exec(query)![1])) &&
+        query.includes("width"),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
+
+describe("TaskDetailView in the right sidebar from 700px (#3011)", () => {
+  it("puts Approve behind a confirm step: the first press arms, the second approves", async () => {
+    const user = userEvent.setup();
+    const approveTask = vi.fn().mockResolvedValue({});
+    const t = task({ status: "reviewing" });
+    setTasks([t], { approveTask });
+    render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
+    expect(approveTask).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Confirm approve/ }));
+    expect(approveTask).toHaveBeenCalledWith(t.id);
+  });
+
+  it("offers the docked-panel pop-out from 1100px only", () => {
+    const t = task({ status: "ready" });
+    setTasks([t]);
+    const { unmount } = render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Pop out to a docked panel" })).toBeInTheDocument();
+    unmount();
+    stubTablet();
+    try {
+      render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Pop out to a docked panel" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
