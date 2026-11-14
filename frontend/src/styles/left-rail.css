@@ -419,11 +419,13 @@
   background: var(--seg);
   color: var(--fg);
 }
-.rail-ws-row:disabled {
+.rail-ws-row:disabled,
+.rail-ws-row[aria-disabled="true"] {
   opacity: 0.45;
   cursor: default;
 }
-.rail-ws-row:disabled:hover {
+.rail-ws-row:disabled:hover,
+.rail-ws-row[aria-disabled="true"]:hover {
   background: transparent;
 }
 .rail-ws-row.danger {
@@ -462,6 +464,7 @@
   border-bottom: 1px solid var(--border);
 }
 .rail-ws-manage-title {
+  color: var(--fg);
   flex: 1;
   min-width: 0;
   display: flex;

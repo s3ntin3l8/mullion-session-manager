@@ -1,4 +1,4 @@
-import { useContext, useId, useState } from "react";
+import { useContext, useId, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Session } from "../api/index.js";
 import { CreateProjectModal } from "../CreateProjectModal.js";
@@ -59,6 +59,9 @@ export function LauncherProjectPicker({
   const [modal, setModal] = useState<"edit" | "create" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [pulling, setPulling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const manageBtnRef = useRef<HTMLButtonElement>(null);
+  const addBtnRef = useRef<HTMLButtonElement>(null);
   const [discoverCollapsed, setDiscoverCollapsed] = useState(false);
   const ids = useId();
 
@@ -94,6 +97,7 @@ export function LauncherProjectPicker({
       <span className={`launcher-project-tools${coarse ? " coarse" : ""}`}>
         {project && (
           <button
+            ref={manageBtnRef}
             type="button"
             className="launcher-project-btn"
             aria-label={`Manage ${project.name}`}
@@ -106,6 +110,7 @@ export function LauncherProjectPicker({
           </button>
         )}
         <button
+          ref={addBtnRef}
           type="button"
           className="launcher-project-btn launcher-project-add"
           aria-expanded={panel === "add"}
@@ -143,9 +148,12 @@ export function LauncherProjectPicker({
               <button
                 type="button"
                 className="launcher-project-row"
-                disabled={gitPullState(project, gitStatus).disabled || pulling}
+                // aria-disabled, not disabled: a pull that leaves nothing to
+                // pull must not drop keyboard focus out of the launcher.
+                aria-disabled={gitPullState(project, gitStatus).disabled || pulling || undefined}
                 title={gitPullState(project, gitStatus).title}
                 onClick={async () => {
+                  if (gitPullState(project, gitStatus).disabled || pulling) return;
                   setMessage(null);
                   setPulling(true);
                   const error = await pullProject(project.id);
@@ -161,25 +169,33 @@ export function LauncherProjectPicker({
                 className="launcher-project-row"
                 armedLabel={deleteArmLabel}
                 onConfirm={async () => {
+                  // One delete at a time: a second confirm while the first is
+                  // in flight would send another DELETE for the same project.
+                  if (deleting) return;
+                  setDeleting(true);
                   setMessage(null);
-                  const deleting = project;
+                  const removed = project;
                   const error = await deleteProjectAndEndSessions(
-                    deleting.id,
+                    removed.id,
                     projectSessions,
                     actions.onSessionEnded,
                   );
+                  setDeleting(false);
                   if (error !== null) {
                     setMessage(error);
                     return;
                   }
                   const next =
-                    useDashboardStore.getState().projects.find((p) => p.id !== deleting.id) ?? null;
+                    useDashboardStore.getState().projects.find((p) => p.id !== removed.id) ?? null;
                   onChange(next?.id ?? null);
                   setPanel(null);
+                  // The panel (and the focused button) is gone: the next
+                  // project's "⋯", or "Add project" when none is left.
+                  requestAnimationFrame(() => (manageBtnRef.current ?? addBtnRef.current)?.focus());
                 }}
               >
                 <CloseIcon size={14} aria-hidden="true" />
-                Delete project
+                {deleting ? "Deleting…" : "Delete project"}
               </ConfirmButton>
             </>
           )}

@@ -104,7 +104,13 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     await user.click(within(list).getByRole("button", { name: "Manage Alpha" }));
     const manage = within(list).getByRole("group", { name: "Manage Alpha" });
     expect(within(manage).getByText("1 of 2, no group")).toBeInTheDocument();
-    expect(within(manage).getByRole("button", { name: "Move up" })).toBeDisabled();
+    expect(within(manage).getByRole("button", { name: "Move up" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    // Inert, not disabled: nothing happens, and focus is not dropped.
+    await user.click(within(manage).getByRole("button", { name: "Move up" }));
+    expect(actions.reorderWorkspaces).not.toHaveBeenCalled();
     await user.click(within(manage).getByRole("button", { name: "Move down" }));
     expect(actions.reorderWorkspaces).toHaveBeenLastCalledWith(
       expect.arrayContaining([
@@ -128,14 +134,36 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     render(<App />);
     await user.click(chip());
     const list = screen.getByRole("dialog", { name: "Workspaces" });
+    actions.deleteWorkspace.mockImplementation(async (id: number) => {
+      useDashboardStore.setState({
+        workspaces: useDashboardStore.getState().workspaces.filter((w) => w.id !== id),
+      });
+    });
     await user.click(within(list).getByRole("button", { name: "Manage Beta" }));
     const del = within(list).getByRole("button", { name: "Delete workspace" });
     await user.click(del);
     expect(actions.deleteWorkspace).not.toHaveBeenCalled();
     await user.click(within(list).getByRole("button", { name: /Click again to delete/ }));
     expect(actions.deleteWorkspace).toHaveBeenCalledWith(2);
-    // Back on the list.
-    expect(within(list).getByRole("searchbox", { name: "Search workspaces" })).toBeInTheDocument();
+    // Back on the list; its "⋯" went with the workspace, so the search box.
+    await waitFor(() =>
+      expect(within(list).getByRole("searchbox", { name: "Search workspaces" })).toHaveFocus(),
+    );
+  });
+
+  it("goes back one step from a rename with the Back button", async () => {
+    stubPxWidth(1000);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(chip());
+    const list = screen.getByRole("dialog", { name: "Workspaces" });
+    await user.click(within(list).getByRole("button", { name: "Manage Alpha" }));
+    await user.click(within(list).getByRole("button", { name: "Rename" }));
+    await user.click(within(list).getByRole("button", { name: "Back" }));
+    // The actions again, not the list.
+    expect(within(list).getByRole("button", { name: "Move to group" })).toBeInTheDocument();
+    await user.click(within(list).getByRole("button", { name: "Back to workspaces" }));
+    expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus();
   });
 
   it("renames and deletes a group, and opens New group", async () => {
@@ -186,6 +214,7 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
       workspaces: [makeWorkspace({ id: 1, name: "Alpha" })],
       activeWorkspaceId: 1,
       projects: [MULLION],
+      gitStatuses: {},
       refreshProjects: vi.fn().mockResolvedValue(undefined),
     });
   });
@@ -254,7 +283,10 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
     const panel = within(launcher).getByRole("group", { name: "Manage mullion" });
     // Nothing to pull without a git status.
-    expect(within(panel).getByRole("button", { name: "Git pull" })).toBeDisabled();
+    expect(within(panel).getByRole("button", { name: "Git pull" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     await user.click(within(panel).getByRole("button", { name: "Edit" }));
     const modal = await screen.findByRole("dialog", { name: "Edit project" });
     const name = within(modal).getByDisplayValue("mullion");
@@ -266,6 +298,42 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     expect(updateProject.mock.calls[0][1]).toMatchObject({ name: "mullion-core" });
     // The launcher is still open behind it.
     expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
+  });
+
+  it("pulls the selected project and says how it went", async () => {
+    stubPxWidth(1000);
+    stubFetch();
+    const pullProjectGit = vi
+      .fn()
+      .mockResolvedValueOnce({ pulled: true })
+      .mockResolvedValueOnce({ pulled: false, reason: "dirty-tree" });
+    useDashboardStore.setState({
+      pullProjectGit,
+      refreshGitStatuses: vi.fn().mockResolvedValue(undefined),
+      refreshGitRefs: vi.fn().mockResolvedValue(undefined),
+      gitStatuses: {
+        5: {
+          branch: "main",
+          files: [],
+          isClean: true,
+          hasConflicts: false,
+          ahead: 0,
+          behind: 2,
+        } as never,
+      },
+    });
+    const user = userEvent.setup();
+    const launcher = await openLauncher();
+    await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
+    const pull = within(launcher).getByRole("button", { name: "Git pull" });
+    expect(pull).toHaveAttribute("title", "Pull 2 commits from tracking branch");
+    await user.click(pull);
+    expect(pullProjectGit).toHaveBeenCalledWith(5);
+    expect(await within(launcher).findByRole("status")).toHaveTextContent("Pulled.");
+    await user.click(within(launcher).getByRole("button", { name: "Git pull" }));
+    await waitFor(() =>
+      expect(within(launcher).getByRole("status")).toHaveTextContent(/uncommitted changes/),
+    );
   });
 
   it("deletes the selected project after a confirming click and selects another", async () => {
@@ -285,6 +353,10 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     expect(deleteProject).toHaveBeenCalledWith(5);
     await waitFor(() =>
       expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("6"),
+    );
+    // Focus lands on the next project's "⋯", not on <body>.
+    await waitFor(() =>
+      expect(within(launcher).getByRole("button", { name: "Manage runway" })).toHaveFocus(),
     );
   });
 });

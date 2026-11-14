@@ -76,20 +76,19 @@ export function gitPullState(
 export async function pullProject(projectId: number): Promise<string | null> {
   try {
     const result = await useDashboardStore.getState().pullProjectGit(projectId);
-    if (!result.pulled) {
-      // No `&& result.reason` guard — formatPullReasonMessage's default
-      // branch covers `{pulled: false}` without a reason, so a missing-reason
-      // response never falls through silently.
-      return formatPullReasonMessage(result.reason, result.detail);
-    }
-    // Other pull surfaces invalidate refs too (Hermes review, PR #1366):
-    // without this, branch labels and diff stats stay stale until their own
-    // poll tick lands.
+    // No `&& result.reason` guard — formatPullReasonMessage's default branch
+    // covers `{pulled: false}` without a reason, so a missing-reason response
+    // never falls through silently.
+    const message = result.pulled ? null : formatPullReasonMessage(result.reason, result.detail);
+    // Refreshed whether or not it pulled: a refused pull often means the
+    // cached status was stale. Other pull surfaces invalidate refs too (Hermes
+    // review, PR #1366): without this, branch labels and diff stats stay
+    // stale until their own poll tick lands.
     await Promise.all([
       useDashboardStore.getState().refreshGitStatuses(),
       useDashboardStore.getState().refreshGitRefs([projectId]),
     ]);
-    return null;
+    return message;
   } catch (err) {
     return err instanceof Error ? err.message : "Pull failed — try again.";
   }

@@ -260,7 +260,11 @@ export function WorkspaceListContent({
     if (manage !== null || returnFocusRef.current === null) return;
     const key = returnFocusRef.current;
     returnFocusRef.current = null;
-    listRef.current?.querySelector<HTMLElement>(`[data-manage="${key}"]`)?.focus();
+    // A deleted workspace or group took its "⋯" with it: the search box then.
+    const target =
+      listRef.current?.querySelector<HTMLElement>(`[data-manage="${key}"]`) ??
+      listRef.current?.querySelector<HTMLElement>(".rail-ws-search");
+    target?.focus();
   }, [manage]);
 
   const openManage = (target: ManageTarget) => {

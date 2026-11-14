@@ -49,10 +49,11 @@
   flex-shrink: 0;
   color: var(--muted);
 }
-.launcher-project-row:hover:not(:disabled) {
+.launcher-project-row:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--seg);
 }
-.launcher-project-row:disabled {
+.launcher-project-row:disabled,
+.launcher-project-row[aria-disabled="true"] {
   opacity: 0.45;
   cursor: default;
 }

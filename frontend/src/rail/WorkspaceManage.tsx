@@ -49,7 +49,9 @@ export function WorkspaceManage({
   useEffect(() => {
     if (target.step === "rename") return; // the field takes focus itself
     rootRef.current
-      ?.querySelector<HTMLElement>(".rail-ws-manage-body button:not(:disabled)")
+      ?.querySelector<HTMLElement>(
+        ".rail-ws-manage-body button:not(:disabled):not([aria-disabled='true'])",
+      )
       ?.focus();
   }, [target.kind, target.id, target.step]);
 
@@ -153,6 +155,9 @@ export function WorkspaceManage({
           className="rail-ws-back"
           aria-label={target.step === "menu" ? "Back to workspaces" : "Back"}
           title={target.step === "menu" ? "Back to workspaces" : "Back"}
+          // Keeps a rename field's focus: its blur would commit and leave the
+          // rename step before this click, which would then step back twice.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={stepBack}
         >
           <ChevronLeftIcon size={15} aria-hidden="true" />
@@ -243,8 +248,12 @@ function workspaceBody({
       <button
         type="button"
         className="rail-ws-row"
-        disabled={index <= 0}
-        onClick={() => move(workspace.groupId, index - 1)}
+        // aria-disabled, not disabled: the move that reaches the end must not
+        // drop keyboard focus out of the popover from the button just pressed.
+        aria-disabled={index <= 0 || undefined}
+        onClick={() => {
+          if (index > 0) move(workspace.groupId, index - 1);
+        }}
       >
         <ChevronDownIcon size={14} aria-hidden="true" style={{ rotate: "180deg" }} />
         <span className="rail-ws-row-name">Move up</span>
@@ -252,8 +261,10 @@ function workspaceBody({
       <button
         type="button"
         className="rail-ws-row"
-        disabled={index < 0 || index >= bucketLength - 1}
-        onClick={() => move(workspace.groupId, index + 1)}
+        aria-disabled={index < 0 || index >= bucketLength - 1 || undefined}
+        onClick={() => {
+          if (index >= 0 && index < bucketLength - 1) move(workspace.groupId, index + 1);
+        }}
       >
         <ChevronDownIcon size={14} aria-hidden="true" />
         <span className="rail-ws-row-name">Move down</span>

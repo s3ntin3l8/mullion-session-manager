@@ -18,7 +18,8 @@ export function ThemedPortal({ children }: { children: ReactNode }) {
   return createPortal(
     <div
       className={themeClassName(theme)}
-      style={{ display: "contents" }}
+      // Text colour comes from `.app` in the tree it left.
+      style={{ display: "contents", color: "var(--fg)" }}
       onKeyDown={(e) => e.stopPropagation()}
     >
       {children}
