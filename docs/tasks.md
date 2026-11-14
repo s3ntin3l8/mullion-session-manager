@@ -369,12 +369,18 @@ unresolved dependency state.
 The task board and the session board (originally two separate surfaces —
 issue #211's session-only Kanban view and this section's own dockview
 panel) have merged into one unified Kanban view (`frontend/src/
-UnifiedBoard.tsx`). Command Palette → Integrations → **Tasks**, the
-sidebar's own Tasks nav entry (badge count of tasks needing a decision
-right now — `ready` + `reviewing`), or the list/Kanban toggle in the
-toolbar all switch to it — it's an overlay over the dockview grid, not a
-panel, so toggling back to list view instantly restores whatever was
-tiled underneath. Task status columns are the board; a task with a linked
+UnifiedBoard.tsx`). It is the app's **Tasks mode**; the grid is
+**Workspace mode** (`#3009`). From 700px wide the left rail's mode switch
+(the Tasks entry shows how many tasks need you, as the board's "Needs me"
+filter counts them), Ctrl/⌘ + Alt + **O**, Command Palette → Integrations →
+**Tasks** and the sidebar's own Tasks nav entry all switch to it. Tasks mode
+shows the board full size beside the right sidebar, without the left sidebar
+or the Dock. It's an overlay over the dockview grid, not a panel, so switching
+back to Workspace instantly restores whatever was tiled underneath. The last
+mode is remembered per device. A task's worker or reviewer pill in the
+sidebar's task detail opens that session in Workspace mode and keeps the task
+open in the sidebar. The phone keeps its top bar and its navigator's Tasks
+tab. Task status columns are the board; a task with a linked
 worker or review session renders that session's live status nested on its
 own card, and any session not owned by a task collects in the **ad-hoc
 sessions strip** beneath the columns (`#2845`,

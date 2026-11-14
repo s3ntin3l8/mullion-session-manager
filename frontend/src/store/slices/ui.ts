@@ -505,6 +505,15 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set({ viewMode: value });
     },
 
+    toggleViewMode: () => {
+      get().setViewMode(get().viewMode === "kanban" ? "list" : "kanban");
+    },
+
+    openSessionInWorkspace: (sessionId) => {
+      get().setViewMode("list");
+      get().requestOpenSession(sessionId);
+    },
+
     setHierarchicalView: (value) => {
       writeBool(STORAGE_KEYS.hierarchicalView, value);
       set({ hierarchicalView: value });

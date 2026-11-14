@@ -231,6 +231,18 @@ export const GITHUB_VIEW_SHORTCUT: ShortcutDefinition = {
   binding: { kind: "either-mod", code: "KeyH", alt: "require", shift: "forbid" },
 };
 
+// The mode switch (#3009). O, not T: Ctrl+Alt+T opens a terminal on most Linux
+// desktops before the browser sees it, and ⌥⌘M/⌥⌘J/⌥⌘L/⌥⌘I are taken by the
+// browser on macOS. Same Ctrl/Cmd-required family as the sidebar chords, so a
+// bare Alt+O still reaches the shell.
+export const MODE_SWITCH_SHORTCUT: ShortcutDefinition = {
+  id: "mode-switch",
+  action: "Workspace / Tasks",
+  detail: "Switch between Workspace and Tasks. Not on phone, which has its own mode switch.",
+  scope: "app",
+  binding: { kind: "either-mod", code: "KeyO", alt: "require", shift: "forbid" },
+};
+
 export const DISMISS_SHORTCUT: ShortcutDefinition = {
   id: "dismiss",
   action: "Dismiss",
@@ -274,6 +286,7 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
   RIGHT_SIDEBAR_SHORTCUT,
   GIT_VIEW_SHORTCUT,
   GITHUB_VIEW_SHORTCUT,
+  MODE_SWITCH_SHORTCUT,
   DISMISS_SHORTCUT,
   FIND_SHORTCUT,
   COPY_SHORTCUT,

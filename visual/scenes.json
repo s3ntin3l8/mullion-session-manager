@@ -388,7 +388,7 @@
       "viewports": ["tablet", "fold"],
       "steps": [
         {
-          "click": "role=button[name=\"Toggle sidebar\"]"
+          "click": "role=button[name=\"Sidebar\"]"
         },
         {
           "wait": 600

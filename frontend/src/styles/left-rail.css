@@ -1,0 +1,150 @@
+/* ============================================================ */
+/* Left rail (#3009)                                              */
+/* ============================================================ */
+/* The app's global navigation from 700px up, in place of the top bar: the
+   mode switch at the top, Workspace mode's own entries in the middle, the
+   command box, bell and settings at the bottom. Not rendered on the phone
+   tier, which keeps its top bar. It owns the left and bottom safe-area
+   insets on its edge; `.app-body`'s top padding (app-shell.css) owns the top
+   one now that no bar does. */
+.left-rail {
+  width: var(--left-rail-w);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  padding-left: env(safe-area-inset-left);
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  /* A short window (a landscape foldable) scrolls the rail rather than
+     clipping the bottom cluster. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+
+.left-rail-modes,
+.left-rail-middle,
+.left-rail-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+/* Reserved for the workspace chip and the open panes (#3009's second half);
+   empty until then, so it takes no room. */
+.left-rail-middle:empty {
+  display: none;
+}
+.left-rail-bottom {
+  margin-top: auto;
+  padding-top: 8px;
+}
+.left-rail-sep {
+  flex-shrink: 0;
+  width: 24px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.left-rail-btn {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  min-height: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.left-rail-btn:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--seg);
+}
+.left-rail-btn.active {
+  color: var(--fg);
+  background: var(--seg);
+}
+/* Active marker on the rail's outer edge, as the right rail does on its own. */
+.left-rail-btn.active::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ring);
+}
+.left-rail-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.left-rail-btn svg {
+  display: block;
+}
+/* The sidebar toggle mirrors its glyph while the sidebar is hidden. */
+.left-rail-btn.collapsed svg {
+  transform: scaleX(-1);
+}
+.left-rail-mode {
+  min-height: 44px;
+}
+.left-rail-label {
+  font-size: 0.625rem;
+  line-height: 1;
+}
+
+/* Same pill as the right rail's count badge (right-sidebar.css). */
+.left-rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 14px;
+  height: 0.875rem;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 0.875rem;
+  text-align: center;
+}
+
+@media (pointer: coarse) {
+  .left-rail-btn {
+    min-height: 44px;
+  }
+}
+
+/* Tasks mode from 700px: the board full size beside the right sidebar. The
+   left sidebar is not shown: collapsed the way the desktop collapse does it
+   (sidebar.css), not `display: none`, which would give the session list's
+   virtualizer a zero-height box; `visibility` also takes its controls out of
+   the tab order. The tablet drawer is closed on the way in (App.tsx), and its
+   scrim is hidden here too. App.tsx does not render the Dock in Tasks mode. */
+.app[data-mode="tasks"]:not([data-tier="phone"]) {
+  .sidebar-wrapper {
+    width: 0 !important;
+    border-right: none;
+    overflow: hidden;
+    visibility: hidden;
+  }
+  .cmux-scrim {
+    display: none !important;
+  }
+}

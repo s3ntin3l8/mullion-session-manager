@@ -109,8 +109,10 @@ export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSe
   );
 }
 
-// Header + body of the phone navigator. viewMode === "kanban" wins over the
-// local tab, so Tasks can also be entered from outside (palette).
+// Header + body of the phone navigator. On the phone, viewMode === "kanban"
+// wins over the local tab, so Tasks can also be entered from outside
+// (palette). On the tablet the board is Tasks mode over the grid (#3009), so
+// the Tasks tab only switches to it, and the drawer closes.
 export function PhoneNavigatorPanel({
   navTab,
   setNavTab,
@@ -126,7 +128,7 @@ export function PhoneNavigatorPanel({
   // Tablet only: the workspace switcher, shown at the top of the Projects tab
   // (phone has no workspaces).
   workspaces?: ReactNode;
-  // Tablet shows two task columns side by side instead of one.
+  // Tablet: the Tasks tab switches to Tasks mode instead of showing the board.
   tablet?: boolean;
   navTab: PhoneNavTab;
   setNavTab: (tab: PhoneNavTab) => void;
@@ -137,7 +139,7 @@ export function PhoneNavigatorPanel({
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
 }) {
-  const tasksOpen = useDashboardStore((st) => st.viewMode === "kanban");
+  const tasksOpen = useDashboardStore((st) => !tablet && st.viewMode === "kanban");
   return (
     <>
       <PhoneNavigatorHeader
@@ -156,7 +158,7 @@ export function PhoneNavigatorPanel({
         <KanbanBoardOverlay
           inline
           phone
-          columnCount={tablet ? 2 : 1}
+          columnCount={1}
           onOpenSession={onOpenSession}
           onSessionEnded={onSessionEnded}
         />

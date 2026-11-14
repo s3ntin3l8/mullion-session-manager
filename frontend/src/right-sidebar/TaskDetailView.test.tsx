@@ -397,7 +397,7 @@ describe("TaskDetailView", () => {
 
   it("shows the review state and opens the worker and reviewer sessions", async () => {
     const user = userEvent.setup();
-    const requestOpenSession = vi.fn();
+    const openSessionInWorkspace = vi.fn();
     const t = task({
       status: "reviewing",
       approvalState: "awaiting-human",
@@ -410,7 +410,7 @@ describe("TaskDetailView", () => {
     const sessions = [7, 8].map(
       (id) => ({ id, sessionStatus: "idle", sessionStatusDetail: null }) as unknown as Session,
     );
-    setTasks([t], { sessions, requestOpenSession });
+    setTasks([t], { sessions, openSessionInWorkspace });
     renderDetail(t.id);
     expect(screen.getByText("REVIEWING")).toBeTruthy();
     expect(screen.getByText(/Approve to merge/)).toBeTruthy();
@@ -418,9 +418,9 @@ describe("TaskDetailView", () => {
     expect(screen.getByText(/2 auto-returns \(limit reached\)/)).toBeTruthy();
     expect(screen.getByText("REQUEST_CHANGES")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^worker/ }));
-    expect(requestOpenSession).toHaveBeenCalledWith(7);
+    expect(openSessionInWorkspace).toHaveBeenCalledWith(7);
     await user.click(screen.getByRole("button", { name: /^reviewer/ }));
-    expect(requestOpenSession).toHaveBeenCalledWith(8);
+    expect(openSessionInWorkspace).toHaveBeenCalledWith(8);
   });
 
   it("returns to the pull request it was reached from, otherwise to the list", async () => {

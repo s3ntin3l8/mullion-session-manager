@@ -186,6 +186,9 @@ const ALWAYS_CLAIMED: Array<[string, string]> = [
   // Ctrl+Alt+B and Alt+Meta+B are RIGHT_SIDEBAR_SHORTCUT in shortcutCatalog.ts.
   ["Ctrl+Alt+B", "the right-sidebar toggle"],
   ["Alt+Meta+B", "the right-sidebar toggle"],
+  // MODE_SWITCH_SHORTCUT (#3009).
+  ["Ctrl+Alt+O", "the Workspace / Tasks switch"],
+  ["Alt+Meta+O", "the Workspace / Tasks switch"],
   ["Shift+Insert", "paste"],
   ["Meta+V", "paste"],
   ["Ctrl+V", 'paste (if the opt-in "Ctrl+V paste" setting is ever turned on)'],

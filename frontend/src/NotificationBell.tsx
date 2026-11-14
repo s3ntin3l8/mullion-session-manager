@@ -22,7 +22,8 @@ import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
-import { panelPosition } from "./lib/notifPanelPosition.js";
+import { panelPosition, railPanelPosition } from "./lib/notifPanelPosition.js";
+import type { NotifPanelPosition } from "./lib/notifPanelPosition.js";
 import { TextInput } from "./ui/primitives.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
@@ -367,6 +368,8 @@ export function NotificationBell({
   onOpenBrowser,
   sheet = false,
   sheetClassName,
+  placement = "below",
+  triggerClassName = "toolbar-icon-btn",
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -389,6 +392,11 @@ export function NotificationBell({
   sheet?: boolean;
   // Extra class on the sheet (e.g. the tablet variant that caps its width).
   sheetClassName?: string;
+  // Where the popover opens: under the bell (the phone's top bar) or beside it,
+  // growing upward from its bottom edge (the left rail's bottom cluster, #3009).
+  placement?: "below" | "beside";
+  // The trigger's class: the top bar's icon button, or the rail's.
+  triggerClassName?: string;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -406,7 +414,7 @@ export function NotificationBell({
   const [open, setOpen] = useState(false);
   // Sheet only: which sessions' groups the feed shows.
   const [filter, setFilter] = useState<"needs" | "all">("all");
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<NotifPanelPosition | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -563,8 +571,12 @@ export function NotificationBell({
   const reposition = useCallback(() => {
     if (!btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
-    setPos(panelPosition(rect, window.innerWidth));
-  }, []);
+    setPos(
+      placement === "beside"
+        ? railPanelPosition(rect, window.innerWidth, window.innerHeight)
+        : panelPosition(rect, window.innerWidth),
+    );
+  }, [placement]);
   useVisualViewportChange(open, reposition);
 
   // Advances every session with at least one unread feed item to that
@@ -589,7 +601,7 @@ export function NotificationBell({
     <>
       <button
         ref={btnRef}
-        className="toolbar-icon-btn"
+        className={triggerClassName}
         title={
           unreadCount > 0 ? `Notifications — ${unreadCount} unread` : "No unread notifications"
         }
@@ -610,8 +622,7 @@ export function NotificationBell({
         onClick={(e) => {
           e.stopPropagation();
           if (!open && btnRef.current) {
-            const rect = btnRef.current.getBoundingClientRect();
-            setPos(panelPosition(rect, window.innerWidth));
+            reposition();
             openFilter();
           }
           setOpen((v) => !v);
@@ -716,7 +727,7 @@ export function NotificationBell({
           <div
             ref={panelRef}
             className={themeClassName(theme, "pane-tab-overflow-menu", "notif-panel")}
-            style={{ position: "fixed", top: pos.top, left: pos.left }}
+            style={{ position: "fixed", ...pos }}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={onPanelKeyDown}
             role="dialog"

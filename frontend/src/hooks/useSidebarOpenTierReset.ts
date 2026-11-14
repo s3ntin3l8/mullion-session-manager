@@ -12,11 +12,17 @@ import type { Dispatch, SetStateAction } from "react";
 
 export interface UseSidebarOpenTierResetParams {
   compact: boolean;
+  /** Tasks mode from 700px (#3009): the board takes the grid and the left
+   *  sidebar is hidden, so the tablet drawer closes on the way in, whichever
+   *  path switched the mode (rail, shortcut, palette). False on the phone,
+   *  whose navigator holds the board. */
+  boardOverGrid?: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
 }
 
 export function useSidebarOpenTierReset({
   compact,
+  boardOverGrid = false,
   setSidebarOpen,
 }: UseSidebarOpenTierResetParams): void {
   // Review finding — without this, resizing from tablet (drawer open) to
@@ -36,4 +42,7 @@ export function useSidebarOpenTierReset({
     // directive is not repeated (an unused one fails lint).
     if (!compact) setSidebarOpen(false);
   }, [compact]);
+  useEffect(() => {
+    if (boardOverGrid) setSidebarOpen(false);
+  }, [boardOverGrid]);
 }
