@@ -692,9 +692,8 @@ export interface UiSlice {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   // Right sidebar: `rightSidebarView` is the last-active view id (kept while
-  // closed so toggling reopens it), `rightSidebarOpen` whether the drawer is
-  // showing, `rightSidebarPinned` whether it docks (desktop only) instead of
-  // overlaying the grid.
+  // closed so toggling reopens it), `rightSidebarOpen` whether the panel is
+  // showing. The panel is always docked (#3006).
   rightSidebarView: string;
   rightSidebarProjectRequest: { projectId: number; nonce: number } | null;
   /** A one-shot "show History scoped to this" request (Source Control's View
@@ -710,7 +709,6 @@ export interface UiSlice {
    *  views and so a session row can open it before the panel is mounted. */
   githubOpenPrByProject: Record<number, number | null>;
   rightSidebarOpen: boolean;
-  rightSidebarPinned: boolean;
   rightSidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment.
   viewMode: ViewMode;
@@ -829,7 +827,6 @@ export interface UiSlice {
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;
-  setRightSidebarPinned: (value: boolean) => void;
   setRightSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
   setHierarchicalView: (value: boolean) => void;

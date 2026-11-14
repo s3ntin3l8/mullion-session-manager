@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RightSidebar } from "./RightSidebar.js";
+import { COARSE_POINTER_QUERY, RIGHT_SIDEBAR_FULL_WIDTH_QUERY } from "../lib/layoutTier.js";
 import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
@@ -53,14 +54,26 @@ beforeEach(() => {
     rightSidebarProjectRequest: null,
     followedProjectId: null,
     rightSidebarOpen: false,
-    rightSidebarPinned: false,
     rightSidebarWidth: 340,
     prsByProject: {},
     defaultBranchCiByProject: {},
   });
 });
 
+// Make exactly these media queries match. narrowWindow: a window too narrow
+// to dock the panel.
+function matchQueries(...queries: string[]) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: queries.includes(query),
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
+const narrowWindow = () => matchQueries(RIGHT_SIDEBAR_FULL_WIDTH_QUERY);
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   resetPhoneBackStackForTests();
   vi.clearAllMocks();
   useDashboardStore.setState({ projects: [], gitStatuses: {} });
@@ -291,23 +304,42 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().rightSidebarView).toBe("github");
   });
 
-  it("floats unpinned over the grid: scrim click and Escape both dismiss it", async () => {
-    const user = userEvent.setup();
+  it("is docked at every width where it renders: no scrim, and Escape leaves it open (#3006)", () => {
+    for (const tier of ["desktop", "tablet"] as const) {
+      useDashboardStore.setState({ rightSidebarOpen: true });
+      const { container, unmount } = renderSidebar(tier);
+
+      expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
+      expect(container.querySelector(".right-sidebar-panel.full")).toBeNull();
+      expect(container.querySelector(".right-sidebar-scrim")).toBeNull();
+      expect(container.querySelector(".right-sidebar-resize-handle")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /pin sidebar/i })).toBeNull();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      unmount();
+    }
+  });
+
+  it("covers the workspace where the window is too narrow to dock, and Escape closes it there", () => {
+    narrowWindow();
     useDashboardStore.setState({ rightSidebarOpen: true });
-    const { container } = renderSidebar();
-    expect(container.querySelector(".right-sidebar-panel.overlay")).toBeTruthy();
+    const { container } = renderSidebar("tablet");
+    const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
 
-    await user.click(container.querySelector(".right-sidebar-scrim") as HTMLElement);
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(panel.classList.contains("full")).toBe(true);
+    // No inline width: the stylesheet stretches it to the rail.
+    expect(panel.style.width).toBe("");
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+    expect(container.querySelector(".right-sidebar-scrim")).toBeNull();
 
-    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
   it("leaves an Escape that came from inside a terminal (or was already handled) alone", () => {
+    narrowWindow();
     useDashboardStore.setState({ rightSidebarOpen: true });
-    renderSidebar();
+    renderSidebar("tablet");
     const xterm = document.createElement("div");
     xterm.className = "xterm";
     const textarea = document.createElement("textarea");
@@ -336,42 +368,7 @@ describe("RightSidebar", () => {
     expect(panel.style.width).toBe("420px");
   });
 
-  it("docks when pinned on desktop: no scrim, and Escape leaves it open", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
-    const { container } = renderSidebar("desktop");
-
-    expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
-    expect(container.querySelector(".right-sidebar-scrim")).toBeNull();
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
-  });
-
-  it("ignores a saved pin on tablet: overlay, no pin button, no resize handle", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
-    const { container } = renderSidebar("tablet");
-
-    expect(container.querySelector(".right-sidebar-panel.overlay")).toBeTruthy();
-    expect(container.querySelector(".right-sidebar-scrim")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /pin sidebar/i })).toBeNull();
-    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
-    // The saved preference itself is untouched.
-    expect(useDashboardStore.getState().rightSidebarPinned).toBe(true);
-  });
-
-  it("the pin button toggles and persists the pinned flag", async () => {
-    const user = userEvent.setup();
-    useDashboardStore.setState({ rightSidebarOpen: true });
-    renderSidebar();
-
-    await user.click(screen.getByRole("button", { name: "Pin sidebar" }));
-    expect(useDashboardStore.getState().rightSidebarPinned).toBe(true);
-    expect(localStorage.getItem("crs.rightSidebarPinned")).toBe("1");
-
-    await user.click(screen.getByRole("button", { name: "Unpin sidebar" }));
-    expect(useDashboardStore.getState().rightSidebarPinned).toBe(false);
-  });
-
-  it("tablet: a rightward swipe on the open drawer dismisses it", () => {
+  it("tablet: a swipe on the open panel does not close it (#3006)", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
     const { container } = renderSidebar("tablet");
     const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;
@@ -385,7 +382,7 @@ describe("RightSidebar", () => {
     touch("touchstart", 100);
     touch("touchmove", 200);
 
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
   });
 
   it("desktop: the drawer has no swipe gesture", () => {
@@ -405,38 +402,56 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
   });
 
-  it("tablet: the back gesture closes the floating drawer", () => {
+  it("the back gesture leaves a docked panel alone and closes one that covers the workspace", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
-    renderSidebar("tablet");
-
+    const docked = renderSidebar("tablet");
     act(() => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    docked.unmount();
 
+    narrowWindow();
+    renderSidebar("tablet");
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
-  it("closes the drawer when the tier changes to phone, or a floating one goes tablet → desktop", () => {
+  it("closes the panel when the tier changes to phone, and keeps it through tablet → desktop", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
-    const { rerender } = renderSidebar("tablet");
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    const { rerender, container } = renderSidebar("tablet");
 
     rerender(<RightSidebar tier="desktop" actions={actions} />);
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
 
-    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
     rerender(<RightSidebar tier="phone" actions={actions} />);
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
-  it("keeps a pinned drawer open when going tablet → desktop (it docks)", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
-    const { rerender, container } = renderSidebar("tablet");
+  it("has no resize handle under a touch pointer, which could not drag it", () => {
+    matchQueries(COARSE_POINTER_QUERY);
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { container } = renderSidebar("tablet");
 
-    rerender(<RightSidebar tier="desktop" actions={actions} />);
-
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
     expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+  });
+
+  it("a forced desktop tier on a narrow window keeps Escape but stays off the back stack", () => {
+    narrowWindow();
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    renderSidebar("desktop");
+
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
   it("the close button closes the drawer", async () => {
@@ -499,7 +514,7 @@ describe("RightSidebar", () => {
   });
 
   it("dragging the left handle resizes (inverted) and commits a clamped width", () => {
-    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarPinned: true });
+    useDashboardStore.setState({ rightSidebarOpen: true });
     const { container } = renderSidebar("desktop");
     const handle = container.querySelector(".right-sidebar-resize-handle") as HTMLElement;
     const panel = container.querySelector(".right-sidebar-panel") as HTMLElement;

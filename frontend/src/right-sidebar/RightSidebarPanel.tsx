@@ -15,22 +15,10 @@ export interface RightSidebarPanelProps {
   view: RightSidebarView;
   followed: FollowedProject;
   actions: RightSidebarActions;
-  // Pinning only exists on desktop — below that the drawer is overlay-only.
-  canPin: boolean;
-  pinned: boolean;
-  onTogglePin: () => void;
   onClose: () => void;
 }
 
-export function RightSidebarPanel({
-  view,
-  followed,
-  actions,
-  canPin,
-  pinned,
-  onTogglePin,
-  onClose,
-}: RightSidebarPanelProps) {
+export function RightSidebarPanel({ view, followed, actions, onClose }: RightSidebarPanelProps) {
   const View = view.Component;
   const projectId = followed.effectiveProjectId;
   const { checkoutSessionId, choice } = useCheckoutTarget(projectId);
@@ -72,18 +60,6 @@ export function RightSidebarPanel({
         <div className="right-sidebar-toolbar-slot" ref={setToolbarSlot} />
         <div className="right-sidebar-detail-slot" ref={setDetailSlot} />
         <span className="right-sidebar-header-actions">
-          {canPin && (
-            <button
-              type="button"
-              className={`right-sidebar-icon-btn${pinned ? " active" : ""}`}
-              aria-label={pinned ? "Unpin sidebar" : "Pin sidebar"}
-              aria-pressed={pinned}
-              title={pinned ? "Unpin (float over the grid)" : "Pin (dock beside the grid)"}
-              onClick={onTogglePin}
-            >
-              <PinIcon size={14} />
-            </button>
-          )}
           <button
             type="button"
             className="right-sidebar-icon-btn"

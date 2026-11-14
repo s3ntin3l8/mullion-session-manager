@@ -36,6 +36,10 @@ export type { LayoutTier, LayoutBand };
 export const PHONE_BREAKPOINT_QUERY = "(max-width: 699.98px)";
 export const TABLET_BREAKPOINT_QUERY = "(min-width: 700px) and (max-width: 1279.98px)";
 export const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1280px)";
+// Below this width a docked right sidebar would leave the workspace less than
+// about 400px, so an open view covers the workspace instead (#3006). Kept
+// here with the tier breakpoints so the 800px floor cannot drift from them.
+export const RIGHT_SIDEBAR_FULL_WIDTH_QUERY = "(max-width: 799.98px)";
 
 // The five bands (design section 9.1) refine the three tiers above: phone and
 // desktop reuse their queries, tablet splits at 800 and 1100. The 800 edge

@@ -166,7 +166,6 @@ describe("TaskDetailView keyboard access in the real right sidebar", () => {
       sessions: [],
       rightSidebarView: "tasks",
       rightSidebarOpen: true,
-      rightSidebarPinned: false,
       rightSidebarWidth: 340,
       rightSidebarProjectRequest: null,
       followedProjectId: null,

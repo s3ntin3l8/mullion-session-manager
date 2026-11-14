@@ -296,10 +296,18 @@ describe("App tier wiring", () => {
     (tier, expected) => {
       stubWidth(tier);
       render(<App />);
-      expect(usePhoneBackStack).toHaveBeenLastCalledWith(false, expect.any(Function));
+      // Nothing is registered active while closed: the drawer's entry and the
+      // right sidebar's are both inactive.
+      const calls = vi.mocked(usePhoneBackStack).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every(([active]) => active === false)).toBe(true);
       if (tier === "desktop") return;
+      // Not "last called with": the right sidebar registers its own (inactive)
+      // entry on the same render, after the drawer's. Only calls made by the
+      // click count.
+      vi.mocked(usePhoneBackStack).mockClear();
       fireEvent.click(screen.getByTestId("toggle-sidebar"));
-      expect(usePhoneBackStack).toHaveBeenLastCalledWith(expected, expect.any(Function));
+      expect(usePhoneBackStack).toHaveBeenCalledWith(expected, expect.any(Function));
     },
   );
 
