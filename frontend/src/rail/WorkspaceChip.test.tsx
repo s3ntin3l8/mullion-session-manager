@@ -8,6 +8,7 @@ import type { Group } from "../api/index.js";
 import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import { makeSession, makeWorkspace } from "../test/fixtures.js";
+import railCss from "../styles/left-rail.css?raw";
 
 const group = (over: Partial<Group>): Group => ({
   id: 1,
@@ -32,7 +33,13 @@ function seed({ withUngrouped = true, active = 2 } = {}) {
     workspaces: [
       makeWorkspace({ id: 1, name: "Landing", groupId: 1, position: 1 }),
       makeWorkspace({ id: 2, name: "Mullion", groupId: 2, position: 0 }),
-      makeWorkspace({ id: 3, name: "Runway", groupId: 2, position: 1 }),
+      makeWorkspace({
+        id: 3,
+        name: "Runway",
+        groupId: 2,
+        position: 1,
+        layout: { views: [{ params: { sessionId: 5 } }] },
+      }),
       ...(withUngrouped
         ? [makeWorkspace({ id: 4, name: "Personal", groupId: null, position: 0 })]
         : []),
@@ -106,6 +113,13 @@ describe("WorkspaceChip", () => {
       "true",
     );
     expect(within(list).getByRole("button", { name: "Personal" })).toBeInTheDocument();
+    // Runway holds a session that needs input: the sidebar's attention dot.
+    expect(
+      within(ai).getByRole("button", { name: "Runway" }).querySelector(".workspace-attn-dot"),
+    ).not.toBeNull();
+    expect(
+      within(ai).getByRole("button", { name: "Mullion" }).querySelector(".workspace-attn-dot"),
+    ).toBeNull();
     expect(within(list).getByRole("button", { name: "New workspace" })).toBeInTheDocument();
     expect(within(list).getByRole("searchbox", { name: "Search workspaces" })).toHaveFocus();
 
@@ -195,5 +209,13 @@ describe("chipPopoverPosition", () => {
       left: 8,
       maxHeight: 240,
     });
+  });
+});
+
+describe("workspace list rows", () => {
+  it("are at least 48px tall under a coarse pointer", () => {
+    const start = railCss.indexOf(".rail-ws-list.touch .rail-ws-row {");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(railCss.slice(start, railCss.indexOf("}", start))).toMatch(/min-height:\s*48px/);
   });
 });

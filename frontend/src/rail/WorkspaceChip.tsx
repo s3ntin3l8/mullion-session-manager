@@ -156,7 +156,8 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
           label="Workspaces"
           closeLabel="Close workspaces"
           title="Workspaces"
-          sheetClassName="rail-ws-sheet"
+          // The tablet width cap the session sheet uses (compact.css).
+          sheetClassName="rail-ws-sheet mobile-session-sheet--tablet"
           backStack
         >
           {open && <WorkspaceListContent onPick={pick} touch />}

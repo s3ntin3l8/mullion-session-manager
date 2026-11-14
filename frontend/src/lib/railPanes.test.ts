@@ -10,7 +10,13 @@ describe("railLabel", () => {
     ["task #7 worker", "claude", "#7"],
     ["fake-agent.sh", "./fake-agent.sh", "fake-agent"],
     ["codex: orders query", "codex --yolo", "orders"],
-    ["npm run dev", "npm run dev", "run"],
+    ["npm run dev", "npm run dev", "npm"],
+    ["claude --dangerously-skip-permissions", "claude --dangerously-skip-permissions", "claude"],
+    ["/usr/bin/opencode --flag", "/usr/bin/opencode --flag", "opencode"],
+    ["bash -l", "bash -l", "bash"],
+    ["./fake-agent.sh", "./fake-agent.sh", "fake-agent"],
+    ["user@host: ~/proj/app", "zsh", "proj"],
+    ["claude --resume · auth flow", "claude --resume", "auth"],
     ["Release notes", undefined, "Release"],
   ])("%s → %s", (title, command, expected) => {
     expect(railLabel(title, command)).toBe(expected);

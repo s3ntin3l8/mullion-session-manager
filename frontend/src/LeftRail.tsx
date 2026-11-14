@@ -21,9 +21,9 @@ export interface LeftRailProps {
   /** Touch tablets: the bell's feed as a bottom sheet instead of a popover. */
   notificationSheet?: boolean;
   /**
-   * The rail's middle region, shown in Workspace mode only. Empty for now; the
-   * workspace chip, the group squares and the open panes go here (#3009's
-   * second half).
+   * The rail's middle region, shown in Workspace mode only, the one part of
+   * the rail that scrolls: App passes RailWorkspaceSection (the workspace
+   * chip and, while the left sidebar is not showing, the open panes).
    */
   middle?: ReactNode;
 }
@@ -115,9 +115,10 @@ export function LeftRail({
             <SidebarToggleIcon size={17} />
           </button>
           {/* ---- Middle region (Workspace mode only) ----
-              Reserved for the workspace chip with its group squares and,
-              while the sidebar is collapsed, the workspace's open panes with
-              a "+" under them. Rendered from the `middle` prop. */}
+              The workspace chip with its group squares and, while the
+              sidebar is not showing, the workspace's open panes with a "+"
+              under them (rail/RailWorkspaceSection.tsx, from the `middle`
+              prop). The only part of the rail that scrolls. */}
           <div className="left-rail-middle" data-rail-region="middle">
             {middle}
           </div>

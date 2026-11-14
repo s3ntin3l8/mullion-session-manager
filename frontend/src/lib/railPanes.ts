@@ -39,15 +39,29 @@ const EXTENSION = /\.[a-z0-9]{1,4}$/i;
  * The few characters a rail entry has room for, picked from the title the
  * sidebar shows (sessionDisplayTitle). A task's number wins ("task #7 worker"
  * is "#7"); otherwise the first word that is not the agent's own name, which
- * the logo already says ("claude · login fix" is "login"), without a file
- * extension ("fake-agent.sh" is "fake-agent"). Falls back to the title.
+ * the logo already says ("claude · login fix" is "login"), not a flag, a path
+ * prefix or a user@host, and without a file extension ("fake-agent.sh" is
+ * "fake-agent"). A title that is only the raw command (a session that never
+ * set one) is named by its program ("bash -l" is "bash"). CSS truncates what
+ * does not fit.
  */
 export function railLabel(title: string, command?: string): string {
-  const tokens = title.split(SEPARATORS).filter(Boolean);
+  const trimmed = title.trim();
+  if (command !== undefined && trimmed === command.trim()) {
+    const program = commandToBinary(command).replace(EXTENSION, "");
+    if (program) return program;
+  }
+  const tokens = trimmed.split(SEPARATORS).filter(Boolean);
   const issue = tokens.find((t) => /^#\d+$/.test(t));
   if (issue) return issue;
   const binary = command ? commandToBinary(command).toLowerCase() : null;
-  const word = tokens.find((t) => /[\p{L}\p{N}]/u.test(t) && t.toLowerCase() !== binary);
+  const word = tokens.find(
+    (t) =>
+      /[\p{L}\p{N}]/u.test(t) &&
+      !t.startsWith("-") &&
+      !t.includes("@") &&
+      t.toLowerCase() !== binary,
+  );
   const picked = word ?? tokens[0] ?? title;
   return picked.replace(EXTENSION, "") || picked;
 }
