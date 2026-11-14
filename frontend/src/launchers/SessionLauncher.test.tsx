@@ -753,3 +753,60 @@ describe("SessionLauncher — opened from the palette or a split (#3054)", () =>
     });
   });
 });
+
+describe("SessionLauncher — a fast Enter from the palette (#3054)", () => {
+  it("an Enter pressed while the launchers load launches the preselected entry once they arrive", async () => {
+    const onCreateSession = vi.fn();
+    let releaseActions: (() => void) | null = null;
+    const result = mockFetch({
+      "GET /api/projects/:id/actions": () =>
+        new Promise<Response>((resolve) => {
+          releaseActions = () => resolve(jsonResponse(200, [CLAUDE, CODEX, BASH]));
+        }),
+      "GET /api/codex/models": () => jsonResponse(200, []),
+      "GET /api/sessions": () => jsonResponse(200, []),
+      "POST /api/sessions": ({ init }) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        onCreateSession(body);
+        return jsonResponse(201, { id: 42, projectId: PROJECT.id, command: body.command });
+      },
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: CODEX.id }));
+
+    await screen.findByText("Loading launchers…");
+    await user.keyboard("{Enter}");
+    expect(onCreateSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(releaseActions).not.toBeNull());
+    await act(async () => releaseActions!());
+
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledTimes(1);
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
+  });
+
+  it("populates Codex's model options from the live catalog", async () => {
+    const result = mockFetch({
+      "GET /api/projects/:id/actions": () => jsonResponse(200, [CLAUDE, CODEX]),
+      "GET /api/codex/models": () => jsonResponse(200, ["gpt-6-astra", "gpt-6-luna"]),
+      "GET /api/sessions": () => jsonResponse(200, []),
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: CODEX.id }));
+
+    await user.click(await screen.findByRole("radio", { name: "codex" }));
+    const select = await screen.findByRole("combobox", { name: "Model for this session" });
+    await waitFor(() =>
+      expect(within(select).getByRole("option", { name: "gpt-6-astra" })).toBeInTheDocument(),
+    );
+    expect(within(select).getByRole("option", { name: "gpt-6-luna" })).toBeInTheDocument();
+    // The static fallback list is not shown once the live catalog answers.
+    expect(within(select).queryByRole("option", { name: "gpt-6-sol" })).toBeNull();
+  });
+});

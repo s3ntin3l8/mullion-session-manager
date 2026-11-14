@@ -51,7 +51,7 @@ export interface UseCommandSearchResult {
    * +/-1-against-`activeIndex` nav this hook's callers do inline. */
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   /** Launchers matching the current query, with hidden agents stripped —
-   * renders as "Launchers". */
+   * renders as "New session" (#3054: they open the launcher). */
   filtered: Launcher[];
   /** Live, non-killed terminal sessions matching the current query — empty
    * on a blank query (this is search, not an always-on browse list; the

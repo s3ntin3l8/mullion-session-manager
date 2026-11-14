@@ -465,6 +465,32 @@ describe("CommandPalette -> entries open the launcher (#3054)", () => {
     expect(posts).toBe(0);
   });
 
+  it("says the list is loading until the project's agents, shells and scripts arrive", async () => {
+    let release: (() => void) | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/actions")) {
+          return new Promise<Response>((resolve) => {
+            release = () => resolve(jsonResponse(200, [CLAUDE, BASH]));
+          });
+        }
+        if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      }),
+    );
+    renderPalette();
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Loading agents, shells and scripts…",
+    );
+    await waitFor(() => expect(release).not.toBeNull());
+    release!();
+    await screen.findAllByText("bash");
+    expect(screen.queryByText("Loading agents, shells and scripts…")).toBeNull();
+  });
+
   it("no longer promises a launch: no launch options, and the empty list names what is missing", async () => {
     const user = userEvent.setup();
     renderPalette();

@@ -391,22 +391,32 @@ function LauncherNewSession({
   // palette, else the selected agent, else the first shell or script.
   const pickedRow = rows.find((r) => r.id === pickedRowId) ?? null;
   const primary = pickedRow ?? selected ?? rows[0] ?? null;
-
-  // #3054 — opened from a palette entry: once the launchers are in (Launch is
-  // disabled until then, so it cannot take focus at mount), Launch takes
-  // focus, once per open.
-  const launchButtonRef = useRef<HTMLButtonElement>(null);
-  const focusedLaunchRef = useRef(false);
-  useEffect(() => {
-    if (initialLauncherId === null || !loaded || focusedLaunchRef.current) return;
-    focusedLaunchRef.current = true;
-    launchButtonRef.current?.focus();
-  }, [initialLauncherId, loaded]);
   const launchPrimary = () => {
     if (!primary) return;
     if (primary.kind === "agent") launchAgent(primary);
     else launchRow(primary);
   };
+
+  // #3054 — opened from a palette entry: once the launchers are in (Launch is
+  // disabled until then, so it cannot take focus at mount), Launch takes
+  // focus, once per open. An Enter pressed before they are in (a fast Enter-Enter from the palette
+  // lands on the filter) launches once they are, rather than being dropped.
+  const launchButtonRef = useRef<HTMLButtonElement>(null);
+  const focusedLaunchRef = useRef(false);
+  const pendingLaunchRef = useRef(false);
+  const launchPrimaryRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    launchPrimaryRef.current = launchPrimary;
+  });
+  useEffect(() => {
+    if (initialLauncherId === null || !loaded || focusedLaunchRef.current) return;
+    focusedLaunchRef.current = true;
+    launchButtonRef.current?.focus();
+    if (pendingLaunchRef.current) {
+      pendingLaunchRef.current = false;
+      launchPrimaryRef.current();
+    }
+  }, [initialLauncherId, loaded]);
 
   const tilesRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -437,7 +447,8 @@ function LauncherNewSession({
   const onFilterKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      launchPrimary();
+      if (initialLauncherId !== null && !loaded) pendingLaunchRef.current = true;
+      else launchPrimary();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
       focusEntry();
