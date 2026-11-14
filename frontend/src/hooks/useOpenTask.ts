@@ -13,7 +13,6 @@ export function useCanPopOutTask(): boolean {
   return band === "desktop" || band === "desktop-narrow";
 }
 
-
 // "Show me this task" from the board or from inside the right sidebar (a PR
 // row's task chip, a branch's owning task, an issue's linked task). From 700px
 // it selects it in the sidebar's Tasks view, so its status-first detail opens
