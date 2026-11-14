@@ -450,6 +450,16 @@ describe("App tier wiring", () => {
     act(() => useDashboardStore.getState().setViewMode("list"));
   });
 
+  it("does not let the tablet drawer be swiped open in Tasks mode", () => {
+    stubWidth("tablet");
+    useDashboardStore.setState({ viewMode: "kanban" });
+    vi.mocked(attachSidebarSwipeGesture).mockClear();
+    render(<App />);
+    expect(attachSidebarSwipeGesture).not.toHaveBeenCalled();
+    act(() => useDashboardStore.getState().setViewMode("list"));
+    expect(attachSidebarSwipeGesture).toHaveBeenCalled();
+  });
+
   it("tells the rail whether the docked sidebar shows on desktop", () => {
     stubWidth("desktop");
     useDashboardStore.setState({ sidebarCollapsed: false });

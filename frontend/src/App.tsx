@@ -868,11 +868,10 @@ export function App() {
   // Drop a stale open drawer when leaving the compact tier. Extracted to
   // useSidebarOpenTierReset; called here, where the effect was — before
   // usePhoneBackStack / usePhoneTasksNavigator.
-  useSidebarOpenTierReset({
-    compact,
-    boardOverGrid: !isMobile && viewMode === "kanban",
-    setSidebarOpen,
-  });
+  // Tasks mode from 700px (#3009): the board takes the grid and the left
+  // sidebar is hidden, so the tablet drawer is closed and cannot be swiped open.
+  const boardOverGrid = !isMobile && viewMode === "kanban";
+  useSidebarOpenTierReset({ compact, boardOverGrid, setSidebarOpen });
   // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
@@ -882,7 +881,13 @@ export function App() {
   usePhoneTasksNavigator({ compact: isMobile, viewMode, sidebarOpen, setSidebarOpen });
   // Edge-swipe to open/dismiss the compact sidebar. Extracted to
   // useSidebarSwipe; called here, where the effect was.
-  useSidebarSwipe({ compact, sidebarOpen, setSidebarOpen, appBodyRef, sidebarWrapperRef });
+  useSidebarSwipe({
+    compact: compact && !boardOverGrid,
+    sidebarOpen,
+    setSidebarOpen,
+    appBodyRef,
+    sidebarWrapperRef,
+  });
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct

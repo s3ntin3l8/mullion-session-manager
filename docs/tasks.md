@@ -373,7 +373,8 @@ UnifiedBoard.tsx`). It is the app's **Tasks mode**; the grid is
 **Workspace mode** (`#3009`). From 700px wide the left rail's mode switch
 (the Tasks entry shows how many tasks need you, as the board's "Needs me"
 filter counts them), Ctrl/⌘ + Alt + **O**, Command Palette → Integrations →
-**Tasks** and the sidebar's own Tasks nav entry all switch to it. Tasks mode
+**Tasks** and the sidebar's own Tasks nav entry (badge count of tasks needing a
+decision right now — `ready` + `reviewing`) all switch to it. Tasks mode
 shows the board full size beside the right sidebar, without the left sidebar
 or the Dock. It's an overlay over the dockview grid, not a panel, so switching
 back to Workspace instantly restores whatever was tiled underneath. The last
