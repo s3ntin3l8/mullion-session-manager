@@ -19,13 +19,18 @@ export function createDockCommands({ CliUsageError, requireOne }) {
       }
       return { json: await client.request("docks.list", { projectId: args[0] }) };
     },
-    async start(client, args) {
+    async start(client, rawArgs) {
+      const branchFlag = rawArgs.indexOf("--branch");
+      const branch = branchFlag === -1 ? undefined : rawArgs[branchFlag + 1];
+      // Positionals only: `--branch <name>` is not a project or control id.
+      const args =
+        branchFlag === -1
+          ? rawArgs
+          : rawArgs.filter((_, i) => i !== branchFlag && i !== branchFlag + 1);
       const hasProject = args[1] !== undefined;
       const projectId = hasProject ? args[0] : undefined;
       const dockId = hasProject ? args[1] : args[0];
       if (dockId === undefined) throw new CliUsageError("dock control id is required");
-      const branchFlag = args.indexOf("--branch");
-      const branch = branchFlag === -1 ? undefined : args[branchFlag + 1];
       try {
         const result = await client.request("docks.start", {
           ...(projectId !== undefined ? { projectId } : {}),

@@ -58,6 +58,11 @@ describe("mullion dock", () => {
     await runCommand(["dock", "start", "web"], { client, io });
     expect(client.request).toHaveBeenCalledWith("docks.start", { dockControlId: "web" });
     await runCommand(["dock", "start", "1", "web", "--branch", "feat/x"], { client, io });
+    await runCommand(["dock", "start", "web", "--branch", "feat/y"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("docks.start", {
+      dockControlId: "web",
+      branch: "feat/y",
+    });
     expect(client.request).toHaveBeenCalledWith("docks.start", {
       projectId: "1",
       dockControlId: "web",
