@@ -9,6 +9,30 @@
   --bg-light: #fafafa;
 }
 
+/* Motion tokens (docs/motion.md). Theme-independent, so they live at :root
+   with the two values above rather than on .cmux-root. lib/motion.ts carries
+   the same numbers for code that animates from TypeScript, and
+   lib/motion.test.ts pins the two copies together. Anything a finger can move
+   uses the spring in lib/spring.ts instead of a duration.
+
+   Under prefers-reduced-motion the reset at the end of this file zeroes every
+   transition that uses these (and every other) durations, so nothing here
+   needs a reduced-motion variant. Do not add one that shortens them to a few
+   milliseconds: that reset's comment explains why a near-zero transition
+   breaks the terminal's text canvas. */
+:root {
+  /* The scale and tint a control shows the moment it is touched. */
+  --motion-press: 110ms;
+  /* Content arriving in place, and what travel becomes under reduced motion. */
+  --motion-fade: 160ms;
+  /* A layout change no finger drives (a card moving to its new lane). */
+  --motion-layout: 420ms;
+  /* Anything that arrives and settles. */
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Press feedback. */
+  --motion-ease-press: cubic-bezier(0, 0, 0.58, 1);
+}
+
 /* Design tokens ported 1:1 from the Claude Design "Cmux design integration"
    project (Cmux Redesign.dc.html / Cmux States.dc.html) — see
    .claude/plans/ok-i-m-thinking-of-merry-corbato.md's Phase 4b section and
