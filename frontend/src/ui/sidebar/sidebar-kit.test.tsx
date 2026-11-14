@@ -13,6 +13,7 @@ import {
   ViewHeader,
 } from "./index.js";
 import css from "../../styles/sidebar-kit.css?raw";
+import { SidebarDetailSlotContext } from "./detailSlot.js";
 import { useDashboardStore } from "../../store/index.js";
 
 beforeEach(() => localStorage.clear());
@@ -293,6 +294,37 @@ describe("ViewHeader / DetailHeader", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();
     expect(screen.getByRole("link", { name: "Open on GitHub" })).toBeInTheDocument();
+  });
+});
+
+// #2979 — the drawer swaps its picker, toolbar, strip and phone head for a
+// detail's header through an attribute DetailHeader sets on the panel, not
+// through `:has()`, which a WebView may lack.
+describe("DetailHeader in the drawer's detail slot", () => {
+  function Panel({ show }: { show: boolean }) {
+    const slot = document.getElementById("slot");
+    return (
+      <SidebarDetailSlotContext.Provider value={slot}>
+        {show && <DetailHeader title="#9 Dark mode: low contrast" onBack={() => {}} />}
+      </SidebarDetailSlotContext.Provider>
+    );
+  }
+
+  it("marks the panel while it fills the slot, and clears the mark when it leaves", () => {
+    const panel = document.createElement("div");
+    panel.innerHTML = '<div class="right-sidebar-header"><div id="slot"></div></div>';
+    document.body.append(panel);
+    const { rerender, unmount } = render(<Panel show />);
+    expect(panel).toHaveAttribute("data-sidebar-detail");
+    expect(document.getElementById("slot")).toHaveTextContent("#9 Dark mode: low contrast");
+    rerender(<Panel show={false} />);
+    expect(panel).not.toHaveAttribute("data-sidebar-detail");
+    unmount();
+    panel.remove();
+  });
+
+  it("lets the title in the header row wrap to two lines", () => {
+    expect(css).toMatch(/\.sb-vh--bare \.sb-vh-name \{[^}]*-webkit-line-clamp: 2/);
   });
 });
 

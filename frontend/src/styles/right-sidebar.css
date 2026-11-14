@@ -192,20 +192,23 @@
 }
 /* The thin context strip under the header row, and the slot a pushed detail
    view's header fills. While the detail slot has content it replaces the picker,
-   toolbar and strip, so a detail never stacks a second header bar. */
+   toolbar and strip, so a detail never stacks a second header bar. The switch
+   is DetailHeader's `data-sidebar-detail` on the panel, not `:has()` (#2979):
+   a WebView without `:has()` would otherwise hide the detail's Back. */
 .right-sidebar-detail-slot {
   display: none;
   flex: 1;
   min-width: 0;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *) > .right-sidebar-detail-slot {
+[data-sidebar-detail] > .right-sidebar-header > .right-sidebar-detail-slot {
   display: flex;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *)
+[data-sidebar-detail]
+  > .right-sidebar-header
   > :is(.right-sidebar-follow-glyph, .settings-dropdown, .right-sidebar-toolbar-slot) {
   display: none;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *) + .right-sidebar-strip-slot {
+[data-sidebar-detail] > .right-sidebar-strip-slot {
   display: none;
 }
 .right-sidebar-strip-slot:empty {
