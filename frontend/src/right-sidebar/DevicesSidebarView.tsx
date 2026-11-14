@@ -2,10 +2,10 @@ import { EmptyStateNote } from "../ui/EmptyState.js";
 import { SidebarDevices } from "../SidebarDevices.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
-import type { RightSidebarViewProps } from "./views.js";
+import type { HostGlobalViewProps } from "./views.js";
 
 // The right sidebar's Devices view: the device list with start, stop and open.
-// Host-global (the registry marks it `hostGlobal`), so `projectId` is unused.
+// Host-global (the registry marks it `hostGlobal`), so it gets no project id.
 // The list, its polling and its error handling are SidebarDevices — the same
 // component the phone navigator's Devices tab renders — not a second copy.
 //
@@ -13,7 +13,7 @@ import type { RightSidebarViewProps } from "./views.js";
 // always been. A later slice (the two-halves layout, #3012) shows the screen
 // inside this view instead; that hooks in right here, by choosing between
 // showing the screen in place and calling `actions.onOpenDevice`.
-export function DevicesSidebarView({ actions }: RightSidebarViewProps) {
+export function DevicesSidebarView({ actions }: HostGlobalViewProps) {
   return (
     <div className="devices-sidebar-view">
       <SidebarHeader label={VIEW_TITLES.devices} />
@@ -21,6 +21,7 @@ export function DevicesSidebarView({ actions }: RightSidebarViewProps) {
         showHeader={false}
         onOpenDevice={actions.onOpenDevice}
         empty={<EmptyStateNote>No devices yet. Create one in Settings → Devices.</EmptyStateNote>}
+        loadFailed={<EmptyStateNote>Couldn't load devices.</EmptyStateNote>}
       />
     </div>
   );

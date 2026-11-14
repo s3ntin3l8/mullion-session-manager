@@ -8,6 +8,7 @@
 import type { ComponentType, SVGProps } from "react";
 import type { Device } from "../api/index.js";
 import type { CheckoutChoice } from "../hooks/useCheckoutTarget.js";
+import type { LayoutBand } from "../lib/layoutTierTypes.js";
 
 type ViewIconProps = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -45,21 +46,45 @@ export interface RightSidebarViewProps {
   actions: RightSidebarActions;
 }
 
-export interface RightSidebarView {
+// What a host-global view (Devices) receives: no project, because it is not
+// about one. Kept apart from RightSidebarViewProps so a project id of "none"
+// can never reach a view as a fake 0.
+export interface HostGlobalViewProps {
+  actions: RightSidebarActions;
+}
+
+interface RightSidebarViewBase {
   id: string;
   label: string;
   icon: ComponentType<ViewIconProps>;
-  Component: ComponentType<RightSidebarViewProps>;
   // A hook (called once per rail button, so each view's subscription lives
   // in its own component — looping hooks in the parent would break the rules
   // of hooks). Required (use `useNoBadge`) so the rail never has to call a
   // hook conditionally. `null` means no badge.
   useBadge: (projectId: number | null) => RailBadge | null;
   // Whether the rail shows this view at all (same hook-per-button rule as
-  // useBadge). `useAlwaysEnabled` for the views that are always there.
+  // useBadge). `useAlwaysEnabled` for the views that are always there. A view
+  // with `bands` derives this from them (`useEnabledInBands`).
   useEnabled: () => boolean;
-  // A host-global view (Devices) is not about the followed project: the panel
-  // shows no project picker or "No projects yet" state for it and renders it
-  // even with no project at all. It still receives `projectId`, but 0 then.
-  hostGlobal?: boolean;
+  // The layout bands the view exists in, when it does not exist in all of
+  // them. Browser and Dock are views only where the screen is split in two
+  // halves (700 to 1099px); from 1100px they are a grid pane and the bottom
+  // Dock. Declarative so a surface other than the rail (the phone's "more"
+  // sheet) can read it without calling a hook. Absent: every band.
+  bands?: readonly LayoutBand[];
 }
+
+export interface ProjectSidebarView extends RightSidebarViewBase {
+  hostGlobal?: false;
+  Component: ComponentType<RightSidebarViewProps>;
+}
+
+// A host-global view (Devices) is not about the followed project: the panel
+// shows no project picker or "No projects yet" state for it, renders it even
+// with no project at all, and passes it no project id.
+export interface HostGlobalSidebarView extends RightSidebarViewBase {
+  hostGlobal: true;
+  Component: ComponentType<HostGlobalViewProps>;
+}
+
+export type RightSidebarView = ProjectSidebarView | HostGlobalSidebarView;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
@@ -9,6 +9,7 @@ import {
   SidebarStripSlotContext,
   SidebarToolbarSlotContext,
 } from "./sidebarToolbarSlot.js";
+import { useCurrentLayoutBand, viewInBand } from "./viewBands.js";
 import type { RightSidebarActions, RightSidebarView } from "./views.js";
 
 export interface RightSidebarPanelProps {
@@ -19,9 +20,16 @@ export interface RightSidebarPanelProps {
 }
 
 export function RightSidebarPanel({ view, followed, actions, onClose }: RightSidebarPanelProps) {
-  const View = view.Component;
   const projectId = followed.effectiveProjectId;
   const hostGlobal = view.hostGlobal === true;
+  // A view that does not exist in this band (Browser and Dock from 1100px)
+  // can still be the persisted one, or stay open across a resize. Its rail
+  // button is gone, so nothing could close it: close it here instead of
+  // rendering a view the layout has no place for.
+  const inBand = viewInBand(view, useCurrentLayoutBand());
+  useEffect(() => {
+    if (!inBand) onClose();
+  }, [inBand, onClose]);
   const { checkoutSessionId, choice } = useCheckoutTarget(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [stripSlot, setStripSlot] = useState<HTMLElement | null>(null);
@@ -73,7 +81,7 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
         </span>
       </div>
       <div className="right-sidebar-strip-slot" ref={setStripSlot} />
-      {projectId == null && !hostGlobal ? (
+      {!inBand ? null : projectId == null && !hostGlobal ? (
         <div className="github-panel-empty-row">No projects yet.</div>
       ) : (
         <div className="right-sidebar-body cmux-scroll">
@@ -81,12 +89,18 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
             <SidebarStripSlotContext.Provider value={stripSlot}>
               <SidebarDetailSlotContext.Provider value={detailSlot}>
                 <SidebarRepoTitleContext.Provider value={setRepoTitle}>
-                  <View
-                    projectId={projectId ?? 0}
-                    checkoutSessionId={checkoutSessionId}
-                    checkoutChoice={choice}
-                    actions={actions}
-                  />
+                  {view.hostGlobal ? (
+                    <view.Component actions={actions} />
+                  ) : (
+                    projectId != null && (
+                      <view.Component
+                        projectId={projectId}
+                        checkoutSessionId={checkoutSessionId}
+                        checkoutChoice={choice}
+                        actions={actions}
+                      />
+                    )
+                  )}
                 </SidebarRepoTitleContext.Provider>
               </SidebarDetailSlotContext.Provider>
             </SidebarStripSlotContext.Provider>
