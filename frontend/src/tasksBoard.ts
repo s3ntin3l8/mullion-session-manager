@@ -247,6 +247,33 @@ export function defaultPhoneSegment(
   );
 }
 
+// The phone's lanes (#3014) that hold a task needing the owner, for the strip's
+// dot. `needsYou` is the one definition (taskMasterSummary.ts's needsYouReason),
+// passed in so this module stays free of it.
+export function phoneSegmentsNeedingYou(
+  tasks: readonly Task[],
+  needsYou: (task: Task) => boolean,
+): Set<PhoneSegmentId> {
+  const out = new Set<PhoneSegmentId>();
+  for (const task of tasks) {
+    if (!needsYou(task)) continue;
+    const column = boardColumnOf(task.status);
+    const segment = PHONE_SEGMENTS.find((s) => s.statuses.includes(column));
+    if (segment) out.add(segment.id);
+  }
+  return out;
+}
+
+// The lane the phone board opens on (#3014): the first lane, in strip order,
+// that holds a task needing the owner; without one, defaultPhoneSegment.
+export function openingPhoneSegment(
+  counts: Record<TaskStatus, number>,
+  available: readonly PhoneSegmentId[],
+  needingYou: ReadonlySet<PhoneSegmentId>,
+): PhoneSegmentId {
+  return available.find((id) => needingYou.has(id)) ?? defaultPhoneSegment(counts, available);
+}
+
 // Tablet shows `count` adjacent columns at once (phone shows one). Returns the
 // window of `count` columns that contains `selected`, starting at it and
 // clamped at the end — picking the last chip shows the last `count` columns.

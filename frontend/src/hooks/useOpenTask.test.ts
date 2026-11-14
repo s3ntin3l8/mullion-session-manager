@@ -58,14 +58,17 @@ describe("useOpenTask", () => {
     expect(state.rightSidebarOpen).toBe(true);
   });
 
-  it("phone: asks for the docked panel", () => {
+  // #3014 — the phone shows the sidebar's view full screen, so it opens the
+  // task there too; nothing asks for the docked panel any more.
+  it("phone: opens the task in the sidebar's Tasks view, which the phone shows full screen", () => {
     tier = "phone";
     const { result } = renderHook(() => useOpenTask());
     result.current(5);
     const state = useDashboardStore.getState();
-    expect(state.openTaskRequest?.taskId).toBe(5);
-    expect(state.selectedTaskId).toBeNull();
-    expect(state.rightSidebarOpen).toBe(false);
+    expect(state.openTaskRequest).toBeNull();
+    expect(state.selectedTaskId).toBe(5);
+    expect(state.rightSidebarView).toBe("tasks");
+    expect(state.rightSidebarOpen).toBe(true);
   });
 });
 

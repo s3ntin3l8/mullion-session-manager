@@ -736,6 +736,10 @@ export interface UiSlice {
   rightSidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment.
   viewMode: ViewMode;
+  /** Set when "Open session in Workspace" switched from Tasks to Workspace
+   *  (#3014): the phone's back gesture then returns to Tasks, reopening the
+   *  task the switch came from. Cleared by any other mode change. */
+  crossLinkReturn: { taskId: number | null } | null;
   // Phase 5 (Track B, issue #195 5.5b) — see ViewMode's own doc comment.
   // Only meaningful in "list" viewMode — the unified board's ad-hoc lane
   // cards (UnifiedBoard.tsx) always render flat regardless of this flag.
@@ -860,6 +864,9 @@ export interface UiSlice {
    *  useClearTaskSelectionOnProjectChange keeps a task whose project the
    *  sidebar moves to. */
   openSessionInWorkspace: (sessionId: number) => void;
+  /** Back from a cross-link (#3014): Tasks mode again, with the task the
+   *  switch came from opened in the right sidebar. A no-op without one. */
+  returnFromCrossLink: () => void;
   setHierarchicalView: (value: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
   // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,

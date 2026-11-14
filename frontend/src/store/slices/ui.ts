@@ -235,6 +235,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     rightSidebarOpen: readBool(STORAGE_KEYS.rightSidebarOpen, false),
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
+    crossLinkReturn: null,
     hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
     splitRequest: null,
@@ -506,7 +507,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     setViewMode: (value) => {
       writeString(STORAGE_KEYS.viewMode, value);
-      set({ viewMode: value });
+      // Only a real switch forgets a cross-link: opening the session it asked
+      // for calls this again with "list" (usePanelOpener's leaveTaskView).
+      set((s) => ({
+        viewMode: value,
+        crossLinkReturn: s.viewMode === value ? s.crossLinkReturn : null,
+      }));
     },
 
     toggleViewMode: () => {
@@ -514,8 +520,19 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
 
     openSessionInWorkspace: (sessionId) => {
+      const { viewMode, selectedTaskId } = get();
       get().setViewMode("list");
+      // Only a real switch is a cross-link: from Workspace there is no Tasks
+      // mode to return to.
+      if (viewMode === "kanban") set({ crossLinkReturn: { taskId: selectedTaskId } });
       get().requestOpenSession(sessionId);
+    },
+
+    returnFromCrossLink: () => {
+      const link = get().crossLinkReturn;
+      if (!link) return;
+      get().setViewMode("kanban");
+      if (link.taskId !== null) get().openRightSidebarTask(link.taskId, null);
     },
 
     setHierarchicalView: (value) => {

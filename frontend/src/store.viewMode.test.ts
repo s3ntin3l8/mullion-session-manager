@@ -106,4 +106,62 @@ describe("store modes (#3009)", () => {
     expect(s.rightSidebarOpen).toBe(true);
     expect(s.rightSidebarView).toBe("tasks");
   });
+
+  // #3014 — the phone's back gesture returns to Tasks after a cross-link.
+  it("records a cross-link from Tasks, with the task it came from", () => {
+    useDashboardStore.setState({ viewMode: "kanban", crossLinkReturn: null });
+    useDashboardStore.getState().openRightSidebarTask(42);
+    useDashboardStore.getState().openSessionInWorkspace(7);
+    expect(useDashboardStore.getState().crossLinkReturn).toEqual({ taskId: 42 });
+  });
+
+  it("records no cross-link when already in Workspace", () => {
+    useDashboardStore.setState({ viewMode: "list", crossLinkReturn: null });
+    useDashboardStore.getState().openSessionInWorkspace(7);
+    expect(useDashboardStore.getState().crossLinkReturn).toBeNull();
+  });
+
+  it("keeps the cross-link while the session it opened lands (setViewMode to the same mode)", () => {
+    useDashboardStore.setState({ viewMode: "kanban", crossLinkReturn: null });
+    useDashboardStore.getState().openRightSidebarTask(42);
+    useDashboardStore.getState().openSessionInWorkspace(7);
+    // usePanelOpener's onOpenSession leaves Task view first, i.e. "list" again.
+    useDashboardStore.getState().setViewMode("list");
+    expect(useDashboardStore.getState().crossLinkReturn).toEqual({ taskId: 42 });
+  });
+
+  it("forgets the cross-link on any other mode change", () => {
+    useDashboardStore.setState({ viewMode: "list", crossLinkReturn: { taskId: 1 } });
+    useDashboardStore.getState().setViewMode("kanban");
+    expect(useDashboardStore.getState().crossLinkReturn).toBeNull();
+  });
+
+  it("returnFromCrossLink goes back to Tasks and reopens the task, once", () => {
+    useDashboardStore.setState({ viewMode: "kanban", crossLinkReturn: null });
+    useDashboardStore.getState().openRightSidebarTask(42);
+    useDashboardStore.getState().openSessionInWorkspace(7);
+    useDashboardStore.getState().closeRightSidebar();
+    useDashboardStore.getState().returnFromCrossLink();
+    const s = useDashboardStore.getState();
+    expect(s.viewMode).toBe("kanban");
+    expect(s.selectedTaskId).toBe(42);
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.crossLinkReturn).toBeNull();
+    // Nothing left to return from.
+    useDashboardStore.getState().setViewMode("list");
+    useDashboardStore.getState().returnFromCrossLink();
+    expect(useDashboardStore.getState().viewMode).toBe("list");
+    expect(useDashboardStore.getState().crossLinkReturn).toBeNull();
+  });
+
+  it("returnFromCrossLink with no task only switches the mode", () => {
+    useDashboardStore.setState({
+      viewMode: "list",
+      crossLinkReturn: { taskId: null },
+      rightSidebarOpen: false,
+    });
+    useDashboardStore.getState().returnFromCrossLink();
+    expect(useDashboardStore.getState().viewMode).toBe("kanban");
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
 });

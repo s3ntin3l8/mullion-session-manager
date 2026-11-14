@@ -662,11 +662,11 @@ describe("usePanelOpener — onOpenTasks", () => {
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
-  it("keeps the sidebar (the navigator) open on phone, where the board lives in it", () => {
+  it("phone: switches to Tasks mode, the board over the grid, with no drawer to keep open (#3014)", () => {
     const { result } = setup({ dockviewApi: null, layout: PHONE_LAYOUT });
     result.current.onOpenTasks();
     expect(setViewMode).toHaveBeenCalledWith("kanban");
-    expect(setSidebarOpen).not.toHaveBeenCalled();
+    expect(setSidebarOpen).not.toHaveBeenCalledWith(true);
   });
 
   it("closes the tablet drawer: from 700px Tasks mode is the board over the grid (#3009)", () => {

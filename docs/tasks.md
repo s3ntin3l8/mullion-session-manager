@@ -380,8 +380,17 @@ or the Dock. It's an overlay over the dockview grid, not a panel, so switching
 back to Workspace instantly restores whatever was tiled underneath. The last
 mode is remembered per device. A task's worker or reviewer pill in the
 sidebar's task detail opens that session in Workspace mode and keeps the task
-open in the sidebar. The phone keeps its top bar and its navigator's Tasks
-tab. Task status columns are the board; a task with a linked
+open in the sidebar. The phone (`#3014`) has no drawer: a mode bar at the
+bottom (Workspace, Tasks with the needs-you count, and "⋯"), hidden while the
+on-screen keyboard is up, switches modes. Its board shows one lane at a time
+(Backlog, Ready, Active, Done) under a strip naming each lane with its count;
+swipe between lanes. "Needs you" is a filter chip there, a dot marks each lane
+holding such a task, and the board opens on the first of them. A task opens
+full screen with its actions at the bottom. "⋯" lists the right sidebar's
+views, each opening full screen, then Settings. The back gesture closes a
+sheet, then a detail inside a view, then the view; it switches mode only to
+return to Tasks after a task's session pill took you to Workspace. Task
+status columns are the board; a task with a linked
 worker or review session renders that session's live status nested on its
 own card, and any session not owned by a task collects in the **ad-hoc
 sessions strip** beneath the columns (`#2845`,
@@ -474,8 +483,10 @@ The strip is on every layout, phone included.
   from a control under the toolbar. On a **phone** it is four joined segments —
   Backlog, Ready, **Active** (In progress, which holds the queued tasks, then
   Reviewing, stacked) and **Done** (Done, then Failed) — each with a count; it
-  opens on Active, then Ready, when they hold something, and Hide Done & Failed
-  removes the Done segment. The compact two-column variant (per-status chips,
+  opens on the first segment holding a task that needs you (a dot marks each
+  such segment, `#3014`), else on Active, then Ready, when they hold
+  something; swipe between segments; and Hide Done & Failed removes the Done
+  segment. The compact two-column variant (per-status chips,
   two adjacent columns) is no longer rendered from 700px, where the board is
   full size in Tasks mode. The phone keeps the same compact card, shows the
   filters in the filter sheet, ignores Group by (the board stays flat) and keeps
@@ -533,9 +544,10 @@ approval` (generic on purpose, no title: a notification tray is outside the
   embedded timeline and — when a review agent is configured — a distinct
   "Review" card with the review agent's own timeline, its captured findings
   text, and (once the task has auto-returned) a round indicator. From 700px
-  every card, task chip and notification opens here (`#3011`). The phone renders no right sidebar,
-  so a card there opens the full-screen docked task detail instead. A task
-  notification click opens the same detail the same way, and the PR and issue
+  every card, task chip and notification opens here (`#3011`). The phone shows
+  this same detail full screen over the board, with its actions at the bottom
+  (`#3014`); a task notification there still opens the full-screen docked task
+  detail. Elsewhere a notification click opens the sidebar's detail, and the PR and issue
   chips in the GitHub and Git views show the task in the Tasks view too.
 - Tapping an ad-hoc session in the strip under the board switches to
   Workspace mode and shows that session there (`#3011`).

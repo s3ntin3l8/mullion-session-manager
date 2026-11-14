@@ -373,7 +373,9 @@ describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
     expect(requestOpenTask).not.toHaveBeenCalled();
   });
 
-  it("phone: a card click asks for the full-screen docked panel instead", async () => {
+  // #3014 — the phone opens the sidebar's task detail, which it shows full
+  // screen over the board (RightSidebar.tsx).
+  it("phone: a card click opens the task in the sidebar's Tasks view, full screen", async () => {
     tasks = [makeTask({ id: 7, status: "in_progress", title: "Open on phone" })];
     layoutTier = "phone";
     const user = userEvent.setup();
@@ -381,9 +383,9 @@ describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
 
     await user.click(screen.getByText("Open on phone"));
 
-    expect(requestOpenTask).toHaveBeenCalledTimes(1);
-    expect(requestOpenTask).toHaveBeenCalledWith(7);
-    expect(openRightSidebarTask).not.toHaveBeenCalled();
+    expect(openRightSidebarTask).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarTask).toHaveBeenCalledWith(7);
+    expect(requestOpenTask).not.toHaveBeenCalled();
   });
 
   it("rings the card whose task the store has selected, and only that one", () => {
@@ -655,6 +657,101 @@ describe("UnifiedBoard phone layout", () => {
     expect(screen.getByRole("button", { name: /^Active/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("ip1")).toBeInTheDocument();
     expect(screen.queryByText("r1")).toBeNull();
+  });
+
+  // #3014 — "Needs you" is a chip, not a lane; lanes holding such a task get a
+  // dot; the board opens on the first of them.
+  it("dots the lanes that hold a task needing you and opens on the first of them", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 2, status: "in_progress", title: "ip1" }),
+      makeTask({ id: 3, status: "reviewing", title: "rv1", approvalState: "awaiting-human" }),
+      makeTask({ id: 4, status: "failed", title: "f1" }),
+    ];
+    renderPhone();
+    const strip = screen.getByRole("group", { name: "Task status" });
+    const dotted = within(strip)
+      .getAllByRole("button")
+      .filter((b) => b.querySelector(".tasks-phone-strip-dot"))
+      .map((b) => b.textContent);
+    expect(dotted).toEqual(["Active2", "Done1"]);
+    expect(within(strip).getAllByRole("img", { name: "needs you" })).toHaveLength(2);
+    // Active is first in strip order among the dotted lanes.
+    expect(screen.getByRole("button", { name: /^Active/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens on a later lane when only it holds a task needing you", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 2, status: "in_progress", title: "ip1" }),
+      makeTask({ id: 4, status: "failed", title: "f1" }),
+    ];
+    renderPhone();
+    expect(screen.getByRole("button", { name: /^Done/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("f1")).toBeInTheDocument();
+  });
+
+  it("has no dots and keeps the usual opening lane when nothing needs you", () => {
+    renderPhone();
+    expect(document.querySelector(".tasks-phone-strip-dot")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Active/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("filters to the tasks needing you from the Needs you chip, and back", async () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", title: "r1" }),
+      makeTask({ id: 2, status: "reviewing", title: "rv1", approvalState: "awaiting-human" }),
+      makeTask({ id: 3, status: "in_progress", title: "ip1" }),
+    ];
+    renderPhone();
+    const chip = screen.getByRole("button", { name: /^Needs you/ });
+    expect(chip).toHaveTextContent("Needs you 1");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    // A chip, not a lane.
+    expect(
+      within(screen.getByRole("group", { name: "Task status" })).queryByRole("button", {
+        name: /Needs you/,
+      }),
+    ).toBeNull();
+    expect(screen.getByText("ip1")).toBeInTheDocument();
+    await userEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("rv1")).toBeInTheDocument();
+    expect(screen.queryByText("ip1")).toBeNull();
+    await userEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("ip1")).toBeInTheDocument();
+  });
+
+  it("swipes between lanes: left for the next, right for the previous", () => {
+    renderPhone();
+    const body = document.querySelector(".task-board-body")!;
+    const swipe = (from: number, to: number) => {
+      const ev = (type: string, x: number) =>
+        Object.assign(new Event(type, { bubbles: true, cancelable: true }), {
+          touches: type === "touchend" ? [] : [{ clientX: x, clientY: 200 }],
+        });
+      act(() => {
+        body.dispatchEvent(ev("touchstart", from));
+        body.dispatchEvent(ev("touchmove", (from + to) / 2));
+        body.dispatchEvent(ev("touchmove", to));
+        body.dispatchEvent(ev("touchend", to));
+      });
+    };
+    const pressed = () =>
+      within(screen.getByRole("group", { name: "Task status" }))
+        .getAllByRole("button")
+        .find((b) => b.getAttribute("aria-pressed") === "true")?.textContent;
+    expect(pressed()).toBe("Active1");
+    swipe(300, 100);
+    expect(pressed()).toBe("Done1");
+    // Past the last lane: stays.
+    swipe(300, 100);
+    expect(pressed()).toBe("Done1");
+    swipe(100, 300);
+    expect(pressed()).toBe("Active1");
+    swipe(100, 300);
+    expect(pressed()).toBe("Ready2");
   });
 
   it("folds Reviewing into Active and Failed into Done in the segment counts", () => {
