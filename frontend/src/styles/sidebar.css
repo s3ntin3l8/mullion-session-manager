@@ -19,11 +19,16 @@
 /* The docked sidebar's collapse, from 1100px (#3041): App.tsx sets
    `.sidebar-collapsed` only where the sidebar is docked (from 1280px from the
    persisted preference, from 1100 to 1279px from that band's own
-   collapsed-by-default flag), so the rule needs no width or tier gate. */
+   collapsed-by-default flag), so the rule needs no width or tier gate.
+   App.tsx also makes the collapsed wrapper `inert`; `visibility: hidden` is
+   the fallback for browsers without it (a hidden element is not focusable),
+   rather than `display: none`, which would give the session list's
+   virtualizer a zero-height box. */
 .app.sidebar-collapsed .sidebar-wrapper {
   width: 0;
   border-right: none;
   overflow: hidden;
+  visibility: hidden;
 }
 
 /* Resize handle on the sidebar's right edge — hover-revealed, same pattern
@@ -1833,7 +1838,7 @@ button.discover-header:hover {
 .mobile-session-backdrop {
   position: fixed;
   inset: 0;
-  /* Above the drawer (45) and overlay backdrop (50); below Settings (60) and
+  /* Above the overlay backdrop (50); below Settings (60) and
      modals (70). */
   z-index: 55;
   display: flex;

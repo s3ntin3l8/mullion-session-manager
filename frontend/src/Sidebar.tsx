@@ -75,8 +75,8 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
 export interface SidebarProps {
-  // Source Control lives in the right sidebar on desktop and tablet; only the
-  // phone navigator (which has no right sidebar) still renders it here.
+  // Source Control lives in the right sidebar from 700px; only the phone's
+  // hidden sidebar (the phone has no right sidebar) still renders it here.
   showSourceControl: boolean;
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;

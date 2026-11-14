@@ -631,7 +631,7 @@ see [`dock.md`](dock.md)).
 Tasks; `data-mode` on `.app`, remembered per device) switches between the
 dockview grid and the task board (`KanbanBoardOverlay`, an overlay over the
 grid, so the grid and its terminals stay mounted). Tasks mode hides the left
-sidebar and the Dock from 700px. See [`tasks.md`](tasks.md).
+sidebar (from 1100px, where there is one) and the Dock from 700px. See [`tasks.md`](tasks.md).
 
 **Left rail** (`LeftRail.tsx`, from 700px): the mode switch, the left
 sidebar's toggle (from 1100px only), the workspace chip and list

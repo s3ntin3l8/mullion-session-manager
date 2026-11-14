@@ -246,10 +246,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
     showTaskSessions: DEFAULT_SETTINGS.sessions.showTaskSessions,
-    // Desktop-only persistent collapse (distinct from the mobile-only
-    // `sidebarOpen` overlay flag App.tsx owns locally — different semantics
-    // per breakpoint: mobile is a closed-by-default overlay, desktop is an
-    // open-by-default panel the user can choose to hide).
+    // The docked left sidebar's persistent collapse from 1280px: open by
+    // default. From 1100 to 1279px App.tsx keeps its own, collapsed-by-default
+    // flag instead, and below 1100px there is no left sidebar (#3041).
     sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
     rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),

@@ -86,7 +86,6 @@ describe("App tier wiring", () => {
     expect(host).toHaveAttribute("hidden");
     expect(host.hasAttribute("inert")).toBe(true);
     expect(within(host as HTMLElement).getByTestId("sidebar")).toBeInTheDocument();
-    expect(container.querySelector(".cmux-scrim")).toBeNull();
     expect(screen.queryByTestId("toggle-sidebar")).toBeNull();
     expect(vi.mocked(usePhoneBackStack).mock.calls.every(([active]) => active === false)).toBe(
       true,
@@ -239,11 +238,15 @@ describe("App tier wiring", () => {
     stubWidth("desktop");
     const { container } = render(<App />);
     const app = container.querySelector(".app")!;
+    const wrapper = container.querySelector(".sidebar-wrapper")!;
+    expect(wrapper.hasAttribute("inert")).toBe(false);
     act(() => {
       fireEvent.click(screen.getByTestId("toggle-sidebar"));
     });
     expect(app.classList.contains("sidebar-collapsed")).toBe(true);
     expect(useDashboardStore.getState().sidebarCollapsed).toBe(true);
+    // Collapsed: out of the tab order and the accessibility tree too.
+    expect(wrapper.hasAttribute("inert")).toBe(true);
   });
 });
 
@@ -274,7 +277,6 @@ describe("App left sidebar by band (#3041)", () => {
     const app = container.querySelector(".app")!;
     expect(app.getAttribute("data-tier")).toBe("tablet");
     expect(container.querySelector(".sidebar-wrapper")).toBeNull();
-    expect(container.querySelector(".cmux-scrim")).toBeNull();
     expect(screen.queryByTestId("workspace-switcher")).toBeNull();
     // Still mounted, hidden, for its data loading and GitHub subscriptions.
     const host = container.querySelector(".sidebar-host-hidden")!;
@@ -310,10 +312,10 @@ describe("App left sidebar by band (#3041)", () => {
     expect(app.getAttribute("data-band")).toBe("desktop-narrow");
     const wrapper = container.querySelector(".sidebar-wrapper")!;
     expect(wrapper).not.toBeNull();
-    // Docked: no inert, no scrim, no hidden host. Collapsed by default even
-    // though the >=1280px preference says open.
-    expect(wrapper.hasAttribute("inert")).toBe(false);
-    expect(container.querySelector(".cmux-scrim")).toBeNull();
+    // Docked: no hidden host. Collapsed by default even though the >=1280px
+    // preference says open, and inert while collapsed, so its rows are out
+    // of the tab order.
+    expect(wrapper.hasAttribute("inert")).toBe(true);
     expect(container.querySelector(".sidebar-host-hidden")).toBeNull();
     expect(within(wrapper as HTMLElement).getByTestId("workspace-switcher")).toBeInTheDocument();
     expect(within(wrapper as HTMLElement).getByTestId("sidebar")).toBeInTheDocument();
@@ -327,6 +329,7 @@ describe("App left sidebar by band (#3041)", () => {
     expect(app.classList.contains("sidebar-collapsed")).toBe(false);
     expect(rail).toHaveAttribute("data-sidebar-shown", "true");
     expect(railHarness.props?.showPanes).toBe(false);
+    expect(wrapper.hasAttribute("inert")).toBe(false);
     expect(container.querySelector(".sidebar-resize-handle")).not.toBeNull();
     // The band's own flag: the >=1280px preference is left alone.
     expect(useDashboardStore.getState().sidebarCollapsed).toBe(false);
@@ -338,6 +341,7 @@ describe("App left sidebar by band (#3041)", () => {
     fireEvent.click(screen.getByTestId("toggle-sidebar"));
     expect(app.classList.contains("sidebar-collapsed")).toBe(true);
     expect(rail).toHaveAttribute("data-sidebar-shown", "false");
+    expect(wrapper.hasAttribute("inert")).toBe(true);
   });
 
   it("collapses the 1200px sidebar again when the window leaves the band and comes back", () => {

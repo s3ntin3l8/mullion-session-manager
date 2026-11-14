@@ -147,8 +147,8 @@ export function App() {
   // Tablet tier plan, PR 4 — replaces the old phone-only `isMobile` boolean.
   // `isMobile` below is now a derived `layoutTier === "phone"` local const
   // (not its own state) so every "stays phone-only" call site the plan
-  // enumerates (phone session switcher, empty-grid dropzone suppression,
-  // toggleSidebar's dual semantics) keeps working unchanged, while
+  // enumerates (phone session switcher, empty-grid dropzone suppression)
+  // keeps working unchanged, while
   // tier-aware call sites (session-opening's positioning, applyLayoutPresentation)
   // read `layoutTier` directly.
   // Seeded synchronously from the live width (not a "desktop" placeholder) so
@@ -1297,9 +1297,13 @@ export function App() {
           </div>
         )}
         {/* From 1100px: docked, pushing the grid (design 9.1). Collapsing
-            it is styles/sidebar.css's `.sidebar-collapsed` rule. */}
+            it is styles/sidebar.css's `.sidebar-collapsed` rule, which takes
+            it to zero width; `inert` takes its controls out of the tab order
+            and the accessibility tree too, or a keyboard user would tab
+            through session rows they cannot see (collapsed is the default
+            from 1100 to 1279px). */}
         {leftSidebarDocked && (
-          <div className="sidebar-wrapper cmux-scroll">
+          <div className="sidebar-wrapper cmux-scroll" inert={!leftSidebarShown}>
             {leftSidebarShown && (
               <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
             )}
