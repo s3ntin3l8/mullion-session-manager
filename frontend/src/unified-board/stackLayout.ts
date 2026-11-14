@@ -47,6 +47,17 @@ export const STACK_ORDER: readonly TaskStatus[] = (Object.keys(STACK_RANK) as Ta
 
 const COLLAPSED_BY_DEFAULT: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["backlog", "done"]);
 
+/** One status of the board: the entry the strip, the left rail and the sections list. */
+export interface StatusEntry {
+  id: TaskStatus;
+  title: string;
+  count: number;
+  /** A task in this status needs the owner: the entry carries a dot. */
+  needsYou: boolean;
+  /** How many of the status's tasks need the owner (the rail names it). */
+  needsYouCount: number;
+}
+
 export interface StackSection {
   id: TaskStatus;
   title: string;
@@ -54,6 +65,8 @@ export interface StackSection {
   tasks: Task[];
   /** Whether a task in it needs the owner (the board's "Needs me" definition). */
   needsYou: boolean;
+  /** How many of its tasks need the owner. */
+  needsYouCount: number;
 }
 
 /** The stacked board's sections for the board's (already filtered) tasks. */
@@ -62,11 +75,13 @@ export function stackSections(tasks: Task[]): StackSection[] {
   for (const id of STACK_ORDER) {
     const sectionTasks = boardColumnTasks(tasks, id);
     if (id === "failed" && sectionTasks.length === 0) continue;
+    const needsYouCount = sectionTasks.filter((t) => needsYouReason(t) !== null).length;
     sections.push({
       id,
       title: BOARD_COLUMNS.find((c) => c.id === id)?.title ?? id,
       tasks: sectionTasks,
-      needsYou: sectionTasks.some((t) => needsYouReason(t) !== null),
+      needsYou: needsYouCount > 0,
+      needsYouCount,
     });
   }
   return sections;

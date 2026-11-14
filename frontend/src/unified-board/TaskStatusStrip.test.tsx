@@ -6,8 +6,8 @@ import { TaskStatusStrip } from "./TaskStatusStrip.js";
 
 describe("TaskStatusStrip", () => {
   const statuses = [
-    { id: "reviewing" as const, title: "Reviewing", count: 2, needsYou: true },
-    { id: "backlog" as const, title: "Backlog", count: 5, needsYou: false },
+    { id: "reviewing" as const, title: "Reviewing", count: 2, needsYou: true, needsYouCount: 1 },
+    { id: "backlog" as const, title: "Backlog", count: 5, needsYou: false, needsYouCount: 0 },
   ];
 
   it("lists each status with its count, marking the ones that need the owner", () => {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { DragEvent } from "react";
-import type { Project, Session, Task } from "../api/index.js";
+import type { Project, Session, Task, TaskStatus } from "../api/index.js";
 import type { Theme } from "../store/index.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskCard } from "./TaskCard.js";
@@ -35,6 +35,7 @@ export function TaskColumn({
   rail = false,
   selectedTaskId = null,
   headless = false,
+  status,
 }: {
   title: string;
   tasks: Task[];
@@ -65,6 +66,8 @@ export function TaskColumn({
   // The stacked board's sections draw their own header (title, count, the
   // needs-you dot, the fold), so the column renders its body only.
   headless?: boolean;
+  // The lane's status, as data-status, so a jump from the left rail can find it.
+  status?: TaskStatus;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
   // Which blocked stacks the user has opened, by stack key. Local to the column: a
@@ -104,12 +107,16 @@ export function TaskColumn({
   );
 
   if (collapsed) {
-    return <div className="kanban-column kanban-column-collapsed">{header}</div>;
+    return (
+      <div className="kanban-column kanban-column-collapsed" data-status={status}>
+        {header}
+      </div>
+    );
   }
 
   if (rail && tasks.length === 0 && !pending && !acceptsDrop) {
     return (
-      <div className="kanban-column kanban-column-rail">
+      <div className="kanban-column kanban-column-rail" data-status={status}>
         <span className="kanban-column-title">{title}</span>
         <span className="kanban-column-count">0</span>
       </div>
@@ -208,6 +215,7 @@ export function TaskColumn({
   return (
     <div
       className={`kanban-column${tasks.length === 0 && !pending ? " kanban-column-is-empty" : ""}`}
+      data-status={status}
     >
       {!headless && header}
       <div
