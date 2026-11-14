@@ -545,6 +545,77 @@
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
       }
+    },
+    {
+      "name": "fold-two-halves",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": "role=button[name=\"New session\"] >> nth=0"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"Add login rate limiting\")"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": "role=button[name=\"New session\"] >> nth=-1"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"Dark mode palette\")"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "settle": ".xterm-screen"
+    },
+    {
+      "name": "fold-view-over-half",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": "role=button[name=\"New session\"] >> nth=0"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"Add login rate limiting\")"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": "role=button[name=\"New session\"] >> nth=-1"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"Dark mode palette\")"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"Git\"]"
+        },
+        {
+          "wait": 800
+        }
+      ]
     }
   ],
   "viewports": {

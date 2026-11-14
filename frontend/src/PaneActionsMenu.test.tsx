@@ -77,7 +77,6 @@ function storeState() {
     settings: {
       sessions: { confirmBeforeKill: false },
       layoutMode: layoutModeSetting,
-      tabletPaneCap: 2,
     },
     promoteSession: promoteSessionMock,
     declinePromote: vi.fn().mockResolvedValue(undefined),
@@ -631,7 +630,7 @@ describe("PaneActionsMenu", () => {
     expect(openOrFocusSessionPanel).toHaveBeenCalledWith(
       CONTAINER_API,
       newSession,
-      { tier: "desktop", tabletPaneCap: 2 },
+      { tier: "desktop" },
       projects,
     );
   });

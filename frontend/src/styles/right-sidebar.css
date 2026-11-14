@@ -311,9 +311,10 @@
 }
 
 /* Touch: the header and rail controls are what opens and closes the panel
-   now, so they get a taller target (#3006). The rail stays 40px wide here, so
-   a rail button is 44px tall and 30px wide; the rail itself widens with the
-   two-halves layout (#3010). */
+   now, so they get a taller target (#3006). Outside the two halves the rail
+   is 40px wide, so a rail button is 44px tall and 30px wide; between 800 and
+   1099px the rail matches the left one, 48px with 48px targets on touch
+   (#3010, the block at the end of this file). */
 @media (pointer: coarse) {
   .right-sidebar-icon-btn,
   .right-sidebar-header .sb-ibtn {
@@ -323,4 +324,39 @@
   .right-rail-btn {
     min-height: 44px;
   }
+}
+
+/* ---- Two halves, 800-1099px (#3010) -------------------------------------- */
+/* The right rail matches the left one: 48px, and its buttons the left rail's
+   40px; on touch, 48px targets. */
+.app[data-band="rails-halves"] .right-rail {
+  /* Border included, like the left rail, so the halves come out equal. */
+  width: calc(48px + env(safe-area-inset-right));
+  padding-right: env(safe-area-inset-right);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.app[data-band="rails-halves"] .right-rail-btn {
+  width: 40px;
+  flex-shrink: 0;
+}
+@media (pointer: coarse) {
+  .app[data-band="rails-halves"] .right-rail-btn,
+  .app[data-band="rails-halves"] .right-rail .left-rail-btn {
+    min-height: 48px;
+  }
+}
+/* The panel is exactly the right half: the width left after both rails,
+   split evenly with the grid, so the seam sits in the middle (on a foldable,
+   on the hinge). Not the stored width, no resize handle, and the width is
+   never animated (a terminal reflows on every step; docs/motion.md). */
+.app.halves-band .grid-area,
+.app.halves-band .right-sidebar-panel.docked.half {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+  transition: none;
 }

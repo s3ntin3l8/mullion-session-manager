@@ -420,7 +420,9 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
-  it("closes the panel when the tier changes to phone, and keeps it through tablet → desktop", () => {
+  // #3010 — folding keeps an open view open (design 9.2): the phone shows it,
+  // and unfolding brings it back.
+  it("keeps the panel open through tablet → desktop → phone → tablet", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
     const { rerender, container } = renderSidebar("tablet");
 
@@ -429,7 +431,11 @@ describe("RightSidebar", () => {
     expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
 
     rerender(<RightSidebar tier="phone" actions={actions} />);
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(container.querySelector(".right-sidebar-panel")).toBeNull();
+
+    rerender(<RightSidebar tier="tablet" actions={actions} />);
+    expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
   });
 
   it("has no resize handle under a touch pointer, which could not drag it", () => {
@@ -540,5 +546,48 @@ describe("RightSidebar", () => {
 
     expect(useDashboardStore.getState().rightSidebarWidth).toBe(390);
     expect(localStorage.getItem("crs.rightSidebarWidth")).toBe("390");
+  });
+});
+
+// #3010 — the two halves between 800 and 1099px.
+describe("RightSidebar in the two halves", () => {
+  const half = <div data-testid="right-half-session">session</div>;
+  const rail = <button type="button">Right half session</button>;
+
+  it("is exactly the right half: no stored width, no resize handle", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarWidth: 520 });
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    const panel = container.querySelector(".right-sidebar-panel.docked") as HTMLElement;
+    expect(panel).toHaveClass("half");
+    expect(panel.style.width).toBe("");
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+  });
+
+  it("shows the right half's session while no view covers it, and the view over it", () => {
+    useDashboardStore.setState({ rightSidebarOpen: false });
+    const { container } = render(
+      <RightSidebar tier="tablet" actions={actions} halves rightHalf={half} railSessions={rail} />,
+    );
+    expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+    expect(container.querySelector('[aria-label="Right half"]')).toHaveClass("half");
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
+    act(() => useDashboardStore.setState({ rightSidebarOpen: false }));
+    expect(screen.getByTestId("right-half-session")).toBeInTheDocument();
+  });
+
+  it("lists the right half's sessions in the rail, below the views", () => {
+    render(<RightSidebar tier="tablet" actions={actions} halves railSessions={rail} />);
+    const nav = screen.getByRole("navigation", { name: "Right sidebar" });
+    const buttons = [...nav.querySelectorAll("button")];
+    expect(buttons.at(-1)).toHaveTextContent("Right half session");
+  });
+
+  it("renders no right half outside the halves", () => {
+    useDashboardStore.setState({ rightSidebarOpen: false });
+    render(<RightSidebar tier="desktop" actions={actions} rightHalf={half} />);
+    expect(screen.queryByTestId("right-half-session")).toBeNull();
   });
 });

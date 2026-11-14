@@ -10,7 +10,7 @@ import {
   migrateLegacyProjectPanels,
   reseedSessionPanelTitles,
 } from "../panelUtils.js";
-import { resolveLayoutTier } from "../lib/layoutTier.js";
+import { resolveLayoutPresentation } from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
@@ -28,8 +28,13 @@ const AUTOSAVE_DEBOUNCE_MS = 800;
 // stale for even one commit. Also covers a forced `settings.layoutMode:
 // "phone"` override, which is server-global — see AppearanceSection.tsx's
 // own hint text for that consequence.
+// Issue #1426, extended by #3010 — the phone (one pane) and the two halves
+// between 800 and 1099px (one pane per half) are device-local views of the
+// workspace, not edits of it: maximizing a group, hiding headers and adding a
+// pane to show it on a half must never reach the layout desktop shares. Named
+// for the phone, where it started.
 function isPhoneTierNow(): boolean {
-  return resolveLayoutTier(useDashboardStore.getState().settings.layoutMode) === "phone";
+  return resolveLayoutPresentation(useDashboardStore.getState().settings.layoutMode) !== "grid";
 }
 
 interface PendingSave {
@@ -385,7 +390,13 @@ export function useWorkspacePersistence({
     // Safe regardless of whether restoringRef suppresses this call's own
     // onDidLayoutChange echo, since serializeForPersist strips
     // maximizedNode unconditionally on every future save.
-    applyLayoutPresentation(dockviewApi, layoutTier);
+    // #3010 — the halves (800-1099px) are a one-pane presentation inside
+    // the tablet tier; their own effect (useFoldHalves) then shows the left
+    // half's remembered pane.
+    const presentation = resolveLayoutPresentation(
+      useDashboardStore.getState().settings.layoutMode,
+    );
+    applyLayoutPresentation(dockviewApi, presentation === "halves" ? "halves" : layoutTier);
     restoredWorkspaceIdRef.current = activeWorkspaceId;
     // Bumped directly here rather than relying on the onDidLayoutChange
     // effect below to notice this restore — it structurally can't, because

@@ -11,10 +11,22 @@ import { sidebarPhoneSection } from "./lib/phoneNavSection.js";
 import type { PhoneNavTab } from "./PhoneNavigator.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
+import { PaneActionsMenu } from "./PaneActionsMenu.js";
+import { describeError } from "./lib/describeError.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { LeftRail } from "./LeftRail.js";
 import { RailWorkspaceSection } from "./rail/RailWorkspaceSection.js";
+import { RailPanes } from "./rail/RailPaneList.js";
+import type { RailEntryMenuItem } from "./rail/RailPaneList.js";
+import type { RailPaneEntry } from "./lib/railPanes.js";
+import { HalfHeader } from "./fold/HalfHeader.js";
+import { RightHalfPane } from "./fold/RightHalfPane.js";
+import { preferredPaneFor, useFoldHalves } from "./hooks/useFoldHalves.js";
+import { canGoRight, EMPTY_FOLD_HALVES, splitByHalf } from "./lib/foldHalves.js";
+import type { Half } from "./lib/foldHalves.js";
+import { sessionPaneTitle } from "./lib/sessionDisplay.js";
+import type { LayoutPresentation } from "./lib/layoutTier.js";
 import type { RailPaneInput } from "./lib/railPanes.js";
 import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
@@ -40,12 +52,11 @@ import { initialPaneTitle } from "./paneTitle.js";
 import { components, tabComponents, KanbanBoardOverlay } from "./panels/registry.js";
 import {
   isTiledPanel,
-  tiledColumnCount,
-  shouldWarnTabletPaneCap,
   canLaunchTerminal,
   shouldShowCodexHookTrustBanner,
   workspaceProjectIdsFromPanels,
   openTerminalSessionIds,
+  openSessionPanel,
   focusPanelForTier,
   panelSessionId,
 } from "./panelUtils.js";
@@ -92,7 +103,6 @@ import { useSyncSessionOpenerRefs } from "./hooks/useSyncSessionOpenerRefs.js";
 import { usePushSessionOpen } from "./hooks/usePushSessionOpen.js";
 import { usePushResync } from "./hooks/usePushResync.js";
 import { usePostWorkspaceSwitchHighlight } from "./hooks/usePostWorkspaceSwitchHighlight.js";
-import { usePaneCapNotice } from "./hooks/usePaneCapNotice.js";
 import { useSidebarOpenTierReset } from "./hooks/useSidebarOpenTierReset.js";
 import { useSidebarSwipe } from "./hooks/useSidebarSwipe.js";
 import { useRetriableLazy } from "./lib/retriableLazy.js";
@@ -298,10 +308,6 @@ export function App() {
   // state-setters don't re-run the check reliably) and from the fetch race
   // below (workspacesLoaded flips exactly once).
   const bootstrappedRef = useRef(false);
-  // Workspace ids that have already seen the tablet pane-cap notice this
-  // page load (issue #1555). Not persisted: a reload may say it again.
-  const paneCapWarnedRef = useRef(new Set<number>());
-  const [paneCapNotice, setPaneCapNotice] = useState(false);
   // restoringRef/restoredWorkspaceIdRef used to be declared here, but now
   // come from useWorkspacePersistence's return value (see the hook call
   // further down, at the exact position the restore/autosave effects used
@@ -407,7 +413,25 @@ export function App() {
     layoutMode: settings.layoutMode,
     setLayoutTier,
     onUnfold: liftPhoneTaint,
+    preferPanel: preferredPaneFor,
   });
+
+  // #3010 — the two halves between 800 and 1099px: one pane per half, a
+  // device-local view of the workspace (see useFoldHalves). Workspace mode
+  // only for the UI; the presentation itself also holds under the board.
+  const layoutPresentation: LayoutPresentation = isMobile
+    ? "phone"
+    : layoutBand === "rails-halves"
+      ? "halves"
+      : "grid";
+  const foldHalves = layoutPresentation === "halves" && viewMode !== "kanban";
+  const halvesState = useDashboardStore((s) =>
+    s.activeWorkspaceId === null
+      ? EMPTY_FOLD_HALVES
+      : (s.foldHalves[s.activeWorkspaceId] ?? EMPTY_FOLD_HALVES),
+  );
+  const focusedHalf = useDashboardStore((s) => s.focusedHalf);
+  const rightSidebarOpen = useDashboardStore((s) => s.rightSidebarOpen);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —
@@ -583,12 +607,27 @@ export function App() {
   // why the actual count is 12 rather than the roadmap's estimated 16).
   // Memoized so the onOpen* callbacks below (each lists `layout` in its own
   // useCallback dependency array — see usePanelOpener's own header comment)
-  // don't get a fresh identity every render, only when the tier or the
-  // user's configured cap actually changes.
-  const layout: LayoutContext = useMemo(
-    () => ({ tier: layoutTier, tabletPaneCap: settings.tabletPaneCap }),
-    [layoutTier, settings.tabletPaneCap],
-  );
+  // don't get a fresh identity every render, only when the tier changes.
+  const layout: LayoutContext = useMemo(() => ({ tier: layoutTier }), [layoutTier]);
+
+  // #3010 — after `layout`, which reopening a remembered pane needs.
+  useFoldHalves({
+    dockviewApi,
+    presentation: layoutPresentation,
+    activeWorkspaceId,
+    panelsVersion,
+    isRestored: () =>
+      !restoringRef.current &&
+      activeWorkspaceId !== null &&
+      restoredWorkspaceIdRef.current === activeWorkspaceId,
+    sessionsLoaded,
+    reopenSession: (sessionId) => {
+      const session = useDashboardStore.getState().sessions.find((x) => x.id === sessionId);
+      if (!dockviewApi || !session || session.status === "killed") return false;
+      openSessionPanel(dockviewApi, session, layout, useDashboardStore.getState().projects);
+      return true;
+    },
+  });
   const {
     onOpenSession,
     onOpenSessionAsFloat,
@@ -752,6 +791,11 @@ export function App() {
     if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
     useDashboardStore.getState().openLauncher();
   }, []);
+  // #3010 — the "+" under a half's sessions: the launcher, targeting that half.
+  const openNewSessionOnHalf = useCallback((half: Half) => {
+    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
+    useDashboardStore.getState().openLauncher({ half });
+  }, []);
 
   // A split-right/split-down click (PaneHeaderActions.tsx) signals intent
   // via the store's `splitRequest` (that component can't receive props from
@@ -780,6 +824,22 @@ export function App() {
   // that id just gets focused — dockview panel ids are unique, and split's
   // whole point is launching a *new* session, so this collision is rare).
   // Falls back to the normal `onOpenSession` path for a non-split launch.
+  // #3010 — a session launched or opened from a half's "+" lands on that
+  // half: assigned before it opens, so the open path's router places it.
+  const openSessionOnHalf = useCallback(
+    (session: Session, target: { half?: Half } | null) => {
+      if (foldHalves && target?.half && dockviewApi) {
+        useDashboardStore.getState().moveToHalf(
+          `session-${session.id}`,
+          target.half,
+          dockviewApi.panels.map((p) => p.id),
+        );
+      }
+      onOpenSession(session);
+    },
+    [foldHalves, dockviewApi, onOpenSession],
+  );
+
   const handleLaunched = useCallback(
     (session: Session) => {
       if (!dockviewApi || !splitRequest) {
@@ -791,7 +851,7 @@ export function App() {
       const panelId = `session-${session.id}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
-        existing.api.setActive();
+        focusPanelForTier(dockviewApi, existing, layoutTier);
       } else {
         const referencePanel = dockviewApi.getPanel(req.referencePanelId);
         const projectName = projects.find((p) => p.id === session.projectId)?.name;
@@ -803,42 +863,15 @@ export function App() {
           params: { sessionId: session.id },
           ...(referencePanel ? { position: { referencePanel, direction: req.direction } } : {}),
         });
-        // Explicit splits ignore tabletPositioning's cap (issue #1555).
-        // Count after addPanel — dockview updates the grid synchronously.
-        const workspaceKey = activeWorkspaceId ?? -1;
-        if (
-          shouldWarnTabletPaneCap({
-            tier: layoutTier,
-            columnCount: tiledColumnCount(dockviewApi.panels),
-            cap: settings.tabletPaneCap,
-            alreadyWarned: paneCapWarnedRef.current.has(workspaceKey),
-          })
-        ) {
-          paneCapWarnedRef.current.add(workspaceKey);
-          setPaneCapNotice(true);
-        }
       }
       setSidebarOpen(false);
     },
-    [
-      dockviewApi,
-      splitRequest,
-      onOpenSession,
-      projects,
-      activeWorkspaceId,
-      layoutTier,
-      settings.tabletPaneCap,
-    ],
+    [dockviewApi, splitRequest, onOpenSession, projects, layoutTier],
   );
-
-  usePaneCapNotice({ paneCapNotice, setPaneCapNotice });
 
   const handleSelectWorkspace = useCallback((workspaceId: number) => {
     useDashboardStore.getState().showWorkspace(workspaceId);
     setSidebarOpen(false);
-    // The notice is one boolean, the warned set is per workspace. Leaving it
-    // up across a switch showed workspace B a split that happened in A.
-    setPaneCapNotice(false);
   }, []);
 
   // One toggle, two meanings depending on breakpoint: phone/tablet's
@@ -967,6 +1000,107 @@ export function App() {
     },
     [dockviewApi, layoutTier],
   );
+  // #3010 — the halves' panes: the left rail lists the left half's, the
+  // right rail the right half's.
+  const railSplit = useMemo(() => splitByHalf(halvesState, railPanes), [halvesState, railPanes]);
+  const moveToHalf = useCallback(
+    (panelId: string, half: Half) => {
+      if (!dockviewApi) return;
+      const store = useDashboardStore.getState();
+      store.moveToHalf(
+        panelId,
+        half,
+        dockviewApi.panels.map((p) => p.id),
+      );
+      if (half === "right") {
+        // The moved session shows on the right half, uncovering it.
+        if (store.rightSidebarOpen) store.closeRightSidebar();
+        store.setFocusedHalf("right");
+      } else {
+        const panel = dockviewApi.getPanel(panelId);
+        if (panel) focusPanelForTier(dockviewApi, panel, layoutTier);
+      }
+    },
+    [dockviewApi, layoutTier],
+  );
+  // A right-rail session behaves like a view tab: tap shows it on the right
+  // half, tap again hides it; while a view covers the half, a tap uncovers it.
+  const toggleRightRailPane = useCallback((panelId: string) => {
+    const store = useDashboardStore.getState();
+    if (store.rightSidebarOpen) {
+      store.closeRightSidebar();
+      store.showRightPane(panelId);
+      store.setFocusedHalf("right");
+      return;
+    }
+    store.toggleRightPane(panelId);
+    const ws = store.activeWorkspaceId;
+    const shown = ws === null ? null : useDashboardStore.getState().foldHalves[ws]?.shownRight;
+    store.setFocusedHalf(shown === panelId ? "right" : "left");
+  }, []);
+  // #3010 — the halves hide dockview's tab strip, so each half's header
+  // carries the pane's menu (rename, close the pane, end the session), as
+  // the phone picker does.
+  const renderHalfActions = useCallback(
+    (panelId: string) => (startRename: () => void) => {
+      const panel = dockviewApi?.getPanel(panelId);
+      if (!dockviewApi || !panel) return null;
+      return (
+        <PaneActionsMenu
+          api={panel.api}
+          params={panel.params as TerminalPaneParams | undefined}
+          containerApi={dockviewApi}
+          onRename={startRename}
+          triggerClassName="half-header-btn half-header-menu"
+        />
+      );
+    },
+    [dockviewApi],
+  );
+  const renameHalfPane = useCallback(
+    (panelId: string, value: string) => {
+      const panel = dockviewApi?.getPanel(panelId);
+      if (!panel) return;
+      const sessionId = panelSessionId(panel);
+      const previous = panel.title ?? "";
+      panel.api.setTitle(value);
+      if (sessionId === undefined) return;
+      void useDashboardStore
+        .getState()
+        .renameSession(sessionId, value)
+        .catch((err) => {
+          panel.api.setTitle(previous);
+          useDashboardStore
+            .getState()
+            .reportError("Could not rename the session.", describeError(err));
+        });
+    },
+    [dockviewApi],
+  );
+  const closeHalfPane = useCallback(
+    (panelId: string) => dockviewApi?.getPanel(panelId)?.api.close(),
+    [dockviewApi],
+  );
+  const halfMenuItems = useCallback(
+    (half: Half) =>
+      (entry: RailPaneEntry): RailEntryMenuItem[] => [
+        ...(half === "left"
+          ? canGoRight(entry.panelId) && railSplit.left.length > 1
+            ? [
+                {
+                  label: "Move to the right half",
+                  onSelect: () => moveToHalf(entry.panelId, "right"),
+                },
+              ]
+            : []
+          : [
+              { label: "Move to the left half", onSelect: () => moveToHalf(entry.panelId, "left") },
+            ]),
+        // Detaches the pane; the session keeps running.
+        { label: "Close pane", onSelect: () => closeHalfPane(entry.panelId) },
+      ],
+    [moveToHalf, railSplit.left.length, closeHalfPane],
+  );
   // Projects with a session open in the active workspace, derived from the
   // live dockview panels (panel.params.sessionId -> session.projectId) —
   // reactive via panelsVersion, bumped on every ordinary dockview layout
@@ -1038,10 +1172,53 @@ export function App() {
   // panel switch — see its own render site further down) — without this,
   // the bar would keep showing and sending keys to a terminal the Kanban
   // board is currently covering, with no way to see what a tap even did.
+  //
+  // #3010 — with two halves on screen, the key bar addresses the focused
+  // half: the right half's session while it has focus (and no view covers
+  // it), the left half's otherwise.
+  // Only while its pane is open in the grid: the assignment can outlive a
+  // pane for a moment (a reload, before the remembered panes reopen).
+  const rightHalfPanelId =
+    foldHalves &&
+    halvesState.shownRight !== null &&
+    railPanes.some((p) => p.id === halvesState.shownRight)
+      ? halvesState.shownRight
+      : null;
+  const rightHalfSession = rightHalfPanelId
+    ? sessions.find((s) => `session-${s.id}` === rightHalfPanelId)
+    : undefined;
+  const rightHalfOnScreen = !!rightHalfSession && !rightSidebarOpen;
+  // The left half's pane, for its header.
+  const leftHalfPane = (() => {
+    if (!foldHalves || !activePanelId) return null;
+    const pane = railPanes.find((p) => p.id === activePanelId);
+    if (!pane) return null;
+    const session =
+      pane.sessionId === undefined ? undefined : sessions.find((x) => x.id === pane.sessionId);
+    return {
+      id: pane.id,
+      title: session ? sessionPaneTitle(session) : pane.title,
+      projectName: session
+        ? (projects.find((p) => p.id === session.projectId)?.name ?? null)
+        : null,
+    };
+  })();
+  const onUseLeftHalf = useCallback(() => {
+    const store = useDashboardStore.getState();
+    store.setFocusedHalf("left");
+    const id = store.activePanelId;
+    if (id) store.noteHalfUsed({ kind: "pane", panelId: id });
+  }, []);
   const activeTerminalSession =
-    activePanelId && viewMode !== "kanban"
-      ? sessions.find((s) => `session-${s.id}` === activePanelId && s.status === "active")
-      : undefined;
+    viewMode === "kanban"
+      ? undefined
+      : rightHalfOnScreen && focusedHalf === "right"
+        ? rightHalfSession?.status === "active"
+          ? rightHalfSession
+          : undefined
+        : activePanelId
+          ? sessions.find((s) => `session-${s.id}` === activePanelId && s.status === "active")
+          : undefined;
 
   // Dockview ships its own hardcoded light/dark chrome colors, unaware of
   // the selected terminal color scheme — so a scheme's background (e.g.
@@ -1177,6 +1354,10 @@ export function App() {
         sidebarOpen && "sb-open",
         isMobile && viewMode === "kanban" && "nav-tasks",
         sidebarCollapsed && "sidebar-collapsed",
+        foldHalves && "fold-halves",
+        // The two halves' widths hold in Tasks mode too: the board on the
+        // left half, the task sidebar docked on the right (frame 2b).
+        layoutPresentation === "halves" && "halves-band",
         sidebarResizing && "sidebar-resizing",
         settings.sidebarDensity === "compact" && "density-compact",
         isCoarsePointer && activeTerminalSession && "key-bar",
@@ -1223,10 +1404,13 @@ export function App() {
                 onSelectWorkspace={handleSelectWorkspace}
                 sheet={isCoarsePointer}
                 showPanes={!leftSidebarShown}
-                panes={railPanes}
+                panes={foldHalves ? railSplit.left : railPanes}
                 activePanelId={activePanelId}
                 onFocusPane={focusRailPane}
-                onNewSession={openNewSessionLauncher}
+                onNewSession={
+                  foldHalves ? () => openNewSessionOnHalf("left") : openNewSessionLauncher
+                }
+                menuItems={foldHalves ? halfMenuItems("left") : undefined}
               />
             }
             onOpenLauncher={openGlobalLauncher}
@@ -1301,7 +1485,16 @@ export function App() {
             </>
           )}
         </div>
-        <div className="grid-area">
+        <div
+          className={`grid-area${foldHalves ? " fold-half fold-half-left" : ""}${
+            foldHalves && rightHalfOnScreen && focusedHalf === "left" ? " focused" : ""
+          }`}
+          // #3010 — a press or focus in the left half gives it the key bar
+          // and makes its pane the one used last (for the phone after
+          // folding).
+          onPointerDownCapture={foldHalves ? onUseLeftHalf : undefined}
+          onFocusCapture={foldHalves ? onUseLeftHalf : undefined}
+        >
           {/* Whole-backend-down — design States doc section 04. Docked at
               the top of the grid area, rest of the UI dimmed (not
               disabled) beneath it via .grid-area-body.dimmed, matching the
@@ -1374,22 +1567,6 @@ export function App() {
                 onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
               >
                 Retry
-              </button>
-            </div>
-          )}
-          {paneCapNotice && (
-            <div className="pane-cap-notice">
-              <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="pane-cap-notice-title" role="status">
-                This split is past the tablet pane cap, so panes may get small.
-              </span>
-              <button
-                type="button"
-                className="pane-cap-notice-dismiss"
-                aria-label="Dismiss"
-                onClick={() => setPaneCapNotice(false)}
-              >
-                ×
               </button>
             </div>
           )}
@@ -1475,6 +1652,21 @@ export function App() {
             </div>
           )}
           <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
+            {foldHalves && leftHalfPane && (
+              <HalfHeader
+                side="left"
+                title={leftHalfPane.title}
+                projectName={leftHalfPane.projectName}
+                onMove={
+                  canGoRight(leftHalfPane.id) && railSplit.left.length > 1
+                    ? () => moveToHalf(leftHalfPane.id, "right")
+                    : null
+                }
+                focused={rightHalfOnScreen && focusedHalf === "left"}
+                renderActions={renderHalfActions(leftHalfPane.id)}
+                onRenameCommit={(value) => renameHalfPane(leftHalfPane.id, value)}
+              />
+            )}
             <div
               ref={dockviewContainerRef}
               className="dockview-container"
@@ -1579,6 +1771,46 @@ export function App() {
           tier={layoutTier}
           actions={rightSidebarActions}
           workspaceProjectIds={scopedWorkspaceProjectIds}
+          halves={layoutPresentation === "halves"}
+          rightHalf={
+            rightHalfSession && rightHalfPanelId ? (
+              <RightHalfPane
+                sessionId={rightHalfSession.id}
+                title={sessionPaneTitle(rightHalfSession)}
+                projectName={
+                  projects.find((p) => p.id === rightHalfSession.projectId)?.name ?? null
+                }
+                focused={focusedHalf === "right"}
+                onMoveLeft={() => moveToHalf(rightHalfPanelId, "left")}
+                onClose={() => {
+                  useDashboardStore.getState().showRightPane(null);
+                  useDashboardStore.getState().setFocusedHalf("left");
+                }}
+                onUse={() => {
+                  const store = useDashboardStore.getState();
+                  store.setFocusedHalf("right");
+                  store.noteHalfUsed({ kind: "pane", panelId: rightHalfPanelId });
+                }}
+                renderActions={renderHalfActions(rightHalfPanelId)}
+                onRenameCommit={(value) => renameHalfPane(rightHalfPanelId, value)}
+              />
+            ) : null
+          }
+          railSessions={
+            foldHalves ? (
+              <>
+                <span className="left-rail-sep" aria-hidden="true" />
+                <RailPanes
+                  panes={railSplit.right}
+                  activePanelId={rightHalfOnScreen ? rightHalfPanelId : null}
+                  onFocus={toggleRightRailPane}
+                  onAdd={() => openNewSessionOnHalf("right")}
+                  label="Right half"
+                  menuItems={halfMenuItems("right")}
+                />
+              </>
+            ) : null
+          }
         />
       </div>
       <ProjectPreviewPicker
@@ -1590,8 +1822,8 @@ export function App() {
       <SessionLauncherHost
         phone={isMobile}
         panels={mobilePanels}
-        onLaunched={onOpenSession}
-        onOpenSession={onOpenSession}
+        onLaunched={openSessionOnHalf}
+        onOpenSession={openSessionOnHalf}
       />
       {paletteOpen && (
         <CommandPalette

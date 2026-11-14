@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { LayoutMode, Session } from "./api/index.js";
 
 // Set by the pane-cap test before render. Null keeps every other test on the
@@ -139,6 +139,7 @@ const railHarness = vi.hoisted(() => ({
     onFocusPane: (panelId: string) => void;
     onNewSession: () => void;
     onSelectWorkspace: (id: number) => void;
+    menuItems?: (entry: { panelId: string }) => Array<{ label: string; onSelect: () => void }>;
   },
 }));
 vi.mock("./rail/RailWorkspaceSection.js", () => ({
@@ -147,7 +148,31 @@ vi.mock("./rail/RailWorkspaceSection.js", () => ({
     return <div data-testid="rail-middle" data-show-panes={String(props.showPanes)} />;
   },
 }));
-vi.mock("./MobileKeyBar.js", () => ({ MobileKeyBar: () => null }));
+vi.mock("./MobileKeyBar.js", () => ({
+  MobileKeyBar: ({ sessionId }: { sessionId: number }) => (
+    <div data-testid="key-bar" data-session={sessionId} />
+  ),
+}));
+// #3010 — the right half's pane and the launcher, as App wires them.
+const foldHarness = vi.hoisted(() => ({
+  rightHalf: null as null | { sessionId: number; focused: boolean; onUse: () => void },
+  launcher: null as null | {
+    onLaunched: (session: unknown, target: { half?: "left" | "right" } | null) => void;
+  },
+  onOpenSession: (() => {}) as (session: unknown) => void,
+}));
+vi.mock("./fold/RightHalfPane.js", () => ({
+  RightHalfPane: (p: NonNullable<typeof foldHarness.rightHalf>) => {
+    foldHarness.rightHalf = p;
+    return <div data-testid="right-half" data-session={p.sessionId} />;
+  },
+}));
+vi.mock("./launchers/SessionLauncher.js", () => ({
+  SessionLauncherHost: (p: NonNullable<typeof foldHarness.launcher>) => {
+    foldHarness.launcher = p;
+    return null;
+  },
+}));
 vi.mock("./MobileSessionBar.js", () => ({
   MobileSessionBar: ({ tier, contextLabel }: { tier: string; contextLabel?: string }) => (
     <span data-testid="session-bar" data-tier={tier} data-context={contextLabel ?? ""} />
@@ -200,7 +225,9 @@ vi.mock("./hooks/useWorkspacePersistence.js", () => ({
 }));
 vi.mock("./hooks/useLayoutPresentation.js", () => ({ useLayoutPresentation: vi.fn() }));
 vi.mock("./hooks/useVisualViewportInset.js", () => ({ useVisualViewportInset: vi.fn() }));
-vi.mock("./hooks/usePanelOpener.js", () => ({ usePanelOpener: () => ({}) }));
+vi.mock("./hooks/usePanelOpener.js", () => ({
+  usePanelOpener: () => ({ onOpenSession: (s: unknown) => foldHarness.onOpenSession(s) }),
+}));
 vi.mock("./hooks/usePhoneTasksNavigator.js", () => ({ usePhoneTasksNavigator: vi.fn() }));
 vi.mock("./hooks/usePhoneBackStack.js", () => ({ usePhoneBackStack: vi.fn() }));
 vi.mock("./lib/sidebarSwipeGesture.js", () => ({
@@ -219,11 +246,15 @@ function setLayoutMode(layoutMode: LayoutMode) {
 }
 
 // matchMedia stub keyed on the width tier the test wants to simulate.
-function stubWidth(tier: "phone" | "tablet" | "desktop", coarse = false) {
+// "halves" is the tablet tier inside the two-halves band, 800-1099px (#3010).
+function stubWidth(tier: "phone" | "tablet" | "desktop" | "halves", coarse = false) {
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => ({
       matches:
+        (tier === "halves" &&
+          (query === "(min-width: 700px) and (max-width: 1279.98px)" ||
+            query === "(min-width: 800px) and (max-width: 1099.98px)")) ||
         (tier === "phone" && query.includes("max-width: 699.98px")) ||
         (tier === "tablet" && query.includes("min-width: 700px")) ||
         (tier === "desktop" && query.includes("min-width: 1280px")) ||
@@ -674,7 +705,7 @@ describe("App workspace bootstrap", () => {
   });
 });
 
-describe("App tablet pane-cap notice", () => {
+describe("App explicit split on the tablet", () => {
   function referenceSession(id: number): Session {
     return {
       id,
@@ -756,7 +787,6 @@ describe("App tablet pane-cap notice", () => {
       settings: {
         ...useDashboardStore.getState().settings,
         layoutMode: "tablet",
-        tabletPaneCap: 2,
       },
     });
   });
@@ -770,29 +800,19 @@ describe("App tablet pane-cap notice", () => {
     vi.clearAllMocks();
   });
 
-  it("warns once for an explicit split past the cap, and clears on a workspace switch", async () => {
+  // #3010 removed the tablet pane cap and its notice: an explicit split
+  // still adds the session, and nothing warns about columns any more.
+  it("adds an explicit split's session without a pane-cap notice", async () => {
     render(<App />);
-    const launch = await screen.findByTestId("launch-split");
-    fireEvent.click(launch);
-    // Scoped to the app's OWN notice rather than "any role=status" — the
-    // app also mounts the app-wide toast host, which is a role=status
-    // region that is always present (the global toast slice).
-    const notice = await screen.findByText(/This split is past the tablet pane cap/);
-    expect(notice).toHaveAttribute("role", "status");
-    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByTestId("show-workspace"));
-    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
-
-    useDashboardStore.setState({
-      splitRequest: { referencePanelId: "session-1", direction: "right" },
-    });
-    // A second split of the same session only focuses the panel already
-    // added. A new session is what can add another column.
-    splitHarness.launch = { ...splitHarness.launch!, id: 10 };
     fireEvent.click(await screen.findByTestId("launch-split"));
-    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
-    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(2);
+    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
+    expect(splitHarness.api?.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "session-9",
+        position: expect.objectContaining({ direction: "right" }),
+      }),
+    );
+    expect(screen.queryByText(/pane cap/)).toBeNull();
   });
 });
 
@@ -1034,5 +1054,196 @@ describe("App task opening by tier (#3011)", () => {
     window.history.replaceState({}, "", "/?task=9");
     render(<App />);
     expect(useDashboardStore.getState().openTaskRequest?.taskId).toBe(9);
+  });
+});
+
+// #3010 — the two halves between 800 and 1099px.
+describe("App two halves", () => {
+  const setActive = vi.fn();
+  function makeApi() {
+    const panels = [10, 11].map((id) => ({
+      id: `session-${id}`,
+      title: `s${id}`,
+      params: { sessionId: id },
+      api: { location: { type: "grid" }, setActive, close: vi.fn() },
+      group: { id: `g${id}` },
+    }));
+    return {
+      panels,
+      groups: [],
+      activePanel: null,
+      getPanel: (id: string) => panels.find((panel) => panel.id === id) ?? null,
+      addPanel: vi.fn(),
+      maximizeGroup: vi.fn(),
+      hasMaximizedGroup: () => false,
+      exitMaximizedGroup: vi.fn(),
+      onDidActivePanelChange: () => ({ dispose: vi.fn() }),
+      onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onWillMutateLayout: () => ({ dispose: vi.fn() }),
+      onDidMutateLayout: () => ({ dispose: vi.fn() }),
+    };
+  }
+  const session = (id: number) =>
+    ({
+      id,
+      projectId: 7,
+      name: null,
+      nameLocked: false,
+      lastTitle: `session ${id}`,
+      command: "bash",
+      status: "active",
+      attention: false,
+    }) as Session;
+
+  beforeEach(() => {
+    railHarness.props = null;
+    foldHarness.rightHalf = null;
+    foldHarness.launcher = null;
+    foldHarness.onOpenSession = vi.fn();
+    splitHarness.announced = false;
+    splitHarness.launch = null;
+    setLayoutMode("auto");
+    localStorage.clear();
+    useDashboardStore.setState({
+      viewMode: "list",
+      activeWorkspaceId: 1,
+      activePanelId: "session-10",
+      sessions: [session(10), session(11), session(12)],
+      foldHalves: {},
+      focusedHalf: "left",
+      rightSidebarOpen: false,
+      refreshWorkspaces: vi.fn().mockResolvedValue(undefined),
+      hydrateSettings: vi.fn(),
+      startThemeWatch: vi.fn(() => () => {}),
+    });
+  });
+
+  afterEach(() => {
+    splitHarness.api = null;
+    splitHarness.announced = false;
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    useDashboardStore.setState({ foldHalves: {}, focusedHalf: "left", activePanelId: null });
+  });
+
+  async function renderHalves(coarse = false) {
+    stubWidth("halves", coarse);
+    splitHarness.api = makeApi();
+    const view = render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    return view;
+  }
+
+  it("shows the halves: the left rail lists the left half, the right rail the right one", async () => {
+    const { container } = await renderHalves();
+    expect(container.querySelector(".app")).toHaveClass("fold-halves");
+    expect(railHarness.props?.panes.map((p) => p.id)).toEqual(["session-10", "session-11"]);
+    expect(screen.queryByTestId("right-half")).toBeNull();
+
+    act(() =>
+      useDashboardStore.getState().moveToHalf("session-11", "right", ["session-10", "session-11"]),
+    );
+    expect(railHarness.props?.panes.map((p) => p.id)).toEqual(["session-10"]);
+    expect(screen.getByTestId("right-half")).toHaveAttribute("data-session", "11");
+    const rail = screen.getByRole("navigation", { name: "Right sidebar" });
+    expect(within(rail).getByRole("group", { name: "Right half" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: /session 11/ })).toBeInTheDocument();
+  });
+
+  it("is not the halves outside 800-1099px; in Tasks mode only the widths hold", async () => {
+    stubWidth("tablet");
+    const { container } = render(<App />);
+    expect(container.querySelector(".app")).not.toHaveClass("fold-halves");
+    cleanup();
+    useDashboardStore.setState({ viewMode: "kanban", rightSidebarOpen: true });
+    const tasks = await renderHalves();
+    const app = tasks.container.querySelector(".app");
+    expect(app).not.toHaveClass("fold-halves");
+    // The halves' widths still hold: the sidebar docks on the right half.
+    expect(app).toHaveClass("halves-band");
+    expect(tasks.container.querySelector(".right-sidebar-panel.docked")).toHaveClass("half");
+    useDashboardStore.setState({ viewMode: "list", rightSidebarOpen: false });
+  });
+
+  it("points the key bar at the focused half", async () => {
+    await renderHalves(true);
+    // The fake grid reports no active panel on ready; the left half's is set here.
+    act(() => useDashboardStore.setState({ activePanelId: "session-10" }));
+    act(() =>
+      useDashboardStore.getState().moveToHalf("session-11", "right", ["session-10", "session-11"]),
+    );
+    act(() => useDashboardStore.getState().setFocusedHalf("right"));
+    expect(screen.getByTestId("key-bar")).toHaveAttribute("data-session", "11");
+    act(() => useDashboardStore.getState().setFocusedHalf("left"));
+    expect(screen.getByTestId("key-bar")).toHaveAttribute("data-session", "10");
+    // A view covering the right half takes the right session off the key bar.
+    act(() => {
+      useDashboardStore.getState().setFocusedHalf("right");
+      useDashboardStore.setState({ rightSidebarOpen: true });
+    });
+    expect(screen.getByTestId("key-bar")).toHaveAttribute("data-session", "10");
+  });
+
+  it("lands a session launched from a half's + on that half", async () => {
+    await renderHalves();
+    act(() => foldHarness.launcher?.onLaunched(session(12), { half: "right" }));
+    expect(useDashboardStore.getState().foldHalves[1]?.right).toEqual(["session-12"]);
+    expect(foldHarness.onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 12 }));
+    // Without a half, nothing is assigned.
+    act(() => foldHarness.launcher?.onLaunched(session(10), null));
+    expect(useDashboardStore.getState().foldHalves[1]?.right).toEqual(["session-12"]);
+  });
+
+  it("opens the launcher for the half whose + was pressed", async () => {
+    await renderHalves();
+    act(() => railHarness.props?.onNewSession());
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({ half: "left" });
+    const rail = screen.getByRole("navigation", { name: "Right sidebar" });
+    act(() => {
+      fireEvent.click(within(rail).getByRole("button", { name: "New session" }));
+    });
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({ half: "right" });
+    act(() => useDashboardStore.setState({ launcherRequest: null }));
+  });
+
+  it("closes a pane from a rail entry's long-press menu, and moves it between halves", async () => {
+    await renderHalves();
+    const api = splitHarness.api as unknown as ReturnType<typeof makeApi>;
+    const entry = { panelId: "session-11" } as Parameters<
+      NonNullable<NonNullable<typeof railHarness.props>["menuItems"]>
+    >[0];
+    const items = railHarness.props?.menuItems?.(entry) ?? [];
+    expect(items.map((i) => i.label)).toEqual(["Move to the right half", "Close pane"]);
+    act(() => items[0]!.onSelect());
+    expect(useDashboardStore.getState().foldHalves[1]?.right).toEqual(["session-11"]);
+    act(() => items[1]!.onSelect());
+    expect(api.panels[1]!.api.close).toHaveBeenCalled();
+  });
+
+  it("toggles a right-rail session like a view tab, and uncovers the half from a view", async () => {
+    await renderHalves();
+    act(() =>
+      useDashboardStore.getState().moveToHalf("session-11", "right", ["session-10", "session-11"]),
+    );
+    const rail = screen.getByRole("navigation", { name: "Right sidebar" });
+    const entry = () => within(rail).getByRole("button", { name: /session 11/ });
+    act(() => {
+      fireEvent.click(entry());
+    });
+    expect(screen.queryByTestId("right-half")).toBeNull();
+    act(() => {
+      fireEvent.click(entry());
+    });
+    expect(screen.getByTestId("right-half")).toBeInTheDocument();
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    expect(screen.queryByTestId("right-half")).toBeNull();
+    act(() => {
+      fireEvent.click(entry());
+    });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(screen.getByTestId("right-half")).toBeInTheDocument();
   });
 });

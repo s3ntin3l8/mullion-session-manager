@@ -273,6 +273,19 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
     const disposable = props.api.onDidActiveChange((e) => setIsActive(e.isActive));
     return () => disposable.dispose();
   }, [sessionId, props.api]);
+  // #3010 — while this session shows on the right half (800-1099px), the
+  // right half renders its terminal; the grid's copy stands aside. Two live
+  // copies of one session would both resize its pty (the server keeps the
+  // last size sent) and both register for the key bar's input.
+  const onRightHalf = useDashboardStore(
+    (s) =>
+      s.foldHalvesActive &&
+      s.activeWorkspaceId !== null &&
+      s.foldHalves[s.activeWorkspaceId]?.shownRight === panelId,
+  );
+  if (onRightHalf) {
+    return <div className="fold-elsewhere">Shown on the right half</div>;
+  }
   return (
     <div
       className={highlightedPanelId === panelId ? "panel-body-highlight" : ""}

@@ -42,6 +42,7 @@ import type {
 import type { GithubIssueUi } from "./githubResources.js";
 import type { ReorderUpdate } from "../reorder.js";
 import type { KanbanColumnId } from "../kanban.js";
+import type { FoldHalvesState, Half, LastUsed } from "../lib/foldHalves.js";
 
 // "list" is today's per-project sidebar tree (Sidebar.tsx); "kanban" is the
 // unified task/session board (UnifiedBoard.tsx — originally issue #211's
@@ -860,6 +861,32 @@ export interface UiSlice {
    *  useClearTaskSelectionOnProjectChange keeps a task whose project the
    *  sidebar moves to. */
   openSessionInWorkspace: (sessionId: number) => void;
+  /** #3010 — per workspace, which panes show on which half between 800 and
+   *  1099px. Device-local (crs.foldHalves), never in the saved layout. */
+  foldHalves: Record<number, FoldHalvesState>;
+  /** Which half has focus there: what the key bar and keyboard address. */
+  focusedHalf: Half;
+  /** Moves a pane of the active workspace to a half; `openIds` are its open
+   *  panes (a move that would empty the left half is refused). */
+  moveToHalf: (panelId: string, half: Half, openIds: readonly string[]) => void;
+  /** A right-rail session as a view tab: show it, or hide it if showing. */
+  toggleRightPane: (panelId: string) => void;
+  /** Shows a right-half pane, or closes the right half (null). */
+  showRightPane: (panelId: string | null) => void;
+  /** Records the pane shown on the left half; `used` (default) also makes
+   *  it the one used last. */
+  noteLeftPane: (panelId: string, used?: boolean) => void;
+  noteHalfUsed: (used: LastUsed) => void;
+  /** Forgets panes of the active workspace that were closed. */
+  forgetFoldPanes: (closedIds: readonly string[]) => void;
+  /** Remembers the terminal panes open while the halves show. */
+  noteFoldOpen: (openIds: readonly string[]) => void;
+  setFocusedHalf: (half: Half) => void;
+  /** Whether the halves are on screen right now (800-1099px). Runtime only:
+   *  App sets it; the terminal pane wrapper reads it so a session shown on
+   *  the right half is not also mounted in the grid. */
+  foldHalvesActive: boolean;
+  setFoldHalvesActive: (active: boolean) => void;
   setHierarchicalView: (value: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
   // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,

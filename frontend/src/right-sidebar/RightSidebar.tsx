@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
@@ -22,6 +23,13 @@ export interface RightSidebarProps {
   // Issue #1877 — the workspace's project ids (App's scopedWorkspaceProjectIds);
   // the project picker offers only these. null/absent = every project.
   workspaceProjectIds?: number[] | null;
+  /** #3010 — the two halves (800-1099px): the panel is exactly the right
+   *  half (equal to the left, no stored width, no resize handle). */
+  halves?: boolean;
+  /** The right half's session, shown while no sidebar view covers it. */
+  rightHalf?: ReactNode;
+  /** The right half's sessions, listed in the rail below the views. */
+  railSessions?: ReactNode;
 }
 
 function subscribeFullWidth(onChange: () => void): () => void {
@@ -38,7 +46,14 @@ const readFullWidth = (): boolean => window.matchMedia(RIGHT_SIDEBAR_FULL_WIDTH_
 // too narrow to dock does an open view cover the workspace. Rendered as
 // siblings of `.grid-area` inside `.app-body`. Not rendered on phone, where
 // the navigator panel already carries Source Control.
-export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSidebarProps) {
+export function RightSidebar({
+  tier,
+  actions,
+  workspaceProjectIds,
+  halves = false,
+  rightHalf,
+  railSessions,
+}: RightSidebarProps) {
   const viewId = useDashboardStore((s) => s.rightSidebarView);
   const open = useDashboardStore((s) => s.rightSidebarOpen);
   const storedWidth = useDashboardStore((s) => s.rightSidebarWidth);
@@ -128,15 +143,11 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // forced desktop tier on a narrow window keeps Escape but not back.
   usePhoneBackStack(covering && isCompactTier(tier), close);
 
-  // A tier change (rotate, fold/unfold, window resize) that lands on phone
-  // closes the panel: `open` is persisted state and phone renders nothing
-  // here, so it would otherwise linger invisibly.
-  const lastTier = useRef(tier);
-  useEffect(() => {
-    const prev = lastTier.current;
-    lastTier.current = tier;
-    if (prev !== tier && open && tier === "phone") close();
-  }, [tier, open, close]);
+  // #3010 — a tier change that lands on phone (folding, a narrowed window)
+  // leaves an open view open. It used to close it, since phone renders
+  // nothing here; design 9.2 keeps it instead: the phone layout shows the view
+  // full screen if it was used last, and unfolding brings it back on the
+  // right half. `open` is persisted state, so nothing else is needed.
 
   if (tier === "phone") return null;
 
@@ -146,17 +157,23 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     <>
       {open && (
         <aside
-          className={`right-sidebar-panel docked${full ? " full" : ""}${dragging ? " resizing" : ""}`}
-          style={full ? undefined : { width }}
+          className={`right-sidebar-panel docked${full ? " full" : ""}${dragging ? " resizing" : ""}${halves ? " half" : ""}`}
+          style={full || halves ? undefined : { width }}
           aria-label={`${view.label} sidebar`}
         >
-          {!full && !coarse && (
+          {!full && !coarse && !halves && (
             <div className="right-sidebar-resize-handle" onMouseDown={onMouseDown} />
           )}
           <RightSidebarPanel view={view} followed={followed} actions={actions} onClose={close} />
         </aside>
       )}
-      <RightRail projectId={followed.effectiveProjectId} />
+      {/* #3010 — the right half's session, while no view covers it. */}
+      {!open && halves && rightHalf && (
+        <aside className="right-sidebar-panel docked half" aria-label="Right half">
+          {rightHalf}
+        </aside>
+      )}
+      <RightRail projectId={followed.effectiveProjectId}>{railSessions}</RightRail>
     </>
   );
 }

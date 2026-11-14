@@ -8,7 +8,7 @@ import { useDashboardStore } from "../store/index.js";
 let tier: "desktop" | "tablet" | "phone" = "desktop";
 vi.mock("../lib/layoutTier.js", async (importOriginal) => ({
   ...(await importOriginal<typeof layoutTier>()),
-  useLayoutContext: () => ({ tier, tabletPaneCap: 2 }),
+  useLayoutContext: () => ({ tier }),
 }));
 
 beforeEach(() => {

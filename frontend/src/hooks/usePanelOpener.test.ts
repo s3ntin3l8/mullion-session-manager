@@ -112,8 +112,8 @@ interface SetupProps {
   activeWorkspaceId: number | null;
 }
 
-const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop", tabletPaneCap: 2 };
-const PHONE_LAYOUT: LayoutContext = { tier: "phone", tabletPaneCap: 2 };
+const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop" };
+const PHONE_LAYOUT: LayoutContext = { tier: "phone" };
 
 function setup(overrides: Partial<SetupProps> = {}) {
   const initialProps: SetupProps = {
@@ -332,7 +332,7 @@ describe("usePanelOpener — onOpenSession", () => {
     const api = mockDockviewApi();
     const { result } = setup({
       dockviewApi: api,
-      layout: { tier: "tablet", tabletPaneCap: 2 },
+      layout: { tier: "tablet" },
     });
 
     result.current.onOpenSession(SESSION);
@@ -670,7 +670,7 @@ describe("usePanelOpener — onOpenTasks", () => {
   });
 
   it("closes the tablet drawer: from 700px Tasks mode is the board over the grid (#3009)", () => {
-    const layout = { tier: "tablet", tabletPaneCap: 2 } as LayoutContext;
+    const layout = { tier: "tablet" } as LayoutContext;
     const { result } = setup({ dockviewApi: null, layout });
     result.current.onOpenTasks();
     expect(setViewMode).toHaveBeenCalledWith("kanban");

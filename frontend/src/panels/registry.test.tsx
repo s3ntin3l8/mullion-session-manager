@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Suspense, useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import { makePanelWrapper, components, KanbanBoardOverlay } from "./registry.js";
@@ -665,5 +665,60 @@ describe("components['task-detail'] — close on delete", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "delete task" }));
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #3010 — one mounted terminal per session: while a session shows on the
+// right half (800-1099px), the right half renders it and the grid's copy
+// stands aside, so the pty is not resized by two viewers and the key bar
+// has one input to address.
+describe("TerminalPanelWrapper — the right half's session stands aside", () => {
+  function renderPanel() {
+    const props = {
+      params: { sessionId: 1 },
+      api: { setTitle: vi.fn(), isActive: false, onDidActiveChange: () => ({ dispose: () => {} }) },
+      containerApi: {},
+    } as unknown as IDockviewPanelProps<{ sessionId: number }>;
+    return render(<components.terminal {...props} />);
+  }
+
+  beforeEach(() => {
+    resetStore();
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 1, projectId: 1 })],
+      projects: [makeProject({ id: 1, name: "demo" })],
+      activeWorkspaceId: 4,
+      foldHalves: {
+        4: {
+          right: ["session-1"],
+          shownRight: "session-1",
+          shownLeft: null,
+          lastUsed: null,
+          open: [],
+        },
+      },
+      foldHalvesActive: true,
+    });
+  });
+
+  it("renders no terminal while its session shows on the right half", () => {
+    renderPanel();
+    expect(screen.queryByTestId("terminal-pane")).toBeNull();
+    expect(screen.getByText("Shown on the right half")).toBeInTheDocument();
+  });
+
+  it("renders the terminal again once the halves are gone or the half is closed", () => {
+    renderPanel();
+    act(() => useDashboardStore.setState({ foldHalvesActive: false }));
+    expect(screen.getByTestId("terminal-pane")).toBeInTheDocument();
+    act(() =>
+      useDashboardStore.setState({
+        foldHalvesActive: true,
+        foldHalves: {
+          4: { right: ["session-1"], shownRight: null, shownLeft: null, lastUsed: null, open: [] },
+        },
+      }),
+    );
+    expect(screen.getByTestId("terminal-pane")).toBeInTheDocument();
   });
 });

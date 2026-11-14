@@ -54,6 +54,9 @@ export const STORAGE_KEYS = {
   // dismissed; the notice returns only once the generator's output changes.
   dismissedConventionsNotice: "crs.dismissedConventionsNotice",
   viewMode: "crs.viewMode",
+  // #3010 — which panes show on which half between 800 and 1099px, per
+  // workspace (lib/foldHalves.ts). Device-local: never in the saved layout.
+  foldHalves: "crs.foldHalves",
   hierarchicalView: "crs.hierarchicalView",
   dockCollapsed: "crs.dockCollapsed",
   dockHeight: "crs.dockHeight",
