@@ -1,0 +1,90 @@
+/* The launcher's Where row: the project's "⋯" and "Add project", and the
+   panel they open in place under the row (#3048, LauncherProjects.tsx). */
+.launcher-project-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.launcher-project-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  min-width: 30px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+.launcher-project-btn[aria-expanded="true"] {
+  background: var(--seg);
+  color: var(--fg);
+}
+/* A full line of its own, after the host and worktree controls. */
+.launcher-project-panel {
+  order: 99;
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+.launcher-project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 0.8125rem;
+  text-align: left;
+}
+.launcher-project-row svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.launcher-project-row:hover:not(:disabled) {
+  background: var(--seg);
+}
+.launcher-project-row:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.launcher-project-row.danger,
+.launcher-project-row.danger svg {
+  color: var(--r);
+}
+/* The delete row is a ConfirmButton with an armed label: its two labels share
+   one grid cell, laid out like the other rows. */
+.launcher-project-row.confirm-btn-stable {
+  display: grid;
+  justify-items: stretch;
+}
+.launcher-project-row.confirm-btn-stable > .confirm-btn-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.launcher-project-message {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+/* Under a coarse pointer: 44px targets. */
+.launcher-project-tools.coarse .launcher-project-btn {
+  min-height: 44px;
+  min-width: 44px;
+}
+.launcher-project-panel.coarse .launcher-project-row {
+  min-height: 44px;
+  font-size: 0.9375rem;
+}
+.launcher-project-panel.coarse .discover-add {
+  min-height: 44px;
+}

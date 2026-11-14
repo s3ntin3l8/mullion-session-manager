@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../api/index.js";
-import type { DiscoveredProject, Host } from "../api/index.js";
+import type { DiscoveredProject, Host, Project } from "../api/index.js";
 import { Dropdown } from "../ui/primitives.js";
 import {
   EmptyState,
@@ -26,11 +26,18 @@ export function DiscoverProjects({
   onToggleCollapsed,
   onOpenSettingsProjects,
   hosts,
+  onAdded,
+  bodyId = "discover-projects-body",
 }: {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onOpenSettingsProjects: () => void;
   hosts: Host[];
+  // A candidate was added as a new project (the launcher selects it, #3048).
+  onAdded?: (project: Project) => void;
+  // The disclosure body's id: the launcher mounts a second copy beside the
+  // sidebar's, and ids must stay unique.
+  bodyId?: string;
 }) {
   // P1 perf fix — both fields here are pure actions (never read reactively),
   // same reasoning as ProjectSection's header comment in Sidebar.tsx.
@@ -126,9 +133,10 @@ export function DiscoverProjects({
     clearAddError(c.cwd);
     store
       .createProject(c.name, c.cwd, selectedHostId, allowDuplicate ? { allowDuplicate } : undefined)
-      .then(() => {
+      .then((project) => {
         setAdded((prev) => new Set(prev).add(c.cwd));
         void store.refreshProjects();
+        onAdded?.(project);
       })
       .catch((err: unknown) => {
         // Discover only lists directories a scan already found on disk, so
@@ -222,7 +230,7 @@ export function DiscoverProjects({
           role="button"
           tabIndex={0}
           aria-expanded={!collapsed}
-          aria-controls="discover-projects-body"
+          aria-controls={bodyId}
           onClick={onToggleCollapsed}
           onKeyDown={(e) => {
             if (e.target !== e.currentTarget) return;
@@ -242,7 +250,7 @@ export function DiscoverProjects({
         {hostPicker}
       </div>
       {!collapsed && (
-        <div id="discover-projects-body" className="discover-body">
+        <div id={bodyId} className="discover-body">
           {remaining.map((c) => (
             <div key={c.cwd} className="discover-item">
               <FolderIcon size={14} style={{ color: "var(--muted)" }} />

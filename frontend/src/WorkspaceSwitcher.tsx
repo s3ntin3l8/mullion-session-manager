@@ -4,8 +4,13 @@ import { useDashboardStore } from "./store/index.js";
 import { CreateGroupModal } from "./CreateGroupModal.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
-import { computeReorder } from "./reorder.js";
-import type { ReorderItem } from "./reorder.js";
+import {
+  deleteGroup,
+  deleteWorkspace,
+  moveWorkspace,
+  renameGroup,
+  renameWorkspace,
+} from "./workspaceActions.js";
 import type { Group, Session, Workspace } from "./api/index.js";
 import {
   deriveWorkspaceLiveStatus,
@@ -14,7 +19,6 @@ import {
   type WorkspaceLiveStatus,
 } from "./hooks/useWorkspaceTree.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
-import { describeError } from "./lib/describeError.js";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -26,6 +30,7 @@ import {
 } from "./ui/icons.js";
 import { WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 import { TextInput } from "./ui/primitives.js";
+import { InlineRenameInput } from "./ui/InlineRenameInput.js";
 
 // Workspaces (named, persistent split-layouts — Mullion's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals
@@ -178,14 +183,7 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
     },
     commitWorkspaceDrop: (groupId, index) => {
       if (!dragging || dragging.kind !== "workspace") return;
-      const asItems: ReorderItem[] = workspaces.map((w) => ({
-        id: w.id,
-        groupId: w.groupId,
-        position: w.position,
-      }));
-      void useDashboardStore
-        .getState()
-        .reorderWorkspaces(computeReorder(asItems, dragging.id, index, groupId));
+      moveWorkspace(workspaces, dragging.id, groupId, index);
     },
     endDrag,
   };
@@ -266,31 +264,10 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
               sessionIdsByWorkspace={sessionIdsByWorkspace}
               activeWorkspaceId={displayActiveWorkspaceId}
               onSelect={(id) => handleSelectWorkspace(id)}
-              onRename={(id, name) => {
-                // Every one of these used to `void` its action, which
-                // turned a rejected request into an unhandled promise
-                // rejection — a failed delete looked exactly like a
-                // successful one, and the workspace was simply still
-                // there with no explanation (audit finding 12).
-                void useDashboardStore
-                  .getState()
-                  .renameWorkspace(id, name)
-                  .catch((err) => {
-                    useDashboardStore
-                      .getState()
-                      .reportError("Could not rename the workspace.", describeError(err));
-                  });
-              }}
-              onDelete={(id) => {
-                void useDashboardStore
-                  .getState()
-                  .deleteWorkspace(id)
-                  .catch((err) => {
-                    useDashboardStore
-                      .getState()
-                      .reportError("Could not delete the workspace.", describeError(err));
-                  });
-              }}
+              // workspaceActions.ts reports a rejected request rather than
+              // leaving it unhandled (audit finding 12).
+              onRename={renameWorkspace}
+              onDelete={deleteWorkspace}
               onToggleCollapsed={() =>
                 void useDashboardStore
                   .getState()
@@ -299,19 +276,8 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
               onEditGroup={(name, color) =>
                 void useDashboardStore.getState().updateGroup(group.id, { name, color })
               }
-              onRenameGroup={(name) =>
-                void useDashboardStore.getState().updateGroup(group.id, { name })
-              }
-              onDeleteGroup={() => {
-                void useDashboardStore
-                  .getState()
-                  .deleteGroup(group.id)
-                  .catch((err) => {
-                    useDashboardStore
-                      .getState()
-                      .reportError("Could not delete the group.", describeError(err));
-                  });
-              }}
+              onRenameGroup={(name) => renameGroup(group.id, name)}
+              onDeleteGroup={() => deleteGroup(group.id)}
               dragCtx={dragCtx}
               onHeaderDragOver={(e) => {
                 if (!dragCtx.dragging) return;
@@ -337,29 +303,8 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
             sessions={sessions}
             sessionIdsByWorkspace={sessionIdsByWorkspace}
             onSelect={(id) => handleSelectWorkspace(id)}
-            onRename={(id, name) => {
-              // The grouped list above has the same guard on its own
-              // rename — a rejected request must not become an unhandled
-              // rejection (audit finding 12).
-              void useDashboardStore
-                .getState()
-                .renameWorkspace(id, name)
-                .catch((err) => {
-                  useDashboardStore
-                    .getState()
-                    .reportError("Could not rename the workspace.", describeError(err));
-                });
-            }}
-            onDelete={(id) => {
-              void useDashboardStore
-                .getState()
-                .deleteWorkspace(id)
-                .catch((err) => {
-                  useDashboardStore
-                    .getState()
-                    .reportError("Could not delete the workspace.", describeError(err));
-                });
-            }}
+            onRename={renameWorkspace}
+            onDelete={deleteWorkspace}
           />
 
           <div style={{ padding: "4px 12px 10px" }}>
@@ -424,15 +369,6 @@ function GroupSection({
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
-  const [draftName, setDraftName] = useState(group.name);
-  // Unmounting the focused <input> below (setEditingName(false)) fires a
-  // native blur before this render's closure ever sees the *new* draftName/
-  // group.name — so without this guard, Enter's onRenameGroup call would
-  // double-fire via onBlur's own (stale) "still differs" check, and Escape's
-  // onBlur would see the pre-reset typed text and commit the very rename the
-  // user just tried to cancel. Both keydown branches arm this so onBlur only
-  // ever runs for an actual click-away.
-  const suppressBlurRef = useRef(false);
 
   const isAssignTarget =
     dragCtx.dragging?.kind === "workspace" &&
@@ -482,30 +418,10 @@ function GroupSection({
           }}
         />
         {editingName ? (
-          <TextInput
-            small
-            autoFocus
-            className="workspace-rename-input"
-            value={draftName}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setDraftName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                suppressBlurRef.current = true;
-                if (draftName.trim()) onRenameGroup(draftName.trim());
-                setEditingName(false);
-              } else if (e.key === "Escape") {
-                suppressBlurRef.current = true;
-                setDraftName(group.name);
-                setEditingName(false);
-              }
-            }}
-            onBlur={() => {
-              if (!suppressBlurRef.current && draftName.trim() && draftName !== group.name) {
-                onRenameGroup(draftName.trim());
-              }
-              setEditingName(false);
-            }}
+          <InlineRenameInput
+            name={group.name}
+            onCommit={onRenameGroup}
+            onDone={() => setEditingName(false)}
           />
         ) : (
           <span
@@ -513,8 +429,6 @@ function GroupSection({
             onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
-              suppressBlurRef.current = false;
-              setDraftName(group.name);
               setEditingName(true);
             }}
           >
@@ -749,11 +663,7 @@ function WorkspaceItem({
   drag: WorkspaceItemDrag;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draftName, setDraftName] = useState(workspace.name);
   const rowRef = useRef<HTMLDivElement>(null);
-  // See the matching comment on GroupSection's suppressBlurRef — same
-  // unmount-fires-blur-with-a-stale-closure hazard applies here.
-  const suppressBlurRef = useRef(false);
 
   return (
     <div
@@ -793,30 +703,10 @@ function WorkspaceItem({
       </span>
       <GridIcon size={14} className="workspace-item-icon" />
       {editing ? (
-        <TextInput
-          small
-          autoFocus
-          className="workspace-rename-input"
-          value={draftName}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setDraftName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              suppressBlurRef.current = true;
-              if (draftName.trim()) onRename(draftName.trim());
-              setEditing(false);
-            } else if (e.key === "Escape") {
-              suppressBlurRef.current = true;
-              setDraftName(workspace.name);
-              setEditing(false);
-            }
-          }}
-          onBlur={() => {
-            if (!suppressBlurRef.current && draftName.trim() && draftName !== workspace.name) {
-              onRename(draftName.trim());
-            }
-            setEditing(false);
-          }}
+        <InlineRenameInput
+          name={workspace.name}
+          onCommit={onRename}
+          onDone={() => setEditing(false)}
         />
       ) : (
         <button
@@ -836,8 +726,6 @@ function WorkspaceItem({
           }}
           onDoubleClick={(e) => {
             e.stopPropagation();
-            suppressBlurRef.current = false;
-            setDraftName(workspace.name);
             setEditing(true);
           }}
         >
@@ -860,11 +748,7 @@ function WorkspaceItem({
               key: "edit",
               label: "Edit",
               icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
-              onClick: () => {
-                suppressBlurRef.current = false;
-                setDraftName(workspace.name);
-                setEditing(true);
-              },
+              onClick: () => setEditing(true),
             },
             {
               key: "delete",
