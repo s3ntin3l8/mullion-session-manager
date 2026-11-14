@@ -39,8 +39,8 @@ export const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1280px)";
 
 // The five bands (design section 9.1) refine the three tiers above: phone and
 // desktop reuse their queries, tablet splits at 800 and 1100. The 800 edge
-// agrees with RightSidebar's RIGHT_SIDEBAR_FULL_WIDTH_QUERY
-// ("(max-width: 799.98px)"). A band says nothing about the pointer: see
+// is design section 9.1/7's "narrower than roughly 800px", so a full-width
+// right sidebar query of "(max-width: 799.98px)" lines up with it. A band says nothing about the pointer: see
 // COARSE_POINTER_QUERY below, which varies independently of it.
 export const RAILS_FULL_BAND_QUERY = "(min-width: 700px) and (max-width: 799.98px)";
 export const RAILS_HALVES_BAND_QUERY = "(min-width: 800px) and (max-width: 1099.98px)";
@@ -178,11 +178,10 @@ const BAND_BOUNDARY_QUERIES = [
   RAILS_FULL_BAND_QUERY,
   RAILS_HALVES_BAND_QUERY,
   DESKTOP_NARROW_BAND_QUERY,
-  DESKTOP_BREAKPOINT_QUERY,
 ];
 
 // Live-subscribed band, the five-way sibling of useLayoutTier. Listens on
-// every band's own query: any width crossing flips exactly one of them.
+// the queries resolveLayoutBand reads (the desktop band is the fall-through).
 export function useLayoutBand(layoutMode: LayoutMode): LayoutBand {
   const [band, setBand] = useState(() => resolveLayoutBand(layoutMode));
 

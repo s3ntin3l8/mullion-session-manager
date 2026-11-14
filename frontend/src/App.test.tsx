@@ -216,10 +216,28 @@ describe("App tier wiring", () => {
     },
   );
 
-  it("exposes a data-band next to data-tier", () => {
-    stubWidth("desktop");
+  it.each([
+    [500, "phone"],
+    [750, "rails-full"],
+    [1000, "rails-halves"],
+    [1200, "desktop-narrow"],
+    [1500, "desktop"],
+  ])("exposes data-band next to data-tier at %s px (%s)", (width, band) => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => {
+        const min = /min-width: ([\d.]+)px/.exec(query);
+        const max = /max-width: ([\d.]+)px/.exec(query);
+        return {
+          matches: (!min || width >= Number(min[1])) && (!max || width <= Number(max[1])),
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        };
+      }),
+    );
     const { container } = render(<App />);
-    expect(container.querySelector(".app")?.getAttribute("data-band")).toBe("desktop");
+    expect(container.querySelector(".app")?.getAttribute("data-band")).toBe(band);
   });
 
   it("lets an explicit layoutMode override the width", () => {
