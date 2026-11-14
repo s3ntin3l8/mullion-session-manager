@@ -499,9 +499,9 @@ html[data-theme-hint="dark"] {
    300ms fallback timer, and the tab-reorder one has none, so a reorder
    leaves `dv-tab--shifting` (will-change plus an already-zero transition)
    on the tabs until the next one. Harmless, and not worth a longer duration.
-   `transition-delay` is left alone on purpose: sidebar.css relies on
-   `visibility 0s linear 0.24s` to keep a closing drawer visible, and the
-   delay still applies at a `0s` duration. Animations keep 0.01ms: removing
+   `transition-delay` is left alone on purpose: a delayed `visibility`
+   transition keeps a closing surface visible, and the delay still applies at
+   a `0s` duration. Animations keep 0.01ms: removing
    that part changed nothing.
 
    The end states are safe: cmuxPulse settles at opacity 1 (full legibility),

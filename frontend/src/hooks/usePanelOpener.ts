@@ -1,5 +1,4 @@
 import { useCallback, useEffect } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { Device, Project, Session, Task, Workspace } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
@@ -30,8 +29,7 @@ import type { ProjectHubTab } from "../ProjectHubPanel.js";
 // configs drive. Module-level (not created per-render) so each is a stable
 // object identity, same as any other constant App.tsx or its hooks close
 // over — this is what lets onOpenGitHub/onOpenGit/etc. below list only the
-// values that can actually change (dockviewApi/projects/layout/
-// setSidebarOpen) in their own useCallback dependency arrays, with no need
+// values that can actually change (dockviewApi/projects/layout) in their own useCallback dependency arrays, with no need
 // to also list the config object itself.
 const GITHUB_CONFIG: ProjectPanelKindConfig = {
   kind: "github",
@@ -78,18 +76,6 @@ export interface UsePanelOpenerParams {
   // effect dependency array relies on exactly this (see its own doc comment
   // on `onOpenSession`) — adding `sessions` here to "look something up"
   // would silently break that.
-  // Must be the raw `useState` setter (stable identity forever) — same
-  // requirement as useDockviewDrop's `setSidebarOpen`/useWorkspacePersistence's
-  // `setPanelsVersion`/useLayoutPresentation's `setLayoutTier` (see those
-  // hooks' own param comments). Listed in every callback below's own dependency array
-  // purely because eslint's exhaustive-deps rule can no longer statically
-  // prove a function-parameter's identity is stable the way it can for a
-  // bare `useState` call in this same file — not because it ever actually
-  // changes. Since it never does, this is a lint-satisfying addition to each
-  // callback's dependency array relative to App.tsx's pre-extraction
-  // versions (which read the local `useState` setter directly and so didn't
-  // need to list it), not a behavior or identity-stability change.
-  setSidebarOpen: Dispatch<SetStateAction<boolean>>;
 }
 
 export interface UsePanelOpenerResult {
@@ -212,7 +198,6 @@ export function usePanelOpener({
   projects,
   workspaces,
   activeWorkspaceId,
-  setSidebarOpen,
 }: UsePanelOpenerParams): UsePanelOpenerResult {
   // Issue: opening any dockview panel while the Tasks board (UnifiedBoard,
   // a z-index 100 overlay on top of the dockview grid — see App.tsx's own
@@ -280,9 +265,8 @@ export function usePanelOpener({
           openSessionPanel(dockviewApi, session, layout, projects);
         }
       }
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, projects, workspaces, activeWorkspaceId, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, projects, workspaces, activeWorkspaceId, leaveTaskView],
   );
 
   const onOpenSessionAsFloat = useCallback(
@@ -290,9 +274,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openSessionPanel(dockviewApi, session, layout, projects);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, projects, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, projects, leaveTaskView],
   );
 
   const onOpenTimeline = useCallback(
@@ -300,9 +283,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openTimelinePanel(dockviewApi, session, layout);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenGitHub = useCallback(
@@ -310,9 +292,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, GITHUB_CONFIG);
-      setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   const onOpenGit = useCallback(
@@ -321,9 +302,8 @@ export function usePanelOpener({
       // no dockviewApi to wait for.
       leaveTaskView();
       useDashboardStore.getState().openRightSidebarView("git", projectId);
-      setSidebarOpen(false);
     },
-    [setSidebarOpen, leaveTaskView],
+    [leaveTaskView],
   );
 
   const onOpenProjectHub = useCallback(
@@ -331,9 +311,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openProjectHubPanel(dockviewApi, projectId, projects, layout, tab, dockView);
-      setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   // The five setup panels are tabs of one Project panel now; these keep their
@@ -364,9 +343,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, FILE_EDITOR_CONFIG);
-      setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   const onOpenExternalFile = useCallback(
@@ -374,9 +352,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openExternalFilePanel(dockviewApi, projectId, projects, layout, {});
-      setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   const onOpenFile = useCallback(
@@ -402,17 +379,14 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, BROWSER_CONFIG);
-      setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   const onOpenTasks = useCallback(() => {
     useDashboardStore.getState().setViewMode("kanban");
-    // Tasks mode is the board over the grid on every tier, with the tablet's
-    // drawer out of the way (the phone has none, #3014).
-    setSidebarOpen(false);
-  }, [setSidebarOpen]);
+    // Tasks mode is the board over the grid on every tier.
+  }, []);
 
   const onOpenTask = useCallback(
     (task: Task) => {
@@ -421,9 +395,8 @@ export function usePanelOpener({
       // Same leave-the-board step every other opener takes.
       leaveTaskView();
       openTaskDetailPanel(dockviewApi, task, layout);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenBrowserUrl = useCallback(
@@ -443,9 +416,8 @@ export function usePanelOpener({
       // throw the same way applyMobilePresentation's own fix (panelUtils.ts)
       // prevents elsewhere.
       presentNewPanel(dockviewApi, panel, layout.tier);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenPreviewTargets = useCallback((projectId: number) => {
@@ -463,8 +435,7 @@ export function usePanelOpener({
     });
     // Same guard as onOpenBrowserUrl above — see its own comment.
     presentNewPanel(dockviewApi, panel, layout.tier);
-    setSidebarOpen(false);
-  }, [dockviewApi, layout, setSidebarOpen, leaveTaskView]);
+  }, [dockviewApi, layout, leaveTaskView]);
 
   const onOpenPreview = useCallback(
     (projectId: number, slug: string, branch: string | null, targetName?: string) => {
@@ -496,9 +467,8 @@ export function usePanelOpener({
         // Same guard as onOpenBrowserUrl above — see its own comment.
         presentNewPanel(dockviewApi, panel, layout.tier);
       }
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenDevice = useCallback(
@@ -524,9 +494,8 @@ export function usePanelOpener({
           .catch(() => {});
       }
       openDevicePanel(dockviewApi, device, layout);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   return {

@@ -58,9 +58,9 @@ export function useWorkspaceTree(): WorkspaceTree {
   const groups = useDashboardStore((s) => s.groups);
   const sessions = useDashboardStore((s) => s.sessions);
 
-  // Groups load on first use by whichever surface mounts first: on the tablet
-  // the sidebar's switcher unmounts while its drawer shows another tab, so
-  // the rail's chip cannot rely on it having done so. Not on every mount (the
+  // Groups load on first use by whichever surface mounts first: below 1100px
+  // there is no sidebar switcher at all (#3041), so the rail's chip cannot
+  // rely on it having done so. Not on every mount (the
   // chip, the list and the switcher all use this hook), and a failed load is
   // left for the next surface rather than becoming an unhandled rejection.
   useEffect(() => {

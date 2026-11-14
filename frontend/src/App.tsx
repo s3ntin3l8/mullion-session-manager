@@ -6,9 +6,6 @@ import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { SidebarShell } from "./sidebar/SidebarShell.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
-import { PhoneNavigatorPanel } from "./PhoneNavigator.js";
-import { sidebarPhoneSection } from "./lib/phoneNavSection.js";
-import type { PhoneNavTab } from "./PhoneNavigator.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useHalfActions } from "./fold/useHalfActions.js";
@@ -100,8 +97,6 @@ import { useSyncSessionOpenerRefs } from "./hooks/useSyncSessionOpenerRefs.js";
 import { usePushSessionOpen } from "./hooks/usePushSessionOpen.js";
 import { usePushResync } from "./hooks/usePushResync.js";
 import { usePostWorkspaceSwitchHighlight } from "./hooks/usePostWorkspaceSwitchHighlight.js";
-import { useSidebarOpenTierReset } from "./hooks/useSidebarOpenTierReset.js";
-import { useSidebarSwipe } from "./hooks/useSidebarSwipe.js";
 import { useRetriableLazy } from "./lib/retriableLazy.js";
 import { ResourceAlertBanner } from "./ResourceAlertBanner.js";
 
@@ -136,9 +131,10 @@ interface PaletteState {
 
 export function App() {
   const [dockviewApi, setDockviewApi] = useState<DockviewApi | null>(null);
-  // Only meaningful below the mobile breakpoint (see styles.css) — a no-op
-  // on desktop, where .sidebar-wrapper ignores this class entirely.
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Whether the docked left sidebar shows in the desktop-narrow band
+  // (1100-1279px, #3041): collapsed by default and not persisted, so the
+  // >=1280px `sidebarCollapsed` preference is not touched from this band.
+  const [narrowSidebarShown, setNarrowSidebarShown] = useState(false);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   // Issue #1638 — giving up on the initial load used to be console-only.
   // Stays false until a later round succeeds. Distinct from workspacesLoaded:
@@ -151,8 +147,8 @@ export function App() {
   // Tablet tier plan, PR 4 — replaces the old phone-only `isMobile` boolean.
   // `isMobile` below is now a derived `layoutTier === "phone"` local const
   // (not its own state) so every "stays phone-only" call site the plan
-  // enumerates (phone session switcher, empty-grid dropzone suppression,
-  // toggleSidebar's dual semantics) keeps working unchanged, while
+  // enumerates (phone session switcher, empty-grid dropzone suppression)
+  // keeps working unchanged, while
   // tier-aware call sites (session-opening's positioning, applyLayoutPresentation)
   // read `layoutTier` directly.
   // Seeded synchronously from the live width (not a "desktop" placeholder) so
@@ -168,6 +164,20 @@ export function App() {
   // reads it yet. Independent of `isCoarsePointer` below.
   const layoutBand = useLayoutBand(useDashboardStore((s) => s.settings.layoutMode));
   const isMobile = layoutTier === "phone";
+  // Entering the desktop-narrow band starts with its sidebar collapsed again,
+  // whatever it was the last time the window was that wide. Adjusted during
+  // render (React's "storing information from previous renders" pattern),
+  // not in an effect, so the first frame in the band is already collapsed.
+  const [narrowSidebarBand, setNarrowSidebarBand] = useState(layoutBand);
+  if (narrowSidebarBand !== layoutBand) {
+    setNarrowSidebarBand(layoutBand);
+    setNarrowSidebarShown(false);
+  }
+  // The left sidebar by band (#3041, design 9.1/9.5): docked from 1100px
+  // (open by default from 1280px, collapsed by default below), absent from
+  // 700 to 1099px, where the rail's workspace chip, its pane list and the
+  // launcher are the navigation. The phone has none either (#3014).
+  const leftSidebarDocked = layoutBand === "desktop" || layoutBand === "desktop-narrow";
   const compact = isCompactTier(layoutTier);
   // Touch affordances (key bar, tab-strip panning) are gated on pointer
   // coarseness, not layout tier — see lib/layoutTier.ts's own doc comment on
@@ -191,11 +201,6 @@ export function App() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
-  // Set when a section was picked from the phone navigator's own Settings
-  // list, so Settings opens straight into it (see Settings.tsx).
-  const [settingsStartInContent, setSettingsStartInContent] = useState(false);
-  // Which tab of the phone navigator is showing; remembered across closes.
-  const [navTab, setNavTab] = useState<PhoneNavTab>("projects");
   // Bumped on the Settings ErrorBoundary's own reset — see loadSettings'
   // header comment for why a fresh lazy() payload (not just remounting)
   // is what actually lets a later reopen retry a chunk-load failure.
@@ -439,21 +444,12 @@ export function App() {
   // load-bearing: none of the three extracted effects share state with any
   // other effect in this file, or with each other beyond the ref the hook
   // now owns internally — see that hook's own header comment.
-  const { dockviewRef } = useDockviewDrop({ dockviewApi, setSidebarOpen });
+  const { dockviewRef } = useDockviewDrop({ dockviewApi });
   useBalanceOnDrop({ dockviewApi, enabled: settings.balancePanesOnDrop });
 
   const openSettings = useCallback((section: SettingsSection = "appearance") => {
     setSettingsSection(section);
-    setSettingsStartInContent(false);
     setSettingsOpen(true);
-  }, []);
-  // Phone navigator's Settings tab: open the picked section directly and
-  // close the navigator behind it.
-  const openSettingsFromNavigator = useCallback((section: SettingsSection) => {
-    setSettingsSection(section);
-    setSettingsStartInContent(true);
-    setSettingsOpen(true);
-    setSidebarOpen(false);
   }, []);
 
   // Opens the global command palette. The single enforcement point for
@@ -653,7 +649,6 @@ export function App() {
     projects,
     workspaces,
     activeWorkspaceId,
-    setSidebarOpen,
   });
 
   // `?session=<id>` deep-link effect (issue #95 prerequisite) — extracted to
@@ -864,64 +859,26 @@ export function App() {
           ...(referencePanel ? { position: { referencePanel, direction: req.direction } } : {}),
         });
       }
-      setSidebarOpen(false);
     },
     [dockviewApi, splitRequest, onOpenSession, projects, layoutTier],
   );
 
   const handleSelectWorkspace = useCallback((workspaceId: number) => {
     useDashboardStore.getState().showWorkspace(workspaceId);
-    setSidebarOpen(false);
   }, []);
 
-  // One toggle, two meanings depending on breakpoint: phone/tablet's
-  // `sidebarOpen` is a closed-by-default overlay flag (App.tsx-local, not
-  // persisted — resets to closed every navigation, which is the right
-  // default for an overlay); desktop's `sidebarCollapsed` is a persisted,
-  // open-by-default panel-visibility preference (store-owned, survives
-  // reload). Same button, same handler.
-  //
-  // Floating-sidebar redesign — was phone-only (`isMobile`) under the
-  // tablet tier plan, with tablet deliberately kept on desktop's docked
-  // collapse behavior ("it has room for the docked sidebar"). Reversed:
-  // tablet's sidebar was pushing and resizing the live dockview grid on
-  // open (`sidebar.css`'s `.sidebar-wrapper` was an in-flow `flex-shrink: 0`
-  // item there), which is both the wrong feel (Apple's own
-  // `UISplitViewController` floats the sidebar as an overlay below the
-  // regular/compact width threshold, never resizing content) and a second,
-  // independent trigger for the dockview pane-skew bug fixed separately —
-  // any grid-width change while a group is maximized replays that same
-  // clamp. `layoutTier !== "desktop"` (not `isMobile`) now drives
-  // `sidebarOpen`, so tablet gets the same floating overlay as phone.
+  // The rail's sidebar button (#3041): from 1280px it flips the persisted
+  // `sidebarCollapsed` preference; from 1100 to 1279px the band's own,
+  // collapsed-by-default flag. Both are the same docked sidebar, pushing the
+  // grid. Below 1100px there is no left sidebar, so nothing to toggle.
   const toggleSidebar = useCallback(() => {
-    // The phone has no drawer (#3014): its sessions are the top bar's picker.
-    if (isMobile) return;
-    if (compact) setSidebarOpen((v) => !v);
-    else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
-  }, [isMobile, compact, sidebarCollapsed]);
+    if (layoutBand === "desktop") {
+      useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
+    } else if (layoutBand === "desktop-narrow") {
+      setNarrowSidebarShown((v) => !v);
+    }
+  }, [layoutBand, sidebarCollapsed]);
 
-  // Floating-sidebar redesign — edge-swipe open/dismiss (lib/sidebarSwipeGesture.ts's
-  // own header comment covers the design: discrete threshold+commit, not a
-  // live drag-follow, and no separate overlay hit-target so touches starting
-  // in the edge slice still reach a terminal rendered flush against it
-  // first). Two independent attachments, only one live at a time per state:
-  // `.app-body` with an edge-zone filter drives open (only relevant while
-  // closed), the sidebar panel itself (draggable from anywhere on it,
-  // matching Files/Notes on iPad) drives dismiss (only relevant while open).
-  // Desktop is excluded entirely — the docked sidebar has no swipe gesture.
-  const appBodyRef = useRef<HTMLDivElement>(null);
-  const sidebarWrapperRef = useRef<HTMLDivElement>(null);
-  // Drop a stale open drawer when leaving the compact tier. Extracted to
-  // useSidebarOpenTierReset; called here, where the effect was — before
-  // usePhoneBackStack.
-  // Tasks mode from 700px (#3009): the board takes the grid and the left
-  // sidebar is hidden, so the tablet drawer is closed and cannot be swiped open.
-  const boardOverGrid = !isMobile && viewMode === "kanban";
-  useSidebarOpenTierReset({ compact, boardOverGrid, setSidebarOpen });
-  // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
-  // hooks/usePhoneBackStack.ts). Settings and the session/notification
-  // sheets register themselves; the navigator and the Tasks board live here.
-  usePhoneBackStack(compact && !isMobile && sidebarOpen, () => setSidebarOpen(false));
   // Phone (#3014): after "Open session in Workspace" took a task's session to
   // Workspace, back returns to Tasks (design 9.3). The only back that changes
   // mode; it is registered while the switch it undoes is still in effect.
@@ -929,17 +886,6 @@ export function App() {
   usePhoneBackStack(isMobile && crossLinkReturn !== null && viewMode === "list", () =>
     useDashboardStore.getState().returnFromCrossLink(),
   );
-  // Edge-swipe to open/dismiss the compact sidebar. Extracted to
-  // useSidebarSwipe; called here, where the effect was. Not on the phone,
-  // which has no drawer (#3014).
-  useSidebarSwipe({
-    compact: compact && !isMobile && !boardOverGrid,
-    sidebarOpen,
-    setSidebarOpen,
-    appBodyRef,
-    sidebarWrapperRef,
-  });
-
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct
   // `writeNumber` call the way Dock/UnifiedBoard persist — `setSidebarWidth`
@@ -1224,7 +1170,6 @@ export function App() {
   const sidebar = (
     <SidebarShell
       showSourceControl={isMobile}
-      phoneSection={compact ? sidebarPhoneSection(navTab) : undefined}
       workspaceProjectIds={scopedWorkspaceProjectIds}
       openSessionIds={isMobile ? null : openSessionIds}
       onOpenSession={onOpenSession}
@@ -1239,10 +1184,15 @@ export function App() {
     />
   );
 
-  // Whether the left sidebar shows: the docked one on desktop unless
-  // collapsed, the drawer below 1280px only while open. The rail lists the
-  // open panes when it does not (#3009).
-  const leftSidebarShown = compact ? sidebarOpen : !sidebarCollapsed;
+  // Whether the left sidebar shows: from 1280px unless collapsed, from 1100
+  // to 1279px only once opened, never below 1100px (#3041). The rail lists
+  // the open panes when it does not (#3009).
+  const leftSidebarShown =
+    layoutBand === "desktop"
+      ? !sidebarCollapsed
+      : layoutBand === "desktop-narrow"
+        ? narrowSidebarShown
+        : false;
 
   // Phone session switcher — rendered into the phone's top bar in place of the
   // old `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
@@ -1271,9 +1221,8 @@ export function App() {
       className={themeClassName(
         theme,
         "app",
-        sidebarOpen && "sb-open",
         isMobile && "mode-bar",
-        sidebarCollapsed && "sidebar-collapsed",
+        leftSidebarDocked && !leftSidebarShown && "sidebar-collapsed",
         foldHalves && "fold-halves",
         // The two halves' widths hold in Tasks mode too: the board on the
         // left half, the task sidebar docked on the right (frame 2b).
@@ -1308,10 +1257,10 @@ export function App() {
           mobileSessionSlot={mobileSessionSwitcher}
         />
       )}
-      <div className="app-body" ref={appBodyRef}>
+      <div className="app-body">
         {!isMobile && (
           <LeftRail
-            onToggleSidebar={toggleSidebar}
+            onToggleSidebar={leftSidebarDocked ? toggleSidebar : undefined}
             sidebarShown={leftSidebarShown}
             middle={
               <RailWorkspaceSection
@@ -1335,74 +1284,32 @@ export function App() {
             notificationSheet={compact && isCoarsePointer}
           />
         )}
-        {/* The phone has no drawer (#3014): Projects is the top bar's
-            session picker, Tasks the mode bar, Devices and Settings the mode
-            bar's "more" sheet. The sidebar still mounts, hidden, as it did
-            inside the closed drawer: its mount loads projects, sessions,
-            hosts and tasks, and it owns each project's live GitHub
-            subscription, which the picker and the "more" views rely on. */}
-        {isMobile && (
-          <div className="phone-sidebar-host" hidden inert>
+        {/* No left sidebar on the phone (#3014) or from 700 to 1099px
+            (#3041): there the top bar's session picker / the rail's
+            workspace chip, pane list and the launcher are the navigation.
+            The sidebar still mounts, hidden: its mount loads projects,
+            sessions, hosts and tasks, and it owns each project's live GitHub
+            subscription, which the picker, the launcher and the rail rely
+            on. */}
+        {!leftSidebarDocked && (
+          <div className="sidebar-host-hidden" hidden inert>
             {sidebar}
           </div>
         )}
-        {!isMobile && (
-          <>
-            <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
-            <div
-              className="sidebar-wrapper cmux-scroll"
-              ref={sidebarWrapperRef}
-              /* The compact tier's drawer is closed by sliding it off-screen
-                 (styles/sidebar.css's `transform: translateX(-101%)`), which
-                 leaves every control inside it — session rows, the filter
-                 input, the per-row kebab menus — focusable and in the
-                 accessibility tree while they sit off-screen. A keyboard user
-                 tabbing through the app would land on controls they cannot
-                 see, and a screen reader would read the whole hidden tree.
-
-                 `inert` removes the subtree from both the tab order and the
-                 accessibility tree in one attribute. It is applied only on the
-                 compact tier: the desktop sidebar is always visible, so making
-                 it inert when `sidebarOpen` is false (the desktop default)
-                 would hide a permanently-visible panel.
-
-                 styles/sidebar.css pairs this with `visibility: hidden` for
-                 the closed state, which is the fallback for browsers without
-                 `inert` support — an element with `visibility: hidden` is not
-                 focusable either. */
-              inert={compact && !sidebarOpen}
-            >
-              {/* Desktop-only (review finding, floating-sidebar redesign): the
-                  overlay's own `width: min(310px, 84vw) !important`
-                  (sidebar.css's phone/tablet `data-tier` block) outranks
-                  `--sidebar-width`, the custom property this drag actually
-                  writes to, so below desktop width the handle used to render,
-                  respond to mousedown, and update state/localStorage while
-                  visibly doing nothing — a resize-by-mouse gesture doesn't fit
-                  a touch-first floating overlay anyway. */}
-              {layoutTier === "desktop" && !sidebarCollapsed && (
-                <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
-              )}
-              {/* From 700 to 1279px the drawer is a navigator with tabs instead
-                  of one long scroll. */}
-              {compact ? (
-                <PhoneNavigatorPanel
-                  workspaces={<WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />}
-                  navTab={navTab}
-                  setNavTab={setNavTab}
-                  onOpenTasks={onOpenTasks}
-                  onClose={() => setSidebarOpen(false)}
-                  onSelectSetting={openSettingsFromNavigator}
-                  sidebar={sidebar}
-                />
-              ) : (
-                <>
-                  <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-                  {sidebar}
-                </>
-              )}
-            </div>
-          </>
+        {/* From 1100px: docked, pushing the grid (design 9.1). Collapsing
+            it is styles/sidebar.css's `.sidebar-collapsed` rule, which takes
+            it to zero width; `inert` takes its controls out of the tab order
+            and the accessibility tree too, or a keyboard user would tab
+            through session rows they cannot see (collapsed is the default
+            from 1100 to 1279px). */}
+        {leftSidebarDocked && (
+          <div className="sidebar-wrapper cmux-scroll" inert={!leftSidebarShown}>
+            {leftSidebarShown && (
+              <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
+            )}
+            <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+            {sidebar}
+          </div>
         )}
         <div
           className={`grid-area${foldHalves ? " fold-half fold-half-left" : ""}${
@@ -1648,7 +1555,7 @@ export function App() {
                       >
                         Launch a session
                       </button>
-                      {!leftSidebarShown && (
+                      {leftSidebarDocked && !leftSidebarShown && (
                         <button
                           type="button"
                           className="ui-empty-state-btn-secondary"
@@ -1660,7 +1567,9 @@ export function App() {
                     </div>
                   ) : (
                     <span className="empty-grid-hint">
-                      ⌘K to launch · pick a session from the sidebar
+                      {leftSidebarDocked
+                        ? "⌘K to launch · pick a session from the sidebar"
+                        : "⌘K to launch or find a session"}
                     </span>
                   )}
                 </div>
@@ -1833,7 +1742,7 @@ export function App() {
         // makes this div its own stacking context, so without an explicit
         // z-index it paints at the implicit "auto" level among .app's other
         // children — losing to any sibling with its own explicit z-index
-        // above 0 (e.g. the mobile sidebar drawer at 45, `.overlay-backdrop`
+        // above 0 (e.g. `.overlay-backdrop`
         // at 50), regardless of DOM order. `.settings-backdrop`'s own
         // z-index: 60 (styles.css) is what correctly out-ranks those today;
         // matching it here keeps that ordering unchanged now that this
@@ -1856,7 +1765,6 @@ export function App() {
               <LazySettings
                 onClose={() => setSettingsOpen(false)}
                 initialSection={settingsSection}
-                startInContent={settingsStartInContent}
                 phone={isMobile}
                 backStack={compact}
               />

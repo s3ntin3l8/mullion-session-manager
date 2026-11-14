@@ -63,8 +63,8 @@
 
      Routed through `--shell-top`, defined only inside this pointer-coarse
      block, so the other fixed-position surfaces that line up with the
-     toolbar's bottom edge (.sidebar-wrapper/.cmux-scrim, sidebar.css)
-     and the bottom-sheet backdrops can
+     toolbar's bottom edge (the right sidebar's full-width view) and the
+     bottom-sheet backdrops can
      follow the same pan with a plain `var(--shell-top, 0px)` that resolves
      to 0 on a fine pointer, where `.app` itself doesn't move either. */
   :root {
@@ -254,7 +254,7 @@
      bump above regardless of source order — CSS specificity, not cascade
      position, decides here — so both toggles were silently staying at
      26x26 without this. ViewModeToggle.tsx always renders in
-     .toolbar-actions and HierarchyToggle.tsx renders in the sidebar drawer
+     .toolbar-actions and HierarchyToggle.tsx renders in the left sidebar
      (Sidebar.tsx) — both need their own, equally-specific override. */
   .hierarchy-toggle .toolbar-icon-btn {
     width: 44px;

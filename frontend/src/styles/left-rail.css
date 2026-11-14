@@ -161,17 +161,14 @@
    left sidebar is not shown: collapsed the way the desktop collapse does it
    (sidebar.css), not `display: none`, which would give the session list's
    virtualizer a zero-height box; `visibility` also takes its controls out of
-   the tab order. The tablet drawer is closed on the way in (App.tsx), and its
-   scrim is hidden here too. App.tsx does not render the Dock in Tasks mode. */
+   the tab order. Below 1100px there is no left sidebar to hide (#3041).
+   App.tsx does not render the Dock in Tasks mode. */
 .app[data-mode="tasks"]:not([data-tier="phone"]) {
   .sidebar-wrapper {
     width: 0 !important;
     border-right: none;
     overflow: hidden;
     visibility: hidden;
-  }
-  .cmux-scrim {
-    display: none !important;
   }
 }
 
@@ -289,7 +286,7 @@
 
 /* ---- Workspace list: popover (fine pointer) and sheet (coarse) ----------- */
 .rail-ws-popover {
-  /* Above the tablet drawer (45) and the full-width right sidebar (46),
+  /* Above the full-width right sidebar (46),
      below the command palette (50). */
   z-index: 48;
   width: 280px;

@@ -11,7 +11,7 @@ import { useEffect, useId, useRef } from "react";
 // only the topmost overlay (re-arming the guard if more remain). When the
 // last overlay closes by any other route (its own ✕, picking a row) the
 // guard is consumed with history.back() — deferred one tick so a hand-off
-// (navigator closes as Settings opens) reuses the same entry instead of
+// (one overlay closes as another opens) reuses the same entry instead of
 // racing history.back() against the next pushState.
 //
 // Everything is inert unless `active` is true. Callers pass `compact && open`

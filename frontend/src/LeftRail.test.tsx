@@ -72,6 +72,13 @@ describe("LeftRail in Workspace mode", () => {
     expect(props.onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
+  // #3041 — from 700 to 1099px there is no left sidebar, so no button for it.
+  it("renders no sidebar toggle when there is no sidebar to toggle", () => {
+    renderRail({ onToggleSidebar: undefined });
+    expect(screen.queryByRole("button", { name: "Sidebar" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Command palette" })).toBeInTheDocument();
+  });
+
   it("switches to Tasks mode from the mode switch, and remembers it", async () => {
     const user = userEvent.setup();
     renderRail();

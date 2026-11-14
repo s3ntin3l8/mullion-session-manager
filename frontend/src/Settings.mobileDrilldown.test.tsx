@@ -178,14 +178,7 @@ describe("Settings phone polish", () => {
   });
 });
 
-describe("Settings phone navigator integration", () => {
-  it("startInContent opens straight into Appearance instead of the list", () => {
-    const { container } = render(<Settings onClose={vi.fn()} startInContent />);
-    expect(container.querySelector(".settings-modal-body")).toHaveClass(
-      "settings-modal-body-showing-content",
-    );
-  });
-
+describe("Settings on the phone", () => {
   describe("back stack (phone)", () => {
     const pop = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
     beforeEach(() => {

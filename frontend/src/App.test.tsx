@@ -10,11 +10,12 @@ import {
   persistenceHarness,
   railHarness,
   setLayoutMode,
+  stubLiveWidth,
+  stubPxWidth,
   stubWidth,
 } from "./test/appHarness.js";
 import { App } from "./App.js";
 import { useDashboardStore } from "./store/index.js";
-import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 
 describe("App tier wiring", () => {
@@ -74,60 +75,18 @@ describe("App tier wiring", () => {
     expect(container.querySelector(".app")?.getAttribute("data-tier")).toBe("tablet");
   });
 
-  it("toggles the floating sidebar overlay on a compact tier", () => {
-    stubWidth("tablet");
-    const { container } = render(<App />);
-    const app = container.querySelector(".app")!;
-    expect(app.classList.contains("sb-open")).toBe(false);
-    fireEvent.click(screen.getByTestId("toggle-sidebar"));
-    expect(app.classList.contains("sb-open")).toBe(true);
-    // The swipe-dismiss gesture attaches to the wrapper while it's open.
-    expect(attachSidebarSwipeGesture).toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("toggle-sidebar"));
-    expect(app.classList.contains("sb-open")).toBe(false);
-  });
-
-  // The compact tier's drawer is closed by sliding it off-screen
-  // (`transform: translateX(-101%)`), which left every control inside it —
-  // session rows, the filter input, the per-row kebab menus — focusable and
-  // in the accessibility tree while they sat off-screen. A keyboard user
-  // tabbing through the app landed on controls they could not see, and a
-  // screen reader read the whole hidden tree.
-  //
-  // `inert` takes the whole subtree out of both. It is applied only on the
-  // compact tier: the desktop sidebar is permanently visible, so making it
-  // inert while the (desktop-default) `sidebarOpen` is false would hide a
-  // visible panel.
-  it.each([
-    ["tablet", true],
-    ["desktop", false],
-  ] as const)("marks the drawer inert while it is closed on %s", (tier, inertWhenClosed) => {
-    stubWidth(tier);
-    const { container } = render(<App />);
-    const drawer = container.querySelector(".sidebar-wrapper")!;
-    expect(drawer.hasAttribute("inert")).toBe(inertWhenClosed);
-    if (tier === "desktop") return;
-    fireEvent.click(screen.getByTestId("toggle-sidebar"));
-    expect(drawer.hasAttribute("inert")).toBe(false);
-  });
-
   // #3014 — the phone has no drawer: no wrapper, no scrim, no toggle in the
-  // top bar, no edge swipe, and no back-stack entry for one.
+  // top bar, and no back-stack entry for one.
   it("has no drawer on the phone, and nothing can open one", () => {
     stubWidth("phone", true);
-    vi.mocked(attachSidebarSwipeGesture).mockClear();
     const { container } = render(<App />);
     expect(container.querySelector(".sidebar-wrapper")).toBeNull();
     // The sidebar still mounts, hidden, for its data loading and subscriptions.
-    const host = container.querySelector(".phone-sidebar-host")!;
+    const host = container.querySelector(".sidebar-host-hidden")!;
     expect(host).toHaveAttribute("hidden");
     expect(host.hasAttribute("inert")).toBe(true);
     expect(within(host as HTMLElement).getByTestId("sidebar")).toBeInTheDocument();
-    expect(container.querySelector(".cmux-scrim")).toBeNull();
     expect(screen.queryByTestId("toggle-sidebar")).toBeNull();
-    expect(screen.queryByTestId("navigator")).toBeNull();
-    expect(attachSidebarSwipeGesture).not.toHaveBeenCalled();
-    expect(container.querySelector(".app")!.classList.contains("sb-open")).toBe(false);
     expect(vi.mocked(usePhoneBackStack).mock.calls.every(([active]) => active === false)).toBe(
       true,
     );
@@ -182,31 +141,6 @@ describe("App tier wiring", () => {
     );
   });
 
-  // The drawer registers with the back stack on every compact tier that has
-  // one, so Android back closes it on the unfolded Fold too.
-  it.each([
-    ["tablet", true],
-    ["desktop", false],
-  ] as const)(
-    "registers the open drawer with the back stack on %s only when compact",
-    (tier, expected) => {
-      stubWidth(tier);
-      render(<App />);
-      // Nothing is registered active while closed: the drawer's entry and the
-      // right sidebar's are both inactive.
-      const calls = vi.mocked(usePhoneBackStack).mock.calls;
-      expect(calls.length).toBeGreaterThan(0);
-      expect(calls.every(([active]) => active === false)).toBe(true);
-      if (tier === "desktop") return;
-      // Not "last called with": the right sidebar registers its own (inactive)
-      // entry on the same render, after the drawer's. Only calls made by the
-      // click count.
-      vi.mocked(usePhoneBackStack).mockClear();
-      fireEvent.click(screen.getByTestId("toggle-sidebar"));
-      expect(usePhoneBackStack).toHaveBeenCalledWith(expected, expect.any(Function));
-    },
-  );
-
   // Notifications render as a bottom sheet on touch tablets (not the popover),
   // but a mouse-driven tablet-width window and desktop keep the popover.
   it.each([
@@ -216,7 +150,7 @@ describe("App tier wiring", () => {
   ] as const)("notificationSheet on %s (coarse=%s) is %s", (tier, coarse, expected) => {
     stubWidth(tier, coarse);
     render(<App />);
-    expect(screen.getByTestId("toggle-sidebar")).toHaveAttribute("data-notif-sheet", expected);
+    expect(screen.getByTestId("left-rail")).toHaveAttribute("data-notif-sheet", expected);
   });
 
   // The session picker lives in the phone's top bar; from 700px there is no
@@ -231,23 +165,9 @@ describe("App tier wiring", () => {
     expect(!!screen.queryByTestId("session-bar")).toBe(expected);
   });
 
-  // The tablet gets the tabbed navigator in the drawer, with the workspace
-  // switcher slot. The phone has neither (#3014).
-  it("renders the navigator with the workspace switcher on tablet, none on the phone", () => {
-    stubWidth("tablet");
-    const { unmount } = render(<App />);
-    expect(screen.getByTestId("navigator")).toBeInTheDocument();
-    expect(screen.getByTestId("workspace-switcher")).toBeInTheDocument();
-    unmount();
-    stubWidth("phone");
-    render(<App />);
-    expect(screen.queryByTestId("navigator")).toBeNull();
-  });
-
-  it("renders the plain sidebar + workspace switcher on desktop (no navigator)", () => {
+  it("renders the plain sidebar + workspace switcher on desktop", () => {
     stubWidth("desktop");
     render(<App />);
-    expect(screen.queryByTestId("navigator")).toBeNull();
     expect(screen.getByTestId("workspace-switcher")).toBeInTheDocument();
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
   });
@@ -301,28 +221,6 @@ describe("App tier wiring", () => {
     useDashboardStore.setState({ viewMode: "list" });
   });
 
-  it("closes the tablet drawer when Tasks mode starts from anywhere", () => {
-    stubWidth("tablet");
-    const { container } = render(<App />);
-    const app = container.querySelector(".app")!;
-    fireEvent.click(screen.getByTestId("toggle-sidebar"));
-    expect(app.classList.contains("sb-open")).toBe(true);
-    expect(screen.getByTestId("left-rail")).toHaveAttribute("data-sidebar-shown", "true");
-    act(() => useDashboardStore.getState().setViewMode("kanban"));
-    expect(app.classList.contains("sb-open")).toBe(false);
-    act(() => useDashboardStore.getState().setViewMode("list"));
-  });
-
-  it("does not let the tablet drawer be swiped open in Tasks mode", () => {
-    stubWidth("tablet");
-    useDashboardStore.setState({ viewMode: "kanban" });
-    vi.mocked(attachSidebarSwipeGesture).mockClear();
-    render(<App />);
-    expect(attachSidebarSwipeGesture).not.toHaveBeenCalled();
-    act(() => useDashboardStore.getState().setViewMode("list"));
-    expect(attachSidebarSwipeGesture).toHaveBeenCalled();
-  });
-
   it("tells the rail whether the docked sidebar shows on desktop", () => {
     stubWidth("desktop");
     useDashboardStore.setState({ sidebarCollapsed: false });
@@ -340,11 +238,137 @@ describe("App tier wiring", () => {
     stubWidth("desktop");
     const { container } = render(<App />);
     const app = container.querySelector(".app")!;
+    const wrapper = container.querySelector(".sidebar-wrapper")!;
+    expect(wrapper.hasAttribute("inert")).toBe(false);
     act(() => {
       fireEvent.click(screen.getByTestId("toggle-sidebar"));
     });
-    expect(app.classList.contains("sb-open")).toBe(false);
+    expect(app.classList.contains("sidebar-collapsed")).toBe(true);
     expect(useDashboardStore.getState().sidebarCollapsed).toBe(true);
+    // Collapsed: out of the tab order and the accessibility tree too.
+    expect(wrapper.hasAttribute("inert")).toBe(true);
+  });
+});
+
+// #3041 — the left sidebar by band (design 9.1/9.5). From 1100 to 1279px it
+// is the desktop's docked sidebar, collapsed by default; from 700 to 1099px
+// there is none: the rail's workspace chip, pane list and the launcher are the
+// navigation. No drawer, scrim, swipe or back-stack entry at any width.
+describe("App left sidebar by band (#3041)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      refreshWorkspaces: vi.fn().mockResolvedValue(undefined),
+      hydrateSettings: vi.fn(),
+      startThemeWatch: vi.fn(() => () => {}),
+      sidebarCollapsed: false,
+      viewMode: "list",
+    });
+    setLayoutMode("auto");
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it.each([750, 1000])("has no left sidebar and no sidebar button at %ipx", (px) => {
+    stubPxWidth(px, true);
+    const { container } = render(<App />);
+    const app = container.querySelector(".app")!;
+    expect(app.getAttribute("data-tier")).toBe("tablet");
+    expect(container.querySelector(".sidebar-wrapper")).toBeNull();
+    expect(screen.queryByTestId("workspace-switcher")).toBeNull();
+    // Still mounted, hidden, for its data loading and GitHub subscriptions.
+    const host = container.querySelector(".sidebar-host-hidden")!;
+    expect(host).toHaveAttribute("hidden");
+    expect(host.hasAttribute("inert")).toBe(true);
+    expect(within(host as HTMLElement).getByTestId("sidebar")).toBeInTheDocument();
+    // The rail is the navigation: no sidebar button, its pane list showing.
+    expect(screen.queryByTestId("toggle-sidebar")).toBeNull();
+    expect(screen.getByTestId("left-rail")).toHaveAttribute("data-sidebar-shown", "false");
+    expect(railHarness.props?.showPanes).toBe(true);
+    expect(app.classList.contains("sidebar-collapsed")).toBe(false);
+    // No drawer to register with the back stack.
+    expect(vi.mocked(usePhoneBackStack).mock.calls.every(([active]) => active === false)).toBe(
+      true,
+    );
+    // The empty grid offers the launcher, not a sidebar that does not exist.
+    expect(screen.getByRole("button", { name: "Launch a session" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show the sidebar" })).toBeNull();
+  });
+
+  it("does not touch the >=1280px collapse preference below 1100px", () => {
+    stubPxWidth(1000);
+    useDashboardStore.setState({ sidebarCollapsed: true });
+    render(<App />);
+    expect(useDashboardStore.getState().sidebarCollapsed).toBe(true);
+    expect(screen.queryByTestId("toggle-sidebar")).toBeNull();
+  });
+
+  it("docks the sidebar at 1200px, collapsed by default, and the rail button toggles it", () => {
+    stubPxWidth(1200);
+    const { container } = render(<App />);
+    const app = container.querySelector(".app")!;
+    expect(app.getAttribute("data-band")).toBe("desktop-narrow");
+    const wrapper = container.querySelector(".sidebar-wrapper")!;
+    expect(wrapper).not.toBeNull();
+    // Docked: no hidden host. Collapsed by default even though the >=1280px
+    // preference says open, and inert while collapsed, so its rows are out
+    // of the tab order.
+    expect(wrapper.hasAttribute("inert")).toBe(true);
+    expect(container.querySelector(".sidebar-host-hidden")).toBeNull();
+    expect(within(wrapper as HTMLElement).getByTestId("workspace-switcher")).toBeInTheDocument();
+    expect(within(wrapper as HTMLElement).getByTestId("sidebar")).toBeInTheDocument();
+    expect(app.classList.contains("sidebar-collapsed")).toBe(true);
+    const rail = screen.getByTestId("left-rail");
+    expect(rail).toHaveAttribute("data-sidebar-shown", "false");
+    expect(railHarness.props?.showPanes).toBe(true);
+    expect(container.querySelector(".sidebar-resize-handle")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    expect(app.classList.contains("sidebar-collapsed")).toBe(false);
+    expect(rail).toHaveAttribute("data-sidebar-shown", "true");
+    expect(railHarness.props?.showPanes).toBe(false);
+    expect(wrapper.hasAttribute("inert")).toBe(false);
+    expect(container.querySelector(".sidebar-resize-handle")).not.toBeNull();
+    // The band's own flag: the >=1280px preference is left alone.
+    expect(useDashboardStore.getState().sidebarCollapsed).toBe(false);
+    // No back-stack entry for a docked sidebar.
+    expect(vi.mocked(usePhoneBackStack).mock.calls.every(([active]) => active === false)).toBe(
+      true,
+    );
+
+    fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    expect(app.classList.contains("sidebar-collapsed")).toBe(true);
+    expect(rail).toHaveAttribute("data-sidebar-shown", "false");
+    expect(wrapper.hasAttribute("inert")).toBe(true);
+  });
+
+  it("collapses the 1200px sidebar again when the window leaves the band and comes back", () => {
+    const width = stubLiveWidth(1500);
+    useDashboardStore.setState({ sidebarCollapsed: true });
+    const { container } = render(<App />);
+    const app = container.querySelector(".app")!;
+    expect(app.getAttribute("data-band")).toBe("desktop");
+    // From 1280px the persisted preference rules: collapsed here.
+    expect(app.classList.contains("sidebar-collapsed")).toBe(true);
+    width.resize(1200);
+    expect(app.getAttribute("data-band")).toBe("desktop-narrow");
+    expect(app.classList.contains("sidebar-collapsed")).toBe(true);
+    fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    expect(app.classList.contains("sidebar-collapsed")).toBe(false);
+    width.resize(1500);
+    expect(app.classList.contains("sidebar-collapsed")).toBe(true);
+    width.resize(1200);
+    expect(app.classList.contains("sidebar-collapsed")).toBe(true);
+  });
+
+  it("gives a forced tablet layout no left sidebar", () => {
+    stubPxWidth(1500);
+    setLayoutMode("tablet");
+    const { container } = render(<App />);
+    expect(container.querySelector(".sidebar-wrapper")).toBeNull();
+    expect(screen.queryByTestId("toggle-sidebar")).toBeNull();
   });
 });
 
@@ -777,15 +801,11 @@ describe("App left rail middle region", () => {
     expect(railHarness.props?.showPanes).toBe(true);
   });
 
-  it("lists the panes below 1280px while the drawer is closed, with the list as a sheet on touch", () => {
+  it("lists the panes below 1100px, where there is no left sidebar, with the list as a sheet on touch", () => {
     stubWidth("tablet", true);
     render(<App />);
     expect(railHarness.props?.showPanes).toBe(true);
     expect(railHarness.props?.sheet).toBe(true);
-    act(() => {
-      fireEvent.click(screen.getByTestId("toggle-sidebar"));
-    });
-    expect(railHarness.props?.showPanes).toBe(false);
   });
 
   it("hands the rail every open pane and focuses the one tapped", async () => {

@@ -75,13 +75,8 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
 export interface SidebarProps {
-  // The navigator drawer's Projects tab (700 to 1279px) and the phone's hidden
-  // sidebar: the project tree without the Tasks entry, which the drawer and
-  // the phone's mode bar carry themselves. Unset (desktop) renders the whole
-  // sidebar. Devices are a right-sidebar view (#3012), not a section here.
-  phoneSection?: "projects";
-  // Source Control lives in the right sidebar on desktop and tablet; only the
-  // phone navigator (which has no right sidebar) still renders it here.
+  // Source Control lives in the right sidebar from 700px; only the phone's
+  // hidden sidebar (the phone has no right sidebar) still renders it here.
   showSourceControl: boolean;
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
@@ -125,7 +120,6 @@ export interface SidebarProps {
 }
 
 export function Sidebar({
-  phoneSection,
   showSourceControl,
   onOpenSession,
   onOpenSessionAsFloat,
@@ -501,26 +495,24 @@ export function Sidebar({
 
   return (
     <div className="sidebar">
-      {phoneSection === undefined && (
-        <button
-          className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
-          aria-pressed={viewMode === "kanban"}
-          // Issue: this already claimed to be a toggle via aria-pressed, but
-          // onOpenTasks only ever set viewMode to "kanban" — clicking it a
-          // second time while already in Tasks did nothing, leaving the
-          // Toolbar's "Back" chevron as the only way out. Honoring what the
-          // a11y attribute already advertised.
-          onClick={() =>
-            viewMode === "kanban" ? useDashboardStore.getState().setViewMode("list") : onOpenTasks()
-          }
-        >
-          <LayersIcon size={14} />
-          <span className="sidebar-tasks-entry-label">Tasks</span>
-          {actionableTaskCount > 0 && (
-            <span className="project-attn-pill">{actionableTaskCount}</span>
-          )}
-        </button>
-      )}
+      <button
+        className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
+        aria-pressed={viewMode === "kanban"}
+        // Issue: this already claimed to be a toggle via aria-pressed, but
+        // onOpenTasks only ever set viewMode to "kanban" — clicking it a
+        // second time while already in Tasks did nothing, leaving the
+        // Toolbar's "Back" chevron as the only way out. Honoring what the
+        // a11y attribute already advertised.
+        onClick={() =>
+          viewMode === "kanban" ? useDashboardStore.getState().setViewMode("list") : onOpenTasks()
+        }
+      >
+        <LayersIcon size={14} />
+        <span className="sidebar-tasks-entry-label">Tasks</span>
+        {actionableTaskCount > 0 && (
+          <span className="project-attn-pill">{actionableTaskCount}</span>
+        )}
+      </button>
       <>
         <div className="sidebar-section-header">
           <h2 className="sidebar-section-title">Projects</h2>

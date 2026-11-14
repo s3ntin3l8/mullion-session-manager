@@ -11,8 +11,8 @@
   font-size: 0.875rem;
   overflow: hidden;
   /* What sits above `.app-body`, for the fixed-position surfaces that start
-     under it (the tablet drawer and its scrim, sidebar.css; the right
-     sidebar's full-width view, right-sidebar.css): the phone's top bar, or
+     under it (the right sidebar's full-width view, right-sidebar.css): the
+     phone's top bar, or
      only the top safe-area inset from 700px up, where there is no bar
      (#3009). Plain values first: without env() the calc() line is dropped. */
   --shell-bar-h: 44px;
