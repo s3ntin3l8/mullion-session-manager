@@ -114,10 +114,12 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   same disk-usage data every 60s in the background and surfaces a
   warning/critical low-disk-space alert (dismissible for 24h at the warning
   level) even if you never open Settings.
-- **Mobile.** On a phone, a session switcher replaces the old scrolling tab
-  strip: tap the toolbar's title to open a bottom sheet listing every open
-  session (status dot, agent logo, unread, rename, close), or swipe the
-  title left/right to move to the next/previous one. A redesigned key bar
+- **Every width, touch included.** Two modes, Workspace (the terminal grid)
+  and Tasks (the board), with a left rail and a docked right sidebar from
+  700px; two halves side by side on an unfolded foldable; and on a phone a top
+  bar with a session switcher (tap its title for a sheet listing every
+  session, or swipe it to move to the next one) and a mode bar whose "⋯"
+  opens the right sidebar's views full screen. A redesigned key bar
   gives touch typing a sticky Ctrl (tap/lock/off), Esc/Tab/⇧Tab/arrows,
   paste, a copy-view action, and an in-bar dictation mic, without the old
   row's tail keys running off-screen.

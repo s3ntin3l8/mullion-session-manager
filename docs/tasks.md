@@ -479,16 +479,15 @@ The strip is on every layout, phone included.
   (the sections are flat), the facets panel is hidden, Hide done leaves Done
   and Failed as headers only, and cards can still be dragged within a section
   and between Backlog and Ready while both are open.
-- **Phone** (`#2845`): the board is one status at a time, picked
-  from a control under the toolbar. On a **phone** it is four joined segments —
+- **Phone** (`#2845`): the board is one lane at a time, picked
+  from a strip under the top bar: four joined segments —
   Backlog, Ready, **Active** (In progress, which holds the queued tasks, then
   Reviewing, stacked) and **Done** (Done, then Failed) — each with a count; it
   opens on the first segment holding a task that needs you (a dot marks each
   such segment, `#3014`), else on Active, then Ready, when they hold
   something; swipe between segments; and Hide Done & Failed removes the Done
-  segment. The compact two-column variant (per-status chips,
-  two adjacent columns) is no longer rendered from 700px, where the board is
-  full size in Tasks mode. The phone keeps the same compact card, shows the
+  segment. From 700px the board is full size in Tasks mode (the old
+  two-column variant in the tablet's navigator is gone, `#3016`). The phone keeps the same compact card, shows the
   filters in the filter sheet, ignores Group by (the board stays flat) and keeps
   empty columns as full columns rather than rails. Tapping a card opens its
   detail full-screen.
