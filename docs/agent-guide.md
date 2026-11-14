@@ -283,6 +283,10 @@ Docker discovery is not agent-controllable. A dock session started before
 Mullion recorded which control it ran (#2494) is not found by `list`; stop it
 from the dashboard once.
 
+`start` runs the control's command, env and cwd from `.crs/dock.json`, a file in
+your own checkout that you can edit — no new capability beyond the shell you
+already have.
+
 Reading a dock session's output and switching its branch in place are not
 available to a session yet; until then:
 

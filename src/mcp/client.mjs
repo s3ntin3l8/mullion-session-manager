@@ -386,7 +386,7 @@ export class MullionClient {
         ...(branch !== undefined ? { branch } : {}),
       });
     } catch (err) {
-      if (err?.status !== 404 || branch !== undefined) throw err;
+      if (err?.status !== 404 || branch !== undefined || projectId === undefined) throw err;
     }
     const controls = await this.controlRequest("projects.dock", { projectId });
     const control = Array.isArray(controls)

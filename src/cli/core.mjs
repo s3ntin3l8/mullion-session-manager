@@ -7,6 +7,7 @@
 // `process` directly, so it's exercisable with fakes in tests too — the
 // real process-level wiring lives in mullion.mjs.
 
+import { createDockCommands } from "./dock-commands.mjs";
 import fs from "node:fs";
 import { buildBrowserCommands } from "./browser-commands.mjs";
 import { execFileSync } from "node:child_process";
@@ -1246,77 +1247,7 @@ const previewCommands = {
   },
 };
 
-// #2494 — `list`/`start`/`stop` go through the narrow `docks.*` ops, which an
-// agent session may call for its OWN project: a lone control id means "my
-// project's"; `<projectId> <controlId>` names the project (full scope).
-// A docker-discovered control (and a raw session id) stays on the legacy
-// full-scope path.
-const dockCommands = {
-  async list(client, args = []) {
-    const body = args[0] !== undefined ? { projectId: args[0] } : {};
-    return { json: await client.request("docks.list", body) };
-  },
-  async start(client, args) {
-    const hasProject = args[1] !== undefined;
-    const projectId = hasProject ? args[0] : undefined;
-    const dockId = hasProject ? args[1] : args[0];
-    if (dockId === undefined) throw new CliUsageError("dock control id is required");
-    const branchFlag = args.indexOf("--branch");
-    const branch = branchFlag === -1 ? undefined : args[branchFlag + 1];
-    try {
-      const result = await client.request("docks.start", {
-        ...(projectId !== undefined ? { projectId } : {}),
-        dockControlId: dockId,
-        ...(branch !== undefined ? { branch } : {}),
-      });
-      return { json: result };
-    } catch (err) {
-      if (err?.status !== 404 || projectId === undefined || branch !== undefined) throw err;
-    }
-    const controls = await client.request("projects.dock", { projectId });
-    const control = controls.find((c) => c.id === dockId);
-    if (!control) throw new CliUsageError(`no dock control '${dockId}' for project ${projectId}`);
-    // A docker-sourced control's own stable identity (dockHelpers.ts's
-    // dockerSessionIdentity — this repo's own source of truth, since this
-    // file can't import the frontend's TS helper) — `command` is
-    // reconstructed fresh from live container labels on every discovery
-    // poll and can change text without the underlying service having
-    // changed, which would otherwise leave this session unmatched against
-    // its own control (issue #73 follow-up plan, 5b) the same way a
-    // command-string comparison already fails on the frontend. `nameLocked`
-    // matches Dock.tsx's own identityOpts for the same control.
-    const identity = control.docker ? `docker-logs:${control.docker.containerName}` : null;
-    const body = {
-      projectId,
-      command: control.command,
-      kind: "dock",
-      name: identity ?? control.title,
-      ...(identity ? { nameLocked: true } : {}),
-    };
-    if (control.cwd !== undefined) body.cwd = control.cwd;
-    if (control.worktreeRefresh !== undefined) body.worktreeRefresh = control.worktreeRefresh;
-    if (control.env !== undefined) body.env = control.env;
-    const result = await client.request("sessions.create", body);
-    return { json: result };
-  },
-  async stop(client, args) {
-    // `stop <controlId> --control` (own project) / `stop <projectId> <controlId>`,
-    // else a raw session id (full scope).
-    if (args.includes("--control")) {
-      const dockControlId = args.find((a) => a !== "--control");
-      if (dockControlId === undefined) throw new CliUsageError("dock control id is required");
-      return { json: await client.request("docks.stop", { dockControlId }) };
-    }
-    if (args[1] !== undefined) {
-      return {
-        json: await client.request("docks.stop", { projectId: args[0], dockControlId: args[1] }),
-      };
-    }
-    const sessionId = requireOne(args, "session id");
-    const result = await client.request("sessions.kill", { sessionId });
-    return { json: result };
-  },
-};
+const dockCommands = createDockCommands({ CliUsageError, requireOne });
 
 // `mullion device <verb> <id> ...` — every action verb takes the device's
 // numeric row id (from `device list`) as its first positional arg,

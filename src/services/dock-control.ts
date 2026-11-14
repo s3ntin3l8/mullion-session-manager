@@ -145,7 +145,20 @@ export async function startDockControl(
   if (!control.ok) return control;
   const running = findRunningDockSession(app, projectId, controlId);
   if (running) {
-    return fail(409, "Dock control is already running", { sessionId: running.id });
+    // The row says active, but its process may have died before the
+    // reconciler noticed: decide on live state, and reap a dead row.
+    const project = getProjectRow(app, projectId)!;
+    const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+    const live = await withLiveStatus(
+      app,
+      running,
+      idleThresholdMs,
+      running.hostId ?? project.hostId,
+    );
+    if (live.sessionStatus !== "exited") {
+      return fail(409, "Dock control is already running", { sessionId: running.id });
+    }
+    await killSession(app, running.id, "detach");
   }
   const c = control.value;
   const worktreeRefresh =

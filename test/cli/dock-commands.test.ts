@@ -31,6 +31,18 @@ function fakeClient(overrides: Partial<{ request: unknown }> = {}) {
 }
 
 describe("mullion dock", () => {
+  it("dock list with no project falls back to all dock sessions at full scope (400)", async () => {
+    const client = fakeClient({
+      request: vi.fn(async (op: string) => {
+        if (op === "docks.list")
+          throw Object.assign(new Error("projectId required"), { status: 400 });
+        return [{ id: 1 }];
+      }),
+    });
+    await runCommand(["dock", "list"], { client, io: fakeIo() });
+    expect(client.request).toHaveBeenCalledWith("sessions.list", { kind: "dock" });
+  });
+
   it("dock list requests docks.list (own project in a session, or a named one)", async () => {
     const client = fakeClient();
     const io = fakeIo();

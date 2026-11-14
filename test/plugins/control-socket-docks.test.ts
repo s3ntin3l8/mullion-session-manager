@@ -16,7 +16,17 @@ interface LaunchParams extends Record<string, unknown> {
   name?: string;
   dockControlId?: string;
 }
-const launch = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[] }));
+const launch = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[], live: "idle" }));
+vi.mock("../../src/services/session-live-info.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    withLiveStatus: vi.fn(async (_app: unknown, row: object) => ({
+      ...row,
+      sessionStatus: launch.live,
+    })),
+  };
+});
 vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -72,6 +82,7 @@ describe("docks.* ops (#2494)", () => {
   let cwdB: string;
   beforeEach(() => {
     launch.calls.length = 0;
+    launch.live = "idle";
     const controls = {
       controls: [
         { id: "dev-server", title: "Dev server", command: "make dev", cwd: "web", env: { A: "1" } },
@@ -144,6 +155,20 @@ describe("docks.* ops (#2494)", () => {
     await dispatch(app, conn, { id: 3, op: "docks.start", body: { dockControlId: "dev-server" } });
     expect(frames[2]).toMatchObject({ ok: false, status: 409 });
     expect(launch.calls).toHaveLength(1);
+  });
+
+  it("restarts a control whose row is active but whose process already died", async () => {
+    const { app, agentSession } = await setup();
+    const { conn, frames } = sinkConn("session", agentSession);
+    await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "logs" } });
+    const stale = (frames[0].result as { sessionId: number }).sessionId;
+    launch.live = "exited";
+    await dispatch(app, conn, { id: 2, op: "docks.start", body: { dockControlId: "logs" } });
+    expect(frames[1]).toMatchObject({ ok: true, status: 201 });
+    expect((frames[1].result as { sessionId: number }).sessionId).not.toBe(stale);
+    expect(app.db.select().from(sessions).where(eq(sessions.id, stale)).get()?.status).toBe(
+      "killed",
+    );
   });
 
   it("start with a branch runs the control in a branch worktree", async () => {
