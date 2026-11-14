@@ -58,7 +58,9 @@ export default defineConfig({
     // text, so those files opt back in (sidebar-kit.css: the hover-actions
     // overlay contract in ui/sidebar/sidebar-kit.test.tsx; github-pr.css: the task
     // strip's menu staying unclipped, ui/sidebar/TaskStatusBlock.test.tsx;
-    // left-rail.css: only the rail's middle region scrolls, LeftRail.test.tsx).
+    // left-rail.css: only the rail's middle region scrolls, LeftRail.test.tsx;
+    // companion-views.css: the Dock view's touch-size rows,
+    // right-sidebar/DockSidebarView.test.tsx).
     css: {
       include: [
         /styles\/tokens\.css/,
@@ -66,6 +68,7 @@ export default defineConfig({
         /styles\/github-pr\.css/,
         /styles\/task-board\.css/,
         /styles\/left-rail\.css/,
+        /styles\/companion-views\.css/,
       ],
     },
     maxWorkers,

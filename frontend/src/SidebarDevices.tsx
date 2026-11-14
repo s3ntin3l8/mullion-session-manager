@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import type { Device } from "./api/index.js";
@@ -51,9 +51,19 @@ export interface SidebarDevicesProps {
    * navigator keeps the old "render nothing" behaviour; the right-sidebar view
    * passes an empty state, because a whole view with no content reads as broken. */
   empty?: ReactNode;
+  /** Rendered instead of nothing when the FIRST fetch failed and there is no
+   * list to show yet. The right-sidebar view passes a note; without one, a
+   * failed first load would leave the view showing only its header until a
+   * later poll succeeds. The phone navigator omits it (renders nothing). */
+  loadFailed?: ReactNode;
 }
 
-export function SidebarDevices({ onOpenDevice, showHeader = true, empty }: SidebarDevicesProps) {
+export function SidebarDevices({
+  onOpenDevice,
+  showHeader = true,
+  empty,
+  loadFailed,
+}: SidebarDevicesProps) {
   // Unfiltered, deliberately: a `status: "killed"` row is a STOPPED device,
   // which is exactly what Start exists for. This used to filter to
   // active-only, but that filter only existed to hide rows DELETE left
@@ -103,15 +113,40 @@ export function SidebarDevices({ onOpenDevice, showHeader = true, empty }: Sideb
   // while Settings is open), so an uncaught rejection on a transient
   // /api/devices failure (e.g. a server restart) would otherwise fire every
   // DEVICES_POLL_MS for as long as the tab stays visible.
-  usePolling(() => refreshDevices().catch(() => {}), DEVICES_POLL_MS, {
-    pauseWhenHidden: true,
-    deps: [refreshDevices],
-  });
+  //
+  // `lastFetchFailed` is local, deliberately not `devicesLoaded`: flipping
+  // that on a failure would bring back the false "no devices" empty state.
+  // Written only on a change, so a steady stream of good polls costs no
+  // re-render.
+  const [lastFetchFailed, setLastFetchFailed] = useState(false);
+  const lastFetchFailedRef = useRef(false);
+  const recordFetch = (failed: boolean) => {
+    if (lastFetchFailedRef.current === failed) return;
+    lastFetchFailedRef.current = failed;
+    setLastFetchFailed(failed);
+  };
+  usePolling(
+    () =>
+      refreshDevices()
+        .then(() => recordFetch(false))
+        .catch(() => recordFetch(true)),
+    DEVICES_POLL_MS,
+    {
+      pauseWhenHidden: true,
+      deps: [refreshDevices],
+    },
+  );
 
   // The empty state waits for the first fetch: the store starts at [] and the
   // view can be the persisted active one, so without this a host that HAS
   // devices would flash "no devices" on reload.
-  if (devices.length === 0) return empty && devicesLoaded ? <>{empty}</> : null;
+  if (devices.length === 0) {
+    if (empty && devicesLoaded) return <>{empty}</>;
+    // Only before the first successful fetch: once the list has loaded, a
+    // failed poll keeps showing what the last good one returned.
+    if (loadFailed && !devicesLoaded && lastFetchFailed) return <>{loadFailed}</>;
+    return null;
+  }
 
   const runLifecycle = async (device: Device, kind: "start" | "stop") => {
     if (pendingId !== null) return;

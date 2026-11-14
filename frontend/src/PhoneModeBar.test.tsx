@@ -7,6 +7,7 @@ import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 import { RIGHT_SIDEBAR_VIEWS } from "./right-sidebar/views-registry.js";
 import { useDashboardStore } from "./store/index.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
 import { makeTask } from "./test/fixtures.js";
 import {
   FakeVisualViewport,
@@ -34,6 +35,8 @@ beforeEach(() => {
     rightSidebarOpen: false,
     rightSidebarView: "git",
     crossLinkReturn: null,
+    // The phone band: the sheet lists what the registry enables there.
+    settings: { ...DEFAULT_SETTINGS, layoutMode: "phone" },
   });
 });
 
@@ -120,6 +123,25 @@ describe("PhoneModeBar's more sheet", () => {
       .map((b) => b.textContent);
     expect(labels).toEqual([...RIGHT_SIDEBAR_VIEWS.map((v) => v.label), "Settings"]);
     expect(labels).toContain("Devices");
+  });
+
+  it("lists Browser and Dock, which the registry enables in the phone band (design 9.4)", async () => {
+    render(<Harness />);
+    const sheet = await openMore();
+    expect(within(sheet).getByRole("button", { name: /^Browser/ })).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Dock/ }));
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.rightSidebarView).toBe("dock");
+  });
+
+  it("leaves Browser and Dock out where the registry does not enable them (from 1100px)", async () => {
+    useDashboardStore.setState({ settings: { ...DEFAULT_SETTINGS, layoutMode: "desktop" } });
+    render(<Harness />);
+    const sheet = await openMore();
+    expect(within(sheet).queryByRole("button", { name: /^Browser/ })).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: /^Dock/ })).toBeNull();
+    expect(within(sheet).getByRole("button", { name: /^Git$/ })).toBeInTheDocument();
   });
 
   it("leaves out a view the registry disables (Tasks with Task Master off)", async () => {

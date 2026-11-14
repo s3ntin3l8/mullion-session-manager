@@ -596,6 +596,58 @@ survives a reload (or any other transient resize that hides it), via
 tiled or the previously-pinned control's identity no longer matches any row
 in it.
 
+## The Dock view in the right sidebar (below 1100px)
+
+Where the window is between 700 and 1099px wide (the rails layouts, among
+them a foldable unfolded, where the screen is a session with its
+companions beside it), the right rail has a **Dock** view. On a phone the
+"⋯" sheet lists it with the rail's other views, and it opens full screen for
+the current session's project; its log is read only there too, so the key
+bar never types into it. From 1100px it is
+not registered and the Dock stays the bottom panel described above.
+
+The view shows the project the right sidebar follows:
+
+- **Commands**: one section for the `dock.json` controls.
+- **One section per Compose stack**, headed by its compose project's name,
+  so a dev and a prod stack stay apart. A service that belongs to no stack,
+  and an orphaned log stream, go under **Other containers**.
+- **Selecting a row** (a tap) shows its actions as buttons and its log
+  under the list. Selecting never starts a command; **Start** does.
+  Selecting a Compose service starts its log stream if it is off, as the
+  bottom Dock does.
+- **A command's actions**: Restart, Stop or Start, and the branch picker
+  when the project has more than one checkout. Stop asks for a second tap
+  when Settings → Session management → "Confirm before kill" is on.
+- **A service's actions**: Restart, Stop (two taps) or Start, and Check for
+  update. The image tag stays on the row and is tinted when an update is
+  available.
+- **A stack's own actions** (Restart stack, Apply config, Pull & restart,
+  Rebuild & restart, Stop stack) open from the "⋯" on the stack's heading as
+  a sheet with touch-size rows. Pull, rebuild and stop take a second tap.
+- The port-in-use message, held (recreating) rows and orphaned rows work as
+  in the bottom Dock.
+
+The view leaves out the bottom Dock's GitHub row and its **Preview ▾**
+shortcut: GitHub and Browser are right-rail views of their own. It does not
+run "Auto-attach Docker logs"; the bottom Dock does, and the two can be on
+screen together with a mouse at these widths. On a touch screen the bottom Dock is not
+mounted, so the setting has no effect there yet (#3031), and the view cannot
+yet turn a service's log stream off.
+
+**The log is read only.** The bottom Dock is not mounted under a touch
+pointer, because the mobile key bar sends input by session and cannot tell a
+session's own pane from a Dock monitor of the same session. The view shows
+the log in a read-only terminal (`TerminalPane`'s `readOnly`): it never
+registers as a key-bar target, sends nothing typed or pasted to the PTY, and
+raises no on-screen keyboard. Selecting, copying and find still work. To type
+into a monitor, open it as a session.
+
+Both surfaces run the same data and actions: `frontend/src/dock/useDockProject.ts`
+holds a project's controls, grouping, polling and every action, and the
+bottom Dock's `DockProjectGroup` and the view's `DockSidebarView` are two
+layouts over it.
+
 ## Troubleshooting
 
 - **Monitors don't appear.** Check that `.crs/dock.json` is valid JSON

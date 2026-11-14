@@ -1,14 +1,17 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
 import { ChevronLeftIcon, CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
 import { useCheckoutTarget } from "../hooks/useCheckoutTarget.js";
+import { useDashboardStore } from "../store/index.js";
+import { DEFAULT_RIGHT_SIDEBAR_VIEW } from "../store/constants.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 import {
   SidebarRepoTitleContext,
   SidebarStripSlotContext,
   SidebarToolbarSlotContext,
 } from "./sidebarToolbarSlot.js";
+import { useCurrentLayoutBand, viewInBand } from "./viewBands.js";
 import type { RightSidebarActions, RightSidebarView } from "./views.js";
 
 export interface RightSidebarPanelProps {
@@ -31,9 +34,21 @@ export function RightSidebarPanel({
   phone = false,
   title,
 }: RightSidebarPanelProps) {
-  const View = view.Component;
   const projectId = followed.effectiveProjectId;
   const hostGlobal = view.hostGlobal === true;
+  // A view that does not exist in this band (Browser and Dock from 1100px)
+  // can still be the persisted one, or stay open across a resize. Its rail
+  // button is gone, so nothing could close it: close it here instead of
+  // rendering a view the layout has no place for, and move the stored view
+  // back to the default, or the sidebar toggle would reopen on it.
+  const inBand = viewInBand(view, useCurrentLayoutBand());
+  // A layout effect, so the close lands before the browser paints: no frame
+  // of the out-of-band view's header, no visible open-then-close.
+  useLayoutEffect(() => {
+    if (inBand) return;
+    useDashboardStore.getState().openRightSidebarView(DEFAULT_RIGHT_SIDEBAR_VIEW);
+    onClose();
+  }, [inBand, onClose]);
   const { checkoutSessionId, choice } = useCheckoutTarget(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [stripSlot, setStripSlot] = useState<HTMLElement | null>(null);
@@ -103,7 +118,7 @@ export function RightSidebarPanel({
         )}
       </div>
       <div className="right-sidebar-strip-slot" ref={setStripSlot} />
-      {projectId == null && !hostGlobal ? (
+      {!inBand ? null : projectId == null && !hostGlobal ? (
         <div className="github-panel-empty-row">No projects yet.</div>
       ) : (
         <div className="right-sidebar-body cmux-scroll">
@@ -111,12 +126,18 @@ export function RightSidebarPanel({
             <SidebarStripSlotContext.Provider value={stripSlot}>
               <SidebarDetailSlotContext.Provider value={detailSlot}>
                 <SidebarRepoTitleContext.Provider value={setRepoTitle}>
-                  <View
-                    projectId={projectId ?? 0}
-                    checkoutSessionId={checkoutSessionId}
-                    checkoutChoice={choice}
-                    actions={actions}
-                  />
+                  {view.hostGlobal ? (
+                    <view.Component actions={actions} />
+                  ) : (
+                    projectId != null && (
+                      <view.Component
+                        projectId={projectId}
+                        checkoutSessionId={checkoutSessionId}
+                        checkoutChoice={choice}
+                        actions={actions}
+                      />
+                    )
+                  )}
                 </SidebarRepoTitleContext.Provider>
               </SidebarDetailSlotContext.Provider>
             </SidebarStripSlotContext.Provider>

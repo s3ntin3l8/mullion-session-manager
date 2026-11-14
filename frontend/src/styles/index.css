@@ -50,3 +50,5 @@
 @import "./left-rail.css";
 /* New section — appended last so it cannot reorder any earlier rule (#3013). */
 @import "./session-launcher.css";
+/* New section — appended last so it cannot reorder any earlier rule (#3012). */
+@import "./companion-views.css";

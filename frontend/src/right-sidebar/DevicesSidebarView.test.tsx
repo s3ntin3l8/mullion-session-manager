@@ -55,7 +55,7 @@ describe("DevicesSidebarView (#3012)", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  const renderView = () => render(<DevicesSidebarView projectId={0} actions={actions} />);
+  const renderView = () => render(<DevicesSidebarView actions={actions} />);
 
   it("lists devices without the left sidebar's section header", async () => {
     renderView();
@@ -102,5 +102,29 @@ describe("DevicesSidebarView (#3012)", () => {
     );
     renderView();
     expect(screen.queryByText(/No devices yet/)).toBeNull();
+  });
+
+  it("says the list could not be loaded when the first fetch fails", async () => {
+    resetStore({ devices: [], devicesLoaded: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(500, { message: "boom" }))),
+    );
+    renderView();
+    expect(await screen.findByText("Couldn't load devices.")).toBeInTheDocument();
+    // Not the false empty state: nothing has been loaded, so nothing is known.
+    expect(screen.queryByText(/No devices yet/)).toBeNull();
+  });
+
+  it("keeps the failed-load note off once a fetch has succeeded", async () => {
+    db = [];
+    resetStore({ devices: [], devicesLoaded: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(500, { message: "boom" }))),
+    );
+    renderView();
+    expect(await screen.findByText(/No devices yet/)).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load devices.")).toBeNull();
   });
 });
