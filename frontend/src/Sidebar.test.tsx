@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useSyncExternalStore } from "react";
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
@@ -32,6 +32,7 @@ import { useDashboardStore } from "./store/index.js";
 // publish a host-health change) since Sidebar reads the store the same ways
 // across its own body and the child components it mounts (ProjectHeader,
 // SessionRow, HierarchyToggle).
+let workspaceCounter = 0;
 let projects: Project[];
 let sessions: Session[];
 let hosts: Host[];
@@ -45,6 +46,7 @@ let gitStatuses: Record<number, GitStatus | null>;
 // failed (audit finding 14).
 let projectsLoaded: boolean;
 let projectsError: string | null;
+let activeWorkspaceId: number | null;
 const setShowTaskSessions = vi.fn();
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
@@ -109,6 +111,7 @@ function storeState() {
     toggleSessionMute: vi.fn(),
     projectsLoaded,
     projectsError,
+    activeWorkspaceId,
     reportError,
   };
 }
@@ -292,6 +295,9 @@ beforeEach(() => {
   gitStatuses = {};
   projectsLoaded = true;
   projectsError = null;
+  // A fresh workspace per test: the Other-projects open state is kept per
+  // workspace for the page's lifetime.
+  activeWorkspaceId = ++workspaceCounter;
   reportError.mockClear();
   renameSession.mockReset();
   renameSession.mockResolvedValue(undefined);
@@ -708,6 +714,25 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     Object.defineProperty(dragStart, "dataTransfer", { value: dataTransfer });
     firstRow.dispatchEvent(dragStart);
     expect(dataTransfer.getData("application/x-mullion-session")).toBe("1000");
+  });
+
+  it("puts the Other projects header and rows in the virtualized row model", async () => {
+    projects = [makeProject({ id: 901, name: "alpha" }), makeProject({ id: 902, name: "beta" })];
+    sessions = Array.from({ length: 25 }, (_, i) =>
+      makeSession({ id: 1000 + i, projectId: 901, command: `session-${i}` }),
+    );
+    const onOpenProjectLauncher = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ workspaceProjectIds: [901], onOpenProjectLauncher });
+
+    // Collapse alpha (own ids: the collapse state is module-level) so the section header falls inside the stubbed viewport.
+    await user.click(screen.getByText("alpha"));
+    const toggle = screen.getByRole("button", { name: /Other projects/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    const betaRow = screen.getByText("beta").closest(".project-row") as HTMLElement;
+    await user.click(within(betaRow).getByTitle("New session in project"));
+    expect(onOpenProjectLauncher).toHaveBeenCalledWith(902);
   });
 
   it("still threads the remote-host badge through the virtualized project header", () => {
@@ -1596,14 +1621,15 @@ describe("sidebar workspace scope (issue #1877)", () => {
     expect(screen.queryByText("beta")).toBeNull();
   });
 
-  it("does not claim the dashboard is empty when the workspace simply has nothing tiled", () => {
+  it("lists every project in an empty workspace, with no empty state, and expands the Other projects section", () => {
     projects = [makeProject({ id: 1, name: "alpha" })];
     renderSidebar({ workspaceProjectIds: [] });
 
-    expect(screen.getByText("Nothing tiled in this workspace")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
     expect(screen.queryByText("Welcome to Mullion")).toBeNull();
-    expect(screen.queryByText("alpha")).toBeNull();
-    expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+    const toggle = screen.getByRole("button", { name: /Other projects/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("alpha")).toBeInTheDocument();
   });
 
   // App passes null until sessionsLoaded && the restored workspace match.
@@ -1650,14 +1676,80 @@ describe("sidebar workspace scope (issue #1877)", () => {
     expect(names).toEqual(["alpha", "beta"]);
   });
 
-  it("opens the global launcher from the empty workspace, the toolbar's own opener", async () => {
-    projects = [makeProject({ id: 1, name: "alpha" })];
-    const onOpenGlobalLauncher = vi.fn();
-    const user = userEvent.setup();
-    renderSidebar({ workspaceProjectIds: [], onOpenGlobalLauncher });
+  describe("Other projects section (#2075)", () => {
+    beforeEach(() => {
+      projects = [
+        makeProject({ id: 1, name: "alpha" }),
+        makeProject({ id: 2, name: "beta" }),
+        makeProject({ id: 3, name: "gamma" }),
+      ];
+      sessions = [
+        makeSession({ id: 10, projectId: 1, command: "claude code" }),
+        makeSession({ id: 20, projectId: 2, command: "other ws session" }),
+      ];
+    });
 
-    await user.click(screen.getByRole("button", { name: "Launch a session" }));
-    expect(onOpenGlobalLauncher).toHaveBeenCalledTimes(1);
+    it("lists the tiled project first and the rest in a collapsed section with a count", () => {
+      renderSidebar({ workspaceProjectIds: [1] });
+      expect(screen.getByText("alpha")).toBeInTheDocument();
+      const toggle = screen.getByRole("button", { name: /Other projects/ });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(toggle).toHaveTextContent("2");
+      expect(screen.queryByText("beta")).toBeNull();
+      expect(screen.queryByText("gamma")).toBeNull();
+    });
+
+    it("expands on click, keeps session lists scoped, and collapses again", async () => {
+      const user = userEvent.setup();
+      renderSidebar({ workspaceProjectIds: [1] });
+      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+
+      expect(screen.getByRole("button", { name: /Other projects/ })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByText("beta")).toBeInTheDocument();
+      expect(screen.getByText("gamma")).toBeInTheDocument();
+      expect(screen.queryByText("other ws session")).toBeNull();
+      expect(screen.getAllByText("claude code").length).toBeGreaterThan(0);
+
+      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+      expect(screen.queryByText("beta")).toBeNull();
+    });
+
+    it("is keyboard operable", async () => {
+      const user = userEvent.setup();
+      renderSidebar({ workspaceProjectIds: [1] });
+      screen.getByRole("button", { name: /Other projects/ }).focus();
+      await user.keyboard("{Enter}");
+      expect(screen.getByText("beta")).toBeInTheDocument();
+    });
+
+    it("remembers the choice per workspace", async () => {
+      const user = userEvent.setup();
+      const first = renderSidebar({ workspaceProjectIds: [1] });
+      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+      first.unmount();
+
+      renderSidebar({ workspaceProjectIds: [1] });
+      expect(screen.getByText("beta")).toBeInTheDocument();
+    });
+
+    it("opens the launcher for an other project from its +", async () => {
+      const onOpenProjectLauncher = vi.fn();
+      const user = userEvent.setup();
+      renderSidebar({ workspaceProjectIds: [1], onOpenProjectLauncher });
+      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+
+      const betaRow = screen.getByText("beta").closest(".project-row") as HTMLElement;
+      await user.click(within(betaRow).getByTitle("New session in project"));
+      expect(onOpenProjectLauncher).toHaveBeenCalledWith(2);
+    });
+
+    it("shows no section when unscoped (phone)", () => {
+      renderSidebar({ workspaceProjectIds: null });
+      expect(screen.queryByRole("button", { name: /Other projects/ })).toBeNull();
+    });
   });
 
   it("marks a session whose terminal pane is already open, in words and in the accessible name", () => {

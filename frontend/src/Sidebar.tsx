@@ -113,10 +113,11 @@ export interface SidebarProps {
   // these still goes through onOpenSession, which focuses the existing pane
   // rather than opening a second one — see usePanelOpener.
   openSessionIds?: number[] | null;
-  // The empty workspace state has no project rows left, so it has no
-  // per-project "+" either. This is App's openGlobalLauncher — the
-  // toolbar's launcher / Ctrl-K — not the project-scoped opener above.
-  onOpenGlobalLauncher: () => void;
+  // No longer read here: the "Nothing tiled in this workspace" empty state
+  // it served is gone (#2075) — an empty workspace lists every project
+  // under "Other projects" instead, each with its own "+". Kept on the
+  // props so existing callers still type-check.
+  onOpenGlobalLauncher?: () => void;
 }
 
 export function Sidebar({
@@ -131,7 +132,6 @@ export function Sidebar({
   onOpenProjectSetup,
   workspaceProjectIds = null,
   openSessionIds = null,
-  onOpenGlobalLauncher,
 }: SidebarProps) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription); split into one selector per rendered field (via
@@ -151,6 +151,7 @@ export function Sidebar({
     viewMode,
     projectsLoaded,
     projectsError,
+    activeWorkspaceId,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
@@ -169,6 +170,7 @@ export function Sidebar({
       // (audit finding 14).
       projectsLoaded: s.projectsLoaded,
       projectsError: s.projectsError,
+      activeWorkspaceId: s.activeWorkspaceId,
     })),
   );
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -281,6 +283,26 @@ export function Sidebar({
     }
     return scoped;
   }, [projects, workspaceProjectIds, manualProjectIds]);
+  // #2075 — every project the tree does not list as tiled/pinned. They
+  // follow in the collapsible "Other projects" section, header rows only:
+  // session lists stay scoped to this workspace.
+  const otherProjects = useMemo(() => {
+    if (workspaceProjectIds == null) return [];
+    const scopedIds = new Set(treeProjects.map((p) => p.id));
+    return projects.filter((p) => !scopedIds.has(p.id));
+  }, [projects, treeProjects, workspaceProjectIds]);
+  const emptyWorkspace = workspaceProjectIds != null && treeProjects.length === 0;
+  const [, setOtherVersion] = useState(0);
+  const otherKey = activeWorkspaceId ?? "none";
+  // An untouched section is open only in a workspace with nothing tiled, so
+  // the tree is never blank; a manual choice wins and sticks per workspace.
+  const otherExpanded = otherProjectsExpandedState.get(otherKey) ?? emptyWorkspace;
+  const toggleOtherProjects = useCallback(() => {
+    const current = otherProjectsExpandedState.get(otherKey) ?? emptyWorkspace;
+    otherProjectsExpandedState.set(otherKey, !current);
+    setOtherVersion((v) => v + 1);
+  }, [otherKey, emptyWorkspace]);
+  const showOtherProjects = otherProjects.length > 0 && !filterActive;
   const openSessionIdSet = useMemo(
     () => (openSessionIds == null ? null : new Set(openSessionIds)),
     [openSessionIds],
@@ -482,8 +504,24 @@ export function Sidebar({
         rows.push({ key: `s-${session.id}`, type: "session", session, project, depth });
       }
     }
+    if (showOtherProjects) {
+      rows.push({
+        key: "other-header",
+        type: "other-header",
+        count: otherProjects.length,
+        expanded: otherExpanded,
+      });
+      if (otherExpanded) {
+        for (const project of otherProjects) {
+          rows.push({ key: `o-${project.id}`, type: "other-project", project });
+        }
+      }
+    }
     return rows;
   }, [
+    showOtherProjects,
+    otherProjects,
+    otherExpanded,
     shouldVirtualize,
     visibleProjects,
     baseSessionsByProject,
@@ -667,27 +705,7 @@ export function Sidebar({
             {projects.map((project) => (
               <ProjectGitHubSubscription key={project.id} projectId={project.id} />
             ))}
-            {treeProjects.length === 0 ? (
-              // Issue #1877 — the dashboard HAS projects; none of them are
-              // tiled into this workspace or pinned to the Dock. "Welcome
-              // to Mullion" would be a lie here (that state is the
-              // projects.length === 0 branch above). Same membership as
-              // the Dock's columns: a session open in the live layout, or
-              // a "+ Add project" pin.
-              <EmptyState>
-                <EmptyStateTitle>Nothing tiled in this workspace</EmptyStateTitle>
-                <EmptyStateBody>
-                  A project shows up here once one of its sessions is open in this layout, or you
-                  pin it from the Dock. Launch a session to put one here.
-                </EmptyStateBody>
-                <EmptyStateActions>
-                  <button className="ui-empty-state-btn-primary" onClick={onOpenGlobalLauncher}>
-                    <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-                    Launch a session
-                  </button>
-                </EmptyStateActions>
-              </EmptyState>
-            ) : filterActive && visibleProjects.length === 0 ? (
+            {filterActive && visibleProjects.length === 0 ? (
               <EmptyState>
                 <EmptyStateTitle>No sessions match</EmptyStateTitle>
                 <EmptyStateBody>
@@ -705,6 +723,7 @@ export function Sidebar({
                 onSessionEnded={onSessionEnded}
                 onOpenProjectLauncher={onOpenProjectLauncher}
                 onToggleCollapsed={toggleProjectCollapsedVirtualized}
+                onToggleOtherProjects={toggleOtherProjects}
                 onOpenProjectSetup={onOpenProjectSetup}
               />
             ) : (
@@ -726,6 +745,26 @@ export function Sidebar({
                   openSessionIds={openSessionIdSet}
                 />
               ))
+            )}
+            {!shouldVirtualize && showOtherProjects && (
+              <div className="sidebar-other-projects">
+                <OtherProjectsHeader
+                  count={otherProjects.length}
+                  expanded={otherExpanded}
+                  onToggle={toggleOtherProjects}
+                />
+                {otherExpanded &&
+                  otherProjects.map((project) => (
+                    <OtherProjectRow
+                      key={project.id}
+                      project={project}
+                      hosts={hosts}
+                      onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                      onSessionEnded={onSessionEnded}
+                      onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
+                    />
+                  ))}
+              </div>
             )}
           </>
         )}
@@ -894,6 +933,17 @@ interface ProjectHeaderFlatRow {
   // current" without also needing its own copy of the derivation rule.
   derivedDefault: boolean;
 }
+interface OtherHeaderFlatRow {
+  key: string;
+  type: "other-header";
+  count: number;
+  expanded: boolean;
+}
+interface OtherProjectFlatRow {
+  key: string;
+  type: "other-project";
+  project: Project;
+}
 interface SessionFlatRow {
   key: string;
   type: "session";
@@ -901,7 +951,70 @@ interface SessionFlatRow {
   project: Project;
   depth: number;
 }
-type SidebarFlatRow = ProjectHeaderFlatRow | SessionFlatRow;
+type SidebarFlatRow =
+  ProjectHeaderFlatRow | SessionFlatRow | OtherHeaderFlatRow | OtherProjectFlatRow;
+
+// #2075 — whether the "Other projects" section is open, per workspace, for
+// the lifetime of the page. In memory on purpose: no persisted key.
+const otherProjectsExpandedState = new Map<number | "none", boolean>();
+
+const EMPTY_SESSIONS: Session[] = [];
+
+function OtherProjectsHeader({
+  count,
+  expanded,
+  onToggle,
+}: {
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="sidebar-other-projects-header"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <span className={expanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}>▾</span>
+      <span className="sidebar-section-title">Other projects</span>
+      <span className="sidebar-section-count">{count}</span>
+    </button>
+  );
+}
+
+// A project with nothing tiled here: header only (its "+" and ⋯ menu), no
+// session body — session lists stay scoped to the workspace.
+function OtherProjectRow({
+  project,
+  hosts,
+  onOpenLauncher,
+  onSessionEnded,
+  onOpenProjectSetup,
+}: {
+  project: Project;
+  hosts: Host[];
+  onOpenLauncher: () => void;
+  onSessionEnded: (session: Session) => void;
+  onOpenProjectSetup: () => void;
+}) {
+  return (
+    <div className="project-row">
+      <ProjectHeader
+        project={project}
+        sessions={EMPTY_SESSIONS}
+        hosts={hosts}
+        collapsed
+        onToggleCollapsed={noop}
+        onOpenLauncher={onOpenLauncher}
+        onSessionEnded={onSessionEnded}
+        onOpenProjectSetup={onOpenProjectSetup}
+      />
+    </div>
+  );
+}
+
+function noop() {}
 
 // P9 — the identical onEnd / onPromoted pair used by ProjectSection and
 // VirtualizedProjectTree. Returns the promise (not `void`-discarded) so
@@ -1090,6 +1203,7 @@ function VirtualizedProjectTree({
   onSessionEnded,
   onOpenProjectLauncher,
   onToggleCollapsed,
+  onToggleOtherProjects,
   onOpenProjectSetup,
 }: {
   rows: SidebarFlatRow[];
@@ -1101,6 +1215,7 @@ function VirtualizedProjectTree({
   onSessionEnded: (session: Session) => void;
   onOpenProjectLauncher: (projectId: number) => void;
   onToggleCollapsed: (projectId: number, derivedDefault: boolean) => void;
+  onToggleOtherProjects: () => void;
   onOpenProjectSetup: (projectId: number) => void;
 }) {
   // The scroll container is `.sidebar-wrapper` (App.tsx), an ANCESTOR of
@@ -1175,7 +1290,21 @@ function VirtualizedProjectTree({
               transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
             }}
           >
-            {row.type === "header" ? (
+            {row.type === "other-header" ? (
+              <OtherProjectsHeader
+                count={row.count}
+                expanded={row.expanded}
+                onToggle={onToggleOtherProjects}
+              />
+            ) : row.type === "other-project" ? (
+              <OtherProjectRow
+                project={row.project}
+                hosts={hosts}
+                onOpenLauncher={() => onOpenProjectLauncher(row.project.id)}
+                onSessionEnded={onSessionEnded}
+                onOpenProjectSetup={() => onOpenProjectSetup(row.project.id)}
+              />
+            ) : row.type === "header" ? (
               <div className="project-row">
                 <ProjectHeader
                   project={row.project}
