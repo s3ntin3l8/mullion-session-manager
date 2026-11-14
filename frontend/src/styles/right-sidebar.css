@@ -310,7 +310,9 @@
 }
 
 /* Touch: the header and rail controls are what opens and closes the panel
-   now, so they get a full-size target (#3006). */
+   now, so they get a taller target (#3006). The rail stays 40px wide here, so
+   a rail button is 44px tall and 30px wide; the rail itself widens with the
+   two-halves layout (#3010). */
 @media (pointer: coarse) {
   .right-sidebar-icon-btn,
   .right-sidebar-header .sb-ibtn {

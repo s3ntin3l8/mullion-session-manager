@@ -2,7 +2,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { RIGHT_SIDEBAR_FULL_WIDTH_QUERY, RightSidebar } from "./RightSidebar.js";
+import { RightSidebar } from "./RightSidebar.js";
+import { COARSE_POINTER_QUERY, RIGHT_SIDEBAR_FULL_WIDTH_QUERY } from "../lib/layoutTier.js";
 import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
@@ -59,15 +60,17 @@ beforeEach(() => {
   });
 });
 
-// A window too narrow to dock the panel: only the full-width query matches.
-function narrowWindow() {
+// Make exactly these media queries match. narrowWindow: a window too narrow
+// to dock the panel.
+function matchQueries(...queries: string[]) {
   vi.stubGlobal("matchMedia", (query: string) => ({
-    matches: query === RIGHT_SIDEBAR_FULL_WIDTH_QUERY,
+    matches: queries.includes(query),
     media: query,
     addEventListener: () => {},
     removeEventListener: () => {},
   }));
 }
+const narrowWindow = () => matchQueries(RIGHT_SIDEBAR_FULL_WIDTH_QUERY);
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -425,6 +428,29 @@ describe("RightSidebar", () => {
     expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
 
     rerender(<RightSidebar tier="phone" actions={actions} />);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("has no resize handle under a touch pointer, which could not drag it", () => {
+    matchQueries(COARSE_POINTER_QUERY);
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { container } = renderSidebar("tablet");
+
+    expect(container.querySelector(".right-sidebar-panel.docked")).toBeTruthy();
+    expect(container.querySelector(".right-sidebar-resize-handle")).toBeNull();
+  });
+
+  it("a forced desktop tier on a narrow window keeps Escape but stays off the back stack", () => {
+    narrowWindow();
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    renderSidebar("desktop");
+
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+
+    fireEvent.keyDown(window, { key: "Escape" });
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 

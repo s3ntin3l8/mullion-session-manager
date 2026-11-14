@@ -36,6 +36,10 @@ export type { LayoutTier };
 export const PHONE_BREAKPOINT_QUERY = "(max-width: 699.98px)";
 export const TABLET_BREAKPOINT_QUERY = "(min-width: 700px) and (max-width: 1279.98px)";
 export const DESKTOP_BREAKPOINT_QUERY = "(min-width: 1280px)";
+// Below this width a docked right sidebar would leave the workspace less than
+// about 400px, so an open view covers the workspace instead (#3006). Kept
+// here with the tier breakpoints so the 800px floor cannot drift from them.
+export const RIGHT_SIDEBAR_FULL_WIDTH_QUERY = "(max-width: 799.98px)";
 
 // Touch affordances (key bar, tab-strip panning, 44px hit targets) are
 // gated on pointer coarseness, NOT layout tier — a touchscreen laptop at

@@ -3,6 +3,11 @@ import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
 import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
+import {
+  RIGHT_SIDEBAR_FULL_WIDTH_QUERY,
+  isCompactTier,
+  useCoarsePointer,
+} from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import { useDashboardStore } from "../store/index.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "../store/constants.js";
@@ -18,10 +23,6 @@ export interface RightSidebarProps {
   // the project picker offers only these. null/absent = every project.
   workspaceProjectIds?: number[] | null;
 }
-
-// Below this window width a docked panel would leave the workspace less than
-// about 400px, so an open view takes the whole width instead (#3006).
-export const RIGHT_SIDEBAR_FULL_WIDTH_QUERY = "(max-width: 799.98px)";
 
 function subscribeFullWidth(onChange: () => void): () => void {
   const mq = window.matchMedia(RIGHT_SIDEBAR_FULL_WIDTH_QUERY);
@@ -103,6 +104,8 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   });
 
   const full = useSyncExternalStore(subscribeFullWidth, readFullWidth);
+  // The resize handle is a 6px mouse target; a touch pointer cannot drag it.
+  const coarse = useCoarsePointer();
   // Covering the workspace is the one state the panel can be "in the way":
   // only then do Escape and the back gesture close it.
   const covering = open && full && tier !== "phone";
@@ -121,7 +124,9 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [covering, close]);
-  usePhoneBackStack(covering, close);
+  // The back stack is for the compact tiers only (its own contract): a
+  // forced desktop tier on a narrow window keeps Escape but not back.
+  usePhoneBackStack(covering && isCompactTier(tier), close);
 
   // A tier change (rotate, fold/unfold, window resize) that lands on phone
   // closes the panel: `open` is persisted state and phone renders nothing
@@ -145,7 +150,9 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
           style={full ? undefined : { width }}
           aria-label={`${view.label} sidebar`}
         >
-          {!full && <div className="right-sidebar-resize-handle" onMouseDown={onMouseDown} />}
+          {!full && !coarse && (
+            <div className="right-sidebar-resize-handle" onMouseDown={onMouseDown} />
+          )}
           <RightSidebarPanel view={view} followed={followed} actions={actions} onClose={close} />
         </aside>
       )}
