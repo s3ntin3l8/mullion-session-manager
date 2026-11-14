@@ -664,6 +664,14 @@ describe("RightSidebar in the two halves", () => {
       expect(state.rightSidebarView).toBe("git");
     });
 
+    it("brings the view back when unfolding to 700-799px instead", () => {
+      const { rerender } = fold({ kind: "pane", panelId: "session-3" });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      rerender(<RightSidebar tier="tablet" actions={actions} band="rails-full" />);
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    });
+
     it("in Tasks mode keeps the task's sidebar open through the fold", () => {
       const { container } = fold({ kind: "pane", panelId: "session-3" }, "kanban");
       expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);

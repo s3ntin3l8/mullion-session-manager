@@ -254,9 +254,11 @@ export function RightSidebar({
     lastWideBand.current = band;
     const reopen = reopenOnUnfold.current;
     reopenOnUnfold.current = null;
-    if (reopen !== null && halves && !open) {
+    // Back on any width where the sidebar docks (the halves, or 700-799px
+    // where a view takes the full width), the view comes back.
+    if (reopen !== null && !open) {
       // Putting it back is not using it: the session stays the one used last.
-      markViewRestored();
+      if (halves) markViewRestored();
       useDashboardStore.getState().openRightSidebarView(reopen);
     }
   }, [tier, band, halves, open, close]);

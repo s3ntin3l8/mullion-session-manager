@@ -215,6 +215,9 @@ export function useFoldHalves({
   // when unfolding put back a view the fold closed (markViewRestored): the
   // session was used last, and a second fold should show it again.
   useEffect(() => {
+    // A flag armed while the halves are not on screen is stale: it must not
+    // swallow the next genuine view-open once they are.
+    if (!active) viewRestored = false;
     if (!active || !viewOpen) return;
     if (viewRestored) {
       viewRestored = false;

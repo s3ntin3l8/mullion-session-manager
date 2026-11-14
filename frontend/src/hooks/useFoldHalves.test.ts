@@ -348,6 +348,17 @@ describe("useFoldHalves", () => {
     expect(halves().lastUsed).toEqual({ kind: "view" });
   });
 
+  it("drops a put-back mark armed while the halves are not on screen", () => {
+    useDashboardStore.getState().noteLeftPane("session-1");
+    const { rerender, props } = setup({ presentation: "grid" });
+    markViewRestored();
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    act(() => useDashboardStore.setState({ rightSidebarOpen: false }));
+    rerender({ ...props, presentation: "halves" });
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    expect(halves().lastUsed).toEqual({ kind: "view" });
+  });
+
   it("counts opening a sidebar view as using it", () => {
     setup();
     act(() => useDashboardStore.setState({ rightSidebarOpen: true }));

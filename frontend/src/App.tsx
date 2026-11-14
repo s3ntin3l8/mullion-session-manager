@@ -1016,9 +1016,9 @@ export function App() {
   // so a float is not something the left half can fall back on: the guard
   // that keeps the left half non-empty counts tiled panes only.
   const tiledLeftCount = useMemo(() => {
-    const tiled = new Set(mobilePanels.map((p) => p.id));
+    const tiled = new Set(dockviewApi?.panels.filter(isTiledPanel).map((p) => p.id));
     return railSplit.left.filter((p) => tiled.has(p.id)).length;
-  }, [mobilePanels, railSplit.left]);
+  }, [dockviewApi, railSplit.left]);
   const { moveToHalf, toggleRightRailPane, renderHalfActions, renameHalfPane, halfMenuItems } =
     useHalfActions(dockviewApi, layoutTier, tiledLeftCount);
   // Projects with a session open in the active workspace, derived from the
