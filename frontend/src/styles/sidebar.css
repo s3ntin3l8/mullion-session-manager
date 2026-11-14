@@ -32,7 +32,7 @@
 }
 
 /* Resize handle on the sidebar's right edge — hover-revealed, same pattern
-   as .dock-resize-handle. Hidden when sidebar is collapsed.
+   as .dock-resize-handle. App.tsx renders it only while the sidebar shows.
 
    Must lie fully INSIDE the wrapper's padding box (no negative `right`):
    .sidebar-wrapper sets `overflow-y: auto` with no overflow-x, so per the
@@ -66,9 +66,6 @@
 }
 .sidebar-resize-handle:hover::after {
   background: var(--ring, var(--muted));
-}
-.app.sidebar-collapsed .sidebar-resize-handle {
-  display: none;
 }
 .app.sidebar-resizing .sidebar-wrapper {
   transition: none;
