@@ -121,7 +121,11 @@ export function RightSidebarPanel({
       {!inBand ? null : projectId == null && !hostGlobal ? (
         <div className="github-panel-empty-row">No projects yet.</div>
       ) : (
-        <div className="right-sidebar-body cmux-scroll">
+        // Keyed by the view (#3015): a view arriving, or one view replacing
+        // another, mounts a fresh body that fades and settles in
+        // (styles/motion.css, .motion-arrive). Only the content moves; the
+        // sidebar itself, and any terminal in it, is at its final size at once.
+        <div key={view.id} className="right-sidebar-body cmux-scroll motion-arrive">
           <SidebarToolbarSlotContext.Provider value={toolbarSlot}>
             <SidebarStripSlotContext.Provider value={stripSlot}>
               <SidebarDetailSlotContext.Provider value={detailSlot}>

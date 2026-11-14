@@ -35,6 +35,7 @@ import { PaletteRow } from "./command-palette/PaletteRow.js";
 import { AUTO_VALUE, OWN_HOST_VALUE, describeAutoPreview } from "./command-palette/hostTarget.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
+import { useDismissExit } from "./hooks/usePresence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
 import {
@@ -326,6 +327,11 @@ export function CommandPalette({
   // any other input — this only changes what grabs focus on OPEN.
   const isCoarsePointer = useCoarsePointer();
   const modalRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // #3015 — the palette's own dismiss controls (Escape in the search field,
+  // the backdrop, the close button) play the exit before `onClose`. Running a
+  // command closes at once: the command's result is what the user looks at.
+  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
   const {
     onKeyDown: onTrapKeyDown,
     suppressRestore,
@@ -839,10 +845,15 @@ export function CommandPalette({
     });
 
   return (
-    <div className="overlay-backdrop cmd-palette-backdrop" onClick={onClose}>
+    <div
+      ref={backdropRef}
+      className="overlay-backdrop cmd-palette-backdrop motion-scrim"
+      data-presence={presence}
+      onClick={dismiss}
+    >
       <div
         ref={modalRef}
-        className="cmd-palette"
+        className="cmd-palette motion-dialog"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onDialogKeyDown}
         role="dialog"
@@ -933,7 +944,11 @@ export function CommandPalette({
                 return;
               }
               if (e.key === "Escape") {
-                onClose();
+                // Handled here: the global Escape (useGlobalShortcuts) would
+                // otherwise unmount the palette in the same batch, before its
+                // exit could play (#3015).
+                e.stopPropagation();
+                dismiss();
               } else if (e.key === "ArrowDown" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 openProjectPicker();
@@ -979,7 +994,7 @@ export function CommandPalette({
           <button
             type="button"
             className="kbd kbd-btn"
-            onClick={onClose}
+            onClick={dismiss}
             aria-label="Close command palette"
             title="Close"
           >

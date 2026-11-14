@@ -5,6 +5,7 @@ import { menuMaxHeight, visibleViewport } from "../hooks/useVisualViewportChange
 import { useDashboardStore } from "../store/index.js";
 import { themeClassName } from "../store/theme.js";
 import { truncateMiddle } from "../lib/truncatePath.js";
+import { usePresence } from "../hooks/usePresence.js";
 
 export interface CustomSelectOption {
   value: string;
@@ -105,6 +106,8 @@ export function CustomSelect({
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present, state: presence } = usePresence(open, menuRef);
   const filterRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
 
@@ -400,12 +403,15 @@ export function CustomSelect({
         <span className="custom-select-label">{selected?.label ?? placeholder}</span>
         <ChevronDownIcon size={11} />
       </button>
-      {open &&
+      {present &&
         createPortal(
           <div
             ref={menuRef}
             className={themeClassName(theme, "custom-select-menu")}
             style={getMenuStyle()}
+            data-presence={presence}
+            data-placement={menuPlacement === "top" ? "top" : "bottom"}
+            inert={presence === "leaving"}
             onClick={(e) => e.stopPropagation()}
           >
             {searchable && (

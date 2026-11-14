@@ -135,10 +135,16 @@ export function useFocusTrap({
     const toFocus =
       initialFocusRef?.current ?? (containerRef.current && getFocusable(containerRef.current)[0]);
     toFocus?.focus();
+    const container = containerRef.current;
     return () => {
       if (suppressRestoreRef.current) return;
-      if (lastFocusedRef.current?.isConnected) {
-        lastFocusedRef.current.focus();
+      const target = lastFocusedRef.current;
+      // Never back into the container itself (#3015): an overlay that plays
+      // an exit is still mounted when its trap deactivates, and an element
+      // that grabbed focus as it mounted (an autoFocus search field) would
+      // otherwise take focus back into the overlay that is leaving.
+      if (target?.isConnected && !container?.contains(target)) {
+        target.focus();
       }
     };
     // Deliberately only [active] — re-running this on every render (e.g. a

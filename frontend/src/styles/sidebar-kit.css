@@ -228,7 +228,7 @@
 }
 .sb-chev {
   color: var(--muted);
-  transition: transform 0.12s;
+  transition: transform var(--motion-fade) var(--motion-ease);
 }
 .sb-chev--closed {
   transform: rotate(-90deg);

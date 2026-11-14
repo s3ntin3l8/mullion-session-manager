@@ -118,7 +118,7 @@
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 40px 90px -20px rgba(0, 0, 0, 0.7);
-  animation: cmuxPop 0.13s ease-out;
+  animation: cmuxPop var(--motion-fade) var(--motion-ease);
 }
 .settings-modal-header {
   display: flex;

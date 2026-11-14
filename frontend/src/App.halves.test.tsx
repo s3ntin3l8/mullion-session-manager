@@ -297,4 +297,30 @@ describe("App two halves", () => {
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
     expect(screen.getByTestId("right-half")).toBeInTheDocument();
   });
+
+  // #3015 — a session arriving on the right half mounts fresh, so its arrival
+  // plays (styles/motion.css) instead of the terminal swapping in place.
+  it("mounts the right half afresh for each session that arrives on it", async () => {
+    const ids = [10, 11, 12];
+    await renderHalves(false, makeApi([], ids));
+    act(() =>
+      useDashboardStore.getState().moveToHalf(
+        "session-11",
+        "right",
+        ids.map((id) => `session-${id}`),
+      ),
+    );
+    const first = screen.getByTestId("right-half");
+    expect(first).toHaveAttribute("data-session", "11");
+    act(() =>
+      useDashboardStore.getState().moveToHalf(
+        "session-12",
+        "right",
+        ids.map((id) => `session-${id}`),
+      ),
+    );
+    const second = screen.getByTestId("right-half");
+    expect(second).toHaveAttribute("data-session", "12");
+    expect(second).not.toBe(first);
+  });
 });

@@ -5,6 +5,7 @@ import { useDashboardStore } from "../store/index.js";
 import { themeClassName } from "../store/theme.js";
 import { OverflowIcon } from "./icons.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { usePresence } from "../hooks/usePresence.js";
 import {
   useVisualViewportChange,
   visibleViewport,
@@ -115,6 +116,8 @@ export function KebabMenu({
     active: open,
     containerRef: menuRef,
   });
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present, state: presence } = usePresence(open, menuRef);
 
   const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
@@ -281,6 +284,8 @@ export function KebabMenu({
     return style;
   };
   const menuStyle = getMenuStyle();
+  // An upward menu has its `top` resolved to "auto" (see getMenuStyle).
+  const opensUpward = menuStyle?.top === "auto";
 
   return (
     <>
@@ -324,13 +329,16 @@ export function KebabMenu({
       >
         {trigger ?? <OverflowIcon size={15} />}
       </button>
-      {open &&
+      {present &&
         menuStyle &&
         createPortal(
           <div
             ref={menuRef}
             className={themeClassName(theme, "pane-tab-overflow-menu")}
             style={menuStyle}
+            data-presence={presence}
+            data-placement={opensUpward ? "top" : "bottom"}
+            inert={presence === "leaving"}
             role="menu"
             onKeyDown={onMenuKeyDown}
             onClick={(e) => e.stopPropagation()}

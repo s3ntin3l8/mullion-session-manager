@@ -30,6 +30,7 @@ import {
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange, visibleViewport } from "./hooks/useVisualViewportChange.js";
 import { useLayoutContext } from "./lib/layoutTier.js";
 import { describeError } from "./lib/describeError.js";
@@ -175,6 +176,11 @@ export function PaneActionsMenu({
     active: overflowOpen,
     containerRef: overflowMenuRef,
   });
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present: overflowPresent, state: overflowPresence } = usePresence(
+    overflowOpen,
+    overflowMenuRef,
+  );
   const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
@@ -365,11 +371,13 @@ export function PaneActionsMenu({
       >
         <OverflowIcon size={16} />
       </button>
-      {overflowOpen &&
+      {overflowPresent &&
         overflowPos &&
         createPortal(
           <div
             ref={overflowMenuRef}
+            data-presence={overflowPresence}
+            inert={overflowPresence === "leaving"}
             // Portaled to document.body (see the comment above the outside-
             // click effect), which escapes the .cmux-root/.light element in
             // App.tsx where every --chrome/--border/--fg/etc. custom

@@ -343,7 +343,11 @@
   background: var(--sidebar);
   padding: 8px 9px;
   cursor: pointer;
-  transition: border-color 0.1s;
+  /* Restates styles/motion.css's press transition, which this rule's own
+     `transition` would otherwise replace. */
+  transition:
+    border-color var(--motion-press) var(--motion-ease-press),
+    scale var(--motion-press) var(--motion-ease-press);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -1125,7 +1129,7 @@
   border-radius: 9px;
   background: var(--sidebar);
   overflow: hidden;
-  transition: border-color 0.1s;
+  transition: border-color var(--motion-press) var(--motion-ease-press);
 }
 .kanban-card-drop-target {
   border-color: var(--accent-solid);
