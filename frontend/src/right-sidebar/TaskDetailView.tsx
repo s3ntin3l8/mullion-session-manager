@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
+import { useLayoutContext } from "../lib/layoutTier.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
@@ -148,6 +149,9 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const prsByProject = useDashboardStore((s) => s.prsByProject);
   const openTaskInSidebar = useDashboardStore((s) => s.openRightSidebarTask);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
+  // The docked task panel is a desktop extra (#3011): on the tablet tier the
+  // sidebar's detail is the only task detail, so there is nothing to pop out to.
+  const canPopOut = useLayoutContext().tier === "desktop";
   const [bodyOpen, setBodyOpen] = useState(false);
   // A task is shown from outside the rail (a board card, a notification, a
   // task chip in the GitHub or Git views) as often as from inside it, and the
@@ -246,9 +250,11 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         externalUrl={task.htmlUrl}
         externalLabel="Open the issue on GitHub"
         actions={
-          <IconButton label="Pop out to a docked panel" onClick={() => requestOpenTask(task.id)}>
-            <ExternalLinkIcon size={13} />
-          </IconButton>
+          canPopOut ? (
+            <IconButton label="Pop out to a docked panel" onClick={() => requestOpenTask(task.id)}>
+              <ExternalLinkIcon size={13} />
+            </IconButton>
+          ) : undefined
         }
       />
       <TaskStatusBlock
@@ -359,7 +365,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       )}
 
       <div className="sb-actions-block">
-        <TaskActions task={task} />
+        <TaskActions task={task} confirmApprove />
       </div>
 
       <SidebarSection title="Details" persistKey="task-detail-details" variant="card">

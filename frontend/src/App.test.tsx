@@ -856,3 +856,45 @@ describe("App sidebar workspace scope", () => {
     expect(dockHarness.props?.workspaceProjectIds).toBe(sidebarHarness.props?.workspaceProjectIds);
   });
 });
+
+// #3011 — from 700px the right sidebar's detail is the one task detail. A
+// task notification (here its cold-start `?task=<id>`) at the fold's 851px
+// selects the task in the sidebar and never asks for the docked panel; the
+// phone, which has no right sidebar, still does.
+describe("App task opening by tier (#3011)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      refreshWorkspaces: vi.fn().mockResolvedValue(undefined),
+      hydrateSettings: vi.fn(),
+      startThemeWatch: vi.fn(() => () => {}),
+      openTaskRequest: null,
+      selectedTaskId: null,
+      viewMode: "list",
+    });
+    setLayoutMode("auto");
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("at 851px a task link opens in the sidebar, never the docked panel", () => {
+    stubWidth("tablet");
+    window.history.replaceState({}, "", "/?task=9");
+    render(<App />);
+    const state = useDashboardStore.getState();
+    expect(state.openTaskRequest).toBeNull();
+    expect(state.selectedTaskId).toBe(9);
+    expect(state.rightSidebarView).toBe("tasks");
+    expect(state.viewMode).toBe("kanban");
+  });
+
+  it("on the phone a task link still asks for the docked panel", () => {
+    stubWidth("phone");
+    window.history.replaceState({}, "", "/?task=9");
+    render(<App />);
+    expect(useDashboardStore.getState().openTaskRequest?.taskId).toBe(9);
+  });
+});

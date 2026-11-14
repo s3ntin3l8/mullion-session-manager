@@ -45,8 +45,21 @@ describe("useOpenTask", () => {
     });
   });
 
-  it.each(["tablet", "phone"] as const)("%s: asks for the docked panel", (t) => {
-    tier = t;
+  // #3011 — the right sidebar is the one task detail from 700px: the tablet
+  // tier (the 851px fold included) never asks for the docked panel.
+  it("tablet: selects the task in the sidebar, never the docked panel", () => {
+    tier = "tablet";
+    const { result } = renderHook(() => useOpenTask());
+    result.current(5, { kind: "pr", projectId: 1, number: 2 });
+    const state = useDashboardStore.getState();
+    expect(state.openTaskRequest).toBeNull();
+    expect(state.selectedTaskId).toBe(5);
+    expect(state.rightSidebarView).toBe("tasks");
+    expect(state.rightSidebarOpen).toBe(true);
+  });
+
+  it("phone: asks for the docked panel", () => {
+    tier = "phone";
     const { result } = renderHook(() => useOpenTask());
     result.current(5);
     const state = useDashboardStore.getState();

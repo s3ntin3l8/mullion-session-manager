@@ -729,7 +729,7 @@ export function PrDetailView({
             <TaskStatusBlock
               task={entry.task}
               actions={
-                hasStripActions(entry.task) ? <TaskActions task={entry.task} overflow /> : undefined
+                hasStripActions(entry.task) ? <TaskActions task={entry.task} overflow confirmApprove /> : undefined
               }
               onOpenTask={() =>
                 useDashboardStore

@@ -456,14 +456,28 @@ The strip is on every layout, phone included.
   card can be dragged between Backlog and Ready inside its lane, never into
   another lane (that would change its parent or project). The phone board stays
   flat. **Card density** (`crs.taskDensity`): Compact (default) or Comfortable.
-- **Phone and tablet** (`#2845`): the board is one status at a time, picked
+- **Stacked when narrow** (`#3011`): when the board's own measured width has
+  room for fewer than three lanes (under 540px: three 160px lanes, their gaps
+  and padding), it lists one section per status instead: Reviewing, In
+  progress, Ready, Failed (only while it holds a task), then Backlog and Done
+  collapsed. Each header carries the count and a dot when a task in it needs
+  you; a strip of the statuses on top jumps to one and opens it. The decision
+  follows the board's width, not the device, so the fold's board stacks when a
+  task opens beside it and goes back to lanes when the sidebar closes, and a
+  narrow desktop window stacks too. The selected card stays in view across the
+  switch (its section opens if it was folded) and travels to its new place;
+  under reduced motion it fades in place. In stacked mode Group by is ignored
+  (the sections are flat), the facets panel is hidden, Hide done leaves Done
+  and Failed as headers only, and cards can still be dragged within a section
+  and between Backlog and Ready while both are open.
+- **Phone** (`#2845`): the board is one status at a time, picked
   from a control under the toolbar. On a **phone** it is four joined segments —
   Backlog, Ready, **Active** (In progress, which holds the queued tasks, then
   Reviewing, stacked) and **Done** (Done, then Failed) — each with a count; it
   opens on Active, then Ready, when they hold something, and Hide Done & Failed
-  removes the Done segment. On a **tablet** (the compact tier, two columns wide)
-  it is the per-status chips with two adjacent columns side by side. Both keep
-  the same compact card, show the filters in the filter sheet, ignore Group by
+  removes the Done segment. The compact two-column variant (per-status chips,
+  two adjacent columns) is no longer rendered from 700px, where the board is
+  full size in Tasks mode. Both keep the same compact card, show the filters in the filter sheet, ignore Group by
   (the board stays flat) and keep empty columns as full columns rather than
   rails. Tapping a card opens its detail full-screen.
 - Cards show the title; the linked **issue** number and the **PR** number as
@@ -517,12 +531,13 @@ approval` (generic on purpose, no title: a notification tray is outside the
   board rings the selected card. The detail carries the worker session's
   embedded timeline and — when a review agent is configured — a distinct
   "Review" card with the review agent's own timeline, its captured findings
-  text, and (once the task has auto-returned) a round indicator. Phone and
-  tablet have no usable right rail (phone renders none; tablet floats it over
-  the navigator the board sits in), so a card there opens the full-screen
-  docked task detail instead. A task notification click opens the same detail
-  the same way, and the PR and issue chips in the GitHub and Git views show the
-  task in the Tasks view too.
+  text, and (once the task has auto-returned) a round indicator. From 700px
+  this is the only task detail (`#3011`). The phone renders no right sidebar,
+  so a card there opens the full-screen docked task detail instead. A task
+  notification click opens the same detail the same way, and the PR and issue
+  chips in the GitHub and Git views show the task in the Tasks view too.
+- Tapping an ad-hoc session in the strip under the board switches to
+  Workspace mode and shows that session there (`#3011`).
 - **The review checks the diff against the issue's Scope.** The reviewer
   reports each Scope checkbox as `met`, `partial`, `missing` or `deviated`,
   shown as a "Scope check" section in the review and on the PR. A `missing` or
@@ -652,7 +667,11 @@ edge, with the collapse chevron on the right.
 
 The detail does not depend on the list: a backlog, done, archived or
 other-project task opens too, and Back returns to the list with its filter and
-scroll position. The icon in the header pops the task out to a docked panel.
+scroll position. On desktop the icon in the header pops the task out to a
+docked panel; the tablet tier has no such panel (`#3011`). **Approve** in the
+sidebar (the task detail, and the task strip in a PR's or an issue's detail)
+sits behind a confirm step: the first press arms it ("Confirm approve", with a
+countdown), the second approves.
 
 ### Board actions
 

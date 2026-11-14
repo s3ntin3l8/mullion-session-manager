@@ -511,3 +511,45 @@ describe("TaskDetailView", () => {
     expect(screen.getByText("IN PROGRESS")).toBeTruthy();
   });
 });
+
+// The tablet tier (700–1279px, the 851px fold included), by matchMedia.
+function stubTablet() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: query === "(min-width: 700px) and (max-width: 1279.98px)",
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
+
+describe("TaskDetailView in the right sidebar from 700px (#3011)", () => {
+  it("puts Approve behind a confirm step: the first press arms, the second approves", async () => {
+    const user = userEvent.setup();
+    const approveTask = vi.fn().mockResolvedValue({});
+    const t = task({ status: "reviewing" });
+    setTasks([t], { approveTask });
+    render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
+    expect(approveTask).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /Confirm approve/ }));
+    expect(approveTask).toHaveBeenCalledWith(t.id);
+  });
+
+  it("offers the docked-panel pop-out on desktop only", () => {
+    const t = task({ status: "ready" });
+    setTasks([t]);
+    const { unmount } = render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Pop out to a docked panel" })).toBeInTheDocument();
+    unmount();
+    stubTablet();
+    try {
+      render(<TaskDetailView taskId={t.id} onBack={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: "Pop out to a docked panel" })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

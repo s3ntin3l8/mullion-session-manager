@@ -359,7 +359,21 @@ describe("UnifiedBoard opening a task (#2843: no board drawer)", () => {
     expect(screen.queryByRole("dialog", { name: "Task detail" })).toBeNull();
   });
 
-  it("phone and tablet: a card click asks for the full-screen docked panel instead", async () => {
+  // #3011 — from 700px (the 851px fold is the tablet tier) a card opens the
+  // right sidebar's detail; the docked panel is the phone's alone.
+  it("tablet (851px): a card click opens the sidebar detail, never the docked panel", async () => {
+    tasks = [makeTask({ id: 8, status: "in_progress", title: "Open on the fold" })];
+    layoutTier = "tablet";
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Open on the fold"));
+
+    expect(openRightSidebarTask).toHaveBeenCalledWith(8);
+    expect(requestOpenTask).not.toHaveBeenCalled();
+  });
+
+  it("phone: a card click asks for the full-screen docked panel instead", async () => {
     tasks = [makeTask({ id: 7, status: "in_progress", title: "Open on phone" })];
     layoutTier = "phone";
     const user = userEvent.setup();

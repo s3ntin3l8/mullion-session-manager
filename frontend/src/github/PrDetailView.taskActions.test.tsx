@@ -61,6 +61,12 @@ describe("PrDetailView task actions", () => {
       const fn = vi.fn().mockResolvedValue({});
       const card = await setup({ status }, { [action]: fn });
       await userEvent.click(within(card).getByRole("button", { name: label }));
+      // #3011 — Approve from the sidebar sits behind a confirm step: the
+      // first press arms it, the second approves.
+      if (action === "approveTask") {
+        expect(fn).not.toHaveBeenCalled();
+        await userEvent.click(within(card).getByRole("button", { name: /Confirm approve/ }));
+      }
       expect(fn).toHaveBeenCalledWith(5);
     });
 
