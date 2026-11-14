@@ -36,6 +36,7 @@ const actions = {
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
+  onOpenDevice: vi.fn(),
 };
 
 function renderSidebar(tier: LayoutTier = "desktop") {
@@ -505,6 +506,19 @@ describe("RightSidebar", () => {
     useDashboardStore.setState({ projects: [], rightSidebarOpen: true });
     renderSidebar();
     expect(screen.getByText("No projects yet.")).toBeTruthy();
+  });
+
+  it("shows the Devices view with no project picker and no 'No projects yet' state (host-global)", () => {
+    useDashboardStore.setState({
+      projects: [],
+      rightSidebarOpen: true,
+      rightSidebarView: "devices",
+      devices: [],
+    });
+    renderSidebar();
+    expect(screen.getByRole("complementary", { name: "Devices sidebar" })).toBeTruthy();
+    expect(screen.queryByText("No projects yet.")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
   });
 
   it("falls back to the first registered view when the stored view id is unknown", () => {

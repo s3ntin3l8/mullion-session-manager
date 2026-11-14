@@ -6,6 +6,7 @@
 // components (issue #2414). The registry lives in views-registry.ts and the
 // badge hooks in views-badges.ts.
 import type { ComponentType, SVGProps } from "react";
+import type { Device } from "../api/index.js";
 import type { CheckoutChoice } from "../hooks/useCheckoutTarget.js";
 
 type ViewIconProps = SVGProps<SVGSVGElement> & { size?: number };
@@ -28,6 +29,8 @@ export interface RightSidebarActions {
   onOpenDockConfig: (projectId: number) => void;
   onOpenSkills: (projectId: number) => void;
   onOpenTasks: () => void;
+  /** Open a device's screen as a grid pane. */
+  onOpenDevice: (device: Device) => void;
 }
 
 export interface RightSidebarViewProps {
@@ -55,4 +58,8 @@ export interface RightSidebarView {
   // Whether the rail shows this view at all (same hook-per-button rule as
   // useBadge). `useAlwaysEnabled` for the views that are always there.
   useEnabled: () => boolean;
+  // A host-global view (Devices) is not about the followed project: the panel
+  // shows no project picker or "No projects yet" state for it and renders it
+  // even with no project at all. It still receives `projectId`, but 0 then.
+  hostGlobal?: boolean;
 }

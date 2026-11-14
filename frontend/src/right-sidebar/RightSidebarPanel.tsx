@@ -21,6 +21,7 @@ export interface RightSidebarPanelProps {
 export function RightSidebarPanel({ view, followed, actions, onClose }: RightSidebarPanelProps) {
   const View = view.Component;
   const projectId = followed.effectiveProjectId;
+  const hostGlobal = view.hostGlobal === true;
   const { checkoutSessionId, choice } = useCheckoutTarget(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [stripSlot, setStripSlot] = useState<HTMLElement | null>(null);
@@ -37,7 +38,7 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
           its context. A pushed detail view fills the detail slot instead, and
           the picker, toolbar and strip step aside (right-sidebar.css). */}
       <div className="right-sidebar-header">
-        {projectId != null && (
+        {projectId != null && !hostGlobal && (
           <>
             <span
               className="right-sidebar-follow-glyph"
@@ -72,7 +73,7 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
         </span>
       </div>
       <div className="right-sidebar-strip-slot" ref={setStripSlot} />
-      {projectId == null ? (
+      {projectId == null && !hostGlobal ? (
         <div className="github-panel-empty-row">No projects yet.</div>
       ) : (
         <div className="right-sidebar-body cmux-scroll">
@@ -81,7 +82,7 @@ export function RightSidebarPanel({ view, followed, actions, onClose }: RightSid
               <SidebarDetailSlotContext.Provider value={detailSlot}>
                 <SidebarRepoTitleContext.Provider value={setRepoTitle}>
                   <View
-                    projectId={projectId}
+                    projectId={projectId ?? 0}
                     checkoutSessionId={checkoutSessionId}
                     checkoutChoice={choice}
                     actions={actions}

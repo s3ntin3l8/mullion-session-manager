@@ -8,6 +8,7 @@
 // each other was an import cycle (issue #2414).
 
 import {
+  DeviceIcon,
   FolderIcon,
   GitBranchIcon,
   GitHubIcon,
@@ -15,6 +16,7 @@ import {
   HistoryIcon,
   ListIcon,
 } from "../ui/icons.js";
+import { DevicesSidebarView } from "./DevicesSidebarView.js";
 import { FilesSidebarView } from "./FilesSidebarView.js";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { GitSidebarView } from "./GitSidebarView.js";
@@ -79,5 +81,16 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     Component: ProjectSidebarView,
     useBadge: useNoBadge,
     useEnabled: useAlwaysEnabled,
+  },
+  {
+    id: "devices",
+    label: "Devices",
+    icon: DeviceIcon,
+    Component: DevicesSidebarView,
+    // No badge: the device poll runs only while the view is mounted, so a
+    // badge would be stale whenever the view is closed.
+    useBadge: useNoBadge,
+    useEnabled: useAlwaysEnabled,
+    hostGlobal: true,
   },
 ];

@@ -40,6 +40,7 @@ const actions = {
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
+  onOpenDevice: vi.fn(),
 };
 
 const entry = (name: string, kind: ProjectDirEntry["kind"], over = {}): ProjectDirEntry => ({

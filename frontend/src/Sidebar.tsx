@@ -525,7 +525,10 @@ export function Sidebar({
           )}
         </button>
       )}
-      {phoneSection !== "projects" && <SidebarDevices onOpenDevice={onOpenDevice} />}
+      {/* Devices live in the right sidebar on tablet and desktop; only the phone
+          navigator's Devices tab (the right sidebar does not render there)
+          keeps this list, until a later phone slice moves it. */}
+      {phoneSection === "devices" && <SidebarDevices onOpenDevice={onOpenDevice} />}
       {phoneSection !== "devices" && (
         <>
           <div className="sidebar-section-header">

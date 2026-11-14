@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import type { Device } from "./api/index.js";
@@ -8,7 +8,10 @@ import { describeError } from "./lib/describeError.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import { DeviceIcon, PlayIcon, StopIcon } from "./ui/icons.js";
 
-// Sidebar entry point for the Android device panel (issue #1326) — mirrors
+// The device list (issue #1326). Two homes share this one implementation: the
+// right sidebar's Devices view (right-sidebar/DevicesSidebarView.tsx) on the
+// tablet and desktop tiers, and the phone navigator's Devices tab, where the
+// right sidebar does not render. Mirrors
 // the standalone Tasks button's "host-global thing above the Projects
 // section" precedent (see the `.sidebar-tasks-entry` block this reuses in
 // styles/empty-states.css), not Settings -> Hosts/Bridges: opening a
@@ -39,7 +42,18 @@ function deviceSpokenName(device: Device): string {
   return deviceLabel(device) || "device";
 }
 
-export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device) => void }) {
+export interface SidebarDevicesProps {
+  onOpenDevice: (device: Device) => void;
+  /** Show the "Devices" section header. The right-sidebar view has its own
+   * header strip, so it passes false. Default true (the phone navigator). */
+  showHeader?: boolean;
+  /** Rendered instead of nothing while there are zero devices. The phone
+   * navigator keeps the old "render nothing" behaviour; the right-sidebar view
+   * passes an empty state, because a whole view with no content reads as broken. */
+  empty?: ReactNode;
+}
+
+export function SidebarDevices({ onOpenDevice, showHeader = true, empty }: SidebarDevicesProps) {
   // Unfiltered, deliberately: a `status: "killed"` row is a STOPPED device,
   // which is exactly what Start exists for. This used to filter to
   // active-only, but that filter only existed to hide rows DELETE left
@@ -93,7 +107,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
     deps: [refreshDevices],
   });
 
-  if (devices.length === 0) return null;
+  if (devices.length === 0) return empty ? <>{empty}</> : null;
 
   const runLifecycle = async (device: Device, kind: "start" | "stop") => {
     if (pendingId !== null) return;
@@ -127,9 +141,11 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
 
   return (
     <div className="sidebar-devices">
-      <div className="sidebar-section-header">
-        <span className="sidebar-section-title">Devices</span>
-      </div>
+      {showHeader && (
+        <div className="sidebar-section-header">
+          <span className="sidebar-section-title">Devices</span>
+        </div>
+      )}
       {devices.map((device) => {
         const stopped = device.status === "killed";
         const label = deviceLabel(device);
