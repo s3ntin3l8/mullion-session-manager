@@ -247,7 +247,8 @@
       "settle": 500,
       "emphasis": {
         "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
-      }
+      },
+      "baseline": true
     },
     {
       "name": "session-list",
@@ -394,7 +395,8 @@
       "settle": 500,
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
-      }
+      },
+      "baseline": true
     },
     {
       "name": "tablet-navigator",
@@ -417,7 +419,7 @@
     {
       "name": "tablet-tasks-list",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -459,7 +461,7 @@
     {
       "name": "tablet-tasks-reopen",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -511,12 +513,13 @@
       "settle": 500,
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
-      }
+      },
+      "baseline": true
     },
     {
       "name": "tablet-tasks-stacked",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -546,7 +549,7 @@
     {
       "name": "tablet-notifications",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -564,7 +567,7 @@
     {
       "name": "fold-browser-view",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -585,7 +588,7 @@
     {
       "name": "fold-dock-view",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -606,7 +609,7 @@
     {
       "name": "fold-devices-view",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["fold"],
       "steps": [
         {
@@ -660,7 +663,7 @@
     {
       "name": "fold-view-over-half",
       "path": "/",
-      "tags": ["check", "audit"],
+      "tags": ["audit"],
       "viewports": ["fold"],
       "steps": [
         {
