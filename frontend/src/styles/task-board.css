@@ -338,6 +338,10 @@
 .stacked-section-title {
   flex: 1;
 }
+/* A card scrolled into view lands below the sticky status strip, not under it. */
+.stacked-section-body .task-card {
+  scroll-margin-top: 56px;
+}
 .stacked-section-body .kanban-column {
   min-width: 0;
   max-width: none;

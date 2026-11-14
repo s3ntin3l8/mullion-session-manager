@@ -15,11 +15,14 @@ import type { StackSection } from "./stackLayout.js";
 // a card behaves the same in both layouts.
 export function StackedBoard({
   sections,
+  selectedTaskId,
   selectedStatus,
   hideDone,
   renderBody,
 }: {
   sections: readonly StackSection[];
+  /** The selected task: picking another one re-opens its section if folded. */
+  selectedTaskId: number | null;
   /** The section of the selected task, kept open so its card stays on screen. */
   selectedStatus: TaskStatus | null;
   /** The board's "Hide done": Done and Failed show as headers only, as the lanes do. */
@@ -30,9 +33,12 @@ export function StackedBoard({
   // Selecting a task in a folded section (from the sidebar, a notification)
   // opens that section: adjusted while rendering, React's pattern for state
   // that follows a prop, so the card is there in the same commit.
-  const [seenSelected, setSeenSelected] = useState(selectedStatus);
-  if (seenSelected !== selectedStatus) {
-    setSeenSelected(selectedStatus);
+  // Keyed on the task as well as its status, so picking another task in a
+  // section the user folded opens it again.
+  const selectedKey = `${selectedTaskId ?? ""}:${selectedStatus ?? ""}`;
+  const [seenSelected, setSeenSelected] = useState(selectedKey);
+  if (seenSelected !== selectedKey) {
+    setSeenSelected(selectedKey);
     if (selectedStatus !== null && !open.has(selectedStatus)) {
       setOpen(new Set([...open, selectedStatus]));
     }

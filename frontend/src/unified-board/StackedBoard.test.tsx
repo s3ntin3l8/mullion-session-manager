@@ -295,6 +295,53 @@ describe("UnifiedBoard stacked layout", () => {
     expect(options.duration).toBe(160);
   });
 
+  it("re-opens a folded section when another of its tasks is selected", async () => {
+    tasks = [...tasks, makeTask({ id: 6, status: "ready", title: "Also next", boardOrder: 1 })];
+    selectedTaskId = 2;
+    boardWidth = 378;
+    const view = renderBoard();
+    await userEvent.click(header("Ready"));
+    expect(header("Ready")).toHaveAttribute("aria-expanded", "false");
+    selectedTaskId = 6;
+    view.rerender(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(header("Ready")).toHaveAttribute("aria-expanded", "true");
+    expect(document.querySelector('[data-task-id="6"]')).toHaveClass("task-card-selected");
+  });
+
+  it("reorders within a stacked section by drag and drop", () => {
+    tasks = [...tasks, makeTask({ id: 6, status: "ready", title: "Also next", boardOrder: 1 })];
+    boardWidth = 378;
+    renderBoard();
+    const store = new Map<string, string>();
+    const dataTransfer = {
+      setData: (k: string, v: string) => store.set(k, v),
+      getData: (k: string) => store.get(k) ?? "",
+      get types() {
+        return [...store.keys()];
+      },
+      effectAllowed: "none",
+      dropEffect: "none",
+      setDragImage() {},
+    } as unknown as DataTransfer;
+    const fire = (el: Element, type: string) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+      act(() => {
+        el.dispatchEvent(event);
+      });
+    };
+    const second = document.querySelector('[data-task-id="6"]')!;
+    const first = document.querySelector('[data-task-id="2"]')!;
+    fire(second, "dragstart");
+    fire(first, "dragover");
+    fire(first, "drop");
+    expect(updateTask).toHaveBeenCalled();
+    for (const call of updateTask.mock.calls as unknown as Array<[number, { status?: string }]>) {
+      expect(call[1].status).toBeUndefined();
+    }
+    expect((updateTask.mock.calls as unknown as Array<[number]>).map((c) => c[0])).toContain(6);
+  });
+
   it("does nothing to the cards when none is selected", () => {
     boardWidth = 900;
     renderBoard();

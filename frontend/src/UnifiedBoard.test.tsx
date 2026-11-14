@@ -6,7 +6,7 @@
 // TaskColumn.tsx's drop targets, TaskCard.tsx's drag source, and this
 // file's own `applyDrop`/`updateTask` call), and how a card click opens a task
 // (the board has no drawer of its own since #2843: it selects the task in the
-// sidebar, or opens the docked panel on phone and tablet).
+// sidebar from 700px, or opens the docked panel on the phone, #3011).
 // Per-region tests live in unified-board/TasksToolbar.test.tsx,
 // unified-board/TaskColumn.test.tsx, unified-board/TaskCard.test.tsx,
 // unified-board/TaskSessionSlot.test.tsx, and unified-board/LaneCard.test.tsx

@@ -13,8 +13,8 @@ export interface UseOpenTaskRequestParams {
 }
 
 // Issue #2020 — resolves store/slices/ui.ts's requestOpenTask "intent": the
-// right sidebar (the Tasks detail's pop-out, and on phone/tablet every
-// task chip, board card and notification: hooks/useOpenTask.ts) has no
+// right sidebar (the desktop Tasks detail's pop-out, and on the phone every
+// task chip, board card and notification: hooks/useOpenTask.ts, #3011) has no
 // dockview API, so it asks the app shell to open the task's detail panel.
 // The task twin of useOpenSessionRequest.ts, with the same gates, the same
 // setTimeout(0) retry while a workspace restores, and the same rule that a

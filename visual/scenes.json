@@ -511,7 +511,7 @@
           "waitFor": ".task-card"
         },
         {
-          "click": ".task-card >> nth=0"
+          "click": ".task-card-title >> nth=0"
         },
         {
           "waitFor": "[data-testid=\"task-detail-view\"]"

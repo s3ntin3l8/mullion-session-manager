@@ -631,6 +631,7 @@ export function UnifiedBoard({
               <div className="task-board-lanes task-board-lanes--stacked">
                 <StackedBoard
                   sections={stackedSections}
+                  selectedTaskId={selectedTaskId}
                   selectedStatus={selectedStatus}
                   hideDone={hideDone}
                   renderBody={(section) => (
