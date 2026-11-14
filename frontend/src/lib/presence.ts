@@ -72,7 +72,11 @@ export function exitFinished(el: Element | null | undefined): Promise<void> | nu
     .getAnimations({ subtree: true })
     .filter((a) => onTheClock(a) && (a.effect?.getTiming().iterations ?? 1) !== Infinity);
   if (running.length === 0) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const finished = Promise.allSettled(running.map((a) => a.finished)).then(() => undefined);
-  const safety = new Promise<void>((resolve) => setTimeout(resolve, EXIT_SAFETY_MS));
-  return Promise.race([finished, safety]);
+  const safety = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, EXIT_SAFETY_MS);
+  });
+  // An exit that finishes normally does not leave the safety timer pending.
+  return Promise.race([finished, safety]).finally(() => clearTimeout(timer));
 }
