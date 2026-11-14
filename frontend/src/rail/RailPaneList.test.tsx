@@ -174,8 +174,10 @@ describe("RailPaneList long-press menu", () => {
       />,
     );
     const btn = screen.getByRole("button", { name: /login fix/ });
+    expect(btn).toHaveAttribute("aria-expanded", "false");
     fireEvent.contextMenu(btn);
     expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(btn).toHaveAttribute("aria-expanded", "true");
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     fireEvent.pointerDown(btn);

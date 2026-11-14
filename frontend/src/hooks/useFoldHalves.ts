@@ -49,6 +49,13 @@ export function preferredPaneFor(presentation: LayoutPresentation): string | nul
   return null;
 }
 
+// Set by RightSidebar just before it reopens, on unfolding, the view it
+// closed for the phone (design 9.2); consumed by the next view-open below.
+let viewRestored = false;
+export function markViewRestored(): void {
+  viewRestored = true;
+}
+
 export interface UseFoldHalvesParams {
   dockviewApi: DockviewApi | null;
   presentation: LayoutPresentation;
@@ -204,8 +211,15 @@ export function useFoldHalves({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- panelsVersion is the layout-change signal
   }, [active, dockviewApi, panelsVersion, activeWorkspaceId, rightKey, retryTick]);
 
-  // Opening a sidebar view is "using" it, for the phone after folding.
+  // Opening a sidebar view is "using" it, for the phone after folding. Not
+  // when unfolding put back a view the fold closed (markViewRestored): the
+  // session was used last, and a second fold should show it again.
   useEffect(() => {
-    if (active && viewOpen) useDashboardStore.getState().noteHalfUsed({ kind: "view" });
+    if (!active || !viewOpen) return;
+    if (viewRestored) {
+      viewRestored = false;
+      return;
+    }
+    useDashboardStore.getState().noteHalfUsed({ kind: "view" });
   }, [active, viewOpen]);
 }

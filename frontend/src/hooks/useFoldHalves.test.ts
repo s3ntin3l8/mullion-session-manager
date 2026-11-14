@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { DockviewApi } from "dockview-react";
 import type { IDockviewPanel } from "dockview";
-import { preferredPaneFor, showPaneOnItsHalf, useFoldHalves } from "./useFoldHalves.js";
+import {
+  markViewRestored,
+  preferredPaneFor,
+  showPaneOnItsHalf,
+  useFoldHalves,
+} from "./useFoldHalves.js";
 import type { UseFoldHalvesParams } from "./useFoldHalves.js";
 import {
   focusPanelForTier,
@@ -81,6 +86,17 @@ describe("fold halves in the store (per device, per workspace)", () => {
 
   it("writes nothing for a change that changes nothing", () => {
     useDashboardStore.getState().toggleRightPane("session-9");
+    expect(localStorage.getItem("crs.foldHalves")).toBeNull();
+  });
+
+  it("drops a deleted workspace's assignment, here and in localStorage", () => {
+    useDashboardStore.getState().noteLeftPane("session-1");
+    useDashboardStore.getState().forgetFoldHalvesWorkspace(7);
+    expect(useDashboardStore.getState().foldHalves[7]).toBeUndefined();
+    expect(JSON.parse(localStorage.getItem("crs.foldHalves") ?? "{}")).toEqual({});
+    // Nothing to drop writes nothing.
+    localStorage.removeItem("crs.foldHalves");
+    useDashboardStore.getState().forgetFoldHalvesWorkspace(7);
     expect(localStorage.getItem("crs.foldHalves")).toBeNull();
   });
 
@@ -275,6 +291,45 @@ describe("useFoldHalves", () => {
     expect(halves().right).toEqual([]);
     // What stays remembered is what is open now.
     expect(halves().open).toEqual(["session-1"]);
+  });
+
+  // Design 9.2 with the phone layout (#3014): crossing 700px in either
+  // direction keeps which pane is on which half, the phone starts on the pane
+  // used last, and unfolding shows the left pane again on the left.
+  it("keeps the assignment through a fold to the phone and back", () => {
+    useDashboardStore.getState().noteLeftPane("session-1");
+    useDashboardStore.getState().moveToHalf("session-2", "right", ["session-1", "session-2"]);
+    const { rerender, props, panels, maximized } = setup();
+    expect(maximized()).toBe("session-1");
+    const before = halves();
+    rerender({ ...props, presentation: "phone", panelsVersion: 2 });
+    expect(halvesActive()).toBe(false);
+    expect(preferredPaneFor("phone")).toBe("session-2");
+    // The phone shows the right half's session as its one pane.
+    act(() => {
+      props.dockviewApi!.maximizeGroup(panels[1] as never);
+    });
+    rerender({ ...props, presentation: "phone", panelsVersion: 3 });
+    expect(halves()).toEqual(before);
+    rerender({ ...props, presentation: "halves", panelsVersion: 4 });
+    expect(halvesActive()).toBe(true);
+    expect(maximized()).toBe("session-1");
+    expect(halves().right).toEqual(["session-2"]);
+    expect(halves().shownRight).toBe("session-2");
+    expect(halves().shownLeft).toBe("session-1");
+    expect(preferredPaneFor("phone")).toBe("session-2");
+  });
+
+  it("does not count a view put back on unfolding as used", () => {
+    useDashboardStore.getState().noteLeftPane("session-1");
+    setup();
+    markViewRestored();
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    expect(halves().lastUsed).toEqual({ kind: "pane", panelId: "session-1" });
+    // Only that once: closing and opening again is using it.
+    act(() => useDashboardStore.setState({ rightSidebarOpen: false }));
+    act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
+    expect(halves().lastUsed).toEqual({ kind: "view" });
   });
 
   it("counts opening a sidebar view as using it", () => {

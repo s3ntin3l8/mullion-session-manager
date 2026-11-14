@@ -216,13 +216,7 @@
       "viewports": ["phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
-        },
-        {
-          "wait": 800
-        },
-        {
-          "click": "role=button[name=/^Tasks/] >> nth=0"
+          "click": ".phone-mode-bar button:has-text(\"Tasks\")"
         },
         {
           "wait": 3000
@@ -241,7 +235,7 @@
       "viewports": ["mobile", "phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
+          "click": ".mobile-session-trigger"
         },
         {
           "wait": 800
@@ -259,13 +253,13 @@
       "viewports": ["mobile", "phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
+          "click": ".mobile-session-trigger"
         },
         {
           "wait": 800
         },
         {
-          "click": ".session-item:has-text(\"mobile-demo.sh\")"
+          "click": ".mobile-session-row:has-text(\"mobile demo\")"
         }
       ],
       "settle": ".xterm-screen",
@@ -280,13 +274,13 @@
       "viewports": ["mobile", "phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
+          "click": ".mobile-session-trigger"
         },
         {
           "wait": 800
         },
         {
-          "click": ".session-item:has-text(\"mobile-demo.sh\")"
+          "click": ".mobile-session-row:has-text(\"mobile demo\")"
         }
       ],
       "settle": ".xterm-screen",

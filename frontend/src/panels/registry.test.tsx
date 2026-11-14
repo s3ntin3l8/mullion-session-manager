@@ -707,6 +707,14 @@ describe("TerminalPanelWrapper — the right half's session stands aside", () =>
     expect(screen.getByText("Shown on the right half")).toBeInTheDocument();
   });
 
+  it("renders the terminal in Tasks mode, where the right half shows no session", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderPanel();
+    expect(screen.getByTestId("terminal-pane")).toBeInTheDocument();
+    act(() => useDashboardStore.setState({ viewMode: "list" }));
+    expect(screen.queryByTestId("terminal-pane")).toBeNull();
+  });
+
   it("renders the terminal again once the halves are gone or the half is closed", () => {
     renderPanel();
     act(() => useDashboardStore.setState({ foldHalvesActive: false }));

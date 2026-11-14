@@ -277,9 +277,16 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // right half renders its terminal; the grid's copy stands aside. Two live
   // copies of one session would both resize its pty (the server keeps the
   // last size sent) and both register for the key bar's input.
+  // Not in Tasks mode: the board takes the left half and the task sidebar the
+  // right, so the right half renders no session and the grid's copy is the
+  // one. A view covering the right half is different: the session stays the
+  // right half's, its grid group stays hidden behind the left pane, and
+  // mounting the grid copy there would only remount the terminal on every
+  // cover and uncover.
   const onRightHalf = useDashboardStore(
     (s) =>
       s.foldHalvesActive &&
+      s.viewMode !== "kanban" &&
       s.activeWorkspaceId !== null &&
       s.foldHalves[s.activeWorkspaceId]?.shownRight === panelId,
   );

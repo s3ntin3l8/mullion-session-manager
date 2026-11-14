@@ -74,6 +74,9 @@ export function RailPaneList({
             title={tooltip}
             data-panel-id={entry.panelId}
             aria-haspopup={menuItems ? "menu" : undefined}
+            // The menu opens on a long press or the context-menu key
+            // (Shift+F10 included); Enter and Space stay the entry's tap.
+            aria-expanded={menuItems ? menu?.entry.panelId === entry.panelId : undefined}
             onClick={() => {
               if (suppressClick.current) {
                 suppressClick.current = false;

@@ -160,6 +160,8 @@ describe("foldHalves upkeep", () => {
         },
         "4": { lastUsed: { kind: "pane", panelId: "session-1" } },
         "5": { lastUsed: { kind: "pane" } },
+        "7": { right: ["git-1", "session-3"], shownRight: "git-1" },
+        "8": { right: ["session-3"], shownRight: "session-9" },
         nope: { right: [] },
         "6": null,
       }),
@@ -173,6 +175,9 @@ describe("foldHalves upkeep", () => {
       },
       4: { ...EMPTY_FOLD_HALVES, lastUsed: { kind: "pane", panelId: "session-1" } },
       5: EMPTY_FOLD_HALVES,
+      // Only a terminal goes right, and only an assigned pane shows there.
+      7: { ...EMPTY_FOLD_HALVES, right: ["session-3"] },
+      8: { ...EMPTY_FOLD_HALVES, right: ["session-3"] },
     });
   });
 });

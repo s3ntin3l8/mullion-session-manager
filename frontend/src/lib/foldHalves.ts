@@ -76,7 +76,9 @@ export function splitByHalf<T extends { id: string }>(
  * Moves a pane to a half. A move to the right shows it there; a move that
  * would leave the left half with nothing to show is refused (the left half is
  * never empty while panes are open), as is moving a non-terminal pane right.
- * `openIds` are the panes open in the workspace now.
+ * `openIds` are the tiled panes open in the workspace now: the left half
+ * shows a tiled pane by maximizing its group, so a float cannot keep it
+ * from being empty, and callers leave floats out.
  */
 export function moveToHalf(
   state: FoldHalvesState,
@@ -203,11 +205,15 @@ export function parseFoldHalves(raw: unknown): Record<number, FoldHalvesState> {
     const v = value as Partial<FoldHalvesState>;
     const str = (x: unknown) => (typeof x === "string" ? x : null);
     const last = v.lastUsed as LastUsed | undefined;
+    // A hand-edited or stale entry must not put a non-terminal on the right
+    // half, or show a pane there that is not assigned to it.
+    const right = Array.isArray(v.right)
+      ? v.right.filter((x): x is string => typeof x === "string" && canGoRight(x))
+      : [];
+    const shownRight = str(v.shownRight);
     out[id] = {
-      right: Array.isArray(v.right)
-        ? v.right.filter((x): x is string => typeof x === "string")
-        : [],
-      shownRight: str(v.shownRight),
+      right,
+      shownRight: shownRight !== null && right.includes(shownRight) ? shownRight : null,
       shownLeft: str(v.shownLeft),
       lastUsed:
         last && last.kind === "view"

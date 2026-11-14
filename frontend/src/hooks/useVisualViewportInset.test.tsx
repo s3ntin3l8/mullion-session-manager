@@ -5,7 +5,7 @@
 // reasoning as terminalRepaintRegistry.test.ts's own header comment.
 import { describe, it, expect, afterEach } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
-import { useVisualViewportInset } from "./useVisualViewportInset.js";
+import { useKeyboardUp, useVisualViewportInset } from "./useVisualViewportInset.js";
 import { FakeVisualViewport } from "../test/fakeVisualViewport.js";
 
 /** Awaits the next animation frame — the hook's own update() is
@@ -218,5 +218,79 @@ describe("useVisualViewportInset", () => {
     await act(flushRaf);
     expect(kbOffsetTop()).toBe("0px");
     expect(kbInset()).toBe("330px");
+  });
+});
+
+// Issue #3014 — the phone's mode bar hides while the keyboard is up.
+describe("useKeyboardUp", () => {
+  let seen: boolean[] = [];
+  function KeyboardHarness() {
+    useVisualViewportInset();
+    seen.push(useKeyboardUp());
+    return null;
+  }
+  const keyboardAttr = () => document.documentElement.dataset.keyboard;
+
+  it("is up when the keyboard overlays the page (iOS: the inset)", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(800, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    seen = [];
+    render(<KeyboardHarness />);
+    await act(flushRaf);
+    expect(seen.at(-1)).toBe(false);
+    expect(keyboardAttr()).toBeUndefined();
+    act(() => vv.resizeTo(500, 0));
+    await act(flushRaf);
+    expect(seen.at(-1)).toBe(true);
+    expect(keyboardAttr()).toBe("up");
+    act(() => vv.resizeTo(800, 0));
+    await act(flushRaf);
+    expect(seen.at(-1)).toBe(false);
+    expect(keyboardAttr()).toBeUndefined();
+  });
+
+  it("is up when the layout viewport shrinks under it (Android resizes-content)", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(800, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    seen = [];
+    render(<KeyboardHarness />);
+    await act(flushRaf);
+    // The layout and the visual viewport shrink together: --kb-inset stays 0.
+    stubClientHeight(480);
+    act(() => vv.resizeTo(480, 0));
+    await act(flushRaf);
+    expect(kbInset()).toBe("0px");
+    expect(seen.at(-1)).toBe(true);
+    stubClientHeight(800);
+    act(() => vv.resizeTo(800, 0));
+    await act(flushRaf);
+    expect(seen.at(-1)).toBe(false);
+  });
+
+  it("ignores a small change such as the address bar collapsing", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(800, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    seen = [];
+    render(<KeyboardHarness />);
+    await act(flushRaf);
+    stubClientHeight(744);
+    act(() => vv.resizeTo(744, 0));
+    await act(flushRaf);
+    expect(seen.at(-1)).toBe(false);
+  });
+
+  it("resets on unmount", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(400, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    seen = [];
+    const { unmount } = render(<KeyboardHarness />);
+    await act(flushRaf);
+    expect(keyboardAttr()).toBe("up");
+    unmount();
+    expect(keyboardAttr()).toBeUndefined();
   });
 });

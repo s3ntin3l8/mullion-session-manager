@@ -11,25 +11,22 @@ import { sidebarPhoneSection } from "./lib/phoneNavSection.js";
 import type { PhoneNavTab } from "./PhoneNavigator.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
-import { PaneActionsMenu } from "./PaneActionsMenu.js";
-import { describeError } from "./lib/describeError.js";
+import { useHalfActions } from "./fold/useHalfActions.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { LeftRail } from "./LeftRail.js";
 import { RailWorkspaceSection } from "./rail/RailWorkspaceSection.js";
 import { RailPanes } from "./rail/RailPaneList.js";
-import type { RailEntryMenuItem } from "./rail/RailPaneList.js";
-import type { RailPaneEntry } from "./lib/railPanes.js";
 import { HalfHeader } from "./fold/HalfHeader.js";
 import { RightHalfPane } from "./fold/RightHalfPane.js";
 import { preferredPaneFor, useFoldHalves } from "./hooks/useFoldHalves.js";
-import { canGoRight, EMPTY_FOLD_HALVES, splitByHalf } from "./lib/foldHalves.js";
+import { canGoRight, EMPTY_FOLD_HALVES, halfOf, splitByHalf } from "./lib/foldHalves.js";
 import type { Half } from "./lib/foldHalves.js";
 import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 import type { LayoutPresentation } from "./lib/layoutTier.js";
 import type { RailPaneInput } from "./lib/railPanes.js";
-import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
+import { PhoneModeBar } from "./PhoneModeBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { SessionLauncherHost } from "./launchers/SessionLauncher.js";
@@ -731,13 +728,14 @@ export function App() {
     restoredWorkspaceIdRef,
   });
 
-  // #2149 — a task push notification click opens that task: the sidebar's
-  // Tasks detail from 700px, the full-screen docked panel on phone (#3011).
-  useTaskNotificationOpen(isMobile);
+  // #2149 — a task push notification click opens that task in the sidebar's
+  // Tasks detail (#3011), which the phone shows full screen (#3014).
+  useTaskNotificationOpen();
 
   // Issue #2020 — resolves requestOpenTask (the desktop Tasks detail's
-  // pop-out, and every "show me this task" on phone; the sidebar has no
-  // dockview API of its own). Same ordering contract as the hook above.
+  // pop-out, useCanPopOutTask; every other "show me this task" opens the
+  // sidebar's own detail, #3011, #3014; the sidebar has no dockview API of its
+  // own). Same ordering contract as the hook above.
   useOpenTaskRequest({
     dockviewApi,
     activeWorkspaceId,
@@ -826,13 +824,15 @@ export function App() {
   // Falls back to the normal `onOpenSession` path for a non-split launch.
   // #3010 — a session launched or opened from a half's "+" lands on that
   // half: assigned before it opens, so the open path's router places it.
+  // In a workspace with no tiled pane yet, the right half's "+" lands on the
+  // left: the left half is never empty while a pane is open (moveToHalf).
   const openSessionOnHalf = useCallback(
     (session: Session, target: { half?: Half } | null) => {
       if (foldHalves && target?.half && dockviewApi) {
         useDashboardStore.getState().moveToHalf(
           `session-${session.id}`,
           target.half,
-          dockviewApi.panels.map((p) => p.id),
+          dockviewApi.panels.filter(isTiledPanel).map((p) => p.id),
         );
       }
       onOpenSession(session);
@@ -894,9 +894,11 @@ export function App() {
   // clamp. `layoutTier !== "desktop"` (not `isMobile`) now drives
   // `sidebarOpen`, so tablet gets the same floating overlay as phone.
   const toggleSidebar = useCallback(() => {
+    // The phone has no drawer (#3014): its sessions are the top bar's picker.
+    if (isMobile) return;
     if (compact) setSidebarOpen((v) => !v);
     else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
-  }, [compact, sidebarCollapsed]);
+  }, [isMobile, compact, sidebarCollapsed]);
 
   // Floating-sidebar redesign — edge-swipe open/dismiss (lib/sidebarSwipeGesture.ts's
   // own header comment covers the design: discrete threshold+commit, not a
@@ -911,7 +913,7 @@ export function App() {
   const sidebarWrapperRef = useRef<HTMLDivElement>(null);
   // Drop a stale open drawer when leaving the compact tier. Extracted to
   // useSidebarOpenTierReset; called here, where the effect was — before
-  // usePhoneBackStack / usePhoneTasksNavigator.
+  // usePhoneBackStack.
   // Tasks mode from 700px (#3009): the board takes the grid and the left
   // sidebar is hidden, so the tablet drawer is closed and cannot be swiped open.
   const boardOverGrid = !isMobile && viewMode === "kanban";
@@ -919,14 +921,19 @@ export function App() {
   // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
-  usePhoneBackStack(compact && sidebarOpen, () => setSidebarOpen(false));
-  // Phone only: from 700px Tasks mode is the board over the grid, not the
-  // navigator's Tasks tab (#3009).
-  usePhoneTasksNavigator({ compact: isMobile, viewMode, sidebarOpen, setSidebarOpen });
+  usePhoneBackStack(compact && !isMobile && sidebarOpen, () => setSidebarOpen(false));
+  // Phone (#3014): after "Open session in Workspace" took a task's session to
+  // Workspace, back returns to Tasks (design 9.3). The only back that changes
+  // mode; it is registered while the switch it undoes is still in effect.
+  const crossLinkReturn = useDashboardStore((s) => s.crossLinkReturn);
+  usePhoneBackStack(isMobile && crossLinkReturn !== null && viewMode === "list", () =>
+    useDashboardStore.getState().returnFromCrossLink(),
+  );
   // Edge-swipe to open/dismiss the compact sidebar. Extracted to
-  // useSidebarSwipe; called here, where the effect was.
+  // useSidebarSwipe; called here, where the effect was. Not on the phone,
+  // which has no drawer (#3014).
   useSidebarSwipe({
-    compact: compact && !boardOverGrid,
+    compact: compact && !isMobile && !boardOverGrid,
     sidebarOpen,
     setSidebarOpen,
     appBodyRef,
@@ -982,7 +989,9 @@ export function App() {
   );
   // Every pane open in the active workspace, floating ones included, for the
   // left rail's pane list (#3009). Floating is safe there: focusPanelForTier
-  // only maximizes on the phone, which has no rail.
+  // maximizes only on the phone, which has no rail, and in the halves, whose
+  // router leaves a float to the ordinary path and whose moves count tiled
+  // panes only (tiledLeftCount below).
   const railPanes = useMemo<RailPaneInput[]>(
     () =>
       (dockviewApi?.panels ?? []).map((panel) => ({
@@ -1003,104 +1012,15 @@ export function App() {
   // #3010 — the halves' panes: the left rail lists the left half's, the
   // right rail the right half's.
   const railSplit = useMemo(() => splitByHalf(halvesState, railPanes), [halvesState, railPanes]);
-  const moveToHalf = useCallback(
-    (panelId: string, half: Half) => {
-      if (!dockviewApi) return;
-      const store = useDashboardStore.getState();
-      store.moveToHalf(
-        panelId,
-        half,
-        dockviewApi.panels.map((p) => p.id),
-      );
-      if (half === "right") {
-        // The moved session shows on the right half, uncovering it.
-        if (store.rightSidebarOpen) store.closeRightSidebar();
-        store.setFocusedHalf("right");
-      } else {
-        const panel = dockviewApi.getPanel(panelId);
-        if (panel) focusPanelForTier(dockviewApi, panel, layoutTier);
-      }
-    },
-    [dockviewApi, layoutTier],
-  );
-  // A right-rail session behaves like a view tab: tap shows it on the right
-  // half, tap again hides it; while a view covers the half, a tap uncovers it.
-  const toggleRightRailPane = useCallback((panelId: string) => {
-    const store = useDashboardStore.getState();
-    if (store.rightSidebarOpen) {
-      store.closeRightSidebar();
-      store.showRightPane(panelId);
-      store.setFocusedHalf("right");
-      return;
-    }
-    store.toggleRightPane(panelId);
-    const ws = store.activeWorkspaceId;
-    const shown = ws === null ? null : useDashboardStore.getState().foldHalves[ws]?.shownRight;
-    store.setFocusedHalf(shown === panelId ? "right" : "left");
-  }, []);
-  // #3010 — the halves hide dockview's tab strip, so each half's header
-  // carries the pane's menu (rename, close the pane, end the session), as
-  // the phone picker does.
-  const renderHalfActions = useCallback(
-    (panelId: string) => (startRename: () => void) => {
-      const panel = dockviewApi?.getPanel(panelId);
-      if (!dockviewApi || !panel) return null;
-      return (
-        <PaneActionsMenu
-          api={panel.api}
-          params={panel.params as TerminalPaneParams | undefined}
-          containerApi={dockviewApi}
-          onRename={startRename}
-          triggerClassName="half-header-btn half-header-menu"
-        />
-      );
-    },
-    [dockviewApi],
-  );
-  const renameHalfPane = useCallback(
-    (panelId: string, value: string) => {
-      const panel = dockviewApi?.getPanel(panelId);
-      if (!panel) return;
-      const sessionId = panelSessionId(panel);
-      const previous = panel.title ?? "";
-      panel.api.setTitle(value);
-      if (sessionId === undefined) return;
-      void useDashboardStore
-        .getState()
-        .renameSession(sessionId, value)
-        .catch((err) => {
-          panel.api.setTitle(previous);
-          useDashboardStore
-            .getState()
-            .reportError("Could not rename the session.", describeError(err));
-        });
-    },
-    [dockviewApi],
-  );
-  const closeHalfPane = useCallback(
-    (panelId: string) => dockviewApi?.getPanel(panelId)?.api.close(),
-    [dockviewApi],
-  );
-  const halfMenuItems = useCallback(
-    (half: Half) =>
-      (entry: RailPaneEntry): RailEntryMenuItem[] => [
-        ...(half === "left"
-          ? canGoRight(entry.panelId) && railSplit.left.length > 1
-            ? [
-                {
-                  label: "Move to the right half",
-                  onSelect: () => moveToHalf(entry.panelId, "right"),
-                },
-              ]
-            : []
-          : [
-              { label: "Move to the left half", onSelect: () => moveToHalf(entry.panelId, "left") },
-            ]),
-        // Detaches the pane; the session keeps running.
-        { label: "Close pane", onSelect: () => closeHalfPane(entry.panelId) },
-      ],
-    [moveToHalf, railSplit.left.length, closeHalfPane],
-  );
+  // The left half only ever shows a tiled pane (a float cannot be maximized),
+  // so a float is not something the left half can fall back on: the guard
+  // that keeps the left half non-empty counts tiled panes only.
+  const tiledLeftCount = useMemo(() => {
+    const tiled = new Set(mobilePanels.map((p) => p.id));
+    return railSplit.left.filter((p) => tiled.has(p.id)).length;
+  }, [mobilePanels, railSplit.left]);
+  const { moveToHalf, toggleRightRailPane, renderHalfActions, renameHalfPane, halfMenuItems } =
+    useHalfActions(dockviewApi, layoutTier, tiledLeftCount);
   // Projects with a session open in the active workspace, derived from the
   // live dockview panels (panel.params.sessionId -> session.projectId) —
   // reactive via panelsVersion, bumped on every ordinary dockview layout
@@ -1190,7 +1110,11 @@ export function App() {
   const rightHalfOnScreen = !!rightHalfSession && !rightSidebarOpen;
   // The left half's pane, for its header.
   const leftHalfPane = (() => {
-    if (!foldHalves || !activePanelId) return null;
+    // Only a left-half pane: the active panel can be a right-half one for a
+    // moment (or for good, with no tiled pane left to show on the left).
+    if (!foldHalves || !activePanelId || halfOf(halvesState, activePanelId) !== "left") {
+      return null;
+    }
     const pane = railPanes.find((p) => p.id === activePanelId);
     if (!pane) return null;
     const session =
@@ -1352,7 +1276,7 @@ export function App() {
         theme,
         "app",
         sidebarOpen && "sb-open",
-        isMobile && viewMode === "kanban" && "nav-tasks",
+        isMobile && "mode-bar",
         sidebarCollapsed && "sidebar-collapsed",
         foldHalves && "fold-halves",
         // The two halves' widths hold in Tasks mode too: the board on the
@@ -1381,7 +1305,6 @@ export function App() {
           The top bar's version label is in Settings → Server. */}
       {isMobile && (
         <Toolbar
-          onToggleSidebar={toggleSidebar}
           onOpenSession={onOpenSession}
           onOpenTimeline={onOpenTimeline}
           onOpenBrowser={onOpenBrowser}
@@ -1421,70 +1344,85 @@ export function App() {
             notificationSheet={compact && isCoarsePointer}
           />
         )}
-        <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
-        <div
-          className="sidebar-wrapper cmux-scroll"
-          ref={sidebarWrapperRef}
-          /* The compact tier's drawer is closed by sliding it off-screen
-             (styles/sidebar.css's `transform: translateX(-101%)`), which
-             leaves every control inside it — session rows, the filter
-             input, the per-row kebab menus — focusable and in the
-             accessibility tree while they sit off-screen. A keyboard user
-             tabbing through the app would land on controls they cannot
-             see, and a screen reader would read the whole hidden tree.
+        {/* The phone has no drawer (#3014): Projects is the top bar's
+            session picker, Tasks the mode bar, Devices and Settings the mode
+            bar's "more" sheet. The sidebar still mounts, hidden, as it did
+            inside the closed drawer: its mount loads projects, sessions,
+            hosts and tasks, and it owns each project's live GitHub
+            subscription, which the picker and the "more" views rely on. */}
+        {isMobile && (
+          <div className="phone-sidebar-host" hidden inert>
+            {sidebar}
+          </div>
+        )}
+        {!isMobile && (
+          <>
+            <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
+            <div
+              className="sidebar-wrapper cmux-scroll"
+              ref={sidebarWrapperRef}
+              /* The compact tier's drawer is closed by sliding it off-screen
+                 (styles/sidebar.css's `transform: translateX(-101%)`), which
+                 leaves every control inside it — session rows, the filter
+                 input, the per-row kebab menus — focusable and in the
+                 accessibility tree while they sit off-screen. A keyboard user
+                 tabbing through the app would land on controls they cannot
+                 see, and a screen reader would read the whole hidden tree.
 
-             `inert` removes the subtree from both the tab order and the
-             accessibility tree in one attribute. It is applied only on the
-             compact tier: the desktop sidebar is always visible, so making
-             it inert when `sidebarOpen` is false (the desktop default)
-             would hide a permanently-visible panel.
+                 `inert` removes the subtree from both the tab order and the
+                 accessibility tree in one attribute. It is applied only on the
+                 compact tier: the desktop sidebar is always visible, so making
+                 it inert when `sidebarOpen` is false (the desktop default)
+                 would hide a permanently-visible panel.
 
-             styles/sidebar.css pairs this with `visibility: hidden` for
-             the closed state, which is the fallback for browsers without
-             `inert` support — an element with `visibility: hidden` is not
-             focusable either. */
-          inert={compact && !sidebarOpen}
-        >
-          {/* Desktop-only (review finding, floating-sidebar redesign): the
-              overlay's own `width: min(310px, 84vw) !important`
-              (sidebar.css's phone/tablet `data-tier` block) outranks
-              `--sidebar-width`, the custom property this drag actually
-              writes to, so below desktop width the handle used to render,
-              respond to mousedown, and update state/localStorage while
-              visibly doing nothing — a resize-by-mouse gesture doesn't fit
-              a touch-first floating overlay anyway. */}
-          {layoutTier === "desktop" && !sidebarCollapsed && (
-            <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
-          )}
-          {/* Phone: workspaces don't exist as a concept — the session picker
-              lists every session — and the drawer is a full-screen navigator
-              with tabs instead of one long scroll. */}
-          {compact ? (
-            <>
-              <PhoneNavigatorPanel
-                tablet={!isMobile}
-                workspaces={
-                  isMobile ? undefined : (
-                    <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-                  )
-                }
-                navTab={navTab}
-                setNavTab={setNavTab}
-                onOpenTasks={onOpenTasks}
-                onClose={() => setSidebarOpen(false)}
-                onSelectSetting={openSettingsFromNavigator}
-                sidebar={sidebar}
-                onOpenSession={onOpenSession}
-                onSessionEnded={onSessionEnded}
-              />
-            </>
-          ) : (
-            <>
-              <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-              {sidebar}
-            </>
-          )}
-        </div>
+                 styles/sidebar.css pairs this with `visibility: hidden` for
+                 the closed state, which is the fallback for browsers without
+                 `inert` support — an element with `visibility: hidden` is not
+                 focusable either. */
+              inert={compact && !sidebarOpen}
+            >
+              {/* Desktop-only (review finding, floating-sidebar redesign): the
+                  overlay's own `width: min(310px, 84vw) !important`
+                  (sidebar.css's phone/tablet `data-tier` block) outranks
+                  `--sidebar-width`, the custom property this drag actually
+                  writes to, so below desktop width the handle used to render,
+                  respond to mousedown, and update state/localStorage while
+                  visibly doing nothing — a resize-by-mouse gesture doesn't fit
+                  a touch-first floating overlay anyway. */}
+              {layoutTier === "desktop" && !sidebarCollapsed && (
+                <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
+              )}
+              {/* Phone: workspaces don't exist as a concept — the session picker
+                  lists every session — and the drawer is a full-screen navigator
+                  with tabs instead of one long scroll. */}
+              {compact ? (
+                <>
+                  <PhoneNavigatorPanel
+                    tablet={!isMobile}
+                    workspaces={
+                      isMobile ? undefined : (
+                        <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+                      )
+                    }
+                    navTab={navTab}
+                    setNavTab={setNavTab}
+                    onOpenTasks={onOpenTasks}
+                    onClose={() => setSidebarOpen(false)}
+                    onSelectSetting={openSettingsFromNavigator}
+                    sidebar={sidebar}
+                    onOpenSession={onOpenSession}
+                    onSessionEnded={onSessionEnded}
+                  />
+                </>
+              ) : (
+                <>
+                  <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+                  {sidebar}
+                </>
+              )}
+            </div>
+          </>
+        )}
         <div
           className={`grid-area${foldHalves ? " fold-half fold-half-left" : ""}${
             foldHalves && rightHalfOnScreen && focusedHalf === "left" ? " focused" : ""
@@ -1658,7 +1596,7 @@ export function App() {
                 title={leftHalfPane.title}
                 projectName={leftHalfPane.projectName}
                 onMove={
-                  canGoRight(leftHalfPane.id) && railSplit.left.length > 1
+                  canGoRight(leftHalfPane.id) && tiledLeftCount > 1
                     ? () => moveToHalf(leftHalfPane.id, "right")
                     : null
                 }
@@ -1732,18 +1670,22 @@ export function App() {
                   "kanban", so switching back to Workspace restores exactly
                   what was there before. This is Tasks mode (#3009), entered
                   from the left rail's mode switch, its shortcut, Sidebar.tsx's
-                  own entry or the command palette. From 700px only: on phone
-                  the board renders inside the navigator's Tasks tab instead
-                  (PhoneNavigatorPanel). */}
-              {viewMode === "kanban" && !isMobile && (
-                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
+                  own entry or the command palette, and on the phone from the
+                  mode bar (#3014), where it shows one lane at a time. */}
+              {viewMode === "kanban" && (
+                <KanbanBoardOverlay
+                  onOpenSession={onOpenSession}
+                  onSessionEnded={onSessionEnded}
+                  phone={isMobile}
+                  columnCount={isMobile ? 1 : undefined}
+                />
               )}
             </div>
             {/* Not in Tasks mode from 700px (#3009): the board takes the
                 grid area full height. Unmounted rather than hidden so its
                 monitors are not fitted to an empty box; its rows and
                 heights are persisted, so it comes back as it was. */}
-            {(isMobile || viewMode !== "kanban") && (
+            {viewMode !== "kanban" && (
               <Dock
                 workspaceProjectIds={scopedWorkspaceProjectIds}
                 onOpenGitHub={onOpenGitHub}
@@ -1813,6 +1755,9 @@ export function App() {
           }
         />
       </div>
+      {/* Phone (#3014): the mode bar, last in .app's column so it sits under
+          the key bar, at the bottom edge. */}
+      {isMobile && <PhoneModeBar onOpenSettings={() => openSettings()} />}
       <ProjectPreviewPicker
         onOpenDefault={onOpenBrowser}
         onBlank={onOpenBlankBrowser}
