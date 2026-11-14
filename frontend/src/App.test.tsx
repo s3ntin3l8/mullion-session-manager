@@ -112,10 +112,12 @@ vi.mock("./LeftRail.js", () => ({
     onToggleSidebar,
     notificationSheet,
     sidebarShown,
+    middle,
   }: {
     onToggleSidebar: () => void;
     notificationSheet?: boolean;
     sidebarShown: boolean;
+    middle?: React.ReactNode;
   }) => (
     <nav data-testid="left-rail" data-sidebar-shown={String(sidebarShown)}>
       <button
@@ -123,8 +125,27 @@ vi.mock("./LeftRail.js", () => ({
         data-notif-sheet={String(!!notificationSheet)}
         onClick={onToggleSidebar}
       />
+      {middle}
     </nav>
   ),
+}));
+// The rail's middle region (#3009): records what App hands it.
+const railHarness = vi.hoisted(() => ({
+  props: null as null | {
+    sheet: boolean;
+    showPanes: boolean;
+    panes: { id: string; title: string; sessionId: number | undefined }[];
+    activePanelId: string | null;
+    onFocusPane: (panelId: string) => void;
+    onNewSession: () => void;
+    onSelectWorkspace: (id: number) => void;
+  },
+}));
+vi.mock("./rail/RailWorkspaceSection.js", () => ({
+  RailWorkspaceSection: (props: NonNullable<typeof railHarness.props>) => {
+    railHarness.props = props;
+    return <div data-testid="rail-middle" data-show-panes={String(props.showPanes)} />;
+  },
 }));
 vi.mock("./MobileKeyBar.js", () => ({ MobileKeyBar: () => null }));
 vi.mock("./MobileSessionBar.js", () => ({
@@ -136,14 +157,17 @@ vi.mock("./PaneHeaderActions.js", () => ({ PaneHeaderActions: () => null }));
 vi.mock("./CommandPalette.js", () => ({
   CommandPalette: (props: {
     onLaunched?: (session: NonNullable<typeof splitHarness.launch>) => void;
-  }) =>
-    splitHarness.launch ? (
-      <button
-        type="button"
-        data-testid="launch-split"
-        onClick={() => props.onLaunched?.(splitHarness.launch!)}
-      />
-    ) : null,
+  }) => (
+    <div data-testid="palette">
+      {splitHarness.launch ? (
+        <button
+          type="button"
+          data-testid="launch-split"
+          onClick={() => props.onLaunched?.(splitHarness.launch!)}
+        />
+      ) : null}
+    </div>
+  ),
 }));
 vi.mock("./Dock.js", () => ({
   Dock: (props: { workspaceProjectIds?: number[] | null }) => {
@@ -854,5 +878,119 @@ describe("App sidebar workspace scope", () => {
     // Same array, not a second empty list built for the Dock.
     expect(sidebarHarness.props?.workspaceProjectIds).toEqual([]);
     expect(dockHarness.props?.workspaceProjectIds).toBe(sidebarHarness.props?.workspaceProjectIds);
+  });
+});
+
+// #3009 — the rail's middle region: the workspace chip, and the open panes
+// while the left sidebar is not showing.
+describe("App left rail middle region", () => {
+  const setActive = vi.fn();
+  function makeApi() {
+    const panels = [
+      {
+        id: "session-10",
+        title: "claude",
+        params: { sessionId: 10 },
+        api: { location: { type: "grid" }, setActive, close: vi.fn() },
+        group: { id: "g1" },
+      },
+      {
+        id: "git-3",
+        title: "Git",
+        params: {},
+        api: { location: { type: "grid" }, setActive, close: vi.fn() },
+        group: { id: "g1" },
+      },
+    ];
+    return {
+      panels,
+      activePanel: null,
+      getPanel: (id: string) => panels.find((panel) => panel.id === id) ?? null,
+      addPanel: vi.fn(),
+      onDidActivePanelChange: () => ({ dispose: vi.fn() }),
+      onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onWillMutateLayout: () => ({ dispose: vi.fn() }),
+      onDidMutateLayout: () => ({ dispose: vi.fn() }),
+    };
+  }
+
+  beforeEach(() => {
+    railHarness.props = null;
+    splitHarness.announced = false;
+    splitHarness.launch = null;
+    setLayoutMode("auto");
+    useDashboardStore.setState({
+      viewMode: "list",
+      sidebarCollapsed: false,
+      refreshWorkspaces: vi.fn().mockResolvedValue(undefined),
+      hydrateSettings: vi.fn(),
+      startThemeWatch: vi.fn(() => () => {}),
+    });
+  });
+
+  afterEach(() => {
+    splitHarness.api = null;
+    splitHarness.announced = false;
+    railHarness.props = null;
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    useDashboardStore.setState({ sidebarCollapsed: false });
+  });
+
+  it("lists the panes on desktop only while the docked sidebar is collapsed", () => {
+    stubWidth("desktop");
+    render(<App />);
+    expect(railHarness.props?.showPanes).toBe(false);
+    expect(railHarness.props?.sheet).toBe(false);
+    act(() => {
+      fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    });
+    expect(railHarness.props?.showPanes).toBe(true);
+  });
+
+  it("lists the panes below 1280px while the drawer is closed, with the list as a sheet on touch", () => {
+    stubWidth("tablet", true);
+    render(<App />);
+    expect(railHarness.props?.showPanes).toBe(true);
+    expect(railHarness.props?.sheet).toBe(true);
+    act(() => {
+      fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    });
+    expect(railHarness.props?.showPanes).toBe(false);
+  });
+
+  it("hands the rail every open pane and focuses the one tapped", async () => {
+    stubWidth("tablet");
+    splitHarness.api = makeApi();
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(railHarness.props?.panes).toEqual([
+      { id: "session-10", title: "claude", sessionId: 10 },
+      { id: "git-3", title: "Git", sessionId: undefined },
+    ]);
+    act(() => railHarness.props?.onFocusPane("git-3"));
+    expect(setActive).toHaveBeenCalledTimes(1);
+    act(() => railHarness.props?.onFocusPane("gone"));
+    expect(setActive).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a new session from the rail's + through the launcher (#3013)", () => {
+    stubWidth("desktop");
+    useDashboardStore.setState({ launcherRequest: null });
+    render(<App />);
+    act(() => railHarness.props?.onNewSession());
+    expect(useDashboardStore.getState().launcherRequest).toMatchObject({ target: null });
+    // The launcher, not the command palette.
+    expect(screen.queryByTestId("palette")).toBeNull();
+    act(() => useDashboardStore.setState({ launcherRequest: null }));
+  });
+
+  it("does not render the rail on the phone", () => {
+    stubWidth("phone");
+    render(<App />);
+    expect(screen.queryByTestId("rail-middle")).toBeNull();
   });
 });

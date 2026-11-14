@@ -6,6 +6,7 @@ import { LeftRail } from "./LeftRail.js";
 import type { LeftRailProps } from "./LeftRail.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeTask } from "./test/fixtures.js";
+import railCss from "./styles/left-rail.css?raw";
 
 // The bell has its own suite; here it only has to show where it was mounted
 // and with which presentation.
@@ -156,5 +157,36 @@ describe("LeftRail needs-you count", () => {
     });
     const { container } = renderRail();
     expect(container.querySelector(".left-rail-badge")).toHaveTextContent("99+");
+  });
+});
+
+// #3009 — on a short window only the middle region scrolls: the mode switch
+// and the bottom cluster stay put.
+describe("LeftRail scroll region", () => {
+  const block = (selector: string) => {
+    const start = railCss.indexOf(`${selector} {`);
+    expect(start, selector).toBeGreaterThanOrEqual(0);
+    return railCss.slice(start, railCss.indexOf("}", start));
+  };
+
+  it("puts the middle region between the fixed mode switch and bottom cluster", () => {
+    const { container } = renderRail({ middle: <span>CHIP</span> });
+    const nav = container.querySelector("nav.left-rail")!;
+    const children = [...nav.children].map((el) => el.className);
+    const middleAt = children.findIndex((c) => c.includes("left-rail-middle"));
+    expect(children.findIndex((c) => c.includes("left-rail-modes"))).toBeLessThan(middleAt);
+    expect(children.findIndex((c) => c.includes("left-rail-bottom"))).toBeGreaterThan(middleAt);
+    const middle = nav.children[middleAt];
+    expect(middle).toHaveTextContent("CHIP");
+    expect(middle.querySelector(".left-rail-bottom, .left-rail-modes")).toBeNull();
+  });
+
+  it("scrolls the middle region and not the rail", () => {
+    expect(block(".left-rail")).toMatch(/overflow:\s*hidden/);
+    const middle = block(".left-rail-middle");
+    expect(middle).toMatch(/overflow-y:\s*auto/);
+    expect(middle).toMatch(/min-height:\s*0/);
+    expect(middle).toMatch(/flex:\s*1 1 auto/);
+    expect(block(".left-rail > .left-rail-sep")).toMatch(/flex-shrink:\s*0/);
   });
 });
