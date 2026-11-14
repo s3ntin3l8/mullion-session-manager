@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MutableRefObject,
+  PointerEvent as ReactPointerEvent,
   ReactNode,
   RefObject,
 } from "react";
@@ -11,6 +12,15 @@ import { themeClassName } from "../store/theme.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
 import { CloseIcon } from "./icons.js";
+import { MOTION_EASE, MOTION_FADE_MS, prefersReducedMotion } from "../lib/motion.js";
+import {
+  Spring,
+  addPointerSample,
+  projectRest,
+  releaseVelocity,
+  rubberBand,
+} from "../lib/spring.js";
+import type { PointerSample } from "../lib/spring.js";
 
 // Issue #1435 — MobileSessionSwitcher, CopyModeSheet, the NotificationBell
 // phone branch, and the TasksToolbar phone filter sheet each hand-rolled the
@@ -169,7 +179,13 @@ export function BottomSheet({
     onTrapKeyDown(e);
   };
 
-  if (!open) return null;
+  const { present, backdropRef, onDragStart, onDragMove, onDragEnd } = useSheetMotion(
+    open,
+    sheetRef,
+    onClose,
+  );
+
+  if (!open && !present) return null;
 
   const backdropClass = [
     portal ? themeClassName(theme) : null,
@@ -182,7 +198,15 @@ export function BottomSheet({
 
   const content = (
     <div
+      ref={backdropRef}
       className={backdropClass}
+      // Leaving: still on screen while it travels out, but no longer a dialog
+      // anyone can reach. `open` is already false, so the focus trap and the
+      // back-stack entry are gone; this keeps a stray tap or a screen reader
+      // from landing on a sheet that is on its way out.
+      inert={!open}
+      aria-hidden={open ? undefined : true}
+      style={open ? undefined : { pointerEvents: "none" }}
       onPointerDown={
         backdropClose === "press-release"
           ? (e) => {
@@ -208,7 +232,13 @@ export function BottomSheet({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
-        <div className="mobile-session-sheet-header">
+        <div
+          className="mobile-session-sheet-header"
+          onPointerDown={onDragStart}
+          onPointerMove={onDragMove}
+          onPointerUp={onDragEnd}
+          onPointerCancel={onDragEnd}
+        >
           <span>{title}</span>
           <span className="mobile-session-sheet-header-actions">
             {headerActions}
@@ -223,4 +253,183 @@ export function BottomSheet({
   );
 
   return portal ? createPortal(content, document.body) : content;
+}
+
+// Issue #3008 — the sheet's motion (docs/motion.md). It enters from the bottom
+// edge it belongs to on the house spring, leaves the same way, and follows a
+// finger on its header: a drag can be thrown down to dismiss, caught mid-way,
+// or let go to spring back. Every change of direction (a reopen while it is
+// leaving, a grab while it is arriving) continues from the spring's current
+// position and speed.
+//
+// The travel is the distance from the sheet's top edge to the bottom of the
+// backdrop, measured on every open and close. Where there is no layout to
+// measure (jsdom), the travel is 0 and every run is already at rest, so the
+// sheet opens and closes synchronously, exactly as it did before it moved.
+//
+// Under reduced motion the spring jumps (lib/spring.ts decides that, through
+// lib/motion.ts) and the sheet fades in and out instead, with the Web
+// Animations API: tokens.css's reduced-motion reset zeroes CSS transitions and
+// animations, but not these.
+const INTERACTIVE = "button, a, input, select, textarea, [role='button']";
+
+interface DragState {
+  pointerId: number;
+  // clientY minus the sheet's offset when the finger went down.
+  origin: number;
+  samples: PointerSample[];
+}
+
+function useSheetMotion(
+  open: boolean,
+  sheetRef: RefObject<HTMLDivElement | null>,
+  onClose: () => void,
+) {
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // Mounted: open, or still leaving. Set during render on open (React's
+  // documented pattern for state derived from a prop change), cleared when
+  // the exit comes to rest.
+  const [present, setPresent] = useState(open);
+  if (open && !present) setPresent(true);
+
+  const springRef = useRef<Spring | null>(null);
+  const travelRef = useRef(0);
+  // Whether the sheet has entered since it was last fully gone: decides
+  // between entering from the edge and reversing a sheet that is leaving.
+  const shownRef = useRef(false);
+  const dragRef = useRef<DragState | null>(null);
+  const fadeRef = useRef<Animation | null>(null);
+
+  const measureTravel = () => {
+    const backdrop = backdropRef.current;
+    const sheet = sheetRef.current;
+    if (!backdrop || !sheet) return 0;
+    return Math.max(0, backdrop.clientHeight - sheet.offsetTop);
+  };
+
+  const getSpring = () => {
+    springRef.current ??= new Spring({
+      onUpdate: (offset) => {
+        const sheet = sheetRef.current;
+        const backdrop = backdropRef.current;
+        // At rest the inline styles are removed again, so a resting sheet is
+        // exactly the element its callers and their CSS know.
+        if (sheet) sheet.style.transform = offset ? `translateY(${offset}px)` : "";
+        if (backdrop) {
+          const travel = travelRef.current;
+          backdrop.style.opacity =
+            offset > 0 && travel > 0 ? String(Math.max(0, 1 - offset / travel)) : "";
+        }
+      },
+    });
+    return springRef.current;
+  };
+
+  const fade = (from: number, to: number, onFinish?: () => void): boolean => {
+    const backdrop = backdropRef.current;
+    if (!backdrop || typeof backdrop.animate !== "function") return false;
+    fadeRef.current?.cancel();
+    const animation = backdrop.animate([{ opacity: from }, { opacity: to }], {
+      duration: MOTION_FADE_MS,
+      easing: MOTION_EASE,
+    });
+    fadeRef.current = animation;
+    animation.onfinish = () => {
+      fadeRef.current = null;
+      onFinish?.();
+    };
+    return true;
+  };
+
+  useLayoutEffect(() => {
+    if (!present) return;
+    const spring = getSpring();
+    const travel = measureTravel();
+    travelRef.current = travel;
+    const gone = () => {
+      shownRef.current = false;
+      setPresent(false);
+    };
+    if (open) {
+      fadeRef.current?.cancel();
+      fadeRef.current = null;
+      if (!shownRef.current) {
+        shownRef.current = true;
+        // Enters from the edge it belongs to.
+        spring.jump(travel);
+        if (prefersReducedMotion()) fade(0, 1);
+      }
+      spring.to(0);
+      return;
+    }
+    dragRef.current = null;
+    if (prefersReducedMotion()) {
+      spring.stop();
+      if (!fade(1, 0, gone)) gone();
+      return;
+    }
+    // Leaves the way it came, carrying whatever speed it had (a throw).
+    spring.to(travel, { onRest: gone });
+    // getSpring/measureTravel only read refs; the effect is keyed on the two
+    // values that decide where the sheet should be.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, present]);
+
+  useEffect(
+    () => () => {
+      springRef.current?.stop();
+      fadeRef.current?.cancel();
+    },
+    [],
+  );
+
+  const onDragStart = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!open || dragRef.current) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (e.target instanceof Element && e.target.closest(INTERACTIVE)) return;
+    // Not every environment has pointer capture (jsdom), and a browser throws
+    // for a pointer that is already gone; the drag works without it, only
+    // less reliably once the finger leaves the header.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* see above */
+    }
+    const spring = getSpring();
+    // Caught mid-flight: it stops under the finger.
+    spring.stop();
+    travelRef.current = measureTravel();
+    dragRef.current = {
+      pointerId: e.pointerId,
+      origin: e.clientY - spring.value,
+      samples: [{ position: e.clientY, time: e.timeStamp }],
+    };
+  };
+
+  const onDragMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const offset = e.clientY - drag.origin;
+    // Down it tracks the finger 1:1; up, past its resting place, it resists.
+    getSpring().jump(offset < 0 ? rubberBand(offset) : offset);
+    drag.samples = addPointerSample(drag.samples, { position: e.clientY, time: e.timeStamp });
+  };
+
+  const onDragEnd = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    dragRef.current = null;
+    const spring = getSpring();
+    const velocity = e.type === "pointercancel" ? 0 : releaseVelocity(drag.samples, e.timeStamp);
+    const travel = travelRef.current;
+    // Decided by where the throw is heading, not where the finger lifted.
+    const dismiss = travel > 0 && projectRest(spring.value, velocity) > travel / 2;
+    // Hands the finger's speed to the spring either way. On a dismiss the
+    // close re-targets it to the edge before the next frame, so the throw
+    // carries on out; if the caller keeps the sheet open, it springs back.
+    spring.to(0, { velocity });
+    if (dismiss) onClose();
+  };
+
+  return { present, backdropRef, onDragStart, onDragMove, onDragEnd };
 }

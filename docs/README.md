@@ -71,6 +71,9 @@ when you'd reach for it.
   `ci-cd.yml` structure, test sharding, and required branch-protection
   checks. See [`../CONTRIBUTING.md`](../CONTRIBUTING.md) for the day-to-day
   contributor workflow (setup, the pre-push gate, PR title, worktrees).
+- [`motion.md`](motion.md) — the motion tokens, the house spring, and the
+  rules every animation in the dashboard follows (including: never animate a
+  terminal's size).
 
 ## Background
 

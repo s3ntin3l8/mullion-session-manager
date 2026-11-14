@@ -1947,6 +1947,12 @@ button.discover-header:hover {
   font-weight: 600;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
+  /* The header is the sheet's drag handle (ui/BottomSheet.tsx, #3008): the
+     browser must not pan or select text under a finger that is pulling the
+     sheet down. Taps on its buttons are unaffected. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 /* ui/BottomSheet.tsx's own trailing flex group (headerActions + the close
    button) — one item against `.mobile-session-sheet-header`'s own
