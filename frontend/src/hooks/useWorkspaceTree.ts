@@ -58,11 +58,17 @@ export function useWorkspaceTree(): WorkspaceTree {
   const groups = useDashboardStore((s) => s.groups);
   const sessions = useDashboardStore((s) => s.sessions);
 
-  // Every surface that shows groups loads them: on the tablet the sidebar's
-  // switcher unmounts while its drawer shows another tab, so the rail's chip
-  // cannot rely on it having done so.
+  // Groups load on first use by whichever surface mounts first: on the tablet
+  // the sidebar's switcher unmounts while its drawer shows another tab, so
+  // the rail's chip cannot rely on it having done so. Not on every mount (the
+  // chip, the list and the switcher all use this hook), and a failed load is
+  // left for the next surface rather than becoming an unhandled rejection.
   useEffect(() => {
-    void useDashboardStore.getState().refreshGroups();
+    if (useDashboardStore.getState().groups.length > 0) return;
+    useDashboardStore
+      .getState()
+      .refreshGroups()
+      .catch(() => {});
   }, []);
 
   // P2 perf fix — the expensive part (recursively walking each workspace's

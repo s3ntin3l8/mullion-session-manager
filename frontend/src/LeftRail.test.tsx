@@ -182,7 +182,9 @@ describe("LeftRail scroll region", () => {
   });
 
   it("scrolls the middle region and not the rail", () => {
-    expect(block(".left-rail")).toMatch(/overflow:\s*hidden/);
+    // The rail itself only scrolls as a last resort, once the middle has
+    // shrunk to nothing (flex 1 1 auto, min-height 0).
+    expect(block(".left-rail")).toMatch(/overflow-x:\s*hidden/);
     const middle = block(".left-rail-middle");
     expect(middle).toMatch(/overflow-y:\s*auto/);
     expect(middle).toMatch(/min-height:\s*0/);

@@ -2,6 +2,7 @@
 
 const VIEWPORT_MARGIN_PX = 8;
 const POPOVER_WIDTH_PX = 280;
+const MAX_HEIGHT_PX = 520;
 
 /** Beside the chip, top edges level, clamped into the viewport. The list
  * grows downward and scrolls inside its own max height. */
@@ -20,5 +21,10 @@ export function chipPopoverPosition(
     VIEWPORT_MARGIN_PX,
     Math.min(rect.top, viewportHeight - 240 - VIEWPORT_MARGIN_PX),
   );
-  return { top, left, maxHeight: viewportHeight - top - VIEWPORT_MARGIN_PX };
+  // A cap too, so a long list on a tall window scrolls instead of filling it.
+  return {
+    top,
+    left,
+    maxHeight: Math.min(MAX_HEIGHT_PX, viewportHeight - top - VIEWPORT_MARGIN_PX),
+  };
 }

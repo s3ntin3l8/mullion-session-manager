@@ -74,6 +74,12 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
     );
   }, []);
   useVisualViewportChange(open && !sheet, reposition);
+  // The chip sits in the rail's scrolling middle region: follow it.
+  useEffect(() => {
+    if (!open || sheet) return;
+    window.addEventListener("scroll", reposition, true);
+    return () => window.removeEventListener("scroll", reposition, true);
+  }, [open, sheet, reposition]);
 
   const close = () => setOpen(false);
   const pick = (id: number) => {
@@ -87,6 +93,13 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
       const target = e.target as Node;
       if (btnRef.current?.contains(target) || panelRef.current?.contains(target)) return;
       setOpen(false);
+      // The focused search box goes with the popover. Unless the click put
+      // focus somewhere else, return it to the chip instead of <body>.
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body || document.activeElement === null) {
+          btnRef.current?.focus();
+        }
+      });
     };
     document.addEventListener("mousedown", onOutside);
     return () => document.removeEventListener("mousedown", onOutside);
@@ -143,6 +156,7 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
                 key={sq.key}
                 className={`rail-ws-square${sq.current ? " current" : ""}`}
                 style={{ background: sq.color }}
+                title={sq.title}
                 data-square={sq.key}
               />
             ))}
@@ -157,7 +171,7 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
           closeLabel="Close workspaces"
           title="Workspaces"
           // The tablet width cap the session sheet uses (compact.css).
-          sheetClassName="rail-ws-sheet mobile-session-sheet--tablet"
+          sheetClassName="mobile-session-sheet--tablet"
           backStack
         >
           {open && <WorkspaceListContent onPick={pick} touch />}

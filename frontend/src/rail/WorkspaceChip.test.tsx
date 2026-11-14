@@ -68,7 +68,16 @@ describe("WorkspaceChip", () => {
     expect(chip()).toHaveTextContent("Mullion");
     const initial = chip().querySelector(".rail-ws-initial") as HTMLElement;
     expect(initial.style.borderColor).toBe("var(--b)");
-    expect(refreshGroups).toHaveBeenCalled();
+    // Groups are already loaded: no second fetch.
+    expect(refreshGroups).not.toHaveBeenCalled();
+  });
+
+  it("loads the groups when nothing has yet, and swallows a failed load", async () => {
+    refreshGroups.mockRejectedValueOnce(new Error("429"));
+    useDashboardStore.setState({ groups: [] });
+    render(<WorkspaceChip onSelectWorkspace={vi.fn()} sheet={false} />);
+    expect(refreshGroups).toHaveBeenCalledTimes(1);
+    await act(async () => {});
   });
 
   it("shows one square per group in name order, a grey one for ungrouped, the current outlined", () => {
@@ -77,6 +86,7 @@ describe("WorkspaceChip", () => {
     expect(squares.map((s) => s.dataset.square)).toEqual(["g2", "g1", "ungrouped"]);
     expect(squares.map((s) => s.style.background)).toEqual(["var(--b)", "var(--o)", "var(--dim)"]);
     expect(squares.map((s) => s.classList.contains("current"))).toEqual([true, false, false]);
+    expect(squares.map((s) => s.title)).toEqual(["AI Usage", "Homelab", "Ungrouped"]);
   });
 
   it("has no ungrouped square without ungrouped workspaces, and outlines it for an ungrouped one", () => {
@@ -156,6 +166,24 @@ describe("WorkspaceChip", () => {
     await user.click(chip());
     await user.click(document.body);
     expect(screen.queryByRole("dialog")).toBeNull();
+    // Focus goes back to the chip, not to <body>.
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    expect(chip()).toHaveFocus();
+  });
+
+  it("follows the chip when the rail scrolls under the open popover", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceChip onSelectWorkspace={vi.fn()} sheet={false} />);
+    const rect = vi.spyOn(chip(), "getBoundingClientRect");
+    rect.mockReturnValue({ top: 120, right: 46 } as DOMRect);
+    await user.click(chip());
+    const popover = screen.getByRole("dialog", { name: "Workspaces" });
+    expect(popover.style.top).toBe("120px");
+    rect.mockReturnValue({ top: 60, right: 46 } as DOMRect);
+    act(() => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(popover.style.top).toBe("60px");
   });
 
   it("creates a workspace from the list and switches to it", async () => {
@@ -195,12 +223,13 @@ describe("WorkspaceChip", () => {
 });
 
 describe("chipPopoverPosition", () => {
-  it("opens beside the chip, level with its top", () => {
-    expect(chipPopoverPosition({ top: 120, right: 46 }, 1280, 800)).toEqual({
+  it("opens beside the chip, level with its top, and caps its height", () => {
+    expect(chipPopoverPosition({ top: 120, right: 46 }, 1280, 600)).toEqual({
       top: 120,
       left: 52,
-      maxHeight: 672,
+      maxHeight: 472,
     });
+    expect(chipPopoverPosition({ top: 120, right: 46 }, 1280, 900).maxHeight).toBe(520);
   });
 
   it("keeps room for the list when the chip sits low, and stays inside a narrow window", () => {
