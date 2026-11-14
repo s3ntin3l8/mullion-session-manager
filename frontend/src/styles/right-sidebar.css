@@ -200,15 +200,15 @@
   flex: 1;
   min-width: 0;
 }
-[data-sidebar-detail] > .right-sidebar-header > .right-sidebar-detail-slot {
+[data-sidebar-detail] .right-sidebar-header > .right-sidebar-detail-slot {
   display: flex;
 }
 [data-sidebar-detail]
-  > .right-sidebar-header
+  .right-sidebar-header
   > :is(.right-sidebar-follow-glyph, .settings-dropdown, .right-sidebar-toolbar-slot) {
   display: none;
 }
-[data-sidebar-detail] > .right-sidebar-strip-slot {
+[data-sidebar-detail] .right-sidebar-strip-slot {
   display: none;
 }
 .right-sidebar-strip-slot:empty {

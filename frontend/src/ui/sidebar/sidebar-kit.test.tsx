@@ -312,7 +312,9 @@ describe("DetailHeader in the drawer's detail slot", () => {
 
   it("marks the panel while it fills the slot, and clears the mark when it leaves", () => {
     const panel = document.createElement("div");
-    panel.innerHTML = '<div class="right-sidebar-header"><div id="slot"></div></div>';
+    panel.className = "right-sidebar-panel";
+    // A wrapper between the panel and the header row must not lose the mark.
+    panel.innerHTML = '<div><div class="right-sidebar-header"><div id="slot"></div></div></div>';
     document.body.append(panel);
     const { rerender, unmount } = render(<Panel show />);
     expect(panel).toHaveAttribute("data-sidebar-detail");
@@ -325,7 +327,9 @@ describe("DetailHeader in the drawer's detail slot", () => {
 
   it("keeps the mark when one detail replaces another", () => {
     const panel = document.createElement("div");
-    panel.innerHTML = '<div class="right-sidebar-header"><div id="slot"></div></div>';
+    panel.className = "right-sidebar-panel";
+    // A wrapper between the panel and the header row must not lose the mark.
+    panel.innerHTML = '<div><div class="right-sidebar-header"><div id="slot"></div></div></div>';
     document.body.append(panel);
     function Swap({ id }: { id: number }) {
       return (

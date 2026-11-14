@@ -456,7 +456,8 @@
       "settle": 500,
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
-      }
+      },
+      "baseline": true
     },
     {
       "name": "tablet-tasks-reopen",

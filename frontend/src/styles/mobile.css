@@ -767,9 +767,8 @@
   font-weight: 600;
 }
 /* A detail's own header (with its back arrow) takes the row's place: the
-   phone head is a sibling of the header row, under the panel DetailHeader
-   marks (#2979). */
-[data-sidebar-detail] > .right-sidebar-phone-head {
+   phone head sits in the panel DetailHeader marks (#2979). */
+[data-sidebar-detail] .right-sidebar-phone-head {
   display: none;
 }
 /* A task's main actions in thumb reach: last, and pinned to the bottom edge

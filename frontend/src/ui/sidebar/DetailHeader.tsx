@@ -15,13 +15,13 @@ export interface DetailHeaderProps extends Omit<ViewHeaderProps, "leading" | "ba
  * instead of stacking a second bar under it. */
 export function DetailHeader({ onBack, backLabel = "Back", ...rest }: DetailHeaderProps) {
   const slot = useContext(SidebarDetailSlotContext);
-  // #2979 — marks the panel (the header row's parent, which also holds the
-  // phone's head and the strip) while this header fills the slot, so the CSS
+  // #2979 — marks the panel (`.right-sidebar-panel`, which holds the header
+  // row, the phone's head and the strip) while this header fills the slot, so the CSS
   // that swaps the picker, toolbar, strip and phone head for it does not need
   // `:has()`. React runs every layout-effect cleanup before the next mount's
   // setup, so one detail replacing another never leaves the mark off.
   useLayoutEffect(() => {
-    const panel = slot?.parentElement?.parentElement;
+    const panel = slot?.closest(".right-sidebar-panel");
     if (!panel) return;
     panel.setAttribute("data-sidebar-detail", "");
     return () => panel.removeAttribute("data-sidebar-detail");
