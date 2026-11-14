@@ -233,14 +233,31 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     if (phoneOpen && enteredAtDetail && key === null) close();
   }, [phoneOpen, enteredAtDetail, key, close]);
 
+  // The full screen covers everything else, so it is a modal dialog: focus
+  // moves into it as it opens (its first control, the back arrow), Tab wraps
+  // inside it, and closing it returns focus to where it was (useFocusTrap).
+  const phoneRef = useRef<HTMLElement>(null);
+  const { onKeyDown: onPhoneKeyDown, suppressRestore } = useFocusTrap({
+    active: phoneOpen,
+    containerRef: phoneRef,
+  });
+  // suppressRestore is a fresh closure each render; the actions below read it
+  // through a ref so they are not rebuilt every render.
+  const suppressRestoreRef = useRef(suppressRestore);
+  useEffect(() => {
+    suppressRestoreRef.current = suppressRestore;
+  });
+
   // An action that opens a pane (a device, a file, the full Git panel) leaves
-  // the phone's full screen first, or the pane would open behind it.
+  // the phone's full screen first, or the pane would open behind it. Focus is
+  // not restored on that close: it belongs to the pane being opened.
   const phoneActions = useMemo(
     () =>
       Object.fromEntries(
         Object.entries(actions).map(([name, fn]) => [
           name,
           (...args: unknown[]) => {
+            suppressRestoreRef.current();
             close();
             (fn as (...a: unknown[]) => void)(...args);
           },
@@ -249,14 +266,6 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     [actions, close],
   );
 
-  // The full screen covers everything else, so it is a modal dialog: focus
-  // moves into it as it opens (its first control, the back arrow), Tab wraps
-  // inside it, and closing it returns focus to where it was (useFocusTrap).
-  const phoneRef = useRef<HTMLElement>(null);
-  const { onKeyDown: onPhoneKeyDown } = useFocusTrap({
-    active: phoneOpen,
-    containerRef: phoneRef,
-  });
   // A drill-in swaps the header: the view's back row steps aside for the
   // detail's own header (mobile.css), so focus would fall to <body>. Move it to
   // the back control that is showing now. The first run is the trap's.

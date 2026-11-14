@@ -716,12 +716,18 @@ describe("RightSidebar on the phone", () => {
   });
 
   it("an action that opens a pane leaves the full screen first, in Workspace mode too", async () => {
+    const card = document.createElement("button");
+    document.body.appendChild(card);
+    card.focus();
     renderSidebar("phone");
     open("github");
     await userEvent.click(screen.getByRole("button", { name: "More actions" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Open GitHub panel" }));
     expect(actions.onOpenGitHub).toHaveBeenCalledWith(1);
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    // Focus belongs to the pane being opened, not back on what had it before.
+    expect(document.activeElement).not.toBe(card);
+    card.remove();
   });
 
   it("a task opened from the board is a full screen whose back returns to the board", () => {
