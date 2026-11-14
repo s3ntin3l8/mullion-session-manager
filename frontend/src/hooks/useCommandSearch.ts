@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { normalizeAgentId } from "../api/index.js";
 import type { Launcher, Project, Session, Workspace } from "../api/index.js";
 import { matchesQuery } from "../matchQuery.js";
+import { isHiddenAgent } from "../launchers/launcherList.js";
 import { searchPaletteCommands } from "../paletteCommands.js";
 import type { PaletteCommand } from "../paletteCommands.js";
 
@@ -114,7 +114,7 @@ export function useCommandSearch({
     () =>
       launchers.filter(
         (l) =>
-          (!(l.kind === "agent") || !hiddenAgents?.includes(normalizeAgentId(l.id))) &&
+          !isHiddenAgent(l, hiddenAgents) &&
           (query.trim() === "" || matchesQuery([l.title, l.command], query)),
       ),
     [launchers, query, hiddenAgents],
