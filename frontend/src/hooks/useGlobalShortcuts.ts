@@ -8,6 +8,7 @@ import {
   GIT_VIEW_SHORTCUT,
   GITHUB_VIEW_SHORTCUT,
   matchShortcut,
+  MODE_SWITCH_SHORTCUT,
   RIGHT_SIDEBAR_SHORTCUT,
   SETTINGS_SHORTCUT,
 } from "../lib/shortcutCatalog.js";
@@ -52,6 +53,8 @@ export interface UseGlobalShortcutsParams {
   // Ctrl/Cmd+Alt+B toggles the right sidebar. False on phone, where the
   // sidebar isn't rendered (same gate as its palette command).
   rightSidebarEnabled: boolean;
+  /** Off on the phone tier, which has no left rail (#3009). */
+  modeSwitchEnabled: boolean;
 }
 
 // Extracted from App.tsx (PR 34d of the hook-extraction series) — the single
@@ -95,6 +98,7 @@ export function useGlobalShortcuts({
   openSettings,
   openGlobalLauncher,
   rightSidebarEnabled,
+  modeSwitchEnabled,
 }: UseGlobalShortcutsParams): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -120,6 +124,9 @@ export function useGlobalShortcuts({
       } else if (matchShortcut(GITHUB_VIEW_SHORTCUT, e) && rightSidebarEnabled) {
         e.preventDefault();
         useDashboardStore.getState().toggleRightSidebarView("github");
+      } else if (matchShortcut(MODE_SWITCH_SHORTCUT, e) && modeSwitchEnabled) {
+        e.preventDefault();
+        useDashboardStore.getState().toggleViewMode();
       } else if (matchShortcut(DISMISS_SHORTCUT, e)) {
         // U9 — see handleGlobalEscape's own doc comment for why
         // clearSplitRequest belongs here: the palette also renders for a
@@ -148,5 +155,12 @@ export function useGlobalShortcuts({
     // stable. Same "list it for the linter, not because it changes
     // anything" pattern as `useMobileLayout`'s `[dockviewApi, setIsMobile]`
     // and `useWorkspacePersistence`'s equivalent params.
-  }, [openSettings, openGlobalLauncher, setPalette, setSettingsOpen, rightSidebarEnabled]);
+  }, [
+    openSettings,
+    openGlobalLauncher,
+    setPalette,
+    setSettingsOpen,
+    rightSidebarEnabled,
+    modeSwitchEnabled,
+  ]);
 }

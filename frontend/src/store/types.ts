@@ -53,6 +53,13 @@ import type { KanbanColumnId } from "../kanban.js";
 // UI preference (localStorage, no backend field) — same for
 // hierarchicalView below (Phase 5 Track B, issue #195 5.5b: flat
 // vs hierarchical child-session nesting).
+//
+// The two values are also the app's two first-level modes (#3009): "list" is
+// Workspace mode (the grid, the left sidebar, the Dock) and "kanban" is Tasks
+// mode (the board full size beside the right sidebar). The names predate the
+// modes and every entry point already writes them, so they were kept rather
+// than renamed. The value is remembered per device (crs.viewMode) and restored
+// at start.
 export type ViewMode = "list" | "kanban";
 
 /** Where the right sidebar's Back goes after a cross-link between the Tasks
@@ -844,6 +851,13 @@ export interface UiSlice {
   closeRightSidebar: () => void;
   setRightSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
+  /** The mode switch's keyboard path (#3009): Workspace to Tasks and back. */
+  toggleViewMode: () => void;
+  /** "Open session in Workspace" from a task (#3009): switch to Workspace mode
+   *  and open the session there. The right sidebar's task stays selected;
+   *  useClearTaskSelectionOnProjectChange keeps a task whose project the
+   *  sidebar moves to. */
+  openSessionInWorkspace: (sessionId: number) => void;
   setHierarchicalView: (value: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
   // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,

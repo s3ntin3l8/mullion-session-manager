@@ -51,7 +51,9 @@ function SessionPill({
   /** The task names a session that is no longer in the store (the card says "ended"). */
   ended?: boolean;
 }) {
-  const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
+  // "Open session in Workspace" (#3009): from Tasks mode this switches to
+  // Workspace and opens the session there; this task stays in the sidebar.
+  const openSessionInWorkspace = useDashboardStore((s) => s.openSessionInWorkspace);
   if (!session)
     return (
       <span className="sb-dim">
@@ -62,8 +64,8 @@ function SessionPill({
   return (
     <StatusChip
       tone="info"
-      onClick={() => requestOpenSession(session.id)}
-      title={`Open the ${role} session`}
+      onClick={() => openSessionInWorkspace(session.id)}
+      title={`Open the ${role} session in Workspace`}
     >
       {role} · {formatStatusLabel(presentation, session.sessionStatusDetail, "compact")}
       <ExternalLinkIcon size={10} aria-hidden="true" />

@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useDashboardStore } from "../store/index.js";
 import { useClearTaskSelectionOnProjectChange } from "./useClearTaskSelectionOnProjectChange.js";
+import { makeTask } from "../test/fixtures.js";
 
-beforeEach(() => useDashboardStore.setState({ selectedTaskId: null, taskSelectionSeq: 0 }));
+beforeEach(() =>
+  useDashboardStore.setState({ selectedTaskId: null, taskSelectionSeq: 0, tasks: [] }),
+);
 
 const selected = () => useDashboardStore.getState().selectedTaskId;
 
@@ -70,5 +73,23 @@ describe("useClearTaskSelectionOnProjectChange", () => {
     act(() => useDashboardStore.getState().selectTask(5));
     rerender({ p: null });
     expect(selected()).toBe(5);
+  });
+
+  // #3009 — "Open session in Workspace" from a task opens that task's session,
+  // and the sidebar moves to its project only after the deferred open lands,
+  // well after the selection. The task belongs to the project the sidebar
+  // moves to, so it stays open.
+  it("keeps a task selected when the sidebar moves to that task's own project", () => {
+    useDashboardStore.setState({ tasks: [makeTask({ id: 12, projectId: 9 })] });
+    const { rerender } = renderHook(({ p }) => useClearTaskSelectionOnProjectChange(p), {
+      initialProps: { p: 4 },
+    });
+    act(() => useDashboardStore.getState().openRightSidebarTask(12));
+    act(() => useDashboardStore.getState().openSessionInWorkspace(70));
+    rerender({ p: 9 });
+    expect(selected()).toBe(12);
+    // A later move to another project still clears it.
+    rerender({ p: 4 });
+    expect(selected()).toBeNull();
   });
 });

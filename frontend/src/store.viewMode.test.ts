@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
 import { useDashboardStore } from "./store/index.js";
+import { readStoredViewMode } from "./store/helpers.js";
 
 // Issue #211's list/Kanban view switcher (ViewModeToggle.tsx) — a
 // client-only UI preference persisted via localStorage, same convention as
@@ -58,5 +59,51 @@ describe("store.showWorkspace", () => {
     useDashboardStore.getState().setActiveWorkspaceId(7);
     expect(useDashboardStore.getState().activeWorkspaceId).toBe(7);
     expect(useDashboardStore.getState().viewMode).toBe("kanban");
+  });
+});
+
+// #3009 — the two first-level modes are viewMode's two values: "list" is
+// Workspace mode, "kanban" is Tasks mode.
+describe("store modes (#3009)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useDashboardStore.setState({
+      viewMode: "list",
+      selectedTaskId: null,
+      openSessionRequest: null,
+    });
+  });
+
+  it("toggleViewMode switches Workspace to Tasks and back, persisting each", () => {
+    useDashboardStore.getState().toggleViewMode();
+    expect(useDashboardStore.getState().viewMode).toBe("kanban");
+    expect(localStorage.getItem("crs.viewMode")).toBe("kanban");
+    useDashboardStore.getState().toggleViewMode();
+    expect(useDashboardStore.getState().viewMode).toBe("list");
+    expect(localStorage.getItem("crs.viewMode")).toBe("list");
+  });
+
+  it("restores the last-used mode at start, and reads anything else as Workspace", () => {
+    localStorage.setItem("crs.viewMode", "kanban");
+    expect(readStoredViewMode()).toBe("kanban");
+    localStorage.setItem("crs.viewMode", "list");
+    expect(readStoredViewMode()).toBe("list");
+    localStorage.setItem("crs.viewMode", "board");
+    expect(readStoredViewMode()).toBe("list");
+    localStorage.removeItem("crs.viewMode");
+    expect(readStoredViewMode()).toBe("list");
+  });
+
+  it("openSessionInWorkspace switches to Workspace, opens the session and keeps the task", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    useDashboardStore.getState().openRightSidebarTask(42);
+    useDashboardStore.getState().openSessionInWorkspace(7);
+    const s = useDashboardStore.getState();
+    expect(s.viewMode).toBe("list");
+    expect(localStorage.getItem("crs.viewMode")).toBe("list");
+    expect(s.openSessionRequest?.sessionId).toBe(7);
+    expect(s.selectedTaskId).toBe(42);
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarView).toBe("tasks");
   });
 });

@@ -95,7 +95,7 @@ vi.mock("./Toolbar.js", () => ({
     notificationSheet?: boolean;
     mobileSessionSlot?: React.ReactNode;
   }) => (
-    <div>
+    <div data-testid="toolbar">
       <button
         data-testid="toggle-sidebar"
         data-notif-sheet={String(!!notificationSheet)}
@@ -103,6 +103,27 @@ vi.mock("./Toolbar.js", () => ({
       />
       {mobileSessionSlot}
     </div>
+  ),
+}));
+// From 700px the left rail holds the sidebar toggle the top bar used to (#3009).
+// Same test id, so the tier-agnostic sidebar tests find whichever one renders.
+vi.mock("./LeftRail.js", () => ({
+  LeftRail: ({
+    onToggleSidebar,
+    notificationSheet,
+    sidebarShown,
+  }: {
+    onToggleSidebar: () => void;
+    notificationSheet?: boolean;
+    sidebarShown: boolean;
+  }) => (
+    <nav data-testid="left-rail" data-sidebar-shown={String(sidebarShown)}>
+      <button
+        data-testid="toggle-sidebar"
+        data-notif-sheet={String(!!notificationSheet)}
+        onClick={onToggleSidebar}
+      />
+    </nav>
   ),
 }));
 vi.mock("./MobileKeyBar.js", () => ({ MobileKeyBar: () => null }));
@@ -323,11 +344,11 @@ describe("App tier wiring", () => {
     expect(screen.getByTestId("toggle-sidebar")).toHaveAttribute("data-notif-sheet", expected);
   });
 
-  // The session picker takes over the toolbar centre on every compact tier;
-  // only tablet (where workspaces exist) labels it with the workspace name.
+  // The session picker lives in the phone's top bar; from 700px there is no
+  // top bar (#3009), so no picker either.
   it.each([
     ["phone", true],
-    ["tablet", true],
+    ["tablet", false],
     ["desktop", false],
   ] as const)("renders the session picker on %s: %s", (tier, expected) => {
     stubWidth(tier);
@@ -366,11 +387,12 @@ describe("App tier wiring", () => {
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
   });
 
-  // Tasks: the grid overlay is desktop-only; compact tiers keep the board in
-  // the navigator, which widens (nav-tasks) while it's showing.
+  // Tasks mode: from 700px the board is the grid overlay (#3009); the phone
+  // keeps the board in the navigator, which widens (nav-tasks) while it's
+  // showing.
   it.each([
     ["desktop", true, false],
-    ["tablet", false, true],
+    ["tablet", true, false],
     ["phone", false, true],
   ] as const)("Tasks view on %s: overlay=%s, nav-tasks class=%s", (tier, overlay, navTasks) => {
     stubWidth(tier);
@@ -379,6 +401,76 @@ describe("App tier wiring", () => {
     expect(!!screen.queryByTestId("kanban-overlay")).toBe(overlay);
     expect(container.querySelector(".app")!.classList.contains("nav-tasks")).toBe(navTasks);
     useDashboardStore.setState({ viewMode: "list" });
+  });
+
+  // #3009 — the top bar is the phone's only; from 700px the left rail
+  // replaces it.
+  it.each([
+    ["phone", true, false],
+    ["tablet", false, true],
+    ["desktop", false, true],
+  ] as const)("on %s renders the top bar: %s, the left rail: %s", (tier, bar, rail) => {
+    stubWidth(tier);
+    render(<App />);
+    expect(!!screen.queryByTestId("toolbar")).toBe(bar);
+    expect(!!screen.queryByTestId("left-rail")).toBe(rail);
+  });
+
+  it("marks the mode on the shell and drops the Dock in Tasks mode from 700px", () => {
+    stubWidth("desktop");
+    const { container } = render(<App />);
+    const app = container.querySelector(".app")!;
+    expect(app.getAttribute("data-mode")).toBe("workspace");
+    expect(dockHarness.props).not.toBeNull();
+    dockHarness.props = null;
+    act(() => useDashboardStore.setState({ viewMode: "kanban" }));
+    expect(app.getAttribute("data-mode")).toBe("tasks");
+    expect(dockHarness.props).toBeNull();
+    act(() => useDashboardStore.setState({ viewMode: "list" }));
+  });
+
+  it("keeps the Dock on the phone in Tasks mode", () => {
+    stubWidth("phone");
+    dockHarness.props = null;
+    useDashboardStore.setState({ viewMode: "kanban" });
+    render(<App />);
+    expect(dockHarness.props).not.toBeNull();
+    useDashboardStore.setState({ viewMode: "list" });
+  });
+
+  it("closes the tablet drawer when Tasks mode starts from anywhere", () => {
+    stubWidth("tablet");
+    const { container } = render(<App />);
+    const app = container.querySelector(".app")!;
+    fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    expect(app.classList.contains("sb-open")).toBe(true);
+    expect(screen.getByTestId("left-rail")).toHaveAttribute("data-sidebar-shown", "true");
+    act(() => useDashboardStore.getState().setViewMode("kanban"));
+    expect(app.classList.contains("sb-open")).toBe(false);
+    act(() => useDashboardStore.getState().setViewMode("list"));
+  });
+
+  it("does not let the tablet drawer be swiped open in Tasks mode", () => {
+    stubWidth("tablet");
+    useDashboardStore.setState({ viewMode: "kanban" });
+    vi.mocked(attachSidebarSwipeGesture).mockClear();
+    render(<App />);
+    expect(attachSidebarSwipeGesture).not.toHaveBeenCalled();
+    act(() => useDashboardStore.getState().setViewMode("list"));
+    expect(attachSidebarSwipeGesture).toHaveBeenCalled();
+  });
+
+  it("tells the rail whether the docked sidebar shows on desktop", () => {
+    stubWidth("desktop");
+    useDashboardStore.setState({ sidebarCollapsed: false });
+    render(<App />);
+    const rail = screen.getByTestId("left-rail");
+    expect(rail).toHaveAttribute("data-sidebar-shown", "true");
+    act(() => {
+      fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    });
+    expect(rail).toHaveAttribute("data-sidebar-shown", "false");
+    act(() => useDashboardStore.setState({ sidebarCollapsed: false }));
   });
 
   it("collapses (rather than opens) the docked sidebar on desktop", () => {
