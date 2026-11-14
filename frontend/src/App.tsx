@@ -13,6 +13,7 @@ import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
+import { LeftRail } from "./LeftRail.js";
 import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
@@ -456,6 +457,7 @@ export function App() {
     openSettings,
     openGlobalLauncher,
     rightSidebarEnabled: !isMobile,
+    modeSwitchEnabled: !isMobile,
   });
 
   // Check for updates on mount and re-check every 30 minutes.
@@ -866,15 +868,26 @@ export function App() {
   // Drop a stale open drawer when leaving the compact tier. Extracted to
   // useSidebarOpenTierReset; called here, where the effect was — before
   // usePhoneBackStack / usePhoneTasksNavigator.
-  useSidebarOpenTierReset({ compact, setSidebarOpen });
+  // Tasks mode from 700px (#3009): the board takes the grid and the left
+  // sidebar is hidden, so the tablet drawer is closed and cannot be swiped open.
+  const boardOverGrid = !isMobile && viewMode === "kanban";
+  useSidebarOpenTierReset({ compact, boardOverGrid, setSidebarOpen });
   // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
   usePhoneBackStack(compact && sidebarOpen, () => setSidebarOpen(false));
-  usePhoneTasksNavigator({ compact, viewMode, sidebarOpen, setSidebarOpen });
+  // Phone only: from 700px Tasks mode is the board over the grid, not the
+  // navigator's Tasks tab (#3009).
+  usePhoneTasksNavigator({ compact: isMobile, viewMode, sidebarOpen, setSidebarOpen });
   // Edge-swipe to open/dismiss the compact sidebar. Extracted to
   // useSidebarSwipe; called here, where the effect was.
-  useSidebarSwipe({ compact, sidebarOpen, setSidebarOpen, appBodyRef, sidebarWrapperRef });
+  useSidebarSwipe({
+    compact: compact && !boardOverGrid,
+    sidebarOpen,
+    setSidebarOpen,
+    appBodyRef,
+    sidebarWrapperRef,
+  });
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct
@@ -1095,12 +1108,13 @@ export function App() {
     />
   );
 
-  // Phone/tablet session switcher — rendered into the toolbar in place of the old
-  // `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
-  const mobileSessionSwitcher = compact ? (
+  // Phone session switcher — rendered into the phone's top bar in place of the
+  // old `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
+  // From 700px there is no top bar (#3009): sessions are switched from the
+  // sidebar's list (the tablet drawer), and the rail's open panes come later.
+  const mobileSessionSwitcher = isMobile ? (
     <MobileSessionBar
       tier={layoutTier}
-      contextLabel={isMobile ? undefined : activeWorkspace?.name}
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
@@ -1116,11 +1130,14 @@ export function App() {
     <div
       data-tier={layoutTier}
       data-band={layoutBand}
+      // Workspace or Tasks (#3009); left-rail.css hides the left sidebar in
+      // Tasks mode from 700px.
+      data-mode={viewMode === "kanban" ? "tasks" : "workspace"}
       className={themeClassName(
         theme,
         "app",
         sidebarOpen && "sb-open",
-        compact && viewMode === "kanban" && "nav-tasks",
+        isMobile && viewMode === "kanban" && "nav-tasks",
         sidebarCollapsed && "sidebar-collapsed",
         sidebarResizing && "sidebar-resizing",
         settings.sidebarDensity === "compact" && "density-compact",
@@ -1136,21 +1153,41 @@ export function App() {
           every surface's failure has somewhere to land — including ones
           rendered inside a modal or a panel further down. */}
       <ToastHost />
-      <Toolbar
-        onToggleSidebar={toggleSidebar}
-        onOpenSession={onOpenSession}
-        onOpenTimeline={onOpenTimeline}
-        onOpenBrowser={onOpenBrowser}
-        onOpenLauncher={openGlobalLauncher}
-        onOpenSettings={openSettings}
-        activeWorkspaceName={activeWorkspace?.name ?? null}
-        paneCount={paneCount}
-        currentVersion={currentVersion}
-        mobileSessionSlot={mobileSessionSwitcher}
-        phone={isMobile}
-        notificationSheet={compact && isCoarsePointer}
-      />
+      {/* The top bar is the phone's only (#3009). From 700px its controls
+          live on the left rail below: the board toggle is the mode switch,
+          the command box, bell and settings are the rail's bottom cluster,
+          the sidebar toggle sits under the mode switch, New session is the
+          command box (the palette it opened is the one ⌘K opens) and each
+          sidebar project's "+", and the theme is in Settings → Appearance.
+          The top bar's version label is in Settings → Server. */}
+      {isMobile && (
+        <Toolbar
+          onToggleSidebar={toggleSidebar}
+          onOpenSession={onOpenSession}
+          onOpenTimeline={onOpenTimeline}
+          onOpenBrowser={onOpenBrowser}
+          onOpenLauncher={openGlobalLauncher}
+          onOpenSettings={openSettings}
+          activeWorkspaceName={activeWorkspace?.name ?? null}
+          paneCount={paneCount}
+          currentVersion={currentVersion}
+          mobileSessionSlot={mobileSessionSwitcher}
+          phone
+        />
+      )}
       <div className="app-body" ref={appBodyRef}>
+        {!isMobile && (
+          <LeftRail
+            onToggleSidebar={toggleSidebar}
+            sidebarShown={compact ? sidebarOpen : !sidebarCollapsed}
+            onOpenLauncher={openGlobalLauncher}
+            onOpenSettings={openSettings}
+            onOpenSession={onOpenSession}
+            onOpenTimeline={onOpenTimeline}
+            onOpenBrowser={onOpenBrowser}
+            notificationSheet={compact && isCoarsePointer}
+          />
+        )}
         <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
         <div
           className="sidebar-wrapper cmux-scroll"
@@ -1451,26 +1488,30 @@ export function App() {
                   not a conditionally-mounted replacement" reasoning as the
                   empty grid dropzone above: dockview's own API instance (and
                   every open panel) stays alive underneath while viewMode is
-                  "kanban", so leaving Tasks via Toolbar.tsx's own "Back to
-                  workspace" button restores exactly what was there before.
-                  Tasks is a top-level destination, not a workspace view mode
-                  — entering it now only happens from Sidebar.tsx's own
-                  entry or the command palette, not a toggle that implied it
-                  was a peer of the tiled workspace grid. Desktop/tablet only:
-                  on phone the board renders inside the navigator's Tasks tab
-                  instead (PhoneNavigatorPanel). */}
-              {viewMode === "kanban" && !compact && (
+                  "kanban", so switching back to Workspace restores exactly
+                  what was there before. This is Tasks mode (#3009), entered
+                  from the left rail's mode switch, its shortcut, Sidebar.tsx's
+                  own entry or the command palette. From 700px only: on phone
+                  the board renders inside the navigator's Tasks tab instead
+                  (PhoneNavigatorPanel). */}
+              {viewMode === "kanban" && !isMobile && (
                 <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
               )}
             </div>
-            <Dock
-              workspaceProjectIds={scopedWorkspaceProjectIds}
-              onOpenGitHub={onOpenGitHub}
-              onOpenBrowser={onOpenBrowser}
-              onOpenBlankBrowser={onOpenBlankBrowser}
-              onManagePreviews={(id) => onOpenDockConfig(id, "previews")}
-              onOpenSession={onOpenSession}
-            />
+            {/* Not in Tasks mode from 700px (#3009): the board takes the
+                grid area full height. Unmounted rather than hidden so its
+                monitors are not fitted to an empty box; its rows and
+                heights are persisted, so it comes back as it was. */}
+            {(isMobile || viewMode !== "kanban") && (
+              <Dock
+                workspaceProjectIds={scopedWorkspaceProjectIds}
+                onOpenGitHub={onOpenGitHub}
+                onOpenBrowser={onOpenBrowser}
+                onOpenBlankBrowser={onOpenBlankBrowser}
+                onManagePreviews={(id) => onOpenDockConfig(id, "previews")}
+                onOpenSession={onOpenSession}
+              />
+            )}
             {/* Mobile UI/UX overhaul, item C.2 — last child of
                 .grid-area-body (a flex column), so it sits at the bottom of
                 the already-`bottom: var(--kb-inset)`-shrunk .app shell —

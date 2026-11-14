@@ -4,15 +4,15 @@
 .cmux-scrim {
   display: none;
   position: fixed;
-  /* Issue #87 — matches .toolbar's own inset-aware height (base rule
-     above): a bare 44px here would paint the scrim over the toolbar's
-     lower safe-area-inset-top region on a notched device, and its top edge
-     would no longer align with .sidebar-wrapper's own matching top offset.
-     `--shell-top` (issue #1387, tablet.css) follows .app's own top down
+  /* Issue #87 — starts under the phone's top bar, inset-aware, and from
+     700px under nothing but the top safe-area inset (`--shell-bar-h`,
+     app-shell.css, #3009), so its top edge always lines up with
+     .sidebar-wrapper's own matching top offset. `--shell-top` (issue #1387, tablet.css) follows .app's own top down
      when iOS pans the visual viewport with the keyboard open; 0px
      otherwise. */
-  top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
-  left: 0;
+  top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
+  /* Clear of the left rail from 700px (#3009), so the rail stays usable. */
+  left: var(--left-rail-w, 0px);
   right: 0;
   bottom: 0;
   /* Fallback declaration first, unconditionally: a browser with no
@@ -58,17 +58,17 @@
 :where(.app[data-tier="phone"], .app[data-tier="tablet"]) {
   .sidebar-wrapper {
     position: fixed !important;
-    /* Matches .toolbar's own inset-aware height (its base rule, near the
-       top of toolbar.css) — a bare 44px here would let the drawer start
-       under the (now taller, on a notched device) toolbar. */
-    top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
-    left: 0;
+    /* Under the phone's top bar (inset-aware), or from 700px under only the
+       top safe-area inset, beside the left rail (#3009). */
+    top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
+    left: var(--left-rail-w, 0px);
     bottom: 0;
     width: min(310px, 84vw) !important;
     padding-left: env(safe-area-inset-left);
     padding-bottom: env(safe-area-inset-bottom);
     z-index: 45;
-    transform: translateX(-101%);
+    /* Past the rail too, so the closing slide never paints over it. */
+    transform: translateX(calc(-101% - var(--left-rail-w, 0px)));
     /* The closed drawer is off-screen but not inert in browsers without
        `inert` support (Safari < 15.5), so its session rows, filter input
        and kebab menus would still be tabbable and still be read by a

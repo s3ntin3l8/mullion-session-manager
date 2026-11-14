@@ -8,6 +8,7 @@ import {
   RIGHT_SIDEBAR_SHORTCUT,
   GIT_VIEW_SHORTCUT,
   GITHUB_VIEW_SHORTCUT,
+  MODE_SWITCH_SHORTCUT,
   VOICE_SHORTCUT,
 } from "./shortcutCatalog.js";
 
@@ -180,7 +181,8 @@ export function attachKeyConflictHandler(opts: {
       if (
         matchShortcut(RIGHT_SIDEBAR_SHORTCUT, event) ||
         matchShortcut(GIT_VIEW_SHORTCUT, event) ||
-        matchShortcut(GITHUB_VIEW_SHORTCUT, event)
+        matchShortcut(GITHUB_VIEW_SHORTCUT, event) ||
+        matchShortcut(MODE_SWITCH_SHORTCUT, event)
       ) {
         return false;
       }

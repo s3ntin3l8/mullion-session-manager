@@ -159,7 +159,7 @@ describe("PhoneNavigatorPanel", () => {
     expect(screen.queryByText("WORKSPACES")).toBeNull();
   });
 
-  it("asks the board for two columns on tablet and one on phone", () => {
+  it("keeps the board out of the tablet drawer: Tasks mode is the grid overlay (#3009)", () => {
     useDashboardStore.getState().setViewMode("kanban");
     const { unmount } = render(
       <PhoneNavigatorPanel
@@ -174,7 +174,8 @@ describe("PhoneNavigatorPanel", () => {
         tablet
       />,
     );
-    expect(screen.getByText("BOARD")).toHaveAttribute("data-cols", "2");
+    expect(screen.queryByText("BOARD")).toBeNull();
+    expect(screen.getByText("S")).toBeInTheDocument();
     unmount();
     panel();
     expect(screen.getByText("BOARD")).toHaveAttribute("data-cols", "1");

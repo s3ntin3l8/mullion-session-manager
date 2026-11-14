@@ -12,10 +12,17 @@ import { APP_SHORTCUTS, matchShortcut } from "../lib/shortcutCatalog.js";
 const clearSplitRequest = vi.fn();
 const toggleRightSidebar = vi.fn();
 const toggleRightSidebarView = vi.fn();
+const toggleViewMode = vi.fn();
 let viewMode: string = "list";
 
 function storeState() {
-  return { clearSplitRequest, toggleRightSidebar, toggleRightSidebarView, viewMode };
+  return {
+    clearSplitRequest,
+    toggleRightSidebar,
+    toggleRightSidebarView,
+    toggleViewMode,
+    viewMode,
+  };
 }
 
 vi.mock("../store/index.js", () => {
@@ -53,6 +60,7 @@ function renderShortcuts(overrides: Partial<ShortcutArgs> = {}) {
       openSettings,
       openGlobalLauncher,
       rightSidebarEnabled: overrides.rightSidebarEnabled ?? true,
+      modeSwitchEnabled: overrides.modeSwitchEnabled ?? true,
     }),
   );
   return { setPalette, setSettingsOpen, openSettings, openGlobalLauncher, ...hook };
@@ -266,6 +274,7 @@ describe("useGlobalShortcuts", () => {
           openSettings: vi.fn(),
           openGlobalLauncher,
           rightSidebarEnabled: true,
+          modeSwitchEnabled: true,
         }),
       { initialProps: { openGlobalLauncher: openGlobalLauncher1 } },
     );
@@ -302,6 +311,7 @@ describe("useGlobalShortcuts", () => {
       "right-sidebar": { key: "∫", code: "KeyB", metaKey: true, altKey: true },
       "git-view": { key: "©", code: "KeyG", metaKey: true, altKey: true },
       "github-view": { key: "˙", code: "KeyH", ctrlKey: true, altKey: true },
+      "mode-switch": { key: "ø", code: "KeyO", metaKey: true, altKey: true },
       dismiss: { key: "Escape" },
     };
     expect(APP_SHORTCUTS.map((shortcut) => shortcut.id).sort()).toEqual(
@@ -317,7 +327,23 @@ describe("useGlobalShortcuts", () => {
     expect(openSettings).toHaveBeenCalledTimes(1);
     expect(toggleRightSidebar).toHaveBeenCalledTimes(1);
     expect(toggleRightSidebarView.mock.calls).toEqual([["git"], ["github"]]);
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
     expect(clearSplitRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl/Cmd+Alt+O switches mode, but not bare Alt+O or on the phone (#3009)", () => {
+    const { unmount } = renderShortcuts();
+    const o = dispatchKeyDown({ key: "o", code: "KeyO", ctrlKey: true, altKey: true });
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
+    expect(o.defaultPrevented).toBe(true);
+    dispatchKeyDown({ key: "ø", code: "KeyO", altKey: true });
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
+    unmount();
+
+    renderShortcuts({ modeSwitchEnabled: false });
+    const phone = dispatchKeyDown({ key: "o", code: "KeyO", ctrlKey: true, altKey: true });
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
+    expect(phone.defaultPrevented).toBe(false);
   });
 
   it("Ctrl/Cmd+Alt+G and +H open the Git and GitHub sidebar views, matched on the physical key", () => {
