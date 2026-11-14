@@ -96,11 +96,13 @@ export interface TerminalPrefs {
 }
 
 // Issue #3013 — an open New session launcher (SessionLauncher.tsx). `target`
-// is where the session should land; today only the fold's two halves give it
-// a meaning (a later slice acts on it), so the launcher stores and passes it
-// through without acting on it. Null while the launcher is closed.
+// is where the session should land: `projectId` preselects the project (a
+// sidebar project's "+"); `half` is the fold's left or right half, which a
+// later slice acts on — until then it is stored and passed through only.
+// Null while the launcher is closed.
 export interface LauncherTarget {
   half?: "left" | "right";
+  projectId?: number;
 }
 
 export interface LauncherRequest {

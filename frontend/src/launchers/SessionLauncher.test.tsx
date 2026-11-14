@@ -563,6 +563,17 @@ describe("SessionLauncher — keyboard", () => {
     expect(trigger).not.toHaveFocus();
   });
 
+  it("a project's + preselects that project, which stays changeable", async () => {
+    stubFetch({ launchersByProject: { [PROJECT.id]: [CLAUDE], [OTHER.id]: [CODEX] } });
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ projectId: OTHER.id }));
+
+    expect(await screen.findByRole("radio", { name: "codex" })).toBeInTheDocument();
+    const project = screen.getByRole("combobox", { name: "Project" });
+    expect(project).toHaveValue(String(OTHER.id));
+    expect(project).toBeEnabled();
+  });
+
   it("switching the project reloads that project's launchers", async () => {
     stubFetch({ launchersByProject: { [PROJECT.id]: [CLAUDE], [OTHER.id]: [CODEX] } });
     const user = userEvent.setup();

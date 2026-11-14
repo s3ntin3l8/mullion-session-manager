@@ -3,11 +3,13 @@
 Two surfaces start a session, and they send exactly the same request for the
 same choices (`frontend/src/launchers/useSessionLaunch.ts`):
 
-- **The New session launcher** — the "+" button (and "New session" in the
-  toolbar menu and the phone's session switcher). It only launches.
-- **The command palette** (⌘K / Ctrl+K) — commands, sessions and workspaces,
-  plus every launcher by typing its name. A project row's own "+ session" and a
-  pane's split action still open the palette scoped to that project.
+- **The New session launcher** — it only launches. It opens from a sidebar
+  project's "+" (with that project preselected, still changeable), the
+  sidebar's "Launch a session" when a workspace is empty, and on the phone the
+  top bar's "+" and the session switcher's "New session".
+- **The command palette** (⌘K / Ctrl+K, and the left rail's command box) —
+  commands, sessions and workspaces, plus every launcher by typing its name. A
+  pane's split action still opens the palette scoped to that pane's project.
 
 ## The launcher
 

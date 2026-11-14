@@ -152,6 +152,7 @@ function LauncherDialog({
     >
       <LauncherNewSession
         coarse={false}
+        initialProjectId={request.target?.projectId ?? null}
         filterRef={filterRef}
         onLaunched={(session) => {
           finishOpen(request.seq, suppressRestoreRef);
@@ -258,6 +259,7 @@ function LauncherSheet({
             // A fresh body per open: the sheet itself stays mounted.
             key={request.seq}
             coarse
+            initialProjectId={request.target?.projectId ?? null}
             onLaunched={(session) => {
               finishOpen(request.seq, suppressRestoreRef);
               onLaunched(session, target);
@@ -289,10 +291,14 @@ function LauncherSheet({
 // The New session choices — the same in the dialog and in the sheet.
 function LauncherNewSession({
   coarse,
+  initialProjectId,
   filterRef,
   onLaunched,
 }: {
   coarse: boolean;
+  // A project to preselect (a sidebar project's "+"); null picks the usual
+  // default (the focused pane's project, then the last launched into).
+  initialProjectId: number | null;
   filterRef?: MutableRefObject<HTMLInputElement | null>;
   onLaunched: (session: Session) => void;
 }) {
@@ -305,12 +311,15 @@ function LauncherNewSession({
       theme: s.theme,
     })),
   );
-  // Always a global open: the launcher has no project-scoped entry yet (a
-  // project row's "+ session" and a pane split still open the palette).
+  // The project stays changeable either way: a preselected project is a
+  // starting point, not a binding (unlike the palette's project scope).
   const [projectId, setProjectId] = useState<number | null>(() =>
     resolveInitialLaunchProjectId({
-      scope: "global",
-      projectId: null,
+      scope:
+        initialProjectId !== null && projects.some((p) => p.id === initialProjectId)
+          ? "project"
+          : "global",
+      projectId: initialProjectId,
       activePanelId,
       sessions,
       projects,

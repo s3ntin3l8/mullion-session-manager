@@ -738,9 +738,15 @@ export function App() {
     [dockviewApi],
   );
 
+  // Issue #3013 — New session controls open the launcher (⌘K and the command
+  // box stay the palette). A sidebar project's "+" preselects its project.
   const openProjectLauncher = useCallback((projectId: number) => {
     if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
-    setPalette({ open: true, scope: "project", projectId });
+    useDashboardStore.getState().openLauncher({ projectId });
+  }, []);
+  const openNewSessionLauncher = useCallback(() => {
+    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
+    useDashboardStore.getState().openLauncher();
   }, []);
 
   // A split-right/split-down click (PaneHeaderActions.tsx) signals intent
@@ -1100,7 +1106,7 @@ export function App() {
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
       onOpenProjectLauncher={openProjectLauncher}
-      onOpenGlobalLauncher={openGlobalLauncher}
+      onOpenGlobalLauncher={openNewSessionLauncher}
       onOpenSettingsProjects={() => openSettings("projects")}
       onOpenTasks={onOpenTasks}
       onOpenGit={onOpenGit}
@@ -1119,7 +1125,7 @@ export function App() {
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
-      onNewSession={() => useDashboardStore.getState().openLauncher()}
+      onNewSession={openNewSessionLauncher}
       onOpenSession={onOpenSession}
       // Issue #1882 — the phone tier has no workspace switcher, so a picker
       // row that names another workspace is the way back to it.
@@ -1157,9 +1163,9 @@ export function App() {
       {/* The top bar is the phone's only (#3009). From 700px its controls
           live on the left rail below: the board toggle is the mode switch,
           the command box, bell and settings are the rail's bottom cluster,
-          the sidebar toggle sits under the mode switch, New session is the
-          command box (the palette it opened is the one ⌘K opens) and each
-          sidebar project's "+", and the theme is in Settings → Appearance.
+          the sidebar toggle sits under the mode switch, New session is each
+          sidebar project's "+" (the launcher, #3013) and the command box (the
+          ⌘K palette), and the theme is in Settings → Appearance.
           The top bar's version label is in Settings → Server. */}
       {isMobile && (
         <Toolbar
