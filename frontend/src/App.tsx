@@ -1245,7 +1245,15 @@ export function App() {
         )}
         {/* The phone has no drawer (#3014): Projects is the top bar's
             session picker, Tasks the mode bar, Devices and Settings the mode
-            bar's "more" sheet. */}
+            bar's "more" sheet. The sidebar still mounts, hidden, as it did
+            inside the closed drawer: its mount loads projects, sessions,
+            hosts and tasks, and it owns each project's live GitHub
+            subscription, which the picker and the "more" views rely on. */}
+        {isMobile && (
+          <div className="phone-sidebar-host" hidden inert>
+            {sidebar}
+          </div>
+        )}
         {!isMobile && (
           <>
             <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />

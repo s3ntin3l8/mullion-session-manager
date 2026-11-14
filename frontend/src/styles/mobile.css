@@ -898,3 +898,14 @@
   border-color: var(--accent-solid);
   background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
 }
+/* A short detail still puts its actions at the bottom edge. */
+.right-sidebar-panel.phone .right-sidebar-body:has(> .tasks-detail) {
+  display: flex;
+  flex-direction: column;
+}
+.right-sidebar-panel.phone .right-sidebar-body > .tasks-detail {
+  flex: 1 0 auto;
+}
+.right-sidebar-panel.phone .tasks-detail > .sb-actions-block {
+  margin-top: auto;
+}

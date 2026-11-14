@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
@@ -212,6 +212,22 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
     else if (enteredAtDetail && key === null) close();
   }, [phoneOpen, openedAt, viewMode, enteredAtDetail, key, close]);
 
+  // An action that opens a pane (a device, a file, the full Git panel) leaves
+  // the phone's full screen first, or the pane would open behind it.
+  const phoneActions = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(actions).map(([name, fn]) => [
+          name,
+          (...args: unknown[]) => {
+            close();
+            (fn as (...a: unknown[]) => void)(...args);
+          },
+        ]),
+      ) as unknown as RightSidebarActions,
+    [actions, close],
+  );
+
   if (phone) {
     if (!phoneOpen) return null;
     return (
@@ -225,7 +241,7 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
         <RightSidebarPanel
           view={view}
           followed={followed}
-          actions={actions}
+          actions={phoneActions}
           onClose={close}
           phone
           title={VIEW_TITLES[view.id as keyof typeof VIEW_TITLES] ?? view.label}

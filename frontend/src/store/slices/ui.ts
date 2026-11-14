@@ -507,7 +507,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     setViewMode: (value) => {
       writeString(STORAGE_KEYS.viewMode, value);
-      set({ viewMode: value, crossLinkReturn: null });
+      // Only a real switch forgets a cross-link: opening the session it asked
+      // for calls this again with "list" (usePanelOpener's leaveTaskView).
+      set((s) => ({
+        viewMode: value,
+        crossLinkReturn: s.viewMode === value ? s.crossLinkReturn : null,
+      }));
     },
 
     toggleViewMode: () => {

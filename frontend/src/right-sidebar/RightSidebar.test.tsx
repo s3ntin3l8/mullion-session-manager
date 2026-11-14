@@ -648,6 +648,27 @@ describe("RightSidebar on the phone", () => {
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
+  it("back from a PR in the GitHub view returns to its list, then closes the view", () => {
+    renderSidebar("phone");
+    open("github");
+    act(() => useDashboardStore.getState().setGithubOpenPr(1, 5));
+    expect(useDashboardStore.getState().githubOpenPrByProject[1]).toBe(5);
+    popBack();
+    expect(useDashboardStore.getState().githubOpenPrByProject[1] ?? null).toBeNull();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("an action that opens a pane leaves the full screen first, in Workspace mode too", async () => {
+    renderSidebar("phone");
+    open("github");
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open GitHub panel" }));
+    expect(actions.onOpenGitHub).toHaveBeenCalledWith(1);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
   it("a task opened from the board is a full screen whose back returns to the board", () => {
     useDashboardStore.setState({ viewMode: "kanban" });
     renderSidebar("phone");

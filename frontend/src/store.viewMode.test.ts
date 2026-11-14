@@ -121,9 +121,18 @@ describe("store modes (#3009)", () => {
     expect(useDashboardStore.getState().crossLinkReturn).toBeNull();
   });
 
+  it("keeps the cross-link while the session it opened lands (setViewMode to the same mode)", () => {
+    useDashboardStore.setState({ viewMode: "kanban", crossLinkReturn: null });
+    useDashboardStore.getState().openRightSidebarTask(42);
+    useDashboardStore.getState().openSessionInWorkspace(7);
+    // usePanelOpener's onOpenSession leaves Task view first, i.e. "list" again.
+    useDashboardStore.getState().setViewMode("list");
+    expect(useDashboardStore.getState().crossLinkReturn).toEqual({ taskId: 42 });
+  });
+
   it("forgets the cross-link on any other mode change", () => {
     useDashboardStore.setState({ viewMode: "list", crossLinkReturn: { taskId: 1 } });
-    useDashboardStore.getState().setViewMode("list");
+    useDashboardStore.getState().setViewMode("kanban");
     expect(useDashboardStore.getState().crossLinkReturn).toBeNull();
   });
 
@@ -142,6 +151,7 @@ describe("store modes (#3009)", () => {
     useDashboardStore.getState().setViewMode("list");
     useDashboardStore.getState().returnFromCrossLink();
     expect(useDashboardStore.getState().viewMode).toBe("list");
+    expect(useDashboardStore.getState().crossLinkReturn).toBeNull();
   });
 
   it("returnFromCrossLink with no task only switches the mode", () => {

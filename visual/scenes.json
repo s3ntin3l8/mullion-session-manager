@@ -259,7 +259,7 @@
           "wait": 800
         },
         {
-          "click": ".mobile-session-row:has-text(\"mobile-demo.sh\")"
+          "click": ".mobile-session-row:has-text(\"mobile demo\")"
         }
       ],
       "settle": ".xterm-screen",
@@ -280,7 +280,7 @@
           "wait": 800
         },
         {
-          "click": ".mobile-session-row:has-text(\"mobile-demo.sh\")"
+          "click": ".mobile-session-row:has-text(\"mobile demo\")"
         }
       ],
       "settle": ".xterm-screen",

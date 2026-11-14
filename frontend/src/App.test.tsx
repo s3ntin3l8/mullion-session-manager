@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { LayoutMode, Session } from "./api/index.js";
 
 // Set by the pane-cap test before render. Null keeps every other test on the
@@ -341,6 +341,11 @@ describe("App tier wiring", () => {
     vi.mocked(attachSidebarSwipeGesture).mockClear();
     const { container } = render(<App />);
     expect(container.querySelector(".sidebar-wrapper")).toBeNull();
+    // The sidebar still mounts, hidden, for its data loading and subscriptions.
+    const host = container.querySelector(".phone-sidebar-host")!;
+    expect(host).toHaveAttribute("hidden");
+    expect(host.hasAttribute("inert")).toBe(true);
+    expect(within(host as HTMLElement).getByTestId("sidebar")).toBeInTheDocument();
     expect(container.querySelector(".cmux-scrim")).toBeNull();
     expect(screen.queryByTestId("toggle-sidebar")).toBeNull();
     expect(screen.queryByTestId("navigator")).toBeNull();
