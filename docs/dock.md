@@ -628,7 +628,9 @@ The view shows the project the right sidebar follows:
 The view leaves out the bottom Dock's GitHub row and its **Preview ▾**
 shortcut: GitHub and Browser are right-rail views of their own. It does not
 run "Auto-attach Docker logs"; the bottom Dock does, and the two can be on
-screen together with a mouse at these widths.
+screen together with a mouse at these widths. On a touch screen the bottom Dock is not
+mounted, so the setting has no effect there yet (#3031), and the view cannot
+yet turn a service's log stream off.
 
 **The log is read only.** The bottom Dock is not mounted under a touch
 pointer, because the mobile key bar sends input by session and cannot tell a

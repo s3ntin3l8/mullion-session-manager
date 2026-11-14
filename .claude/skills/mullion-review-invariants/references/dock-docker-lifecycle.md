@@ -10,7 +10,9 @@ Verified against `origin/main` 2731ea21; code is cited by symbol, not line.
 **Invariant.** Discovery is driven by `docker ps -a`, so a compose recreate
 drops a service from a poll or two. `holdVanishedDockerControls` re-inserts
 vanished docker controls for `RECREATE_GRACE_MS`. It runs in the render body of
-`frontend/src/dock/DockProjectGroup.tsx` from state-held previous values, never a
+`frontend/src/dock/useDockProject.ts` (the data layer the bottom Dock's
+`DockProjectGroup` and the right sidebar's `DockSidebarView` share) from
+state-held previous values, never a
 ref and never an effect, because an effect commits after the group has already
 unmounted. Held rows are inert in `frontend/src/dock/DockMonitor.tsx`
 (`aria-disabled`, no menu, no click handler): the backend cannot resolve their
@@ -24,6 +26,10 @@ actions on a vanished control 404; attach edges shift.
 state-backed input, the helper stays pure, and held rows stay unclickable.
 
 ## 2. Docker-logs auto-attach is edge-triggered by identity, pruned each poll
+
+The effect lives in `useDockProject` and runs only for a caller that passes
+`autoAttach: true` (the bottom Dock). Two mounted copies for one project would
+each start a log session for the same container.
 
 **Invariant.** Auto-attach fires on an eligible false-to-true edge (or a timed
 retry after failure), keyed by `dockerSessionIdentity` in

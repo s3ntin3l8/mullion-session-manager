@@ -271,6 +271,8 @@ describe("BrowserPane", () => {
         { clientX: 50, clientY: 30 },
       ],
     });
+    // Lifting one finger of the pinch does not scroll from a stale point.
+    fireEvent.touchMove(canvas, { touches: [{ clientX: 10, clientY: 0 }] });
     fireEvent.touchEnd(canvas, { touches: [] });
     // After the finger lifts, a stray move sends nothing.
     fireEvent.touchMove(canvas, { touches: [{ clientX: 10, clientY: 10 }] });

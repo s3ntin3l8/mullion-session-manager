@@ -294,7 +294,13 @@ export function BrowserPane(props: {
     };
     const onTouchMove = (event: TouchEvent) => {
       const touch = event.touches.length === 1 ? event.touches[0] : undefined;
-      if (!touch || !lastTouch) return;
+      if (!touch) {
+        // A second finger (a pinch): forget the drag, so lifting one finger
+        // does not scroll by the distance from a stale point.
+        lastTouch = null;
+        return;
+      }
+      if (!lastTouch) return;
       const rect = canvas!.getBoundingClientRect();
       const scale = rect.height > 0 ? canvas!.height / rect.height : 1;
       const deltaX = (lastTouch.x - touch.clientX) * scale;

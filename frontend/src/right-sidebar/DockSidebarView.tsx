@@ -308,7 +308,16 @@ function StackSheet({
   );
 }
 
-export function DockSidebarView({ projectId, actions }: RightSidebarViewProps) {
+// Keyed by project: the panel keeps the view mounted when the followed
+// project changes, and the Dock's state (controls, held rows, conflicts,
+// selection) belongs to one project. Without the key, the old project's rows
+// would show, and be startable, under the new project until its first fetch
+// lands, and its discovered services would be held as "recreating" rows.
+export function DockSidebarView(props: RightSidebarViewProps) {
+  return <DockSidebarViewForProject key={props.projectId} {...props} />;
+}
+
+function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps) {
   // "Open holder" on a port-in-use row opens the session that holds the port,
   // the way the other sidebar views open a session (the store's request,
   // which App turns into a pane).
@@ -329,7 +338,13 @@ export function DockSidebarView({ projectId, actions }: RightSidebarViewProps) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // The stack whose sheet is open. Kept (with `open` false) while the sheet
   // animates out, so its rows do not vanish mid-exit.
-  const [sheet, setSheet] = useState<{ composeProject: string; open: boolean } | null>(null);
+  // `opened` counts openings and keys the sheet, so an action armed in one
+  // opening (or for another stack) is never still armed in the next.
+  const [sheet, setSheet] = useState<{
+    composeProject: string;
+    open: boolean;
+    opened: number;
+  } | null>(null);
 
   // A selection whose row is gone (a stack action finished, a service went
   // away) falls back to the first running row, then the first row.
@@ -356,19 +371,23 @@ export function DockSidebarView({ projectId, actions }: RightSidebarViewProps) {
       ? selected
       : null;
   const startLogKey = startLog ? dockRowKey(startLog.control) : null;
+  // Each tap counts, so tapping the selected row again restarts a log
+  // stream that ended (a service restart ends `docker logs`).
+  const [taps, setTaps] = useState(0);
   const startedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (startLogKey === null || startedForRef.current === startLogKey) return;
-    startedForRef.current = startLogKey;
+    if (startLogKey === null) return;
+    const attempt = `${startLogKey}#${taps}`;
+    if (startedForRef.current === attempt) return;
+    startedForRef.current = attempt;
     void startLog?.start();
     // startLog is this render's view of the same row; the key is its identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startLogKey]);
+  }, [startLogKey, taps]);
 
   const select = (control: DockControl) => {
     setSelectedKey(dockRowKey(control));
-    // A fresh tap may start the log again, e.g. after its stream ended.
-    startedForRef.current = null;
+    setTaps((n) => n + 1);
   };
 
   const renderRow = (control: DockControl) => (
@@ -433,7 +452,13 @@ export function DockSidebarView({ projectId, actions }: RightSidebarViewProps) {
                     className="dock-view-stack-menu"
                     aria-label={`${group.composeProject} stack actions`}
                     aria-haspopup="dialog"
-                    onClick={() => setSheet({ composeProject: group.composeProject, open: true })}
+                    onClick={() =>
+                      setSheet((prev) => ({
+                        composeProject: group.composeProject,
+                        open: true,
+                        opened: (prev?.opened ?? 0) + 1,
+                      }))
+                    }
                   >
                     ⋯
                   </button>
@@ -476,6 +501,7 @@ export function DockSidebarView({ projectId, actions }: RightSidebarViewProps) {
         </div>
       )}
       <StackSheet
+        key={sheet?.opened ?? 0}
         open={sheet?.open === true && sheetGroup !== undefined}
         composeProject={sheet?.composeProject ?? ""}
         stack={sheetGroup ? stackActions(sheetGroup.group) : null}

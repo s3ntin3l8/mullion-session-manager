@@ -327,6 +327,39 @@ describe("DockSidebarView (#3012)", () => {
     await waitFor(() => expect(calls).toContain("stack-stop"));
   });
 
+  it("shows nothing of the previous project after a switch", async () => {
+    const view = renderView();
+    await screen.findByRole("region", { name: "Commands" });
+    // Project 2's Dock has not loaded yet.
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
+    view.rerender(<DockSidebarView projectId={2} actions={actions} />);
+    expect(screen.queryByRole("button", { name: /^dev/ })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Stack aurora-dev" })).toBeNull();
+  });
+
+  it("restarts an ended log stream when the selected service is tapped again", async () => {
+    renderView();
+    const row = await screen.findByRole("button", { name: /^api, running/ });
+    await userEvent.click(row);
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    // The stream never shows up as running (it ended); a second tap retries.
+    await userEvent.click(row);
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+  });
+
+  it("never carries an armed stack action into the next opening of the sheet", async () => {
+    renderView();
+    await userEvent.click(await screen.findByRole("button", { name: "aurora-dev stack actions" }));
+    let sheet = await screen.findByRole("dialog", { name: "aurora-dev stack actions" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Stop stack" }));
+    await userEvent.click(within(sheet).getByRole("button", { name: "Close stack actions" }));
+    await userEvent.click(screen.getByRole("button", { name: "aurora-prod stack actions" }));
+    sheet = await screen.findByRole("dialog", { name: "aurora-prod stack actions" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Stop stack" }));
+    // One tap only arms it: the other stack's armed Stop did not carry over.
+    expect(calls).not.toContain("stack-stop");
+  });
+
   it("does not run the Dock's auto-attach, nor start the row it selects by default", async () => {
     controls = [API];
     useDashboardStore.setState({
