@@ -123,6 +123,16 @@ export function TaskFilterBar({
     const count = activeFilterCount(filters, api.hideDone);
     return (
       <div className="tasks-panel-toolbar tasks-panel-toolbar--phone">
+        {/* "Needs you" is a filter on the phone, not a lane (#3014): the
+            quick view the filter sheet also offers, one tap away. */}
+        <button
+          type="button"
+          className={`tasks-phone-needs-chip${api.counts["needs-me"] > 0 ? " attention" : ""}`}
+          aria-pressed={filters.view === "needs-me"}
+          onClick={() => api.setView(filters.view === "needs-me" ? "all" : "needs-me")}
+        >
+          Needs you <span className="task-view-n">{api.counts["needs-me"]}</span>
+        </button>
         {newBtn}
         <button
           type="button"

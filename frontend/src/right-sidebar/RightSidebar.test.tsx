@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RightSidebar } from "./RightSidebar.js";
 import { COARSE_POINTER_QUERY, RIGHT_SIDEBAR_FULL_WIDTH_QUERY } from "../lib/layoutTier.js";
@@ -9,6 +10,8 @@ import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import type { GitStatus, Project } from "../api/index.js";
 import type { GitHubPrPhase } from "../api/types.js";
+import { BottomSheet } from "../ui/BottomSheet.js";
+import { makeTask } from "../test/fixtures.js";
 
 const PROJECT = { id: 1, name: "demo", cwd: "/x/demo", hostId: "local" } as Project;
 
@@ -125,7 +128,7 @@ describe("RightSidebar", () => {
     expect(writes).not.toContain(null);
   });
 
-  it("renders nothing on phone", () => {
+  it("renders nothing on phone while no view is open", () => {
     const { container } = renderSidebar("phone");
     expect(container.firstChild).toBeNull();
   });
@@ -420,6 +423,13 @@ describe("RightSidebar", () => {
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 
+  it("does not open a view at start on the phone from the docked sidebar's persisted state", () => {
+    useDashboardStore.setState({ rightSidebarOpen: true });
+    const { container } = renderSidebar("phone");
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(container.firstChild).toBeNull();
+  });
+
   it("closes the panel when the tier changes to phone, and keeps it through tablet → desktop", () => {
     useDashboardStore.setState({ rightSidebarOpen: true });
     const { rerender, container } = renderSidebar("tablet");
@@ -540,5 +550,150 @@ describe("RightSidebar", () => {
 
     expect(useDashboardStore.getState().rightSidebarWidth).toBe(390);
     expect(localStorage.getItem("crs.rightSidebarWidth")).toBe("390");
+  });
+});
+
+// #3014 — the phone has no rail: the mode bar's "more" sheet opens a view,
+// which shows full screen with a header naming it and a back control.
+describe("RightSidebar on the phone", () => {
+  const popBack = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+  const open = (view: string) => act(() => useDashboardStore.getState().openRightSidebarView(view));
+
+  beforeEach(() => {
+    resetPhoneBackStackForTests();
+    vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+    vi.spyOn(window.history, "back").mockImplementation(() => {});
+    useDashboardStore.setState({
+      viewMode: "list",
+      crossLinkReturn: null,
+      selectedTaskId: null,
+      sidebarHistory: [],
+      taskMasterEnabled: true,
+      tasks: [makeTask({ id: 7, projectId: 1, status: "in_progress", title: "Fix focus" })],
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useDashboardStore.setState({ rightSidebarOpen: false, selectedTaskId: null, tasks: [] });
+  });
+
+  it("shows an opened view full screen, named, with a back control that closes it", async () => {
+    const { container } = renderSidebar("phone");
+    open("git");
+    const panel = container.querySelector(".right-sidebar-panel.phone");
+    expect(panel).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Source Control" })).toBeInTheDocument();
+    // No rail and no close button on the phone; back is the way out.
+    expect(container.querySelector(".right-rail")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close sidebar" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("reuses the view's own component for the current session's project", () => {
+    renderSidebar("phone");
+    open("devices");
+    expect(screen.getByRole("heading", { name: "Devices" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Devices view" })).toBeInTheDocument();
+  });
+
+  it("the back gesture closes the view", () => {
+    renderSidebar("phone");
+    open("files");
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("closes a sheet, then a drill-in, then the view, in that order", () => {
+    function Sheet() {
+      const [shown, setShown] = useState(true);
+      return (
+        <BottomSheet
+          open={shown}
+          onClose={() => setShown(false)}
+          label="A sheet"
+          closeLabel="Close"
+          title="A sheet"
+          backStack
+        >
+          <p>sheet body</p>
+        </BottomSheet>
+      );
+    }
+    const { rerender } = renderSidebar("phone");
+    open("tasks");
+    // Drill in from the list: the task's detail.
+    act(() => useDashboardStore.getState().selectTask(7));
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+    // A sheet opens over it.
+    rerender(
+      <>
+        <RightSidebar tier="phone" actions={actions} />
+        <Sheet />
+      </>,
+    );
+    expect(screen.getByRole("dialog", { name: "A sheet" })).toBeInTheDocument();
+
+    popBack();
+    expect(screen.queryByRole("dialog", { name: "A sheet" })).toBeNull();
+    expect(useDashboardStore.getState().selectedTaskId).toBe(7);
+
+    popBack();
+    expect(useDashboardStore.getState().selectedTaskId).toBeNull();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(screen.queryByTestId("task-detail-view")).toBeNull();
+
+    popBack();
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("a task opened from the board is a full screen whose back returns to the board", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+    popBack();
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(false);
+    expect(state.viewMode).toBe("kanban");
+  });
+
+  it("the task's own back arrow also returns to the board, not to a task list", async () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    const { container } = renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    // The detail's header (in the header's detail slot) carries the back
+    // arrow; the view's own header row steps aside for it (right-sidebar.css).
+    const slot = container.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    await userEvent.click(within(slot).getByRole("button", { name: "Back" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+
+  it("puts the task's main actions in the block the phone pins to the bottom", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    const { container } = renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    expect(
+      container.querySelector(".right-sidebar-panel.phone .tasks-detail > .sb-actions-block"),
+    ).toBeTruthy();
+  });
+
+  it("a cross-link to a session leaves the full screen, and back returns to the task", () => {
+    useDashboardStore.setState({ viewMode: "kanban", requestOpenSession: vi.fn() });
+    renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    act(() => useDashboardStore.getState().openSessionInWorkspace(3));
+    let state = useDashboardStore.getState();
+    expect(state.viewMode).toBe("list");
+    expect(state.rightSidebarOpen).toBe(false);
+    expect(state.crossLinkReturn).toEqual({ taskId: 7 });
+    // App registers this with the back stack (App.test.tsx); here, its effect.
+    act(() => useDashboardStore.getState().returnFromCrossLink());
+    state = useDashboardStore.getState();
+    expect(state.viewMode).toBe("kanban");
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.selectedTaskId).toBe(7);
+    expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
   });
 });

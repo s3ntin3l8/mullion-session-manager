@@ -409,10 +409,10 @@ export function usePanelOpener({
 
   const onOpenTasks = useCallback(() => {
     useDashboardStore.getState().setViewMode("kanban");
-    // The phone shows the board inside the navigator, so it stays open there;
-    // from 700px Tasks mode is the grid overlay, with the drawer out of the way.
-    if (layout.tier !== "phone") setSidebarOpen(false);
-  }, [layout.tier, setSidebarOpen]);
+    // Tasks mode is the board over the grid on every tier, with the tablet's
+    // drawer out of the way (the phone has none, #3014).
+    setSidebarOpen(false);
+  }, [setSidebarOpen]);
 
   const onOpenTask = useCallback(
     (task: Task) => {

@@ -380,8 +380,17 @@ or the Dock. It's an overlay over the dockview grid, not a panel, so switching
 back to Workspace instantly restores whatever was tiled underneath. The last
 mode is remembered per device. A task's worker or reviewer pill in the
 sidebar's task detail opens that session in Workspace mode and keeps the task
-open in the sidebar. The phone keeps its top bar and its navigator's Tasks
-tab. Task status columns are the board; a task with a linked
+open in the sidebar. The phone (`#3014`) has no drawer: a mode bar at the
+bottom (Workspace, Tasks with the needs-you count, and "⋯"), hidden while the
+on-screen keyboard is up, switches modes. Its board shows one lane at a time
+(Backlog, Ready, Active, Done) under a strip naming each lane with its count;
+swipe between lanes. "Needs you" is a filter chip there, a dot marks each lane
+holding such a task, and the board opens on the first of them. A task opens
+full screen with its actions at the bottom. "⋯" lists the right sidebar's
+views, each opening full screen, then Settings. The back gesture closes a
+sheet, then a detail inside a view, then the view; it switches mode only to
+return to Tasks after a task's session pill took you to Workspace. Task
+status columns are the board; a task with a linked
 worker or review session renders that session's live status nested on its
 own card, and any session not owned by a task collects in the **ad-hoc
 sessions strip** beneath the columns (`#2845`,

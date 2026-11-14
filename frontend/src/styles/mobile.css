@@ -679,3 +679,222 @@
     font-size: 1rem;
   }
 }
+
+/* ============================================================ */
+/* Phone shell without the drawer (#3014)                        */
+/* ============================================================ */
+
+/* The mode bar: full width under the key bar, the last row of .app's column.
+   It owns the bottom safe-area inset while it shows, so the key bar and the
+   grid body drop theirs (tablet.css gives them one under a coarse pointer).
+   While the on-screen keyboard is up the bar is not rendered
+   (useKeyboardUp) and they keep their own. */
+.phone-mode-bar {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 6px max(8px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom))
+    max(8px, env(safe-area-inset-right));
+  /* A clear gap from the key bar above it, so two stacked bars do not invite
+     mis-taps (design section 4, option B). */
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 0 0 var(--bg);
+  background: var(--chrome);
+}
+:root:not([data-keyboard="up"]) .app.mode-bar .grid-area-body,
+:root:not([data-keyboard="up"]) .app.mode-bar .mobile-key-bar {
+  padding-bottom: 0;
+}
+.phone-mode-btn {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background-color var(--motion-press) var(--motion-ease-press);
+}
+.phone-mode-btn.active {
+  color: var(--fg);
+  background: var(--seg);
+}
+.phone-mode-btn.phone-mode-more {
+  flex: 0 0 56px;
+}
+.phone-mode-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.6875rem;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The "more" sheet: the phone's right rail, rows at touch size. */
+.phone-more-list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 calc(8px + env(safe-area-inset-bottom));
+}
+.phone-more-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+.phone-more-row:last-child {
+  border-bottom: 0;
+}
+.phone-more-row:active {
+  background: var(--seg);
+}
+.phone-more-label {
+  flex: 1;
+}
+.phone-more-badge {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--seg);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 18px;
+  text-align: center;
+}
+.phone-more-badge.alert {
+  min-width: 8px;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  background: var(--r);
+}
+
+/* A right-sidebar view opened from the sheet: full screen, over the top bar
+   and the mode bar, with a header row that names it and a back control. */
+.right-sidebar-panel.phone {
+  position: fixed;
+  top: var(--shell-top, 0px);
+  bottom: var(--kb-inset, 0px);
+  left: 0;
+  right: 0;
+  z-index: 47;
+  border-left: 0;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.right-sidebar-phone-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 52px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+.right-sidebar-phone-back {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.right-sidebar-phone-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+/* A detail's own header (with its back arrow) takes the row's place. */
+.right-sidebar-phone-head:has(+ .right-sidebar-header .right-sidebar-detail-slot > *) {
+  display: none;
+}
+/* A task's main actions in thumb reach: last, and pinned to the bottom edge
+   while the detail scrolls (design frame 3b). */
+.right-sidebar-panel.phone .tasks-detail {
+  display: flex;
+  flex-direction: column;
+}
+.right-sidebar-panel.phone .tasks-detail > .sb-actions-block {
+  order: 99;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+/* The lane strip (design frame 3a): lane names with counts, the lane on
+   screen underlined, a dot on each lane holding a task that needs you. */
+.app[data-tier="phone"] .tasks-phone-strip--segmented {
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip,
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip:first-child,
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip:last-child {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  gap: 4px;
+}
+.app[data-tier="phone"] .tasks-phone-strip--segmented .tasks-phone-strip-chip[aria-pressed="true"] {
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent-solid);
+}
+.tasks-phone-strip-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--y);
+}
+.tasks-phone-needs-chip {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.tasks-phone-needs-chip.attention {
+  color: var(--fg);
+}
+.tasks-phone-needs-chip[aria-pressed="true"] {
+  color: var(--fg);
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
+}

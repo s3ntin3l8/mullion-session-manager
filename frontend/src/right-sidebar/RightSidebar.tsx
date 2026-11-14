@@ -9,11 +9,14 @@ import {
   useCoarsePointer,
 } from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
+import { goSidebarBack } from "../sidebarBack.js";
 import { useDashboardStore } from "../store/index.js";
+import type { SidebarBack, ViewMode } from "../store/types.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "../store/constants.js";
 import { RightRail } from "./RightRail.js";
 import { RightSidebarPanel } from "./RightSidebarPanel.js";
 import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
+import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarActions } from "./views.js";
 
 export interface RightSidebarProps {
@@ -31,13 +34,62 @@ function subscribeFullWidth(onChange: () => void): () => void {
 }
 const readFullWidth = (): boolean => window.matchMedia(RIGHT_SIDEBAR_FULL_WIDTH_QUERY).matches;
 
+// One slot in the phone's back stack. Keyed by the caller, so a new key (a
+// drill-in that moved to another detail) registers a fresh entry: the stack
+// pops an entry when back is pressed, and an entry that stayed active would
+// not register itself again.
+function PhoneBackEntry({ onBack }: { onBack: () => void }) {
+  usePhoneBackStack(true, onBack);
+  return null;
+}
+
+// The drill-in a view is showing (a task's detail, a PR or an issue), as the
+// sidebar history's own location type; null on a view's list.
+function useDrillIn(viewId: string, projectId: number | null): SidebarBack | null {
+  const taskId = useDashboardStore((s) => s.selectedTaskId);
+  const pr = useDashboardStore((s) =>
+    projectId === null ? null : (s.githubOpenPrByProject[projectId] ?? null),
+  );
+  const issue = useDashboardStore((s) =>
+    projectId === null ? null : (s.githubOpenIssueByProject[projectId] ?? null),
+  );
+  if (viewId === "tasks" && taskId !== null) return { kind: "task", taskId };
+  if (viewId === "github" && projectId !== null) {
+    if (pr !== null) return { kind: "pr", projectId, number: pr };
+    if (issue !== null) return { kind: "issue", projectId, number: issue };
+  }
+  return null;
+}
+
+function drillKey(drill: SidebarBack | null): string | null {
+  if (!drill) return null;
+  return drill.kind === "task"
+    ? `task:${drill.taskId}`
+    : `${drill.kind}:${drill.projectId}:${drill.number}`;
+}
+
+// Back from a drill-in: the sidebar history's step back, else the view's list.
+function leaveDrillIn(drill: SidebarBack): void {
+  goSidebarBack(drill, () => {
+    const store = useDashboardStore.getState();
+    if (drill.kind === "task") store.selectTask(null);
+    else if (drill.kind === "pr") store.setGithubOpenPr(drill.projectId, null);
+    else store.setGithubOpenIssue(drill.projectId, null);
+  });
+}
+
 // Right sidebar: an icon rail plus a view panel. The panel is always docked
 // beside the grid and pushes it; it never floats, has no scrim and is not
 // dismissed by a swipe or a click elsewhere (#3006). A rail tab opens its
 // view, and the open view's tab closes the panel. Only where the window is
 // too narrow to dock does an open view cover the workspace. Rendered as
-// siblings of `.grid-area` inside `.app-body`. Not rendered on phone, where
-// the navigator panel already carries Source Control.
+// siblings of `.grid-area` inside `.app-body`.
+//
+// On the phone (#3014) there is no rail: the "more" sheet (PhoneMoreSheet)
+// opens a view, and an open view is a full screen with a back control. The
+// back gesture closes a drill-in inside it first (a task's detail, a PR), then
+// the view. A view opened straight at a detail (a task from the board) has no
+// list behind it, so back from that detail closes the view.
 export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSidebarProps) {
   const viewId = useDashboardStore((s) => s.rightSidebarView);
   const open = useDashboardStore((s) => s.rightSidebarOpen);
@@ -55,9 +107,9 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // Publish the followed project for the Task Master board's "follow" option (#2858). This
   // is the only place useFollowedProject is resolved for the shell, so the board reads this
   // instead of deriving it a second time. App mounts this on every tier. Phone renders
-  // nothing here, but the project a focused panel puts here is the one the phone follows;
-  // the board words the option for it (#2864). With nothing focused the hook only falls
-  // back to the first project, which nothing made "active", so phone publishes null then
+  // nothing here until a view opens, but the project a focused panel puts here is
+  // the one the phone follows; the board words the option for it (#2864). With
+  // nothing focused the hook only falls back to the first project, which nothing made "active", so phone publishes null then
   // (a visible sidebar does show that fallback project, so it still publishes it). The
   // phone navigator's own Source Control section is only mounted on its projects tab, so
   // it cannot be the producer while the Tasks board is showing.
@@ -128,19 +180,59 @@ export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSideba
   // forced desktop tier on a narrow window keeps Escape but not back.
   usePhoneBackStack(covering && isCompactTier(tier), close);
 
-  // A tier change (rotate, fold/unfold, window resize) that lands on phone
-  // closes the panel: `open` is persisted state and phone renders nothing
-  // here, so it would otherwise linger invisibly.
-  const lastTier = useRef(tier);
+  // Landing on the phone, at start or from a tier change (rotate, fold),
+  // closes the panel: `open` is persisted for the docked sidebar, and on the
+  // phone an open view is a full screen nobody asked for.
+  const lastTier = useRef<LayoutTier | null>(null);
   useEffect(() => {
     const prev = lastTier.current;
     lastTier.current = tier;
     if (prev !== tier && open && tier === "phone") close();
   }, [tier, open, close]);
 
-  if (tier === "phone") return null;
-
   const view = RIGHT_SIDEBAR_VIEWS.find((v) => v.id === viewId) ?? RIGHT_SIDEBAR_VIEWS[0];
+  const phone = tier === "phone";
+  const phoneOpen = phone && open;
+  const viewMode = useDashboardStore((s) => s.viewMode);
+  const drill = useDrillIn(view.id, followedProjectId);
+  const key = drillKey(drill);
+  // What the view opened at: its list (null), or a detail. Recorded as the
+  // panel opens, together with the mode it opened in.
+  const [openedAt, setOpenedAt] = useState<{ drill: string | null; mode: ViewMode } | null>(null);
+  if (phoneOpen && openedAt === null) setOpenedAt({ drill: key, mode: viewMode });
+  if (!phoneOpen && openedAt !== null) setOpenedAt(null);
+  const enteredAtDetail = openedAt !== null && openedAt.drill !== null;
+  useEffect(() => {
+    if (!phoneOpen || openedAt === null) return;
+    // A mode change (a cross-link to a session, "Open task board") leaves the
+    // full screen: it would otherwise cover the mode it switched to.
+    if (viewMode !== openedAt.mode) close();
+    // The detail it opened at was left for the list (its own Back, or the
+    // gesture): there is no list to show, so close.
+    else if (enteredAtDetail && key === null) close();
+  }, [phoneOpen, openedAt, viewMode, enteredAtDetail, key, close]);
+
+  if (phone) {
+    if (!phoneOpen) return null;
+    return (
+      <aside className="right-sidebar-panel phone" aria-label={`${view.label} view`}>
+        {/* Registered before the drill-in below, so a view opened straight at
+            a detail is under it on the stack. */}
+        <PhoneBackEntry onBack={close} />
+        {drill !== null && key !== openedAt?.drill && (
+          <PhoneBackEntry key={key} onBack={() => leaveDrillIn(drill)} />
+        )}
+        <RightSidebarPanel
+          view={view}
+          followed={followed}
+          actions={actions}
+          onClose={close}
+          phone
+          title={VIEW_TITLES[view.id as keyof typeof VIEW_TITLES] ?? view.label}
+        />
+      </aside>
+    );
+  }
 
   return (
     <>

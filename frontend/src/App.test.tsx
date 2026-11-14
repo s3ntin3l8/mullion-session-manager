@@ -91,16 +91,18 @@ vi.mock("./Toolbar.js", () => ({
     notificationSheet,
     mobileSessionSlot,
   }: {
-    onToggleSidebar: () => void;
+    onToggleSidebar?: () => void;
     notificationSheet?: boolean;
     mobileSessionSlot?: React.ReactNode;
   }) => (
     <div data-testid="toolbar">
-      <button
-        data-testid="toggle-sidebar"
-        data-notif-sheet={String(!!notificationSheet)}
-        onClick={onToggleSidebar}
-      />
+      {onToggleSidebar && (
+        <button
+          data-testid="toggle-sidebar"
+          data-notif-sheet={String(!!notificationSheet)}
+          onClick={onToggleSidebar}
+        />
+      )}
       {mobileSessionSlot}
     </div>
   ),
@@ -179,7 +181,9 @@ vi.mock("./ResourceAlertBanner.js", () => ({ ResourceAlertBanner: () => null }))
 vi.mock("./panels/registry.js", () => ({
   components: {},
   tabComponents: {},
-  KanbanBoardOverlay: () => <div data-testid="kanban-overlay" />,
+  KanbanBoardOverlay: ({ phone }: { phone?: boolean }) => (
+    <div data-testid="kanban-overlay" data-phone={String(!!phone)} />
+  ),
 }));
 vi.mock("./Settings.js", () => ({ Settings: () => null }));
 vi.mock("./terminalRepaintRegistry.js", () => ({ repaintAllTerminals: vi.fn() }));
@@ -201,7 +205,8 @@ vi.mock("./hooks/useWorkspacePersistence.js", () => ({
 vi.mock("./hooks/useLayoutPresentation.js", () => ({ useLayoutPresentation: vi.fn() }));
 vi.mock("./hooks/useVisualViewportInset.js", () => ({ useVisualViewportInset: vi.fn() }));
 vi.mock("./hooks/usePanelOpener.js", () => ({ usePanelOpener: () => ({}) }));
-vi.mock("./hooks/usePhoneTasksNavigator.js", () => ({ usePhoneTasksNavigator: vi.fn() }));
+// The mode bar has its own tests (PhoneModeBar.test.tsx).
+vi.mock("./PhoneModeBar.js", () => ({ PhoneModeBar: () => <nav data-testid="mode-bar" /> }));
 vi.mock("./hooks/usePhoneBackStack.js", () => ({ usePhoneBackStack: vi.fn() }));
 vi.mock("./lib/sidebarSwipeGesture.js", () => ({
   attachSidebarSwipeGesture: vi.fn(() => () => {}),
@@ -317,7 +322,6 @@ describe("App tier wiring", () => {
   // inert while the (desktop-default) `sidebarOpen` is false would hide a
   // visible panel.
   it.each([
-    ["phone", true],
     ["tablet", true],
     ["desktop", false],
   ] as const)("marks the drawer inert while it is closed on %s", (tier, inertWhenClosed) => {
@@ -330,10 +334,75 @@ describe("App tier wiring", () => {
     expect(drawer.hasAttribute("inert")).toBe(false);
   });
 
-  // The drawer registers with the back stack on every compact tier (not just
-  // phone), so Android back closes it on the unfolded Fold too.
+  // #3014 — the phone has no drawer: no wrapper, no scrim, no toggle in the
+  // top bar, no edge swipe, and no back-stack entry for one.
+  it("has no drawer on the phone, and nothing can open one", () => {
+    stubWidth("phone", true);
+    vi.mocked(attachSidebarSwipeGesture).mockClear();
+    const { container } = render(<App />);
+    expect(container.querySelector(".sidebar-wrapper")).toBeNull();
+    expect(container.querySelector(".cmux-scrim")).toBeNull();
+    expect(screen.queryByTestId("toggle-sidebar")).toBeNull();
+    expect(screen.queryByTestId("navigator")).toBeNull();
+    expect(attachSidebarSwipeGesture).not.toHaveBeenCalled();
+    expect(container.querySelector(".app")!.classList.contains("sb-open")).toBe(false);
+    expect(vi.mocked(usePhoneBackStack).mock.calls.every(([active]) => active === false)).toBe(
+      true,
+    );
+  });
+
+  // The phone's mode bar (#3014) replaces the drawer; from 700px the rail has
+  // the mode switch.
   it.each([
     ["phone", true],
+    ["tablet", false],
+    ["desktop", false],
+  ] as const)("renders the mode bar on %s: %s", (tier, expected) => {
+    stubWidth(tier);
+    const { container } = render(<App />);
+    expect(!!screen.queryByTestId("mode-bar")).toBe(expected);
+    expect(container.querySelector(".app")!.classList.contains("mode-bar")).toBe(expected);
+  });
+
+  // #3014 — after "Open session in Workspace" from a task, back returns to
+  // Tasks mode (and the task); no other back changes mode.
+  it("registers the cross-link's way back to Tasks on the phone", () => {
+    stubWidth("phone");
+    useDashboardStore.setState({ viewMode: "kanban", selectedTaskId: 7 });
+    render(<App />);
+    const crossLinkEntry = () =>
+      vi
+        .mocked(usePhoneBackStack)
+        .mock.calls.filter(([active]) => active)
+        .map(([, close]) => close);
+    expect(crossLinkEntry()).toHaveLength(0);
+    act(() => useDashboardStore.getState().openSessionInWorkspace(3));
+    const entries = crossLinkEntry();
+    expect(entries.length).toBeGreaterThan(0);
+    act(() => entries.at(-1)!());
+    const state = useDashboardStore.getState();
+    expect(state.viewMode).toBe("kanban");
+    expect(state.selectedTaskId).toBe(7);
+    expect(state.rightSidebarView).toBe("tasks");
+    expect(state.crossLinkReturn).toBeNull();
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    act(() => useDashboardStore.getState().setViewMode("list"));
+  });
+
+  it("does not register a way back to Tasks after a plain mode switch", () => {
+    stubWidth("phone");
+    useDashboardStore.setState({ viewMode: "kanban" });
+    render(<App />);
+    vi.mocked(usePhoneBackStack).mockClear();
+    act(() => useDashboardStore.getState().setViewMode("list"));
+    expect(vi.mocked(usePhoneBackStack).mock.calls.every(([active]) => active === false)).toBe(
+      true,
+    );
+  });
+
+  // The drawer registers with the back stack on every compact tier that has
+  // one, so Android back closes it on the unfolded Fold too.
+  it.each([
     ["tablet", true],
     ["desktop", false],
   ] as const)(
@@ -388,12 +457,9 @@ describe("App tier wiring", () => {
     expect(screen.getByTestId("session-bar")).toHaveAttribute("data-context", "");
   });
 
-  // Compact tiers get the tabbed navigator in the drawer; only tablet has
-  // workspaces, so only tablet passes the switcher slot.
-  it.each([
-    ["phone", false, false],
-    ["tablet", true, true],
-  ] as const)(
+  // The tablet gets the tabbed navigator in the drawer, with the workspace
+  // switcher slot. The phone has neither (#3014).
+  it.each([["tablet", true, true]] as const)(
     "renders the navigator on %s (tablet=%s, workspaces slot=%s)",
     (tier, isTablet, hasWs) => {
       stubWidth(tier);
@@ -411,19 +477,17 @@ describe("App tier wiring", () => {
     expect(screen.getByTestId("sidebar")).toBeInTheDocument();
   });
 
-  // Tasks mode: from 700px the board is the grid overlay (#3009); the phone
-  // keeps the board in the navigator, which widens (nav-tasks) while it's
-  // showing.
+  // Tasks mode is the board over the grid on every tier: #3009 from 700px,
+  // #3014 on the phone, where it shows one lane at a time.
   it.each([
-    ["desktop", true, false],
-    ["tablet", true, false],
-    ["phone", false, true],
-  ] as const)("Tasks view on %s: overlay=%s, nav-tasks class=%s", (tier, overlay, navTasks) => {
+    ["desktop", "false"],
+    ["tablet", "false"],
+    ["phone", "true"],
+  ] as const)("Tasks view on %s is the grid overlay (phone layout: %s)", (tier, phone) => {
     stubWidth(tier);
     useDashboardStore.setState({ viewMode: "kanban" });
-    const { container } = render(<App />);
-    expect(!!screen.queryByTestId("kanban-overlay")).toBe(overlay);
-    expect(container.querySelector(".app")!.classList.contains("nav-tasks")).toBe(navTasks);
+    render(<App />);
+    expect(screen.getByTestId("kanban-overlay")).toHaveAttribute("data-phone", phone);
     useDashboardStore.setState({ viewMode: "list" });
   });
 
@@ -453,12 +517,12 @@ describe("App tier wiring", () => {
     act(() => useDashboardStore.setState({ viewMode: "list" }));
   });
 
-  it("keeps the Dock on the phone in Tasks mode", () => {
+  it("drops the Dock on the phone in Tasks mode too, where the board takes the grid", () => {
     stubWidth("phone");
     dockHarness.props = null;
     useDashboardStore.setState({ viewMode: "kanban" });
     render(<App />);
-    expect(dockHarness.props).not.toBeNull();
+    expect(dockHarness.props).toBeNull();
     useDashboardStore.setState({ viewMode: "list" });
   });
 

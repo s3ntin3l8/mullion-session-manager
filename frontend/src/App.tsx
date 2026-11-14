@@ -16,8 +16,8 @@ import { Toolbar } from "./Toolbar.js";
 import { LeftRail } from "./LeftRail.js";
 import { RailWorkspaceSection } from "./rail/RailWorkspaceSection.js";
 import type { RailPaneInput } from "./lib/railPanes.js";
-import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
+import { PhoneModeBar } from "./PhoneModeBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { SessionLauncherHost } from "./launchers/SessionLauncher.js";
@@ -861,9 +861,11 @@ export function App() {
   // clamp. `layoutTier !== "desktop"` (not `isMobile`) now drives
   // `sidebarOpen`, so tablet gets the same floating overlay as phone.
   const toggleSidebar = useCallback(() => {
+    // The phone has no drawer (#3014): its sessions are the top bar's picker.
+    if (isMobile) return;
     if (compact) setSidebarOpen((v) => !v);
     else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
-  }, [compact, sidebarCollapsed]);
+  }, [isMobile, compact, sidebarCollapsed]);
 
   // Floating-sidebar redesign — edge-swipe open/dismiss (lib/sidebarSwipeGesture.ts's
   // own header comment covers the design: discrete threshold+commit, not a
@@ -878,7 +880,7 @@ export function App() {
   const sidebarWrapperRef = useRef<HTMLDivElement>(null);
   // Drop a stale open drawer when leaving the compact tier. Extracted to
   // useSidebarOpenTierReset; called here, where the effect was — before
-  // usePhoneBackStack / usePhoneTasksNavigator.
+  // usePhoneBackStack.
   // Tasks mode from 700px (#3009): the board takes the grid and the left
   // sidebar is hidden, so the tablet drawer is closed and cannot be swiped open.
   const boardOverGrid = !isMobile && viewMode === "kanban";
@@ -886,14 +888,19 @@ export function App() {
   // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
   // hooks/usePhoneBackStack.ts). Settings and the session/notification
   // sheets register themselves; the navigator and the Tasks board live here.
-  usePhoneBackStack(compact && sidebarOpen, () => setSidebarOpen(false));
-  // Phone only: from 700px Tasks mode is the board over the grid, not the
-  // navigator's Tasks tab (#3009).
-  usePhoneTasksNavigator({ compact: isMobile, viewMode, sidebarOpen, setSidebarOpen });
+  usePhoneBackStack(compact && !isMobile && sidebarOpen, () => setSidebarOpen(false));
+  // Phone (#3014): after "Open session in Workspace" took a task's session to
+  // Workspace, back returns to Tasks (design 9.3). The only back that changes
+  // mode; it is registered while the switch it undoes is still in effect.
+  const crossLinkReturn = useDashboardStore((s) => s.crossLinkReturn);
+  usePhoneBackStack(isMobile && crossLinkReturn !== null && viewMode === "list", () =>
+    useDashboardStore.getState().returnFromCrossLink(),
+  );
   // Edge-swipe to open/dismiss the compact sidebar. Extracted to
-  // useSidebarSwipe; called here, where the effect was.
+  // useSidebarSwipe; called here, where the effect was. Not on the phone,
+  // which has no drawer (#3014).
   useSidebarSwipe({
-    compact: compact && !boardOverGrid,
+    compact: compact && !isMobile && !boardOverGrid,
     sidebarOpen,
     setSidebarOpen,
     appBodyRef,
@@ -1175,7 +1182,7 @@ export function App() {
         theme,
         "app",
         sidebarOpen && "sb-open",
-        isMobile && viewMode === "kanban" && "nav-tasks",
+        isMobile && "mode-bar",
         sidebarCollapsed && "sidebar-collapsed",
         sidebarResizing && "sidebar-resizing",
         settings.sidebarDensity === "compact" && "density-compact",
@@ -1200,7 +1207,6 @@ export function App() {
           The top bar's version label is in Settings → Server. */}
       {isMobile && (
         <Toolbar
-          onToggleSidebar={toggleSidebar}
           onOpenSession={onOpenSession}
           onOpenTimeline={onOpenTimeline}
           onOpenBrowser={onOpenBrowser}
@@ -1237,70 +1243,77 @@ export function App() {
             notificationSheet={compact && isCoarsePointer}
           />
         )}
-        <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
-        <div
-          className="sidebar-wrapper cmux-scroll"
-          ref={sidebarWrapperRef}
-          /* The compact tier's drawer is closed by sliding it off-screen
-             (styles/sidebar.css's `transform: translateX(-101%)`), which
-             leaves every control inside it — session rows, the filter
-             input, the per-row kebab menus — focusable and in the
-             accessibility tree while they sit off-screen. A keyboard user
-             tabbing through the app would land on controls they cannot
-             see, and a screen reader would read the whole hidden tree.
+        {/* The phone has no drawer (#3014): Projects is the top bar's
+            session picker, Tasks the mode bar, Devices and Settings the mode
+            bar's "more" sheet. */}
+        {!isMobile && (
+          <>
+            <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
+            <div
+              className="sidebar-wrapper cmux-scroll"
+              ref={sidebarWrapperRef}
+              /* The compact tier's drawer is closed by sliding it off-screen
+                 (styles/sidebar.css's `transform: translateX(-101%)`), which
+                 leaves every control inside it — session rows, the filter
+                 input, the per-row kebab menus — focusable and in the
+                 accessibility tree while they sit off-screen. A keyboard user
+                 tabbing through the app would land on controls they cannot
+                 see, and a screen reader would read the whole hidden tree.
 
-             `inert` removes the subtree from both the tab order and the
-             accessibility tree in one attribute. It is applied only on the
-             compact tier: the desktop sidebar is always visible, so making
-             it inert when `sidebarOpen` is false (the desktop default)
-             would hide a permanently-visible panel.
+                 `inert` removes the subtree from both the tab order and the
+                 accessibility tree in one attribute. It is applied only on the
+                 compact tier: the desktop sidebar is always visible, so making
+                 it inert when `sidebarOpen` is false (the desktop default)
+                 would hide a permanently-visible panel.
 
-             styles/sidebar.css pairs this with `visibility: hidden` for
-             the closed state, which is the fallback for browsers without
-             `inert` support — an element with `visibility: hidden` is not
-             focusable either. */
-          inert={compact && !sidebarOpen}
-        >
-          {/* Desktop-only (review finding, floating-sidebar redesign): the
-              overlay's own `width: min(310px, 84vw) !important`
-              (sidebar.css's phone/tablet `data-tier` block) outranks
-              `--sidebar-width`, the custom property this drag actually
-              writes to, so below desktop width the handle used to render,
-              respond to mousedown, and update state/localStorage while
-              visibly doing nothing — a resize-by-mouse gesture doesn't fit
-              a touch-first floating overlay anyway. */}
-          {layoutTier === "desktop" && !sidebarCollapsed && (
-            <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
-          )}
-          {/* Phone: workspaces don't exist as a concept — the session picker
-              lists every session — and the drawer is a full-screen navigator
-              with tabs instead of one long scroll. */}
-          {compact ? (
-            <>
-              <PhoneNavigatorPanel
-                tablet={!isMobile}
-                workspaces={
-                  isMobile ? undefined : (
-                    <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-                  )
-                }
-                navTab={navTab}
-                setNavTab={setNavTab}
-                onOpenTasks={onOpenTasks}
-                onClose={() => setSidebarOpen(false)}
-                onSelectSetting={openSettingsFromNavigator}
-                sidebar={sidebar}
-                onOpenSession={onOpenSession}
-                onSessionEnded={onSessionEnded}
-              />
-            </>
-          ) : (
-            <>
-              <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-              {sidebar}
-            </>
-          )}
-        </div>
+                 styles/sidebar.css pairs this with `visibility: hidden` for
+                 the closed state, which is the fallback for browsers without
+                 `inert` support — an element with `visibility: hidden` is not
+                 focusable either. */
+              inert={compact && !sidebarOpen}
+            >
+              {/* Desktop-only (review finding, floating-sidebar redesign): the
+                  overlay's own `width: min(310px, 84vw) !important`
+                  (sidebar.css's phone/tablet `data-tier` block) outranks
+                  `--sidebar-width`, the custom property this drag actually
+                  writes to, so below desktop width the handle used to render,
+                  respond to mousedown, and update state/localStorage while
+                  visibly doing nothing — a resize-by-mouse gesture doesn't fit
+                  a touch-first floating overlay anyway. */}
+              {layoutTier === "desktop" && !sidebarCollapsed && (
+                <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
+              )}
+              {/* Phone: workspaces don't exist as a concept — the session picker
+                  lists every session — and the drawer is a full-screen navigator
+                  with tabs instead of one long scroll. */}
+              {compact ? (
+                <>
+                  <PhoneNavigatorPanel
+                    tablet={!isMobile}
+                    workspaces={
+                      isMobile ? undefined : (
+                        <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+                      )
+                    }
+                    navTab={navTab}
+                    setNavTab={setNavTab}
+                    onOpenTasks={onOpenTasks}
+                    onClose={() => setSidebarOpen(false)}
+                    onSelectSetting={openSettingsFromNavigator}
+                    sidebar={sidebar}
+                    onOpenSession={onOpenSession}
+                    onSessionEnded={onSessionEnded}
+                  />
+                </>
+              ) : (
+                <>
+                  <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+                  {sidebar}
+                </>
+              )}
+            </div>
+          </>
+        )}
         <div className="grid-area">
           {/* Whole-backend-down — design States doc section 04. Docked at
               the top of the grid area, rest of the UI dimmed (not
@@ -1540,18 +1553,22 @@ export function App() {
                   "kanban", so switching back to Workspace restores exactly
                   what was there before. This is Tasks mode (#3009), entered
                   from the left rail's mode switch, its shortcut, Sidebar.tsx's
-                  own entry or the command palette. From 700px only: on phone
-                  the board renders inside the navigator's Tasks tab instead
-                  (PhoneNavigatorPanel). */}
-              {viewMode === "kanban" && !isMobile && (
-                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
+                  own entry or the command palette, and on the phone from the
+                  mode bar (#3014), where it shows one lane at a time. */}
+              {viewMode === "kanban" && (
+                <KanbanBoardOverlay
+                  onOpenSession={onOpenSession}
+                  onSessionEnded={onSessionEnded}
+                  phone={isMobile}
+                  columnCount={isMobile ? 1 : undefined}
+                />
               )}
             </div>
             {/* Not in Tasks mode from 700px (#3009): the board takes the
                 grid area full height. Unmounted rather than hidden so its
                 monitors are not fitted to an empty box; its rows and
                 heights are persisted, so it comes back as it was. */}
-            {(isMobile || viewMode !== "kanban") && (
+            {viewMode !== "kanban" && (
               <Dock
                 workspaceProjectIds={scopedWorkspaceProjectIds}
                 onOpenGitHub={onOpenGitHub}
@@ -1581,6 +1598,9 @@ export function App() {
           workspaceProjectIds={scopedWorkspaceProjectIds}
         />
       </div>
+      {/* Phone (#3014): the mode bar, last in .app's column so it sits under
+          the key bar, at the bottom edge. */}
+      {isMobile && <PhoneModeBar onOpenSettings={() => openSettings()} />}
       <ProjectPreviewPicker
         onOpenDefault={onOpenBrowser}
         onBlank={onOpenBlankBrowser}
