@@ -280,9 +280,9 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // Not in Tasks mode: the board takes the left half and the task sidebar the
   // right, so the right half renders no session and the grid's copy is the
   // one. A view covering the right half is different: the session stays the
-  // right half's, its grid group stays hidden behind the left pane, and
-  // mounting the grid copy there would only remount the terminal on every
-  // cover and uncover.
+  // right half's and is on screen nowhere until the view closes. Its grid
+  // group is hidden behind the maximized left pane, so a copy mounted there
+  // would only measure a box nobody sees, and could size the pty to it.
   const onRightHalf = useDashboardStore(
     (s) =>
       s.foldHalvesActive &&

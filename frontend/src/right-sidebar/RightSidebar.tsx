@@ -11,7 +11,7 @@ import {
   isCompactTier,
   useCoarsePointer,
 } from "../lib/layoutTier.js";
-import type { LayoutTier } from "../lib/layoutTier.js";
+import type { LayoutBand, LayoutTier } from "../lib/layoutTier.js";
 import { useShallow } from "zustand/react/shallow";
 import { goSidebarBack } from "../sidebarBack.js";
 import { useDashboardStore } from "../store/index.js";
@@ -36,6 +36,10 @@ export interface RightSidebarProps {
   rightHalf?: ReactNode;
   /** The right half's sessions, listed in the rail below the views. */
   railSessions?: ReactNode;
+  /** The layout band (App's `layoutBand`); defaults to the halves' band when
+   *  `halves` is set. Tells a fold from the halves apart from other routes
+   *  to the phone. */
+  band?: LayoutBand;
 }
 
 function subscribeFullWidth(onChange: () => void): () => void {
@@ -48,6 +52,11 @@ const readFullWidth = (): boolean => window.matchMedia(RIGHT_SIDEBAR_FULL_WIDTH_
 // #3010 / design 9.2 — folding from the halves keeps an open view full
 // screen if it was the thing used last, or in Tasks mode (the task on the
 // right half becomes the task full screen).
+function noteViewUsed(): void {
+  const s = useDashboardStore.getState();
+  if (s.viewMode !== "kanban") s.noteHalfUsed({ kind: "view" });
+}
+
 function viewKeptOnFold(): boolean {
   const s = useDashboardStore.getState();
   if (s.viewMode === "kanban") return true;
@@ -119,6 +128,7 @@ export function RightSidebar({
   halves = false,
   rightHalf,
   railSessions,
+  band = halves ? "rails-halves" : tier === "phone" ? "phone" : "desktop",
 }: RightSidebarProps) {
   const viewId = useDashboardStore((s) => s.rightSidebarView);
   const open = useDashboardStore((s) => s.rightSidebarOpen);
@@ -218,22 +228,30 @@ export function RightSidebar({
   // mode, where the right half is the task). Otherwise the phone shows the
   // session used last, and the view, closed for the phone, comes back on the
   // right half when the halves do.
-  const lastTier = useRef<{ tier: LayoutTier; halves: boolean } | null>(null);
+  //
+  // The tier and the band are separate state and can cross 700px one commit
+  // apart, so "came from the halves" is the last band seen while neither said
+  // phone, and a pending reopen survives a commit where only one of them has
+  // left the phone.
+  const lastTier = useRef<LayoutTier | null>(null);
+  const lastWideBand = useRef<LayoutBand | null>(null);
   const reopenOnUnfold = useRef<string | null>(null);
   useEffect(() => {
-    const prev = lastTier.current;
-    lastTier.current = { tier, halves };
+    const prevTier = lastTier.current;
+    lastTier.current = tier;
     if (tier === "phone") {
       // A view opened on the phone is a new choice: unfolding keeps it.
-      if (prev?.tier === "phone" && open) reopenOnUnfold.current = null;
-      if (prev?.tier === tier || !open) return;
-      if (prev?.halves) {
+      if (prevTier === "phone" && open) reopenOnUnfold.current = null;
+      if (prevTier === tier || !open) return;
+      if (lastWideBand.current === "rails-halves") {
         if (viewKeptOnFold()) return;
         reopenOnUnfold.current = useDashboardStore.getState().rightSidebarView;
       }
       close();
       return;
     }
+    if (band === "phone") return;
+    lastWideBand.current = band;
     const reopen = reopenOnUnfold.current;
     reopenOnUnfold.current = null;
     if (reopen !== null && halves && !open) {
@@ -241,7 +259,7 @@ export function RightSidebar({
       markViewRestored();
       useDashboardStore.getState().openRightSidebarView(reopen);
     }
-  }, [tier, halves, open, close]);
+  }, [tier, band, halves, open, close]);
 
   const view = RIGHT_SIDEBAR_VIEWS.find((v) => v.id === viewId) ?? RIGHT_SIDEBAR_VIEWS[0];
   const phone = tier === "phone";
@@ -253,6 +271,15 @@ export function RightSidebar({
   // in one flush (a ?task= link on a cold start, the cross-link's return) never
   // renders the closed state in between.
   const [openedAt, setOpenedAt] = useState<string | null>(null);
+  // #3010 — a view kept open through a fold (design 9.2) enters the phone
+  // where it is now: a task open in it is its entry point, so back returns
+  // to the board, and what it opened at during an earlier phone stretch
+  // does not linger. Render-phase, keyed on entering the phone.
+  const [phoneSeen, setPhoneSeen] = useState(phone);
+  if (phone !== phoneSeen) {
+    setPhoneSeen(phone);
+    if (phone) setOpenedAt(key);
+  }
   const followedRef = useRef(followedProjectId);
   useEffect(() => {
     followedRef.current = followedProjectId;
@@ -375,6 +402,10 @@ export function RightSidebar({
           className={`right-sidebar-panel docked${full ? " full" : ""}${dragging ? " resizing" : ""}${halves ? " half" : ""}`}
           style={full || halves ? undefined : { width }}
           aria-label={`${view.label} sidebar`}
+          // #3010 — working in a view on the right half is using it, for
+          // the phone after folding (design 9.2: "opened or used last").
+          onPointerDownCapture={halves ? noteViewUsed : undefined}
+          onKeyDownCapture={halves ? noteViewUsed : undefined}
         >
           {!full && !coarse && !halves && (
             <div className="right-sidebar-resize-handle" onMouseDown={onMouseDown} />

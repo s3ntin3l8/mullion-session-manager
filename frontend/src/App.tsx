@@ -1714,6 +1714,7 @@ export function App() {
           actions={rightSidebarActions}
           workspaceProjectIds={scopedWorkspaceProjectIds}
           halves={layoutPresentation === "halves"}
+          band={layoutBand}
           rightHalf={
             rightHalfSession && rightHalfPanelId ? (
               <RightHalfPane

@@ -526,6 +526,7 @@
 @media (pointer: coarse) {
   .half-header-rename {
     height: 36px;
-    font-size: 16px; /* font-size-px-ok: iOS zooms into an input under 16px */
+    /* 16px at the root size: iOS zooms the page into a smaller input. */
+    font-size: 1rem;
   }
 }
