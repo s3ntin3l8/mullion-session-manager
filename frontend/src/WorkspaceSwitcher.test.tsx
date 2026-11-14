@@ -297,9 +297,9 @@ describe("WorkspaceSwitcher", () => {
     });
 
     it("group header is a focusable role=button that toggles collapse on Enter", async () => {
-      // WorkspaceSwitcher's mount effect fires refreshGroups() unconditionally
-      // (void useDashboardStore.getState().refreshGroups() above), which
-      // would otherwise overwrite the `groups` state set below with the
+      // WorkspaceSwitcher's mount effect (useWorkspaceTree) fires
+      // refreshGroups() while no groups are loaded yet, which could otherwise
+      // overwrite the `groups` state set below with the
       // outer beforeEach's `listGroups` mock (`[]`) the instant that promise
       // resolves — mirror it here so the group this test renders survives
       // that refresh.

@@ -14,6 +14,8 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { LeftRail } from "./LeftRail.js";
+import { RailWorkspaceSection } from "./rail/RailWorkspaceSection.js";
+import type { RailPaneInput } from "./lib/railPanes.js";
 import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
@@ -44,6 +46,8 @@ import {
   shouldShowCodexHookTrustBanner,
   workspaceProjectIdsFromPanels,
   openTerminalSessionIds,
+  focusPanelForTier,
+  panelSessionId,
 } from "./panelUtils.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
@@ -943,6 +947,26 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
     [dockviewApi, panelsVersion],
   );
+  // Every pane open in the active workspace, floating ones included, for the
+  // left rail's pane list (#3009). Floating is safe there: focusPanelForTier
+  // only maximizes on the phone, which has no rail.
+  const railPanes = useMemo<RailPaneInput[]>(
+    () =>
+      (dockviewApi?.panels ?? []).map((panel) => ({
+        id: panel.id,
+        title: panel.title ?? "",
+        sessionId: panelSessionId(panel),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
+    [dockviewApi, panelsVersion],
+  );
+  const focusRailPane = useCallback(
+    (panelId: string) => {
+      const panel = dockviewApi?.getPanel(panelId);
+      if (dockviewApi && panel) focusPanelForTier(dockviewApi, panel, layoutTier);
+    },
+    [dockviewApi, layoutTier],
+  );
   // Projects with a session open in the active workspace, derived from the
   // live dockview panels (panel.params.sessionId -> session.projectId) —
   // reactive via panelsVersion, bumped on every ordinary dockview layout
@@ -1117,10 +1141,15 @@ export function App() {
     />
   );
 
+  // Whether the left sidebar shows: the docked one on desktop unless
+  // collapsed, the drawer below 1280px only while open. The rail lists the
+  // open panes when it does not (#3009).
+  const leftSidebarShown = compact ? sidebarOpen : !sidebarCollapsed;
+
   // Phone session switcher — rendered into the phone's top bar in place of the
   // old `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
-  // From 700px there is no top bar (#3009): sessions are switched from the
-  // sidebar's list (the tablet drawer), and the rail's open panes come later.
+  // From 700px there is no top bar (#3009): the left rail lists the open
+  // panes while the left sidebar is not showing.
   const mobileSessionSwitcher = isMobile ? (
     <MobileSessionBar
       tier={layoutTier}
@@ -1188,7 +1217,18 @@ export function App() {
         {!isMobile && (
           <LeftRail
             onToggleSidebar={toggleSidebar}
-            sidebarShown={compact ? sidebarOpen : !sidebarCollapsed}
+            sidebarShown={leftSidebarShown}
+            middle={
+              <RailWorkspaceSection
+                onSelectWorkspace={handleSelectWorkspace}
+                sheet={isCoarsePointer}
+                showPanes={!leftSidebarShown}
+                panes={railPanes}
+                activePanelId={activePanelId}
+                onFocusPane={focusRailPane}
+                onNewSession={openNewSessionLauncher}
+              />
+            }
             onOpenLauncher={openGlobalLauncher}
             onOpenSettings={openSettings}
             onOpenSession={onOpenSession}

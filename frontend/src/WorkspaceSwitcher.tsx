@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { CreateGroupModal } from "./CreateGroupModal.js";
@@ -7,7 +7,12 @@ import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Group, Session, Workspace } from "./api/index.js";
-import { extractSessionIds } from "./panelUtils.js";
+import {
+  deriveWorkspaceLiveStatus,
+  groupColor,
+  useWorkspaceTree,
+  type WorkspaceLiveStatus,
+} from "./hooks/useWorkspaceTree.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
 import {
@@ -43,32 +48,6 @@ import { TextInput } from "./ui/primitives.js";
 // reorder.ts for the pure reindex math this file drives. (Group reordering
 // was part of that same phase but was later dropped in favor of alphabetical
 // sort — see git history if resurrecting it.)
-
-type WorkspaceLiveStatus = "attention" | "working" | null;
-
-// P2 perf fix — this used to walk `workspace.layout` (the serialized dockview
-// JSON blob, recursively) via extractSessionIds on every call, and it was
-// called inline inside WorkspaceList's `.map()` — so every workspace's whole
-// layout tree got re-walked on every render, including the 4s live-refresh
-// tick that changes `sessions` but never touches `workspaces`/its layouts.
-// Split in two: `sessionIdsByWorkspace` below does the expensive walk once
-// per workspace, memoized on `workspaces` itself (WorkspaceSwitcher's own
-// useMemo); this function just intersects an already-extracted id Set against
-// the current `sessions` array — an O(sessions) scan with no JSON traversal,
-// cheap enough to run unmemoized on every render.
-function deriveWorkspaceLiveStatus(
-  sessionIds: Set<number> | undefined,
-  sessions: Session[],
-): WorkspaceLiveStatus {
-  if (!sessionIds || sessionIds.size === 0) return null;
-  let working = false;
-  for (const s of sessions) {
-    if (!sessionIds.has(s.id)) continue;
-    if (s.attention) return "attention";
-    if (s.activity === "working") working = true;
-  }
-  return working ? "working" : null;
-}
 
 // --- Drag-and-drop orchestration -------------------------------------------
 //
@@ -112,9 +91,8 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
   // action-callers (a store action's function identity never changes, so
   // selecting it wouldn't cost extra renders either, but getState() keeps
   // this component subscribed to strictly nothing but its own render data).
-  const workspaces = useDashboardStore((s) => s.workspaces);
-  const groups = useDashboardStore((s) => s.groups);
-  const sessions = useDashboardStore((s) => s.sessions);
+  const { workspaces, sessions, sortedGroups, groupWorkspaces, ungrouped, sessionIdsByWorkspace } =
+    useWorkspaceTree();
   const activeWorkspaceId = useDashboardStore((s) => s.activeWorkspaceId);
   // Tasks-as-a-destination — Tasks isn't a workspace, so while it's the
   // active view (viewMode === "kanban") no workspace item should paint as
@@ -150,31 +128,6 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
       useDashboardStore.getState().showWorkspace(id);
     }
   };
-
-  useEffect(() => {
-    void useDashboardStore.getState().refreshGroups();
-  }, []);
-
-  // P2 perf fix — the expensive part (recursively walking each workspace's
-  // serialized dockview layout JSON via extractSessionIds) now happens here,
-  // memoized on `workspaces` itself — recomputed only when the workspace
-  // list (or one of its layouts) actually changes identity, NOT on every
-  // render this component's own `sessions` selector above triggers (the 4s
-  // live-refresh tick, which touches `sessions` but never `workspaces`).
-  // deriveWorkspaceLiveStatus (above) does the cheap part — intersecting
-  // this memoized id Set against the current `sessions` array — on every
-  // render, unmemoized, since that's a plain O(sessions) scan with no JSON
-  // traversal.
-  const sessionIdsByWorkspace = useMemo(() => {
-    const map = new Map<number, Set<number>>();
-    for (const w of workspaces) map.set(w.id, extractSessionIds(w.layout));
-    return map;
-  }, [workspaces]);
-
-  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
-  const ungrouped = workspaces
-    .filter((w) => w.groupId === null)
-    .sort((a, b) => a.position - b.position);
 
   // Sidebar declutter (issue #1465) — collapsing the section hides every
   // workspace's own attention/working dot; this rolls them up into one
@@ -313,9 +266,7 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
             <GroupSection
               key={group.id}
               group={group}
-              workspaces={workspaces
-                .filter((w) => w.groupId === group.id)
-                .sort((a, b) => a.position - b.position)}
+              workspaces={groupWorkspaces(group.id)}
               sessions={sessions}
               sessionIdsByWorkspace={sessionIdsByWorkspace}
               activeWorkspaceId={displayActiveWorkspaceId}
@@ -532,7 +483,7 @@ function GroupSection({
         <button
           type="button"
           className="ws-group-color"
-          style={{ background: group.color ?? "var(--dim)" }}
+          style={{ background: groupColor(group) }}
           title="Change group color"
           onClick={(e) => {
             e.stopPropagation();
@@ -953,7 +904,7 @@ function WorkspaceItem({
 // ConfirmButton) until dismissed, freezing our own WS connections along
 // with it. Renders in place of the "+ New workspace" button that summons
 // it, so confirming/cancelling swaps it straight back — no extra rows.
-function NewWorkspaceForm({
+export function NewWorkspaceForm({
   onCreated,
   onCancel,
   createWorkspace,

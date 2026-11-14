@@ -57,13 +57,15 @@ export default defineConfig({
     // `?raw` included. styles/tokens.contrast.test.ts reads tokens.css as
     // text, so those files opt back in (sidebar-kit.css: the hover-actions
     // overlay contract in ui/sidebar/sidebar-kit.test.tsx; github-pr.css: the task
-    // strip's menu staying unclipped, ui/sidebar/TaskStatusBlock.test.tsx).
+    // strip's menu staying unclipped, ui/sidebar/TaskStatusBlock.test.tsx;
+    // left-rail.css: only the rail's middle region scrolls, LeftRail.test.tsx).
     css: {
       include: [
         /styles\/tokens\.css/,
         /styles\/sidebar-kit\.css/,
         /styles\/github-pr\.css/,
         /styles\/task-board\.css/,
+        /styles\/left-rail\.css/,
       ],
     },
     maxWorkers,
