@@ -7,8 +7,8 @@ import { randomPanelId } from "../random-id.js";
 import {
   findSessionWorkspaces,
   focusPanelForTier,
+  presentNewPanel,
   isTiledPanel,
-  maximizeIfTiled,
   openExternalFilePanel,
   openFileOnlyPanel,
   closeFilePanelsUnder,
@@ -442,7 +442,7 @@ export function usePanelOpener({
       // a workspace with no tiled panels), making a bare `maximizeGroup`
       // throw the same way applyMobilePresentation's own fix (panelUtils.ts)
       // prevents elsewhere.
-      if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
+      presentNewPanel(dockviewApi, panel, layout.tier);
       setSidebarOpen(false);
     },
     [dockviewApi, layout, setSidebarOpen, leaveTaskView],
@@ -462,7 +462,7 @@ export function usePanelOpener({
       params: { kind: "external" },
     });
     // Same guard as onOpenBrowserUrl above — see its own comment.
-    if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
+    presentNewPanel(dockviewApi, panel, layout.tier);
     setSidebarOpen(false);
   }, [dockviewApi, layout, setSidebarOpen, leaveTaskView]);
 
@@ -481,7 +481,7 @@ export function usePanelOpener({
             targetName,
             targetRev: Date.now(),
           });
-        existing.api.setActive();
+        focusPanelForTier(dockviewApi, existing, layout.tier);
       } else {
         const panel = dockviewApi.addPanel({
           id,
@@ -494,7 +494,7 @@ export function usePanelOpener({
           params: { projectId, previewSlug: slug, targetName },
         });
         // Same guard as onOpenBrowserUrl above — see its own comment.
-        if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
+        presentNewPanel(dockviewApi, panel, layout.tier);
       }
       setSidebarOpen(false);
     },

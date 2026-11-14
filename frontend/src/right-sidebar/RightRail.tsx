@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
 import type { RightSidebarView } from "./views.js";
@@ -43,11 +44,13 @@ function RailButton({ view, projectId, active, onClick }: RailButtonProps) {
 
 export interface RightRailProps {
   projectId: number | null;
+  /** #3010 — the right half's sessions, listed below the views. */
+  children?: ReactNode;
 }
 
 // Icon column on the right edge — always visible (desktop + tablet); clicking
 // a view's icon opens/closes its drawer.
-export function RightRail({ projectId }: RightRailProps) {
+export function RightRail({ projectId, children }: RightRailProps) {
   const openView = useDashboardStore((s) => (s.rightSidebarOpen ? s.rightSidebarView : null));
   const toggleView = useDashboardStore((s) => s.toggleRightSidebarView);
   return (
@@ -61,6 +64,7 @@ export function RightRail({ projectId }: RightRailProps) {
           onClick={() => toggleView(view.id)}
         />
       ))}
+      {children}
     </nav>
   );
 }

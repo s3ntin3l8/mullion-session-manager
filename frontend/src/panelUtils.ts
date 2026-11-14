@@ -7,7 +7,7 @@ import type {
   Position,
   SerializedDockview,
 } from "dockview";
-import type { Task, Workspace, TabletPaneCap, CodexHookTrust } from "./api/index.js";
+import type { Task, Workspace, CodexHookTrust } from "./api/index.js";
 import { positionToDirection } from "dockview";
 import type { Session, Device } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
@@ -231,19 +231,6 @@ export function tiledColumnCount(
   return ids.size;
 }
 
-// Explicit splits bypass tabletPositioning's cap. Warn once the resulting
-// tiled columns are past it, and only on the tablet tier, and only until
-// this workspace has already been told (the caller owns that set).
-export function shouldWarnTabletPaneCap(args: {
-  tier: LayoutTier;
-  columnCount: number;
-  cap: number;
-  alreadyWarned: boolean;
-}): boolean {
-  if (args.tier !== "tablet" || args.alreadyWarned) return false;
-  return args.columnCount > args.cap;
-}
-
 // A panel opened from the sidebar/launcher should only ever *peek* (float)
 // when there's already a tiled layout to peek across — the first panel in an
 // empty workspace should dock full-screen instead (issue #121). Checking
@@ -298,7 +285,35 @@ export function maximizeIfTiled(
 // post-workspace-switch highlight) go through here. Desktop/tablet behave
 // exactly as a bare `setActive()` always did.
 export function focusPanelForTier(api: DockviewApi, panel: IDockviewPanel, tier: LayoutTier): void {
+  if (halvesRouter?.(api, panel)) return;
   panel.api.setActive();
+  if (tier === "phone") maximizeIfTiled(api, panel);
+}
+
+// #3010 — between 800 and 1099px a workspace shows two panes, one per half.
+// App registers this while that layout is on screen: it shows the pane on the
+// half it belongs to (maximizing its group for the left half, the way the
+// phone shows one pane; rendering it beside the grid for the right half) and
+// returns true. Every focus and open path below goes through focusPanelForTier
+// or presentNewPanel, so they all land on the right half without each knowing
+// about halves. Null everywhere else.
+export type HalvesRouter = (api: DockviewApi, panel: IDockviewPanel) => boolean;
+let halvesRouter: HalvesRouter | null = null;
+export function setHalvesRouter(router: HalvesRouter | null): void {
+  halvesRouter = router;
+}
+export function halvesActive(): boolean {
+  return halvesRouter !== null;
+}
+
+/** After adding a panel: phone shows it alone; the halves place it. */
+export function presentNewPanel(
+  api: DockviewApi,
+  panel: IDockviewPanel | undefined,
+  tier: LayoutTier,
+): void {
+  if (!panel) return;
+  if (halvesRouter?.(api, panel)) return;
   if (tier === "phone") maximizeIfTiled(api, panel);
 }
 
@@ -338,6 +353,13 @@ function desktopPositioning(
     : { position: { direction: "right" } };
 }
 
+// The tablet bands that keep a grid (700-799px and 1100-1279px, #3010) still
+// never float a panel on a touch-first width: a new panel docks as a column
+// while fewer than two are tiled, and joins a tiled group as a tab after
+// that. This was the "tablet pane cap" setting (2 or 3); the 800-1099px band
+// now shows two halves instead, so the setting is gone and the limit is 2.
+const TABLET_COLUMN_LIMIT = 2;
+
 // Tablet tier plan, PR 4 — the capped-grid policy that gives tablet real
 // layout work of its own, rather than being a relabeled desktop. Docks as
 // its own column (`position: { direction: "right" }`) while fewer than
@@ -367,13 +389,13 @@ function desktopPositioning(
 // function needs.
 function tabletPositioning(
   api: DockviewApi,
-  cap: TabletPaneCap,
 ):
   | { position: { direction: "right" } }
   | { position: { referencePanel: IDockviewPanel; direction: "within" } }
   | Record<string, never> {
   const tiledPanels = api.panels.filter(isTiledPanel);
-  if (tiledColumnCount(api.panels) < cap) return { position: { direction: "right" } };
+  if (tiledColumnCount(api.panels) < TABLET_COLUMN_LIMIT)
+    return { position: { direction: "right" } };
   const target =
     api.activePanel && isTiledPanel(api.activePanel) ? api.activePanel : tiledPanels[0];
   if (!target) return {};
@@ -422,11 +444,15 @@ function positioningForTier(
   | { position: { direction: "right" } }
   | { position: { referencePanel: IDockviewPanel; direction: "within" } }
   | Record<string, never> {
+  // The halves show one grid pane at a time on the left, like the phone: a
+  // new panel must land in a tiled group, never float (a float cannot be
+  // maximized).
+  if (halvesActive()) return phonePositioning(api);
   switch (layout.tier) {
     case "phone":
       return phonePositioning(api);
     case "tablet":
-      return tabletPositioning(api, layout.tabletPaneCap);
+      return tabletPositioning(api);
     case "desktop":
       return desktopPositioning(api);
   }
@@ -784,7 +810,8 @@ export function openOrFocusPanel(
   const placement: PanelPlacement =
     spec.position !== undefined
       ? { position: spec.position }
-      : layout && (layout.tier === "phone" || (spec.applyDesktopPositioning ?? true))
+      : layout &&
+          (layout.tier === "phone" || halvesActive() || (spec.applyDesktopPositioning ?? true))
         ? positioningForTier(api, layout)
         : {};
 
@@ -796,7 +823,7 @@ export function openOrFocusPanel(
     params: spec.params,
     ...placement,
   });
-  if (layout?.tier === "phone") maximizeIfTiled(api, panel);
+  if (layout) presentNewPanel(api, panel, layout.tier);
 }
 
 export function openSessionPanel(
@@ -1541,13 +1568,25 @@ export function serializeForPersist(api: DockviewApi): SerializedDockview {
 // it shares desktop's "not phone" branch below (restore every header, exit
 // any maximize left over from a phone-tier session before this transition),
 // the same cleanup desktop already needed with no special-casing added.
-export function applyLayoutPresentation(api: DockviewApi, tier: LayoutTier): void {
-  const isPhone = tier === "phone";
+export function applyLayoutPresentation(
+  api: DockviewApi,
+  tier: LayoutTier | "halves",
+  // #3010 — the pane to show when the one-pane presentation starts: on
+  // folding, the one used last; on unfolding into the halves, the left one.
+  preferPanelId?: string | null,
+): void {
+  const onePane = tier === "phone" || tier === "halves";
   for (const group of api.groups) {
-    if (!isPhone || isTiledGroup(group)) group.header.hidden = isPhone;
+    if (!onePane || isTiledGroup(group)) group.header.hidden = onePane;
   }
-  if (!isPhone) {
+  if (!onePane) {
     if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
+    return;
+  }
+  const preferred = preferPanelId ? api.getPanel(preferPanelId) : undefined;
+  if (preferred && isTiledPanel(preferred)) {
+    preferred.api.setActive();
+    api.maximizeGroup(preferred);
     return;
   }
   if (api.hasMaximizedGroup()) return;

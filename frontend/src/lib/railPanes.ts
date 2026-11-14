@@ -2,7 +2,7 @@ import type { NotificationEvent, Project, Session } from "../api/index.js";
 import { commandToBinary, resolveAgentLogo } from "../cliLogos.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import type { Theme } from "../store/index.js";
-import { sessionDisplayTitle } from "./sessionDisplay.js";
+import { sessionPaneTitle } from "./sessionDisplay.js";
 
 // The left rail's pane list (#3009): one entry per pane open in a workspace.
 // Built here as plain data, so the list component only renders entries and a
@@ -37,7 +37,7 @@ const EXTENSION = /\.[a-z0-9]{1,4}$/i;
 
 /**
  * The few characters a rail entry has room for, picked from the title the
- * sidebar shows (sessionDisplayTitle). A task's number wins ("task #7 worker"
+ * pane's tab shows (sessionPaneTitle). A task's number wins ("task #7 worker"
  * is "#7"); otherwise the first word that is not the agent's own name, which
  * the logo already says ("claude · login fix" is "login"), not a flag, a path
  * prefix or a user@host, and without a file extension ("fake-agent.sh" is
@@ -101,7 +101,7 @@ export function buildRailPaneEntries(
         active,
       };
     }
-    const fullTitle = sessionDisplayTitle(session);
+    const fullTitle = sessionPaneTitle(session);
     const muted = ctx.mutedSessionIds.includes(session.id);
     const seen = ctx.lastSeenSeq[session.id] ?? 0;
     const events = ctx.events[session.id];

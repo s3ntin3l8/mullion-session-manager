@@ -53,9 +53,9 @@ function mockDockviewApi(): DockviewApi {
   } as unknown as DockviewApi;
 }
 
-const DESKTOP: LayoutContext = { tier: "desktop", tabletPaneCap: 2 };
-const TABLET: LayoutContext = { tier: "tablet", tabletPaneCap: 2 };
-const PHONE: LayoutContext = { tier: "phone", tabletPaneCap: 2 };
+const DESKTOP: LayoutContext = { tier: "desktop" };
+const TABLET: LayoutContext = { tier: "tablet" };
+const PHONE: LayoutContext = { tier: "phone" };
 
 const SPEC = {
   component: "terminal",

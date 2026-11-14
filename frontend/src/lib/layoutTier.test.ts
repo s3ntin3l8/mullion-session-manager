@@ -21,9 +21,8 @@ import type { LayoutBand, LayoutTier } from "./layoutTier.js";
 // each test mutate `mockSettings` before rendering, without vi.mock's
 // hoisted factory needing to close over anything declared later in the
 // file.
-let mockSettings: { layoutMode: "auto" | LayoutTier; tabletPaneCap: 2 | 3 } = {
+let mockSettings: { layoutMode: "auto" | LayoutTier } = {
   layoutMode: "auto",
-  tabletPaneCap: 2,
 };
 
 function storeState() {
@@ -259,22 +258,22 @@ describe("useCoarsePointer", () => {
 });
 
 describe("useLayoutContext", () => {
-  it("combines the resolved tier with the store's tabletPaneCap", () => {
+  it("resolves the tier from the store's layout mode", () => {
     stubBreakpointMedia("tablet");
-    mockSettings = { layoutMode: "auto", tabletPaneCap: 3 };
+    mockSettings = { layoutMode: "auto" };
 
     const { result } = renderHook(() => useLayoutContext());
 
-    expect(result.current).toEqual({ tier: "tablet", tabletPaneCap: 3 });
+    expect(result.current).toEqual({ tier: "tablet" });
   });
 
   it("respects an explicit layoutMode override from settings", () => {
     stubBreakpointMedia("phone");
-    mockSettings = { layoutMode: "desktop", tabletPaneCap: 2 };
+    mockSettings = { layoutMode: "desktop" };
 
     const { result } = renderHook(() => useLayoutContext());
 
-    expect(result.current).toEqual({ tier: "desktop", tabletPaneCap: 2 });
+    expect(result.current).toEqual({ tier: "desktop" });
   });
 });
 

@@ -20,7 +20,6 @@ import {
   hasTiledPanels,
   isTiledGroup,
   isTiledPanel,
-  shouldWarnTabletPaneCap,
   tiledColumnCount,
   maximizeIfTiled,
   focusPanelForTier,
@@ -149,10 +148,9 @@ const PROJECTS = [
 
 // Tablet tier plan, PR 4 — every open-or-focus-by-stable-id helper takes an
 // explicit LayoutContext now instead of a boolean/live matchMedia() read.
-const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop", tabletPaneCap: 2 };
-const PHONE_LAYOUT: LayoutContext = { tier: "phone", tabletPaneCap: 2 };
-const TABLET_LAYOUT_CAP2: LayoutContext = { tier: "tablet", tabletPaneCap: 2 };
-const TABLET_LAYOUT_CAP3: LayoutContext = { tier: "tablet", tabletPaneCap: 3 };
+const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop" };
+const PHONE_LAYOUT: LayoutContext = { tier: "phone" };
+const TABLET_LAYOUT: LayoutContext = { tier: "tablet" };
 
 const EXISTING_SESSION: Session = {
   id: 1,
@@ -404,7 +402,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "session-1", component: "terminal", params: {} });
     (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "session-2", position: { direction: "right" } }),
@@ -421,7 +419,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "session-3", component: "terminal", params: {} });
     (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[2][0];
     expect(addCall.id).toBe("session-2");
@@ -464,7 +462,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "floating-1", component: "terminal", params: {}, floating: {} });
     (api as unknown as { activePanel: unknown }).activePanel = api.getPanel("floating-1");
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[3][0];
     expect(addCall.id).toBe("session-2");
@@ -488,7 +486,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "session-3", component: "terminal", params: {} });
     (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-1" };
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     // Only 1 distinct group so far (< cap 2) -> still docks as its own
     // column, not a tab.
@@ -497,26 +495,10 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     );
   });
 
-  it("respects a higher configured cap (3)", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "session-1", component: "terminal", params: {} });
-    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
-    api.addPanel({ id: "session-3", component: "terminal", params: {} });
-    (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
-
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP3, PROJECTS);
-
-    // Only 2 distinct groups so far (< cap 3) -> still docks as its own
-    // column.
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "session-2", position: { direction: "right" } }),
-    );
-  });
-
   it("never floats on tablet, even under the cap — no floating-window touch interaction", () => {
     const api = mockDockviewApi();
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(addCall).not.toHaveProperty("floating");
@@ -1000,7 +982,7 @@ describe("openOrFocusProjectPanel", () => {
   it("tablet: applyDesktopPositioning: false still suppresses positioning (bare add)", () => {
     const api = mockDockviewApi();
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, TABLET_LAYOUT_CAP2, {
+    openOrFocusProjectPanel(api, 1, PROJECTS, TABLET_LAYOUT, {
       kind: "browser",
       titleLabel: "Preview",
       applyDesktopPositioning: false,
@@ -1305,24 +1287,6 @@ describe("tablet pane-cap notice (issue #1555)", () => {
     expect(
       tiledColumnCount([grid("a", "g1"), grid("b", "g1"), grid("c", "g2"), floating("d")]),
     ).toBe(2);
-  });
-
-  it("warns only on tablet, only past the cap, and only once", () => {
-    expect(
-      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 3, cap: 2, alreadyWarned: false }),
-    ).toBe(true);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 2, cap: 2, alreadyWarned: false }),
-    ).toBe(false);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 4, cap: 2, alreadyWarned: true }),
-    ).toBe(false);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "phone", columnCount: 4, cap: 2, alreadyWarned: false }),
-    ).toBe(false);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "desktop", columnCount: 4, cap: 2, alreadyWarned: false }),
-    ).toBe(false);
   });
 });
 

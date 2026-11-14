@@ -81,7 +81,7 @@ function storeState() {
 // tests assert the desktop path (selection in the sidebar's Tasks view).
 vi.mock("../lib/layoutTier.js", async (importOriginal) => ({
   ...(await importOriginal<typeof layoutTierModule>()),
-  useLayoutContext: () => ({ tier: "desktop" as const, tabletPaneCap: 2 }),
+  useLayoutContext: () => ({ tier: "desktop" as const }),
 }));
 
 vi.mock("../store/index.js", () => {

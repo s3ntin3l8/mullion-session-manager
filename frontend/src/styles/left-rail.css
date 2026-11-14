@@ -394,3 +394,139 @@
   min-height: 44px;
   font-size: 1rem;
 }
+
+/* ---- Two halves, 800-1099px (#3010) -------------------------------------- */
+/* Each half's header: the pane's title and the button that moves it to the
+   other half. With both halves on screen the focused one is marked, since it
+   is the one the key bar and the keyboard address. */
+.half-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+  box-shadow: inset 0 2px 0 transparent;
+}
+.half-header.focused {
+  box-shadow: inset 0 2px 0 var(--ring);
+}
+.half-header-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--fg);
+}
+.half-header-project {
+  color: var(--muted);
+}
+.half-header-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.half-header-btn:hover {
+  color: var(--fg);
+  background: var(--seg);
+}
+.half-header-close {
+  padding: 0 6px;
+}
+@media (pointer: coarse) {
+  .half-header {
+    min-height: 44px;
+  }
+  .half-header-btn {
+    min-height: 40px;
+    min-width: 40px;
+    justify-content: center;
+  }
+}
+.fold-half-right {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.fold-half-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* The right half's content fades in; its width never animates. The global
+   reduced-motion reset (tokens.css) covers this one too. */
+.fold-half-right {
+  animation: fold-half-in var(--motion-fade) var(--motion-ease);
+}
+@keyframes fold-half-in {
+  from {
+    opacity: 0;
+  }
+}
+/* A grid pane whose session shows on the right half stands aside. */
+.fold-elsewhere {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+/* The long-press menu on a rail entry. */
+.rail-entry-menu {
+  z-index: 48;
+  min-width: 200px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.rail-entry-menu-item {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-entry-menu-item:hover,
+.rail-entry-menu-item:focus-visible {
+  background: var(--seg);
+}
+/* Renaming a pane in place from its half's header. */
+.half-header-rename {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--ring);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8125rem;
+}
+@media (pointer: coarse) {
+  .half-header-rename {
+    height: 36px;
+    /* 16px at the root size: iOS zooms the page into a smaller input. */
+    font-size: 1rem;
+  }
+}

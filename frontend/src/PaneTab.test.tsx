@@ -104,7 +104,6 @@ function storeState() {
     settings: {
       sessions: { confirmBeforeKill: false },
       layoutMode: "desktop",
-      tabletPaneCap: 2,
     },
     markEventSeen,
     requestSplit,
@@ -868,7 +867,6 @@ describe("PaneTab", () => {
 
       expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session, {
         tier: "desktop",
-        tabletPaneCap: 2,
       });
     });
   });

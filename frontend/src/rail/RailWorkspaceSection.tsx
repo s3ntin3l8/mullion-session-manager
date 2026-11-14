@@ -1,5 +1,6 @@
 import type { RailPaneInput } from "../lib/railPanes.js";
 import { RailPanes } from "./RailPaneList.js";
+import type { RailPanesProps } from "./RailPaneList.js";
 import { WorkspaceChip } from "./WorkspaceChip.js";
 
 export interface RailWorkspaceSectionProps {
@@ -13,6 +14,8 @@ export interface RailWorkspaceSectionProps {
   onFocusPane: (panelId: string) => void;
   /** The "+" under the panes; App routes every "new session" through one function. */
   onNewSession: () => void;
+  /** #3010 — the long-press menu on a pane (move it to the other half). */
+  menuItems?: RailPanesProps["menuItems"];
 }
 
 // What the left rail's middle region holds in Workspace mode (#3009): the
@@ -26,6 +29,7 @@ export function RailWorkspaceSection({
   activePanelId,
   onFocusPane,
   onNewSession,
+  menuItems,
 }: RailWorkspaceSectionProps) {
   return (
     <>
@@ -38,6 +42,7 @@ export function RailWorkspaceSection({
             activePanelId={activePanelId}
             onFocus={onFocusPane}
             onAdd={onNewSession}
+            menuItems={menuItems}
           />
         </>
       )}
