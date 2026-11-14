@@ -1,6 +1,7 @@
-/* The right sidebar's Browser and Dock views (#3012), registered only on the
-   rails layouts (700 to 1099.98px). Both fill the view rather than scroll in
-   it: the browser page and the Dock log take the height that is left. */
+/* The right sidebar's Browser and Dock views (#3012), registered only below
+   1100px (the rails layouts, and full screen on the phone). Both fill the
+   view rather than scroll in it: the browser page and the Dock log take the
+   height that is left. */
 
 /* A view that fills the panel body: the body stops scrolling and lays the
    view out as a column; the view's own regions scroll instead. */

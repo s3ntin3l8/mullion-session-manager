@@ -35,7 +35,7 @@ import {
   useTaskMasterEnabled,
   useTasksBadge,
 } from "./views-badges.js";
-import { RAILS_BANDS, useEnabledInRailsBands } from "./viewBands.js";
+import { COMPANION_BANDS, useEnabledInCompanionBands } from "./viewBands.js";
 import type { RightSidebarView } from "./views.js";
 
 export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
@@ -98,17 +98,19 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     useEnabled: useAlwaysEnabled,
     hostGlobal: true,
   },
-  // Browser and Dock are views only on the rails layouts (`bands`): there the
-  // screen is a session with its companions beside it. From 1100px they stay
-  // a grid pane and the bottom Dock, and are not registered here.
+  // Browser and Dock are views only below 1100px (`bands`): on the rails
+  // layouts the screen is a session with its companions beside it, and on the
+  // phone they are rows of the "more" sheet that open full screen for the
+  // current session's project. From 1100px they stay a grid pane and the
+  // bottom Dock, and are not registered here.
   {
     id: "browser",
     label: "Browser",
     icon: GlobeIcon,
     Component: BrowserSidebarView,
     useBadge: useNoBadge,
-    useEnabled: useEnabledInRailsBands,
-    bands: RAILS_BANDS,
+    useEnabled: useEnabledInCompanionBands,
+    bands: COMPANION_BANDS,
   },
   {
     id: "dock",
@@ -116,7 +118,7 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: DockIcon,
     Component: DockSidebarView,
     useBadge: useNoBadge,
-    useEnabled: useEnabledInRailsBands,
-    bands: RAILS_BANDS,
+    useEnabled: useEnabledInCompanionBands,
+    bands: COMPANION_BANDS,
   },
 ];

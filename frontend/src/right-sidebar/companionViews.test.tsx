@@ -1,18 +1,20 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { RightRail } from "./RightRail.js";
 import { RightSidebar } from "./RightSidebar.js";
 import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
-import { RAILS_BANDS, viewInBand } from "./viewBands.js";
+import { COMPANION_BANDS, viewInBand } from "./viewBands.js";
 import { DESKTOP_NARROW_BAND_QUERY, RAILS_FULL_BAND_QUERY } from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Project } from "../api/index.js";
 import { DEFAULT_SETTINGS } from "../api/index.js";
 
-// Browser and Dock are right-rail views only on the rails layouts, 700 to
-// 1099.98px (#3012). From 1100px they are a grid pane and the bottom Dock.
+// Browser and Dock are right-sidebar views only below 1100px (#3012): on the
+// rail of the rails layouts (700 to 1099.98px), and on the phone through the
+// "more" sheet, full screen. From 1100px they are a grid pane and the bottom
+// Dock.
 
 vi.mock("./BrowserSidebarView.js", () => ({
   BrowserSidebarView: () => <div data-testid="browser-view" />,
@@ -74,14 +76,15 @@ describe("Browser and Dock registration (#3012)", () => {
       expect(view.hostGlobal).not.toBe(true);
       expect(view.label).toBe(id === "browser" ? "Browser" : "Dock");
       expect(view.icon).toBeTypeOf("function");
-      expect(view.bands).toEqual(RAILS_BANDS);
+      expect(view.bands).toEqual(COMPANION_BANDS);
     }
-    expect(RAILS_BANDS).toEqual(["rails-full", "rails-halves"]);
+    expect(COMPANION_BANDS).toEqual(["phone", "rails-full", "rails-halves"]);
   });
 
   it("viewInBand reads the bands; a view without bands is in every band", () => {
-    expect(viewInBand({ bands: RAILS_BANDS }, "rails-halves")).toBe(true);
-    expect(viewInBand({ bands: RAILS_BANDS }, "desktop-narrow")).toBe(false);
+    expect(viewInBand({ bands: COMPANION_BANDS }, "rails-halves")).toBe(true);
+    expect(viewInBand({ bands: COMPANION_BANDS }, "phone")).toBe(true);
+    expect(viewInBand({ bands: COMPANION_BANDS }, "desktop-narrow")).toBe(false);
     expect(viewInBand({}, "desktop")).toBe(true);
   });
 
@@ -128,4 +131,23 @@ describe("Browser and Dock registration (#3012)", () => {
     expect(useDashboardStore.getState().rightSidebarView).toBe("git");
     expect(localStorage.getItem("crs.rightSidebarView")).toContain("git");
   });
+
+  it.each(["browser", "dock"] as const)(
+    "%s opens full screen on the phone and stays open",
+    async (id) => {
+      setLayoutMode("phone");
+      useDashboardStore.setState({ followedProjectId: 1 });
+      render(<RightSidebar tier="phone" actions={actions} />);
+      // Opened after landing, as the "more" sheet's row does: the panel
+      // closes a view that was already open when the phone layout landed.
+      act(() => useDashboardStore.getState().openRightSidebarView(id));
+      const name = id === "browser" ? "Browser view" : "Dock view";
+      expect(screen.getByRole("dialog", { name })).toBeInTheDocument();
+      expect(screen.getByTestId(`${id}-view`)).toBeInTheDocument();
+      // The out-of-band close does not fire in the phone band.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+      expect(useDashboardStore.getState().rightSidebarView).toBe(id);
+    },
+  );
 });

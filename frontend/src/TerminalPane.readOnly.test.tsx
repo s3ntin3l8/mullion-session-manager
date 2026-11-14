@@ -13,6 +13,8 @@ import { registerTerminalInput, unregisterTerminalInput } from "./terminalInputR
 import { DockSidebarView } from "./right-sidebar/DockSidebarView.js";
 import type { RightSidebarActions } from "./right-sidebar/views.js";
 import { DockLogPane } from "./dock/DockLogPane.js";
+import { RightSidebar } from "./right-sidebar/RightSidebar.js";
+import { DEFAULT_SETTINGS } from "./api/index.js";
 
 // TerminalPane's `readOnly` (#3012), with the real component over a small
 // xterm stand-in. Kept apart from TerminalPane.test.tsx, which is at its size
@@ -295,6 +297,35 @@ describe("Dock view log is not a terminal input target (#3012)", () => {
     // The log is a real TerminalPane: an xterm Terminal was constructed for it.
     await waitFor(() => expect(Terminal).toHaveBeenCalled());
     expect(registerTerminalInput).not.toHaveBeenCalled();
+    unmount();
+    expect(unregisterTerminalInput).not.toHaveBeenCalled();
+    listDock.mockRestore();
+  });
+
+  // The phone (design 9.4): the "more" sheet opens the Dock view full screen
+  // over the session, whose key bar stays mounted. The log there must not
+  // become a key-bar target either.
+  it("on the phone, the full-screen Dock view's log never registers", async () => {
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1, name: "aurora-web" })],
+      sessions: [monitor],
+      sessionsLoaded: true,
+      followedProjectId: 1,
+      settings: { ...DEFAULT_SETTINGS, layoutMode: "phone" },
+    });
+    const listDock = vi
+      .spyOn(api, "listProjectDock")
+      .mockResolvedValue([{ id: "dev", title: "dev", command: "npm run dev" }]);
+    const actions = { onOpenDockConfig: vi.fn() } as unknown as RightSidebarActions;
+    const { unmount } = render(<RightSidebar tier="phone" actions={actions} />);
+    act(() => useDashboardStore.getState().openRightSidebarView("dock"));
+    expect(screen.getByRole("dialog", { name: "Dock view" })).toBeInTheDocument();
+    await screen.findByRole("button", { name: /^dev, running/ });
+    await waitFor(() => expect(Terminal).toHaveBeenCalled());
+    expect(registerTerminalInput).not.toHaveBeenCalled();
+    // No on-screen keyboard from a tap on the log.
+    const { textarea } = latestTerm();
+    expect(textarea.getAttribute("inputmode")).toBe("none");
     unmount();
     expect(unregisterTerminalInput).not.toHaveBeenCalled();
     listDock.mockRestore();

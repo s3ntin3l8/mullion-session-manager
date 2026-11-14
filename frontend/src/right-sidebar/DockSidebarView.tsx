@@ -15,9 +15,9 @@ import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
 
-// The right sidebar's Dock view (#3012), registered only on the rails layouts
-// (700 to 1099.98px; see viewBands.ts): the followed project's Dock, laid out
-// for touch. One section for the dock.json commands and one per Compose stack,
+// The right sidebar's Dock view (#3012), registered only below 1100px (the
+// rails layouts and, full screen from the "more" sheet, the phone; see
+// viewBands.ts): the followed project's Dock, laid out for touch. One section for the dock.json commands and one per Compose stack,
 // named after its compose project, so a dev and a prod stack never mix.
 // Tapping a row selects it; under the list, its actions are visible buttons
 // (what the bottom Dock keeps in hover menus and small kebabs) and its log.

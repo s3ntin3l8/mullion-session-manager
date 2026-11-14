@@ -596,11 +596,14 @@ survives a reload (or any other transient resize that hides it), via
 tiled or the previously-pinned control's identity no longer matches any row
 in it.
 
-## The Dock view in the right sidebar (700 to 1099px)
+## The Dock view in the right sidebar (below 1100px)
 
 Where the window is between 700 and 1099px wide (the rails layouts, among
 them a foldable unfolded, where the screen is a session with its
-companions beside it), the right rail has a **Dock** view. From 1100px it is
+companions beside it), the right rail has a **Dock** view. On a phone the
+"⋯" sheet lists it with the rail's other views, and it opens full screen for
+the current session's project; its log is read only there too, so the key
+bar never types into it. From 1100px it is
 not registered and the Dock stays the bottom panel described above.
 
 The view shows the project the right sidebar follows:

@@ -29,10 +29,12 @@ Open a preview using **Preview ▾** in a project's Dock header (see [`dock.md`]
 an empty pane with the address bar focused, for typing an arbitrary URL
 directly).
 
-## The Browser view in the right sidebar (700 to 1099px)
+## The Browser view in the right sidebar (below 1100px)
 
 Where the window is between 700 and 1099px wide (the rails layouts, among
-them a foldable unfolded), the right rail has a **Browser** view: the agent
+them a foldable unfolded), the right rail has a **Browser** view. On a phone
+the "⋯" sheet lists it with the rail's other views, and it opens full screen
+for the current session's project. The view shows the agent
 browser of the session the right sidebar follows, the same CDP-streamed page
 as a session's "Open Agent Browser" pane. The page fills the view under the
 pane's own address bar (back, forward, the address, reload). From 1100px the
