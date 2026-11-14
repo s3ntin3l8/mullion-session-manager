@@ -21,6 +21,7 @@ import type {
   Task,
 } from "../api/index.js";
 import { makeProject, makeTask } from "../test/fixtures.js";
+import { boardStoreStubs } from "../test/boardStoreStubs.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
@@ -65,6 +66,7 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    ...boardStoreStubs,
     taskMasterEnabled,
     kanbanOrder,
     setKanbanColumnOrder,

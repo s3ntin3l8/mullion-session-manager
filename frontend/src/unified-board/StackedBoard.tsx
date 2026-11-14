@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { TaskStatus } from "../api/index.js";
 import { prefersReducedMotion } from "../lib/motion.js";
+import { useDashboardStore } from "../store/index.js";
 import { ChevronDownIcon, ChevronRightIcon } from "../ui/icons.js";
 import { TaskStatusStrip } from "./TaskStatusStrip.js";
 import { initialOpenSections } from "./stackLayout.js";
@@ -10,7 +11,8 @@ import type { StackSection } from "./stackLayout.js";
 // The board while it is narrow (#3011, design section 2 frame 2b): one
 // section per status, active ones first, Backlog and Done collapsed. Each
 // header carries the count and a dot when a task in it needs the owner; the
-// strip on top jumps to a section and opens it. The cards themselves are the
+// strip on top, and the left rail's status list (#3026), jump to a section and
+// open it: both raise the store's statusJumpRequest, which this board consumes. The cards themselves are the
 // lanes' own (UnifiedBoard renders each section's body through TaskColumn), so
 // a card behaves the same in both layouts.
 export function StackedBoard({
@@ -46,6 +48,22 @@ export function StackedBoard({
 
   const sectionEls = useRef(new Map<TaskStatus, HTMLElement>());
   const [jump, setJump] = useState<{ id: TaskStatus; nonce: number } | null>(null);
+  const folds = (id: TaskStatus) => hideDone && (id === "done" || id === "failed");
+  // A request already in the store when this board mounts (made while the
+  // lanes showed, or left over) is not replayed: only a new nonce counts.
+  const request = useDashboardStore((s) => s.statusJumpRequest);
+  // Adjusted while rendering, like the selection above, so the section is
+  // open in the same commit the scroll effect runs in.
+  const [seenNonce, setSeenNonce] = useState(request?.nonce ?? 0);
+  if (request && request.nonce !== seenNonce) {
+    setSeenNonce(request.nonce);
+    const id = request.status;
+    // A status without a section here (Failed while empty) has nothing to open.
+    if (sections.some((s) => s.id === id)) {
+      if (!folds(id) && !open.has(id)) setOpen(new Set([...open, id]));
+      setJump({ id, nonce: request.nonce });
+    }
+  }
   useEffect(() => {
     if (!jump) return;
     // Optional call: jsdom has no scrollIntoView.
@@ -55,7 +73,6 @@ export function StackedBoard({
     });
   }, [jump]);
 
-  const folds = (id: TaskStatus) => hideDone && (id === "done" || id === "failed");
   const toggle = (id: TaskStatus) =>
     setOpen((prev) => {
       const next = new Set(prev);
@@ -63,11 +80,6 @@ export function StackedBoard({
       else next.add(id);
       return next;
     });
-  const onJump = (id: TaskStatus) => {
-    if (!folds(id)) setOpen((prev) => (prev.has(id) ? prev : new Set([...prev, id])));
-    setJump((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }));
-  };
-
   return (
     <div className="stacked-board">
       <TaskStatusStrip
@@ -76,8 +88,9 @@ export function StackedBoard({
           title: s.title,
           count: s.tasks.length,
           needsYou: s.needsYou,
+          needsYouCount: s.needsYouCount,
         }))}
-        onJump={onJump}
+        onJump={(id) => useDashboardStore.getState().requestStatusJump(id)}
       />
       {sections.map((section) => {
         const expanded = open.has(section.id) && !folds(section.id);

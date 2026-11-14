@@ -25,6 +25,7 @@ import type {
   Task,
 } from "../api/index.js";
 import { makeHost, makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import { boardStoreStubs } from "../test/boardStoreStubs.js";
 
 let sessions: Session[];
 let hosts: Host[];
@@ -60,6 +61,7 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    ...boardStoreStubs,
     taskMasterEnabled,
     kanbanOrder,
     setKanbanColumnOrder,

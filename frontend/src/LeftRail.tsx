@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { Session } from "./api/index.js";
 import { needsYouTasks } from "./github/taskMasterSummary.js";
 import { NotificationBell } from "./NotificationBell.js";
+import { RailStatusList } from "./rail/RailStatusList.js";
 import type { SettingsSection } from "./Settings.js";
 import { useDashboardStore } from "./store/index.js";
 import { GearIcon, GridIcon, LayersIcon, SearchIcon, SidebarToggleIcon } from "./ui/icons.js";
@@ -21,7 +22,8 @@ export interface LeftRailProps {
   /** Touch tablets: the bell's feed as a bottom sheet instead of a popover. */
   notificationSheet?: boolean;
   /**
-   * The rail's middle region, shown in Workspace mode only, the one part of
+   * The rail's middle region in Workspace mode (Tasks mode fills its own,
+   * the board's statuses), the one part of
    * the rail that scrolls: App passes RailWorkspaceSection (the workspace
    * chip and, while the left sidebar is not showing, the open panes).
    */
@@ -123,6 +125,13 @@ export function LeftRail({
             {middle}
           </div>
         </>
+      )}
+      {tasksMode && (
+        // Tasks mode's middle region (#3026): the board's statuses, each a
+        // jump. Nothing else of Workspace mode's belongs here.
+        <div className="left-rail-middle" data-rail-region="middle">
+          <RailStatusList />
+        </div>
       )}
       <div className="left-rail-bottom">
         <button

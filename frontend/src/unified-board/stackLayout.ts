@@ -54,6 +54,8 @@ export interface StackSection {
   tasks: Task[];
   /** Whether a task in it needs the owner (the board's "Needs me" definition). */
   needsYou: boolean;
+  /** How many of its tasks need the owner. */
+  needsYouCount: number;
 }
 
 /** The stacked board's sections for the board's (already filtered) tasks. */
@@ -62,11 +64,13 @@ export function stackSections(tasks: Task[]): StackSection[] {
   for (const id of STACK_ORDER) {
     const sectionTasks = boardColumnTasks(tasks, id);
     if (id === "failed" && sectionTasks.length === 0) continue;
+    const needsYouCount = sectionTasks.filter((t) => needsYouReason(t) !== null).length;
     sections.push({
       id,
       title: BOARD_COLUMNS.find((c) => c.id === id)?.title ?? id,
       tasks: sectionTasks,
-      needsYou: sectionTasks.some((t) => needsYouReason(t) !== null),
+      needsYou: needsYouCount > 0,
+      needsYouCount,
     });
   }
   return sections;

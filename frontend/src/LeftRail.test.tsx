@@ -89,17 +89,71 @@ describe("LeftRail in Workspace mode", () => {
 describe("LeftRail in Tasks mode", () => {
   beforeEach(() => useDashboardStore.setState({ viewMode: "kanban" }));
 
-  it("holds only the mode switch and the bottom cluster", () => {
+  it("holds the mode switch, the statuses region and the bottom cluster", () => {
     const { container } = renderRail({ middle: <span>CHIP</span> });
     expect(modeButton(/^Tasks/)).toHaveAttribute("aria-pressed", "true");
     expect(modeButton(/^Workspace$/)).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: "Sidebar" })).toBeNull();
-    expect(container.querySelector('[data-rail-region="middle"]')).toBeNull();
+    // The middle region is the board's statuses; Workspace mode's entries stay out.
     expect(screen.queryByText("CHIP")).toBeNull();
+    expect(container.querySelector('[data-rail-region="middle"]')).not.toHaveTextContent("CHIP");
     // The palette only launches into a workspace (issue #730).
     expect(screen.getByRole("button", { name: "Command palette" })).toBeDisabled();
     expect(screen.getByTestId("bell")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Settings" })).toBeEnabled();
+  });
+
+  describe("status list", () => {
+    const entries = [
+      { id: "reviewing", title: "Reviewing", count: 2, needsYou: true, needsYouCount: 1 },
+      { id: "ready", title: "Ready", count: 1, needsYou: false, needsYouCount: 0 },
+      { id: "done", title: "Done", count: 0, needsYou: false, needsYouCount: 0 },
+    ] as const;
+    beforeEach(() =>
+      useDashboardStore.setState({ boardStatuses: [...entries], statusJumpRequest: null }),
+    );
+    afterEach(() => useDashboardStore.setState({ boardStatuses: [], statusJumpRequest: null }));
+
+    it("lists the board's statuses with counts, names and a dot for the ones needing the owner", () => {
+      renderRail();
+      const list = screen.getByRole("group", { name: "Task statuses" });
+      expect(
+        within(list).getByRole("button", { name: "Reviewing, 2 tasks, 1 needs you" }),
+      ).toBeInTheDocument();
+      expect(within(list).getByRole("button", { name: "Ready, 1 task" })).toBeInTheDocument();
+      expect(within(list).getByRole("button", { name: "Done, 0 tasks" })).toBeInTheDocument();
+      expect(list.querySelectorAll(".rail-status-dot")).toHaveLength(1);
+      expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent("2");
+    });
+
+    it("a tap raises a jump request, again for the same status", async () => {
+      const user = userEvent.setup();
+      renderRail();
+      await user.click(screen.getByRole("button", { name: /^Ready/ }));
+      expect(useDashboardStore.getState().statusJumpRequest).toEqual({ status: "ready", nonce: 1 });
+      await user.click(screen.getByRole("button", { name: /^Ready/ }));
+      expect(useDashboardStore.getState().statusJumpRequest?.nonce).toBe(2);
+    });
+
+    it("lists nothing in Workspace mode", () => {
+      useDashboardStore.setState({ viewMode: "list" });
+      renderRail({ middle: <span>CHIP</span> });
+      expect(screen.queryByRole("group", { name: "Task statuses" })).toBeNull();
+      expect(screen.getByText("CHIP")).toBeInTheDocument();
+    });
+
+    it("is empty before the board has published", () => {
+      useDashboardStore.setState({ boardStatuses: [] });
+      const { container } = renderRail();
+      expect(screen.queryByRole("group", { name: "Task statuses" })).toBeNull();
+      expect(container.querySelector('[data-rail-region="middle"]')).toBeEmptyDOMElement();
+    });
+
+    it("is at least 44px tall under a coarse pointer", () => {
+      expect(railCss).toMatch(
+        /@media \(pointer: coarse\)\s*\{\s*\.rail-status-entry\s*\{\s*min-height:\s*44px/,
+      );
+    });
   });
 
   it("switches back to Workspace mode", async () => {

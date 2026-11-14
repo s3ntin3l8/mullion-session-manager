@@ -6,6 +6,8 @@ export interface StatusStripEntry {
   count: number;
   /** A task in this status needs the owner: the entry carries a dot. */
   needsYou: boolean;
+  /** How many of the status's tasks need the owner (the rail names it). */
+  needsYouCount: number;
 }
 
 // The statuses of the stacked board with their counts, each one a jump to
