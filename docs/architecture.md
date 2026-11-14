@@ -619,8 +619,8 @@ Layout mode (`settings.layoutMode`) can force a tier.
 | `phone`          | under 700    | `phone`   | top bar, one pane at a time, mode bar with "⋯"; no rails                     |
 | `rails-full`     | 700 to 799   | `tablet`  | left rail, grid, right rail; an open right-sidebar view takes the full width |
 | `rails-halves`   | 800 to 1099  | `tablet`  | two halves, a rail each (`useLayoutPresentation` returns `"halves"`)         |
-| `desktop-narrow` | 1100 to 1279 | `tablet`  | left rail, grid, docked right sidebar, bottom Dock                           |
-| `desktop`        | 1280 and up  | `desktop` | the same, with the left sidebar docked                                       |
+| `desktop-narrow` | 1100 to 1279 | `tablet`  | the desktop shell, with the left sidebar collapsed by default                |
+| `desktop`        | 1280 and up  | `desktop` | left rail, docked left sidebar, grid, docked right sidebar, bottom Dock      |
 
 A coarse pointer changes target sizes (44px), adds the terminal key bar, turns
 popovers into sheets and drops hover-only controls at any width; it does not
@@ -634,12 +634,25 @@ grid, so the grid and its terminals stay mounted). Tasks mode hides the left
 sidebar and the Dock from 700px. See [`tasks.md`](tasks.md).
 
 **Left rail** (`LeftRail.tsx`, from 700px): the mode switch, the left
-sidebar's toggle, the workspace chip and list (`rail/WorkspaceChip.tsx`), the
-open panes with a "+" while the left sidebar is not showing
-(`rail/RailPaneList.tsx`), and at the bottom the command box (the ⌘K palette),
-the notification bell and Settings. The left sidebar (projects and their
-sessions, workspaces) is docked from 1280px and a drawer below
-(`PhoneNavigator.tsx`: Projects, Tasks, Settings tabs).
+sidebar's toggle (from 1100px only), the workspace chip and list
+(`rail/WorkspaceChip.tsx`), the open panes with a "+" while the left sidebar is
+not showing (`rail/RailPaneList.tsx`), and at the bottom the command box (the
+⌘K palette), the notification bell and Settings.
+
+**Left sidebar** (projects and their sessions, workspaces; `Sidebar.tsx` with
+`WorkspaceSwitcher.tsx`): docked from 1100px, pushing the grid, never
+floating. From 1280px it is open by default and the rail's toggle flips the
+persisted `sidebarCollapsed`; from 1100 to 1279px it is collapsed by default
+and the toggle flips a flag local to that band (App.tsx's
+`narrowSidebarShown`, reset each time the window enters the band), so the
+wider preference is not touched. From 700 to 1099px there is no left sidebar
+and no toggle: the rail's workspace chip switches workspaces, its pane list
+and "+" reach the open panes and the launcher, and the launcher (its Where row,
+and its Open existing tab under a coarse pointer) and the ⌘K palette's
+session search reach any project's sessions (#3041). Like the phone's, the
+sidebar still mounts there, hidden, because it loads projects, sessions, hosts
+and tasks and owns the GitHub subscriptions. A forced `tablet` layout mode
+resolves to the two-halves band, so it gets no left sidebar either.
 
 **Right rail and sidebar** (`right-sidebar/`): docked at every width from
 700px, never floating. The rail's views are Git, History, GitHub, Tasks (when

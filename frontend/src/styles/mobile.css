@@ -175,7 +175,7 @@
      but not the bottom: in landscape on a notched phone, the home-indicator
      area could otherwise clip the last row of the nav list or scrolled
      section content. Same `env(safe-area-inset-bottom)` pattern already
-     used by the sidebar drawer (sidebar.css), added to each pane's own bottom edge rather than the fixed-size
+     used elsewhere for the home-indicator inset, added to each pane's own bottom edge rather than the fixed-size
      `.settings-modal` shell, since these are the parts that actually
      scroll. */
   .settings-content-body {
@@ -350,105 +350,6 @@
   }
 }
 
-/* The navigator drawer (App.tsx / PhoneNavigator.tsx) from 700 to 1279px: the
-   left rail's sidebar button and the drawer's own ✕ close it. The phone has
-   no drawer since #3014. Not width-scoped: the navigator only mounts on the
-   tablet tier. */
-.phone-nav-header {
-  flex: none;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--chrome);
-  border-bottom: 1px solid var(--border);
-}
-.phone-nav-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 4px 0 16px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--muted);
-}
-.phone-nav-tabs {
-  display: flex;
-  gap: 6px;
-  padding: 6px 12px 10px;
-  overflow-x: auto;
-}
-.phone-nav-tab {
-  flex: 1 0 auto;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 0.875rem;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-.phone-nav-tab[aria-pressed="true"],
-.phone-nav-tab.current {
-  color: var(--fg);
-  border-color: var(--accent-solid);
-  background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
-}
-.phone-nav-settings {
-  padding-bottom: 12px;
-}
-/* The Settings tab's filter (issue #1880). The phone list showed every
-   section unfiltered, so finding one of them meant scrolling past all of
-   them; the desktop rail has had this box since the search index landed.
-   Same shape as the desktop's `.settings-nav-search`, sized for a phone:
-   the input is 16px so iOS does not zoom the page on focus. */
-.phone-nav-settings-search {
-  margin: 10px 12px 8px;
-}
-/* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
-.phone-nav-settings-search > .ui-input {
-  font-size: 1rem;
-}
-.phone-nav-settings-empty {
-  padding: 16px;
-  font-size: 0.78125rem;
-  color: var(--dim);
-}
-.phone-nav-settings-group {
-  padding: 12px 16px 4px;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.phone-nav-settings-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 48px;
-  padding: 0 16px;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 0.9375rem;
-  text-align: left;
-  cursor: pointer;
-}
-.phone-nav-settings-row:active {
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-.phone-nav-settings-icon {
-  display: flex;
-  color: var(--muted);
-}
-.phone-nav-settings-title {
-  flex: 1;
-}
 /* Task board status strip, [New task][Filter] row and filter sheet
    (UnifiedBoard.tsx `phone`) — unscoped: they only render on compact tiers. */
 .task-card-sync-error-text {

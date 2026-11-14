@@ -9,8 +9,9 @@ import { useDashboardStore } from "./store/index.js";
 import { GearIcon, GridIcon, LayersIcon, SearchIcon, SidebarToggleIcon } from "./ui/icons.js";
 
 export interface LeftRailProps {
-  /** Shows or hides the left sidebar (desktop: collapse; tablet: the drawer). */
-  onToggleSidebar: () => void;
+  /** Shows or hides the docked left sidebar. Unset from 700 to 1099px, which
+   *  has no left sidebar (#3041): the button is not rendered. */
+  onToggleSidebar?: () => void;
   /** Whether the left sidebar is showing, for the toggle's pressed state. */
   sidebarShown: boolean;
   /** The command box: the command palette. */
@@ -103,19 +104,21 @@ export function LeftRail({
         <>
           <span className="left-rail-sep" aria-hidden="true" />
           {/* The left sidebar's toggle. On the rail rather than in the
-              sidebar: below 1280px the sidebar is a drawer, and a control
-              inside a closed drawer cannot open it. */}
-          <button
-            type="button"
-            className={`left-rail-btn${sidebarShown ? "" : " collapsed"}`}
-            aria-pressed={sidebarShown}
-            aria-label="Sidebar"
-            title={sidebarShown ? "Hide sidebar" : "Show sidebar"}
-            onClick={onToggleSidebar}
-            data-toggle-sidebar
-          >
-            <SidebarToggleIcon size={17} />
-          </button>
+              sidebar: a control inside a collapsed sidebar cannot open it.
+              Only where there is a left sidebar, from 1100px (#3041). */}
+          {onToggleSidebar && (
+            <button
+              type="button"
+              className={`left-rail-btn${sidebarShown ? "" : " collapsed"}`}
+              aria-pressed={sidebarShown}
+              aria-label="Sidebar"
+              title={sidebarShown ? "Hide sidebar" : "Show sidebar"}
+              onClick={onToggleSidebar}
+              data-toggle-sidebar
+            >
+              <SidebarToggleIcon size={17} />
+            </button>
+          )}
           {/* ---- Middle region (Workspace mode only) ----
               The workspace chip with its group squares and, while the
               sidebar is not showing, the workspace's open panes with a "+"

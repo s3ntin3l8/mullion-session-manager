@@ -41,9 +41,9 @@ const FOCUSABLE_SELECTOR =
 // CommandPalette.tsx already marks its own conditionally-hidden
 // skip-permissions block (`visibility: hidden` + `aria-hidden` on the same
 // wrapper). `visibility` is checked on its own too (see `isVisibilityHidden`)
-// so a node that is only `visibility: hidden` — the closed sidebar drawer,
-// which deliberately does not use `display: none` — is the same kind of
-// focus black hole.
+// so a node that is only `visibility: hidden` — the left sidebar hidden in
+// Tasks mode, which deliberately does not use `display: none` — is the same
+// kind of focus black hole.
 function isAriaHidden(el: Element): boolean {
   return el.closest('[aria-hidden="true"]') !== null;
 }

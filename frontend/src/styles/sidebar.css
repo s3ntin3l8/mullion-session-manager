@@ -1,37 +1,6 @@
 /* ============================================================ */
 /* Sidebar                                                        */
 /* ============================================================ */
-.cmux-scrim {
-  display: none;
-  position: fixed;
-  /* Issue #87 — starts under the phone's top bar, inset-aware, and from
-     700px under nothing but the top safe-area inset (`--shell-bar-h`,
-     app-shell.css, #3009), so its top edge always lines up with
-     .sidebar-wrapper's own matching top offset. `--shell-top` (issue #1387, tablet.css) follows .app's own top down
-     when iOS pans the visual viewport with the keyboard open; 0px
-     otherwise. */
-  top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
-  /* Clear of the left rail from 700px (#3009), so the rail stays usable. */
-  left: var(--left-rail-w, 0px);
-  right: 0;
-  bottom: 0;
-  /* Fallback declaration first, unconditionally: a browser with no
-     backdrop-filter support drops that whole declaration and keeps this
-     flat tint instead — same "plain value first, enhanced value second"
-     pattern as .toolbar's own env()-fallback height (toolbar.css). The
-     tint is lighter than the old flat 48% black specifically because the
-     blur below is doing most of the separation work now; keeping the old
-     48% on top of a blur would read as near-opaque. */
-  background: color-mix(in srgb, #000 30%, transparent);
-  z-index: 40;
-}
-@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-  .cmux-scrim {
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px);
-  }
-}
-
 .sidebar-wrapper {
   width: var(--sidebar-width, 288px);
   flex-shrink: 0;
@@ -47,73 +16,14 @@
      takes its final size at once. */
 }
 
-/* The navigator drawer, tablet tier only (the phone has no drawer since
-   #3014), not a raw viewport width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
-   wide window still floats the sidebar and a forced desktop on a narrow
-   window stays docked (issue #1531). Was a `max-width: 1279.98px` query,
-   which only matched the JS tier in `auto`. `:where()` adds no specificity,
-   so a descendant rule written inside it (`.sidebar-wrapper`) still ties
-   the way that query did, and a later file (compact.css's tablet width)
-   wins where it used to. An `&` rule
-   does not: `&` expands to `:is(:where(...))`, so `&.sb-open .sidebar-wrapper`
-   is one class lighter than the old `.app.sb-open .sidebar-wrapper`. Nothing
-   else targets those state classes, so the computed result still matches. */
-:where(.app[data-tier="tablet"]) {
-  .sidebar-wrapper {
-    position: fixed !important;
-    /* Under the top safe-area inset, beside the left rail (#3009). */
-    top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
-    left: var(--left-rail-w, 0px);
-    bottom: 0;
-    width: min(310px, 84vw) !important;
-    padding-left: env(safe-area-inset-left);
-    padding-bottom: env(safe-area-inset-bottom);
-    z-index: 45;
-    /* Past the rail too, so the closing slide never paints over it. */
-    transform: translateX(calc(-101% - var(--left-rail-w, 0px)));
-    /* The closed drawer is off-screen but not inert in browsers without
-       `inert` support (Safari < 15.5), so its session rows, filter input
-       and kebab menus would still be tabbable and still be read by a
-       screen reader. `visibility: hidden` takes them out of both: an
-       element that is not visible is not focusable.
-
-       `visibility` rather than `display: none` on purpose — the drawer's
-       scroll container is what the session list's virtualizer measures, and
-       `display: none` would give it a zero-height box and break the row
-       count. The delayed visibility transition keeps the drawer visible for
-       the length of the slide-out, so closing still animates. */
-    visibility: hidden;
-    transition:
-      transform 0.24s ease,
-      visibility 0s linear 0.24s;
-    box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
-  }
-  &.sb-open .sidebar-wrapper {
-    transform: none;
-    visibility: visible;
-    /* No delay on the way in — the drawer must be visible as it slides. */
-    transition:
-      transform 0.24s ease,
-      visibility 0s;
-  }
-  &.sb-open .cmux-scrim {
-    display: block !important;
-  }
-}
-
-/* Desktop-only collapse — genuinely docked-sidebar-only behavior, unlike
-   the overlay above: a persisted `sidebarCollapsed` preference from a
-   previous desktop session has no CSS effect on the phone or tablet tier
-   (`toggleSidebar` itself stops writing to it off desktop too — see that
-   function's own comment). The `&` rules below are one class lighter than
-   the old `.app.sidebar-collapsed` selectors (`&` inside `:where()` is
-   `:is(:where(...))`); nothing else competes with them. */
-:where(.app[data-tier="desktop"]) {
-  &.sidebar-collapsed .sidebar-wrapper {
-    width: 0;
-    border-right: none;
-    overflow: hidden;
-  }
+/* The docked sidebar's collapse, from 1100px (#3041): App.tsx sets
+   `.sidebar-collapsed` only where the sidebar is docked (from 1280px from the
+   persisted preference, from 1100 to 1279px from that band's own
+   collapsed-by-default flag), so the rule needs no width or tier gate. */
+.app.sidebar-collapsed .sidebar-wrapper {
+  width: 0;
+  border-right: none;
+  overflow: hidden;
 }
 
 /* Resize handle on the sidebar's right edge — hover-revealed, same pattern

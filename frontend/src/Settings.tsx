@@ -42,16 +42,11 @@ export type { SettingsSection, SettingsSectionLink } from "./settings/settingsSe
 export function Settings({
   onClose,
   initialSection: initialSectionLink = "appearance",
-  startInContent = false,
   phone = false,
   backStack = false,
 }: {
   onClose: () => void;
   initialSection?: SettingsSectionLink;
-  // Phone navigator: the section was picked from its own list, so open
-  // straight into it — even Appearance, which otherwise means "generic
-  // open, show the list first" (see mobileNavOpen below).
-  startInContent?: boolean;
   // Phone tier: back from a section's content returns to the list before it
   // closes Settings (usePhoneBackStack).
   phone?: boolean;
@@ -84,9 +79,7 @@ export function Settings({
   // site. A future deep link that specifically targets Appearance would
   // start on the nav list instead of its content; harmless (one extra tap),
   // and not a case that exists today.
-  const [mobileNavOpen, setMobileNavOpen] = useState(
-    initialSection === "appearance" && !startInContent,
-  );
+  const [mobileNavOpen, setMobileNavOpen] = useState(initialSection === "appearance");
   // Both registered here, in this order, so the stack is [Settings, section
   // content] — effects run child-first, so registering Settings' own entry
   // from App would land it ABOVE the section entry. Back pops the section to

@@ -78,9 +78,9 @@ export function useCoarsePointer(): boolean {
   return coarse;
 }
 
-// "Compact" = phone OR tablet: the tiers where the sidebar is a floating
-// overlay (not docked) and the phone-era navigation affordances (navigator,
-// session picker, back stack) apply. Prefer this over a bare
+// "Compact" = phone OR tablet: the tiers where the phone-era affordances
+// (back stack, touch sheets for the bell) apply. Says nothing about the left
+// sidebar, which follows the band (#3041): docked from 1100px, absent below. Prefer this over a bare
 // `tier !== "desktop"` so the intent is greppable.
 export function isCompactTier(tier: LayoutTier): boolean {
   return tier !== "desktop";

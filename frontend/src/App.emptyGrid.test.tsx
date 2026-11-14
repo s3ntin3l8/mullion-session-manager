@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // The mocks live in the shared harness; import it before App.
-import { setLayoutMode, stubWidth } from "./test/appHarness.js";
+import { setLayoutMode, stubPxWidth, stubWidth } from "./test/appHarness.js";
 import { App } from "./App.js";
 import { useDashboardStore } from "./store/index.js";
 
@@ -36,16 +36,31 @@ describe("App empty workspace", () => {
     expect(screen.queryByRole("button", { name: "Launch a session" })).toBeNull();
   });
 
-  it("offers the launcher and the sidebar under a coarse pointer, with no ⌘K", async () => {
+  it("points a fine pointer below 1100px at ⌘K alone, with no sidebar to pick from", () => {
+    stubPxWidth(1000);
+    render(<App />);
+    expect(screen.getByText("⌘K to launch or find a session")).toBeInTheDocument();
+    expect(screen.queryByText(/pick a session from the sidebar/)).toBeNull();
+  });
+
+  it("offers only the launcher under a coarse pointer below 1100px, with no ⌘K", async () => {
     stubWidth("tablet", true);
-    const { container } = render(<App />);
+    render(<App />);
     expect(screen.queryByText(/⌘K/)).toBeNull();
     const launch = screen.getByRole("button", { name: "Launch a session" });
     await userEvent.click(launch);
     expect(openLauncher).toHaveBeenCalledTimes(1);
-    // The tablet's drawer starts closed, so the sidebar is one tap away here.
+    // No left sidebar from 700 to 1099px (#3041), so nothing to show.
+    expect(screen.queryByRole("button", { name: "Show the sidebar" })).toBeNull();
+  });
+
+  it("offers the collapsed docked sidebar under a coarse pointer at 1200px", async () => {
+    stubPxWidth(1200, true);
+    const { container } = render(<App />);
+    expect(container.querySelector(".app")).toHaveClass("sidebar-collapsed");
     await userEvent.click(screen.getByRole("button", { name: "Show the sidebar" }));
-    expect(container.querySelector(".app")).toHaveClass("sb-open");
+    expect(container.querySelector(".app")).not.toHaveClass("sidebar-collapsed");
+    expect(screen.queryByRole("button", { name: "Show the sidebar" })).toBeNull();
   });
 
   it("drops the sidebar button when the sidebar already shows", () => {
