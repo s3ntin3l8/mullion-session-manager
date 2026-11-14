@@ -97,6 +97,33 @@ export function createDockCommands({ CliUsageError, requireOne }) {
         }),
       };
     },
+    // `config get [<projectId>]` / `config set [<projectId>] --upsert <json> | --remove <id> | --controls <json>`.
+    async config(client, args) {
+      const [action, ...rest] = args;
+      const flagIdx = rest.findIndex((a) => a.startsWith("--"));
+      const positional = flagIdx === -1 ? rest : rest.slice(0, flagIdx);
+      const body = positional[0] !== undefined ? { projectId: positional[0] } : {};
+      if (action === "get") {
+        return { json: await client.request("projects.get_dock_config", body) };
+      }
+      if (action !== "set" || flagIdx === -1) {
+        throw new CliUsageError(
+          "usage: dock config get | set [<projectId>] --upsert <json> | --remove <id> | --controls <json>",
+        );
+      }
+      const flag = rest[flagIdx];
+      const value = rest[flagIdx + 1];
+      if (value === undefined) throw new CliUsageError(`${flag} needs a value`);
+      if (flag === "--remove") body.remove = value;
+      else if (flag === "--upsert" || flag === "--controls") {
+        try {
+          body[flag.slice(2)] = JSON.parse(value);
+        } catch {
+          throw new CliUsageError(`${flag} must be valid JSON`);
+        }
+      } else throw new CliUsageError(`unknown flag ${flag}`);
+      return { json: await client.request("projects.set_dock_config", body) };
+    },
     async stop(client, args) {
       // `stop <controlId> --control` (own project) / `stop <projectId> <controlId>`,
       // else a raw session id (full scope).

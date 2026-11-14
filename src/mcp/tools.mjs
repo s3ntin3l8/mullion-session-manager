@@ -8,6 +8,7 @@
 // `isError: true` result rather than a protocol-level failure.
 
 import { createDockTools } from "./dock-tools.mjs";
+import { getDockConfig, setDockConfig } from "./dock-config-tools.mjs";
 import { browserToolResult } from "./browser-screenshot.mjs";
 import { useDevice } from "./device-use.mjs";
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
@@ -1335,6 +1336,8 @@ export const TOOLS = [
   getMessageStatus,
   killChildSession,
   stopDockSession,
+  getDockConfig,
+  setDockConfig,
   getScrollback,
   getSessionTranscript,
   pushTaskBranch,

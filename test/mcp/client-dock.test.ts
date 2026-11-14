@@ -194,4 +194,21 @@ describe("MullionClient dock methods", () => {
       ["docks.switch", { projectId: "2", dockControlId: "dev", branch: "feat/x" }],
     ]);
   });
+
+  it("getDockConfig / setDockConfig use projects.get_dock_config / set_dock_config", async () => {
+    const ops: unknown[] = [];
+    const socketPath = await startControlServer((msg, socket) => {
+      ops.push([msg.op, msg.body]);
+      socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: {} })}\n`);
+    });
+    const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+    await client.getDockConfig();
+    await client.setDockConfig("2", { upsert: { id: "a" } });
+    await client.setDockConfig(undefined, { remove: "a" });
+    expect(ops).toEqual([
+      ["projects.get_dock_config", {}],
+      ["projects.set_dock_config", { projectId: "2", upsert: { id: "a" } }],
+      ["projects.set_dock_config", { remove: "a" }],
+    ]);
+  });
 });

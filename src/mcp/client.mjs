@@ -462,6 +462,24 @@ export class MullionClient {
     });
   }
 
+  /** The project's raw `.crs/dock.json` document (#3050). */
+  getDockConfig(projectId) {
+    return this.controlRequest(
+      "projects.get_dock_config",
+      projectId !== undefined ? { projectId } : {},
+    );
+  }
+
+  /** Replace (`controls`), upsert one (`upsert`) or remove one (`remove`) control (#3050). */
+  setDockConfig(projectId, { controls, upsert, remove } = {}) {
+    return this.controlRequest("projects.set_dock_config", {
+      ...(projectId !== undefined ? { projectId } : {}),
+      ...(controls !== undefined ? { controls } : {}),
+      ...(upsert !== undefined ? { upsert } : {}),
+      ...(remove !== undefined ? { remove } : {}),
+    });
+  }
+
   /** The caller's own project's dock controls and what is running (#2494). */
   listDockControls(projectId) {
     return this.controlRequest("docks.list", projectId !== undefined ? { projectId } : {});

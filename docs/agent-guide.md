@@ -283,6 +283,13 @@ Docker discovery is not agent-controllable. A dock session started before
 Mullion recorded which control it ran (#2494) is not found by `list`; stop it
 from the dashboard once.
 
+Set the dock up with `mullion dock config get` / `set` (MCP `get_dock_config` /
+`set_dock_config`): `--upsert '<control json>'` adds or replaces one control,
+`--remove <id>` drops one, `--controls '<json>'` replaces the whole list. It
+edits `.crs/dock.json` in your own checkout (so it appears in your diff), is
+validated exactly like Settings → Dock, and refuses to overwrite an unparseable
+file.
+
 `start` runs the control's command, env and cwd from `.crs/dock.json`, a file in
 your own checkout that you can edit — no new capability beyond the shell you
 already have.
