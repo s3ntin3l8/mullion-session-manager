@@ -48,7 +48,12 @@ import { useDragResize } from "./hooks/useDragResize.js";
 import { useReportTerminalPalette } from "./hooks/useReportTerminalPalette.js";
 import { RightSidebar } from "./right-sidebar/RightSidebar.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
-import { isCompactTier, resolveLayoutTier, useCoarsePointer } from "./lib/layoutTier.js";
+import {
+  isCompactTier,
+  resolveLayoutTier,
+  useCoarsePointer,
+  useLayoutBand,
+} from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
 import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
@@ -147,6 +152,9 @@ export function App() {
   const [layoutTier, setLayoutTier] = useState<LayoutTier>(() =>
     resolveLayoutTier(useDashboardStore.getState().settings.layoutMode),
   );
+  // The finer five-way band, exposed as `data-band` for later slices; nothing
+  // reads it yet. Independent of `isCoarsePointer` below.
+  const layoutBand = useLayoutBand(useDashboardStore((s) => s.settings.layoutMode));
   const isMobile = layoutTier === "phone";
   const compact = isCompactTier(layoutTier);
   // Touch affordances (key bar, tab-strip panning) are gated on pointer
@@ -1114,6 +1122,7 @@ export function App() {
   return (
     <div
       data-tier={layoutTier}
+      data-band={layoutBand}
       className={themeClassName(
         theme,
         "app",
