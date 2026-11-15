@@ -16,7 +16,9 @@
 // slice this estimator actually reads; `SidebarFlatRow` is assignable to it
 // at the one call site (Sidebar.tsx's VirtualizedProjectTree) with no cast
 // needed.
-export type SidebarRowSizeInput = { type: "header" } | { type: "session"; session: { id: number } };
+export type SidebarRowSizeInput =
+  | { type: "header" | "other-header" | "other-project" }
+  | { type: "session"; session: { id: number } };
 
 export const PROJECT_HEADER_ROW_ESTIMATE = 32;
 export const SESSION_ROW_ESTIMATE_COLLAPSED = 54;
@@ -43,7 +45,7 @@ export function estimateSidebarRowHeight(
   expandedSessionRowIds: ReadonlySet<number>,
 ): number {
   if (!row) return SESSION_ROW_ESTIMATE_COLLAPSED;
-  if (row.type === "header") return PROJECT_HEADER_ROW_ESTIMATE;
+  if (row.type !== "session") return PROJECT_HEADER_ROW_ESTIMATE;
   return expandedSessionRowIds.has(row.session.id)
     ? SESSION_ROW_ESTIMATE_EXPANDED
     : SESSION_ROW_ESTIMATE_COLLAPSED;

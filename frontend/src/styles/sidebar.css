@@ -147,6 +147,24 @@
   font-size: 0.65625rem;
   color: var(--dim);
 }
+/* #2075 — the collapsible "Other projects" section header: a real button,
+   styled as a section header. */
+.sidebar-other-projects-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 15px 6px 16px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--dim);
+}
+.sidebar-other-projects-header:focus-visible {
+  outline: 2px solid var(--b);
+  outline-offset: -2px;
+}
 /* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
    on `.sidebar-section-header`, same "own modifier class, not the shared
    base" posture as `.source-control-header` (empty-states.css) — Devices'

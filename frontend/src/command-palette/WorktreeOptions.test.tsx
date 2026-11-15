@@ -1,20 +1,16 @@
 // @vitest-environment jsdom
 // <WorktreeOptions> — the launcher's opt-in "isolate this session" toggle
-// (issue #271, option 1) and its P9 branches-fetch failure case. Split out
-// of the former monolithic CommandPalette.test.tsx (PR 29, Wave 5 of
-// .claude/plans/can-we-do-a-warm-cocke.md) — every test here mounts the
-// full <CommandPalette> rather than <WorktreeOptions> in isolation, matching
-// this codebase's existing split-test-file precedent (see
-// session-row/GitLine.test.tsx): the toggle checkbox lives in
-// CommandPalette's own target strip, and CommandPalette's `launch()` reads
-// worktreeEnabled/worktreeBaseRef (passed down as controlled props) at
+// (issue #271, option 1) and its P9 branches-fetch failure case. Every test
+// here mounts the full New session launcher rather than <WorktreeOptions> in
+// isolation: the toggle lives in the launcher's Where row, and the launch
+// reads worktreeEnabled/worktreeBaseRef (passed down as controlled props) at
 // launch time, so a real mount is the only way to exercise that interaction
-// end-to-end.
-import type { ComponentProps } from "react";
+// end-to-end. (It lived in the command palette until #3054 moved every
+// launch to the launcher.)
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { CommandPalette } from "../CommandPalette.js";
+import { SessionLauncherHost } from "../launchers/SessionLauncher.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Launcher, Project } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
@@ -48,7 +44,23 @@ const PROJECT: Project = {
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
-describe("CommandPalette -> worktree isolation toggle", () => {
+function renderLauncher() {
+  const utils = render(
+    <SessionLauncherHost panels={[]} phone={false} onLaunched={vi.fn()} onOpenSession={vi.fn()} />,
+  );
+  act(() => useDashboardStore.getState().openLauncher({ projectId: PROJECT.id }));
+  return utils;
+}
+
+// The base-ref picker: every combobox but the Where row's Project.
+const baseRefPickers = () =>
+  screen.queryAllByRole("combobox").filter((el) => el.getAttribute("aria-label") !== "Project");
+const findBaseRefPicker = async () => {
+  await vi.waitFor(() => expect(baseRefPickers()).toHaveLength(1));
+  return baseRefPickers()[0]!;
+};
+
+describe("New session launcher -> worktree isolation toggle", () => {
   const LAUNCHER = { id: "agent:bash", kind: "shell" as const, title: "bash", command: "bash" };
 
   function mockFetch(opts: {
@@ -84,7 +96,12 @@ describe("CommandPalette -> worktree isolation toggle", () => {
   }
 
   beforeEach(() => {
-    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      viewMode: "list",
+      launcherRequest: null,
+    });
   });
 
   afterEach(() => {
@@ -93,32 +110,11 @@ describe("CommandPalette -> worktree isolation toggle", () => {
 
   it("is off by default and shows no base-ref picker", async () => {
     vi.stubGlobal("fetch", mockFetch({}));
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
+    renderLauncher();
 
     const toggle = await screen.findByLabelText("Isolate in a new worktree");
     expect(toggle).not.toBeChecked();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(baseRefPickers()).toHaveLength(0);
   });
 
   // Issue #271 follow-up — the repo's resolved default branch wins over the
@@ -143,31 +139,10 @@ describe("CommandPalette -> worktree isolation toggle", () => {
       }),
     );
     const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
+    renderLauncher();
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
-    const select = await screen.findByRole("combobox");
+    const select = await findBaseRefPicker();
     // Hermes review, PR #695 — WorktreeOptions now tags options the same
     // way PromoteDialog's dropdown already does ("(default)"/"(current)").
     expect(select).toHaveDisplayValue("origin/main (default)");
@@ -197,31 +172,10 @@ describe("CommandPalette -> worktree isolation toggle", () => {
       }),
     );
     const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
+    renderLauncher();
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
-    const select = await screen.findByRole("combobox");
+    const select = await findBaseRefPicker();
     expect(select).toHaveDisplayValue("origin/main (default)");
     expect(screen.getByRole("option", { name: "main (current)" })).toBeInTheDocument();
   });
@@ -247,31 +201,10 @@ describe("CommandPalette -> worktree isolation toggle", () => {
       }),
     );
     const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
+    renderLauncher();
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
-    const select = await screen.findByRole("combobox");
+    const select = await findBaseRefPicker();
     expect(select).toHaveDisplayValue("main (current)");
     expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
   });
@@ -293,31 +226,10 @@ describe("CommandPalette -> worktree isolation toggle", () => {
       }),
     );
     const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
+    renderLauncher();
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
-    await screen.findByRole("combobox");
+    await findBaseRefPicker();
     await user.click((await screen.findAllByText("bash"))[0]);
 
     expect(onCreateSession).toHaveBeenCalledWith(
@@ -329,28 +241,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
     const onCreateSession = vi.fn();
     vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
     const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
+    renderLauncher();
 
     await user.click((await screen.findAllByText("bash"))[0]);
 
@@ -363,45 +254,22 @@ describe("CommandPalette -> worktree isolation toggle", () => {
 // toggle (now inside <WorktreeOptions>, via useGitBranches) used to be a
 // `void somePromise.then(...)` with no `.catch` at all: a failure left a
 // stale/empty picker plus an unhandled rejection in the console, with
-// nothing visible to the user. See CommandPalette.test.tsx's own "P9 silent
-// failures" describe for the launch-side half of this fix (createSession's
-// failure path) — that one stayed there since it doesn't touch
-// <WorktreeOptions> at all.
-describe("CommandPalette -> WorktreeOptions -> P9 silent failures", () => {
+// nothing visible to the user. SessionLauncher.test.tsx's "shows a failed
+// launch inline" covers the launch-side half (createSession's failure path).
+describe("New session launcher -> WorktreeOptions -> P9 silent failures", () => {
   const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
-
-  function renderPalette(overrides: Partial<ComponentProps<typeof CommandPalette>> = {}) {
-    return render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-        {...overrides}
-      />,
-    );
-  }
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("a failed branches fetch (worktree toggle) surfaces an inline error instead of leaving the picker silently empty forever", async () => {
-    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      viewMode: "list",
+      launcherRequest: null,
+    });
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
@@ -411,7 +279,7 @@ describe("CommandPalette -> WorktreeOptions -> P9 silent failures", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    renderPalette();
+    renderLauncher();
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
 

@@ -882,7 +882,7 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByTitle("More…"));
       await userEvent.click(screen.getByText("Split right"));
 
-      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "right");
+      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "right", 1);
     });
 
     it("calls requestSplit with this tab's own api.id and 'below'", async () => {
@@ -892,7 +892,7 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByTitle("More…"));
       await userEvent.click(screen.getByText("Split down"));
 
-      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "below");
+      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "below", 1);
     });
   });
 

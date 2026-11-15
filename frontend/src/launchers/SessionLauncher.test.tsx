@@ -107,6 +107,27 @@ function stubFetch(
   return result;
 }
 
+// #3054 — an /actions response held open until `release.current()` is called.
+function holdActions(list: Launcher[], onCreateSession: (body: unknown) => void = () => {}) {
+  const release: { current: (() => void) | null } = { current: null };
+  const result = mockFetch({
+    "GET /api/projects/:id/actions": () =>
+      new Promise<Response>((resolve) => {
+        release.current = () => resolve(jsonResponse(200, list));
+      }),
+    "GET /api/codex/models": () => jsonResponse(200, []),
+    "GET /api/sessions": () => jsonResponse(200, []),
+    "POST /api/sessions": ({ init }) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      onCreateSession(body);
+      return jsonResponse(201, { id: 42, projectId: PROJECT.id, command: body.command });
+    },
+  });
+  unexpectedCalls = result.unexpectedCalls;
+  vi.stubGlobal("fetch", result.fetchMock);
+  return release;
+}
+
 function stubCoarsePointer() {
   vi.stubGlobal(
     "matchMedia",
@@ -710,5 +731,200 @@ describe("SessionLauncher — touch sheet", () => {
       "aria-selected",
       "true",
     );
+  });
+});
+
+// #3054 — a launch entry chosen in the command palette opens the launcher on
+// that entry; Launch takes focus once the launchers are in, so Enter launches
+// it. A split's target passes through to the caller, which places the session.
+describe("SessionLauncher — opened from the palette or a split (#3054)", () => {
+  it("preselects an agent, focuses Launch, and Enter launches it", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({ onCreateSession });
+    const user = userEvent.setup();
+    renderHost();
+    act(() =>
+      useDashboardStore.getState().openLauncher({ projectId: OTHER.id, launcherId: CODEX.id }),
+    );
+
+    const launch = await screen.findByRole("button", { name: "Launch codex" });
+    await waitFor(() => expect(launch).toHaveFocus());
+    expect(screen.getByRole("radio", { name: "codex" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue(String(OTHER.id));
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
+  });
+
+  it("preselects a shell over the default agent, and choosing an agent takes over", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({ onCreateSession });
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: BASH.id }));
+
+    const launch = await screen.findByRole("button", { name: "Launch bash" });
+    await waitFor(() => expect(launch).toHaveFocus());
+    expect(screen.getByRole("button", { name: "bash" })).toHaveAttribute("aria-current", "true");
+    await user.click(screen.getByRole("radio", { name: "codex" }));
+    expect(screen.getByRole("button", { name: "Launch codex" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "bash" })).not.toHaveAttribute("aria-current");
+
+    act(() => useDashboardStore.getState().closeLauncher());
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: BASH.id }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Launch bash" })).toHaveFocus());
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "bash" }));
+  });
+
+  it("a plain open keeps focus on the filter", async () => {
+    stubFetch();
+    renderHost();
+    openLauncher();
+    await screen.findByRole("radiogroup", { name: "Agent" });
+    expect(
+      screen.getByRole("textbox", { name: "Filter agents, shells and scripts" }),
+    ).toHaveFocus();
+  });
+
+  it("hands a split target to the caller with the launched session", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost();
+    act(() => useDashboardStore.getState().requestSplit("session-3", "below", PROJECT.id));
+
+    await user.click(await screen.findByRole("button", { name: "Launch claude" }));
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
+    expect(onLaunched).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }), {
+      projectId: PROJECT.id,
+      split: { referencePanelId: "session-3", direction: "below" },
+    });
+  });
+});
+
+describe("SessionLauncher — a fast Enter from the palette (#3054)", () => {
+  it("an Enter pressed while the launchers load launches the preselected entry once they arrive", async () => {
+    const onCreateSession = vi.fn();
+    let releaseActions: (() => void) | null = null;
+    const result = mockFetch({
+      "GET /api/projects/:id/actions": () =>
+        new Promise<Response>((resolve) => {
+          releaseActions = () => resolve(jsonResponse(200, [CLAUDE, CODEX, BASH]));
+        }),
+      "GET /api/codex/models": () => jsonResponse(200, []),
+      "GET /api/sessions": () => jsonResponse(200, []),
+      "POST /api/sessions": ({ init }) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        onCreateSession(body);
+        return jsonResponse(201, { id: 42, projectId: PROJECT.id, command: body.command });
+      },
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: CODEX.id }));
+
+    await screen.findByText("Loading launchers…");
+    await user.keyboard("{Enter}");
+    expect(onCreateSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(releaseActions).not.toBeNull());
+    await act(async () => releaseActions!());
+
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledTimes(1);
+    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
+  });
+
+  // Review of #3061: the palette's list can still be the previous project's
+  // when a row is picked, so the id may be missing from the launcher's list.
+  it("an id the loaded list lacks is no preselection: the early Enter is dropped and focus stays", async () => {
+    const onCreateSession = vi.fn();
+    const release = holdActions([CLAUDE, BASH], onCreateSession);
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: "npm:gone" }));
+
+    await screen.findByText("Loading launchers…");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(release.current).not.toBeNull());
+    await act(async () => release.current!());
+
+    await screen.findByRole("radiogroup", { name: "Agent" });
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("textbox", { name: "Filter agents, shells and scripts" }),
+    ).toHaveFocus();
+    expect(screen.getByRole("button", { name: "bash" })).not.toHaveAttribute("aria-current");
+  });
+
+  // Review of #3061: a hidden agent is in the fetched list but not a tile,
+  // so it must not count as found (Launch would run the first row instead).
+  it("a hidden agent's id is no preselection either", async () => {
+    const onCreateSession = vi.fn();
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        launchers: { ...DEFAULT_SETTINGS.launchers, hiddenAgents: ["codex"] },
+      },
+    });
+    const release = holdActions([CLAUDE, CODEX, BASH], onCreateSession);
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: CODEX.id }));
+
+    await screen.findByText("Loading launchers…");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(release.current).not.toBeNull());
+    await act(async () => release.current!());
+
+    await screen.findByRole("radiogroup", { name: "Agent" });
+    expect(screen.queryByRole("radio", { name: "codex" })).toBeNull();
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("textbox", { name: "Filter agents, shells and scripts" }),
+    ).toHaveFocus();
+  });
+
+  it("does not take focus from a user already typing in the filter", async () => {
+    const release = holdActions([CLAUDE, CODEX, BASH]);
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: CODEX.id }));
+
+    await screen.findByText("Loading launchers…");
+    const filter = screen.getByRole("textbox", { name: "Filter agents, shells and scripts" });
+    await user.keyboard("cod");
+    await waitFor(() => expect(release.current).not.toBeNull());
+    await act(async () => release.current!());
+
+    await screen.findByRole("button", { name: "Launch codex" });
+    expect(filter).toHaveFocus();
+    await user.keyboard("e");
+    expect(filter).toHaveValue("code");
+  });
+
+  it("populates Codex's model options from the live catalog", async () => {
+    const result = mockFetch({
+      "GET /api/projects/:id/actions": () => jsonResponse(200, [CLAUDE, CODEX]),
+      "GET /api/codex/models": () => jsonResponse(200, ["gpt-6-astra", "gpt-6-luna"]),
+      "GET /api/sessions": () => jsonResponse(200, []),
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: CODEX.id }));
+
+    await user.click(await screen.findByRole("radio", { name: "codex" }));
+    const select = await screen.findByRole("combobox", { name: "Model for this session" });
+    await waitFor(() =>
+      expect(within(select).getByRole("option", { name: "gpt-6-astra" })).toBeInTheDocument(),
+    );
+    expect(within(select).getByRole("option", { name: "gpt-6-luna" })).toBeInTheDocument();
+    // The static fallback list is not shown once the live catalog answers.
+    expect(within(select).queryByRole("option", { name: "gpt-6-sol" })).toBeNull();
   });
 });

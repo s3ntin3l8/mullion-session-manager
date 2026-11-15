@@ -43,15 +43,7 @@
 .cmd-palette-target-strip.global {
   background: color-mix(in srgb, var(--accent-solid) 6%, transparent);
 }
-.cmd-palette-options-strip {
-  padding: 6px 15px;
-  border-bottom: 1px solid var(--border-soft);
-}
-.cmd-palette-options-strip.loading {
-  font-size: 0.75rem;
-  color: var(--dim);
-}
-/* Project picker: tinted like the open "Launch in" chip so it can't be
+/* Project picker: tinted like the open project chip so it can't be
    mistaken for the action/integration list. */
 .cmd-palette-list.project-picker {
   background: color-mix(in srgb, var(--accent-solid) 6%, transparent);
@@ -149,12 +141,6 @@
   font-size: 0.65625rem;
   color: var(--r);
 }
-.cmd-palette-launch-error {
-  padding: 8px 15px;
-  font-size: 0.6875rem;
-  color: var(--r);
-  border-bottom: 1px solid var(--border-soft);
-}
 .cmd-palette-worktree-toggle {
   display: inline-flex;
   align-items: center;
@@ -165,13 +151,6 @@
 }
 .cmd-palette-worktree-toggle input {
   accent-color: var(--accent-solid);
-}
-/* Issue #1424 — per-session model picker, sits below the skip-permissions
-   row inside the same options strip. */
-.cmd-palette-model-picker {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-soft);
 }
 .cmd-palette-change-target {
   margin-left: auto;

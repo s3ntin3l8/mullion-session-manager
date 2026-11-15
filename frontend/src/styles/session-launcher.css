@@ -180,6 +180,11 @@
 .session-launcher-row:hover {
   background: var(--surface-hover);
 }
+/* #3054 — a shell or script chosen in the command palette: what Launch runs. */
+.session-launcher-row.on {
+  box-shadow: inset 2px 0 0 var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
+}
 .session-launcher-row-icon {
   color: var(--g);
 }

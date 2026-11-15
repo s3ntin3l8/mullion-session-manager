@@ -53,7 +53,10 @@ export function ProjectHeader({
   sessions: Session[];
   hosts: Host[];
   collapsed: boolean;
-  onToggleCollapsed: () => void;
+  // Omitted for a row with no body to open (#2075's "Other projects"): the
+  // header is then plain content, not a disclosure button, so its own "+"
+  // and menu are not nested inside a button.
+  onToggleCollapsed?: () => void;
   onOpenLauncher: () => void;
   onSessionEnded: (session: Session) => void;
   // Phase 4 (Gap F) — "Scaffold Mullion" kebab-menu entry, bound to this
@@ -152,22 +155,28 @@ export function ProjectHeader({
         // (both already wrapped in `onClick={(e) => e.stopPropagation()}`
         // for the mouse case), and without the guard tabbing to either and
         // pressing Enter/Space would ALSO toggle this row's collapse state.
-        role="button"
-        tabIndex={0}
-        aria-expanded={!collapsed}
-        aria-controls={bodyId}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggleCollapsed();
-          }
-        }}
+        role={onToggleCollapsed ? "button" : undefined}
+        tabIndex={onToggleCollapsed ? 0 : undefined}
+        aria-expanded={onToggleCollapsed ? !collapsed : undefined}
+        aria-controls={onToggleCollapsed ? bodyId : undefined}
+        onKeyDown={
+          onToggleCollapsed
+            ? (e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggleCollapsed();
+                }
+              }
+            : undefined
+        }
       >
-        <ChevronDownIcon
-          size={12}
-          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
-        />
+        {onToggleCollapsed ? (
+          <ChevronDownIcon
+            size={12}
+            className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+          />
+        ) : null}
         <FolderIcon size={15} />
         <span
           className="project-row-name"

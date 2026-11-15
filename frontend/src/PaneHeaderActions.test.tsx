@@ -5,20 +5,27 @@ import userEvent from "@testing-library/user-event";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import type { IDockviewHeaderActionsProps } from "dockview";
 
-// PaneHeaderActions only reads `requestSplit` off the store.
+// PaneHeaderActions reads `requestSplit` off the store, and the sessions
+// (through getState) to name the pane's project when it splits.
 const requestSplit = vi.fn();
 
 vi.mock("./store/index.js", () => {
-  const useDashboardStore = (selector: (s: unknown) => unknown) => selector({ requestSplit });
+  const useDashboardStore = Object.assign(
+    (selector: (s: unknown) => unknown) => selector({ requestSplit }),
+    { getState: () => ({ sessions: [{ id: 1, projectId: 7 }] }) },
+  );
   return { useDashboardStore };
 });
 
-function makeProps(overrides: { activePanel?: { id: string } | undefined } = {}) {
+function makeProps(overrides: { activePanel?: { id: string; params?: unknown } | undefined } = {}) {
   return {
     api: {},
     containerApi: {},
     panels: [],
-    activePanel: "activePanel" in overrides ? overrides.activePanel : { id: "session-1" },
+    activePanel:
+      "activePanel" in overrides
+        ? overrides.activePanel
+        : { id: "session-1", params: { sessionId: 1 } },
     isGroupActive: true,
     group: {},
     headerPosition: "top",
@@ -106,14 +113,22 @@ describe("PaneHeaderActions", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("calls requestSplit with the active panel's id and the clicked direction", async () => {
+  it("calls requestSplit with the active panel's id, the clicked direction and its project", async () => {
     renderInHeader(makeProps());
 
     await userEvent.click(screen.getByTitle("Split right"));
-    expect(requestSplit).toHaveBeenCalledWith("session-1", "right");
+    expect(requestSplit).toHaveBeenCalledWith("session-1", "right", 7);
 
     await userEvent.click(screen.getByTitle("Split down"));
-    expect(requestSplit).toHaveBeenCalledWith("session-1", "below");
+    expect(requestSplit).toHaveBeenCalledWith("session-1", "below", 7);
+  });
+
+  // #3054 — a pane that is not a session's still splits; the launcher then
+  // picks its usual default project.
+  it("splits a pane without a session with no project", async () => {
+    renderInHeader(makeProps({ activePanel: { id: "browser-1", params: {} } }));
+    await userEvent.click(screen.getByTitle("Split right"));
+    expect(requestSplit).toHaveBeenCalledWith("browser-1", "right", undefined);
   });
 
   // Issue: narrow headers overflow — below HIDE_SPLIT_ACTIONS_BELOW_GROUP_

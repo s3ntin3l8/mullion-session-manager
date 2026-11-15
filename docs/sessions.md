@@ -1,17 +1,24 @@
 # Starting a session
 
-Two surfaces start a session, and they send exactly the same request for the
-same choices (`frontend/src/launchers/useSessionLaunch.ts`):
+Every session starts in the New session launcher
+(`frontend/src/launchers/SessionLauncher.tsx`, launching through
+`frontend/src/launchers/useSessionLaunch.ts`); the command palette leads into
+it:
 
-- **The New session launcher** — it only launches. It opens from a sidebar
-  project's "+" (with that project preselected, still changeable), the
-  sidebar's "Launch a session" when a workspace is empty, the left rail's "+"
-  under the open panes (on the two halves, the "+" of each half), the empty
-  workspace's "Launch a session" under a touch pointer, and on the phone the
-  session switcher's "New session".
+- **The New session launcher** — the one place a session starts. It opens
+  from a sidebar project's "+" (with that project preselected, still
+  changeable), the sidebar's "Launch a session" when a workspace is empty, the
+  left rail's "+" under the open panes (on the two halves, the "+" of each
+  half), the empty workspace's "Launch a session" under a touch pointer, on the
+  phone the session switcher's "New session", and a pane's **Split right** /
+  **Split down** (with the pane's project preselected; the session, or an
+  existing one opened from the touch sheet, lands beside that pane).
 - **The command palette** (⌘K / Ctrl+K, and the left rail's command box) —
-  commands, sessions and workspaces, plus every launcher by typing its name. A
-  pane's split action still opens the palette scoped to that pane's project.
+  commands, sessions and workspaces, plus every agent, shell and script by
+  typing its name. The palette starts no session itself: choosing one opens
+  the launcher with that project and entry preselected and **Launch** focused,
+  so Enter launches it. The one exception is the search-only "Open session on
+  branch …", which starts the default agent on that branch directly.
 
 ## The launcher
 
