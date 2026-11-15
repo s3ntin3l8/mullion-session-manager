@@ -161,6 +161,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.launcher-form-retry {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.session-launcher-sheet .launcher-form-retry {
+  min-height: 44px;
+}
 /* "Skip permission prompts": the label spans both columns, the switch sits
    at the end, the hint lines up under the control column on one line. */
 .launcher-form-switch-row {

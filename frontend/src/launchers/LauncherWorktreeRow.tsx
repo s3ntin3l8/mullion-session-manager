@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "../api/index.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
@@ -11,9 +11,9 @@ import { Dropdown } from "../ui/primitives.js";
 // a project without branches (not a git repository, or the list failed)
 // disables the row with a one-line reason instead of an empty dropdown.
 //
-// The command palette keeps command-palette/WorktreeOptions.tsx, which only
-// fetches once its checkbox is ticked. This row needs to know up front
-// whether there is anything to branch from, so it fetches on every project.
+// It replaces command-palette/WorktreeOptions.tsx's checkbox, which only
+// fetched once ticked: this row needs to know up front whether there is
+// anything to branch from, so it fetches on every project.
 
 type Branches =
   | {
@@ -23,7 +23,8 @@ type Branches =
       current: string | null;
       def: string | null;
     }
-  | { projectId: number; status: "none"; reason: string };
+  // `retry`: the list failed (not "no branches"), so asking again may work.
+  | { projectId: number; status: "none"; reason: string; retry: boolean };
 
 export function LauncherWorktreeRow({
   projectId,
@@ -46,13 +47,19 @@ export function LauncherWorktreeRow({
   coarse: boolean;
 }) {
   const [loaded, setLoaded] = useState<Branches | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // The project the shared base ref was set for. A ref is only kept across a
+  // reload of the same project's branches: one seeded or picked for another
+  // project gives way to this project's default, even when this project also
+  // has a branch of that name (#3071 review).
+  const refProjectRef = useRef<number | null>(null);
   useAsyncData(
     () => api.getProjectGitBranches(projectId),
     (result) => {
       const local = (result?.branches ?? []).map((b) => b.name);
       const options = [...local, ...(result?.remoteBranches ?? [])];
       if (options.length === 0) {
-        setLoaded({ projectId, status: "none", reason: "Not a git repository" });
+        setLoaded({ projectId, status: "none", reason: "Not a git repository", retry: false });
         onEnabledChange(false);
         return;
       }
@@ -61,8 +68,10 @@ export function LauncherWorktreeRow({
       setLoaded({ projectId, status: "ready", options, current, def });
       // A ref picked for this project is kept; one left over from another
       // project is replaced by this one's default (then its current branch).
+      const sameProject = refProjectRef.current === projectId;
+      refProjectRef.current = projectId;
       onBaseRefChange((prev) =>
-        prev && options.includes(prev) ? prev : (def ?? current ?? options[0] ?? ""),
+        sameProject && prev && options.includes(prev) ? prev : (def ?? current ?? options[0] ?? ""),
       );
     },
     (err: unknown) => {
@@ -72,10 +81,11 @@ export function LauncherWorktreeRow({
         projectId,
         status: "none",
         reason: detail ? `Could not list branches: ${detail}` : "Could not list branches",
+        retry: true,
       });
       onEnabledChange(false);
     },
-    [projectId],
+    [projectId, attempt],
     { enabled: !baseOnPlacedHost },
   );
   // Another project's result is no result: still loading this one.
@@ -87,9 +97,23 @@ export function LauncherWorktreeRow({
     control = <span className="launcher-form-note">the host&apos;s default branch</span>;
   } else if (branches?.status === "none") {
     control = (
-      <span className="launcher-form-note" title={branches.reason}>
-        {branches.reason}
-      </span>
+      <>
+        <span className="launcher-form-note" title={branches.reason}>
+          {branches.reason}
+        </span>
+        {branches.retry && (
+          <button
+            type="button"
+            className="launcher-form-retry"
+            onClick={() => {
+              setLoaded(null);
+              setAttempt((n) => n + 1);
+            }}
+          >
+            Retry
+          </button>
+        )}
+      </>
     );
   } else {
     const options =

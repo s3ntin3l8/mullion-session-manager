@@ -627,4 +627,20 @@ describe("ui/KebabMenu sheet variant and focus", () => {
     await user.click(screen.getByRole("textbox", { name: "Elsewhere" }));
     expect(screen.getByRole("textbox", { name: "Elsewhere" })).toHaveFocus();
   });
+
+  it("a press outside on a tabindex=-1 container lets it take focus (a dockview pane)", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    render(
+      <div>
+        <div tabIndex={-1} data-testid="pane">
+          <p>Pane text</p>
+        </div>
+        <KebabMenu title="Manage" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    await user.click(screen.getByText("Pane text"));
+    expect(screen.getByTestId("pane")).toHaveFocus();
+  });
 });

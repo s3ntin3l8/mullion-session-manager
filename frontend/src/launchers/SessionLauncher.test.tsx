@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionLauncherHost } from "./SessionLauncher.js";
 import { DEFAULT_SETTINGS } from "../api/index.js";
@@ -1016,6 +1016,85 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     expect(onCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ worktree: { baseRef: "trunk" } }),
     );
+  });
+
+  it("a default branch seeded for one project gives way to the next one's default, even when both have it", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({
+      onCreateSession,
+      branchesByProject: {
+        [PROJECT.id]: BRANCHES,
+        [OTHER.id]: {
+          branches: [
+            { name: "main", isCurrent: false },
+            { name: "develop", isCurrent: true },
+          ],
+          worktrees: [],
+          remoteBranches: [],
+          defaultBranch: "develop",
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ projectId: PROJECT.id }));
+
+    const base = await screen.findByRole("combobox", { name: "Base branch" });
+    await waitFor(() => expect(base).toHaveValue("main"));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Project" }), "runway");
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Base branch" })).toHaveValue("develop"),
+    );
+    await user.click(screen.getByRole("switch", { name: "Isolate in a new worktree" }));
+    await user.click(await screen.findByRole("button", { name: "Launch claude" }));
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree: { baseRef: "develop" } }),
+    );
+  });
+
+  it("a failed branch list offers Retry, and a retry that works brings the dropdown back", async () => {
+    let fail = true;
+    const result = mockFetch({
+      "GET /api/projects/:id/actions": () => jsonResponse(200, [CLAUDE, BASH]),
+      "GET /api/projects/:id/git-branches": () =>
+        fail ? jsonResponse(503, { message: "Host is unreachable" }) : jsonResponse(200, BRANCHES),
+      "GET /api/sessions": () => jsonResponse(200, []),
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    expect(await screen.findByText(/Could not list branches/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Base branch" })).toBeNull();
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    const base = await screen.findByRole("combobox", { name: "Base branch" });
+    await waitFor(() => expect(base).toHaveValue("main"));
+    expect(screen.getByRole("switch", { name: "Isolate in a new worktree" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("arrow keys and typeahead on the project dropdown stop before Add project…", async () => {
+    stubFetch();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ projectId: OTHER.id }));
+
+    const project = await screen.findByRole("combobox", { name: "Project" });
+    expect(project).toHaveValue(String(OTHER.id));
+    // runway is the last project: ArrowDown would land on Add project….
+    expect(fireEvent.keyDown(project, { key: "ArrowDown" })).toBe(false);
+    expect(fireEvent.keyDown(project, { key: "End" })).toBe(false);
+    // "a" starts only Add project…; "m" starts a project and is left alone.
+    expect(fireEvent.keyDown(project, { key: "a" })).toBe(false);
+    expect(fireEvent.keyDown(project, { key: "m" })).toBe(true);
+    // From the first project, ArrowDown moves on as usual.
+    await userEvent.setup().selectOptions(project, "mullion");
+    expect(fireEvent.keyDown(project, { key: "ArrowDown" })).toBe(true);
   });
 
   it("the project ⋯ opens an anchored menu under a fine pointer", async () => {

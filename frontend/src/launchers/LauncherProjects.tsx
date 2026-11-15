@@ -1,4 +1,5 @@
 import { useContext, useEffect, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Session } from "../api/index.js";
 import { CreateProjectModal } from "../CreateProjectModal.js";
@@ -21,6 +22,7 @@ const NO_SESSIONS: Session[] = [];
 // The project dropdown's last entry. Never a project id: picking it opens the
 // Add project view and leaves the selection where it was.
 const ADD_PROJECT = "__add-project__";
+const ADD_PROJECT_LABEL = "Add project…";
 
 // The Where section's Project row (#3048, #3071): the project dropdown, whose
 // last entry is "Add project…", and a "⋯" menu with the chosen project's
@@ -64,7 +66,7 @@ export function LauncherProjectPicker({
   const projectOptions = [
     ...(projects.length === 0 ? [{ value: "", label: "No projects yet", disabled: true }] : []),
     ...projects.map((p) => ({ value: String(p.id), label: p.name })),
-    { value: ADD_PROJECT, label: "Add project…" },
+    { value: ADD_PROJECT, label: ADD_PROJECT_LABEL },
   ];
 
   const toast = (message: string, kind: "success" | "error") =>
@@ -137,8 +139,29 @@ export function LauncherProjectPicker({
     onClick: onAddProject,
   });
 
+  // A closed native <select> changes its value on ArrowDown and on typeahead
+  // (Windows and Linux): arrowing past the last project, or typing a letter
+  // only "Add project…" starts with, would open the Add view by surprise.
+  // Those keys stop at the last project; Add project… stays one deliberate
+  // pick away (a click, or the open list's Enter).
+  const guardAddEntry = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const select = e.target as HTMLElement;
+    if (!(select instanceof HTMLSelectElement) || e.altKey || e.metaKey || e.ctrlKey) return;
+    const lastProject = projects.length - 1;
+    const index = projects.findIndex((p) => String(p.id) === select.value);
+    if (["ArrowDown", "ArrowRight", "End", "PageDown"].includes(e.key)) {
+      if (index >= lastProject) e.preventDefault();
+      return;
+    }
+    if (e.key.length === 1) {
+      const key = e.key.toLowerCase();
+      const projectMatch = projects.some((p) => p.name.toLowerCase().startsWith(key));
+      if (!projectMatch && ADD_PROJECT_LABEL.toLowerCase().startsWith(key)) e.preventDefault();
+    }
+  };
+
   return (
-    <div className="launcher-form-control">
+    <div className="launcher-form-control" onKeyDown={guardAddEntry}>
       <Dropdown
         id={`${labelId}-select`}
         className="launcher-form-fill"

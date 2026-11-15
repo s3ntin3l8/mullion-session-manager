@@ -2,10 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
+import type { LayoutMode } from "../api/index.js";
 import { themeClassName } from "../store/theme.js";
 import { OverflowIcon } from "./icons.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
-import { useCoarsePointer, useLayoutContext } from "../lib/layoutTier.js";
+import { useCoarsePointer, useLayoutTier } from "../lib/layoutTier.js";
 import { BottomSheet } from "./BottomSheet.js";
 import { usePresence } from "../hooks/usePresence.js";
 import {
@@ -76,8 +77,10 @@ export interface KebabMenuSheet {
   closeLabel: string;
 }
 
+// Anything a press would focus, including a `tabindex="-1"` container (a
+// dockview pane activates its group when its content takes focus).
 const FOCUSABLE_TARGET =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+  "button, [href], input, select, textarea, [tabindex], [contenteditable]:not([contenteditable='false'])";
 
 export function KebabMenu({
   items,
@@ -108,7 +111,14 @@ export function KebabMenu({
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const coarse = useCoarsePointer();
-  const layout = useLayoutContext();
+  // The sheet's width modifier only. Read defensively: KebabMenu renders in
+  // plenty of places (and tests) whose store carries no settings, and only a
+  // `sheet` menu needs the tier at all.
+  const tier = useLayoutTier(
+    useDashboardStore(
+      (s) => (s as { settings?: { layoutMode?: LayoutMode } }).settings?.layoutMode,
+    ) ?? "auto",
+  );
   const asSheet = sheet !== undefined && coarse;
   const [open, setOpen] = useState(false);
   const popoverOpen = open && !asSheet;
@@ -439,7 +449,7 @@ export function KebabMenu({
           closeLabel={sheet.closeLabel}
           title={sheet.title}
           backStack
-          sheetClassName={`pane-actions-sheet${layout.tier === "phone" ? "" : " mobile-session-sheet--tablet"}`}
+          sheetClassName={`pane-actions-sheet${tier === "phone" ? "" : " mobile-session-sheet--tablet"}`}
           suppressRestoreRef={sheetSuppressRestoreRef}
         >
           <div
