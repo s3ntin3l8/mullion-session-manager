@@ -46,13 +46,15 @@
   background: var(--seg);
 }
 /* Active marker hugs the rail's right edge instead of an inset shadow, which
-   shifted the glyph off-center. */
+   shifted the glyph off-center. The 40px button leaves a 3.5px gutter in the
+   48px rail, and the rail clips its overflow: -3px keeps the 2px marker
+   inside it (#3055). */
 .right-rail-btn.active::after {
   content: "";
   position: absolute;
   top: 6px;
   bottom: 6px;
-  right: -5px;
+  right: -3px;
   width: 2px;
   border-radius: 1px;
   background: var(--ring);

@@ -158,7 +158,10 @@
   --fg: #171717;
   /* Same two roles as the dark theme above, re-tuned for light surfaces:
      --muted was #737373 (3.90:1 on --pane-hd — below AA) and --dim was
-     #9a9a9a (2.31:1). Now 5.67:1 and 4.72:1 worst-case. */
+     #9a9a9a (2.31:1).
+     #3045/#3055: they are now #484848 / #585858 (were #5a5a5a / #666666),
+     for the same stacked hover tint as the dark theme: 6.29:1 and 4.89:1 on
+     it, 8.31:1 and 6.46:1 flat. */
   --muted: #484848;
   --dim: #585858;
   /* --accent-solid doubles as a text color here (link/label text in the
