@@ -138,7 +138,25 @@ export interface StartTarget {
  * Supplied by the route, so this service does not depend on the plugin layer. */
 export type LaunchSession = (
   payload: Record<string, unknown>,
-) => Promise<{ statusCode: number; body: { id?: number; message?: string; code?: unknown } }>;
+) => Promise<{ statusCode: number; body: LaunchOutcome }>;
+
+/** The only parts of the launch response this service passes on: numbers and a
+ * known code. Upstream message text is deliberately not echoed to the caller. */
+export interface LaunchOutcome {
+  id?: number;
+  code?: "port_in_use";
+  port?: number;
+  holderSessionId?: number;
+}
+
+const LAUNCH_FAILURE: Record<number, string> = {
+  400: "The launch was refused as invalid.",
+  404: "Project not found.",
+  409: "The control is already running, or its port is in use.",
+  429: "Too many live sessions.",
+  502: "Failed to spawn the session.",
+  503: "The spawn outcome is unknown; check the dock.",
+};
 
 /** A relative `worktreePath` is anchored at the project checkout (what a
  * session user means), never at the Mullion process's cwd. */
@@ -245,8 +263,11 @@ export async function startDockControl(
   };
   const { statusCode, body } = await launch(payload);
   if (statusCode !== 201 || typeof body.id !== "number") {
-    return fail(statusCode >= 400 ? statusCode : 502, body.message ?? "Failed to start", {
+    const status = statusCode >= 400 ? statusCode : 502;
+    return fail(status, LAUNCH_FAILURE[status] ?? `Failed to start (HTTP ${status}).`, {
       ...(body.code !== undefined ? { code: body.code } : {}),
+      ...(body.port !== undefined ? { port: body.port } : {}),
+      ...(body.holderSessionId !== undefined ? { holderSessionId: body.holderSessionId } : {}),
     });
   }
   return { ok: true, value: { sessionId: body.id } };

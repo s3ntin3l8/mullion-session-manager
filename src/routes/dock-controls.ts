@@ -35,7 +35,18 @@ export async function dockControlsRoute(app: FastifyInstance) {
       headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
       payload,
     });
-    return { statusCode: res.statusCode, body: res.json() };
+    // Keep only numbers and a known code: nothing upstream is echoed back.
+    const raw = res.json() as Record<string, unknown>;
+    const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    return {
+      statusCode: res.statusCode,
+      body: {
+        id: num(raw.id),
+        code: raw.code === "port_in_use" ? "port_in_use" : undefined,
+        port: num(raw.port),
+        holderSessionId: num(raw.holderSessionId),
+      },
+    };
   };
 
   const send = <T>(reply: FastifyReply, result: DockControlResult<T>) =>
