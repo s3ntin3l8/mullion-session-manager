@@ -348,8 +348,8 @@ describe("ended session status label contrast (#1886)", () => {
       // --dim at opacity 1, and the same colour at the old row opacity of
       // 0.5. Pinned so a token edit that moves the composite is visible
       // here, not only the 3:1 floor.
-      resting: 5.29,
-      faded: 2.26,
+      resting: 6.98,
+      faded: 2.68,
       liveName: 15.45,
       endedName: 4.68,
     },
@@ -358,8 +358,8 @@ describe("ended session status label contrast (#1886)", () => {
       dim: tokenHex(lightBlock, "dim"),
       fg: tokenHex(lightBlock, "fg"),
       sidebar: tokenHex(lightBlock, "sidebar"),
-      resting: 5.21,
-      faded: 2.04,
+      resting: 6.46,
+      faded: 2.21,
       liveName: 16.28,
       endedName: 3.33,
     },

@@ -100,9 +100,10 @@ export function LeftRail({
           )}
         </button>
       </div>
+      {/* The same separator under the mode switch in both modes (#3055). */}
+      <span className="left-rail-sep" aria-hidden="true" />
       {!tasksMode && (
         <>
-          <span className="left-rail-sep" aria-hidden="true" />
           {/* The left sidebar's toggle. On the rail rather than in the
               sidebar: a control inside a collapsed sidebar cannot open it.
               Only where there is a left sidebar, from 1100px (#3041). */}

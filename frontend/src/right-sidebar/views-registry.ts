@@ -8,12 +8,12 @@
 // each other was an import cycle (issue #2414).
 
 import {
+  BriefcaseIcon,
   DeviceIcon,
   DockIcon,
   FolderIcon,
   GitBranchIcon,
   GitHubIcon,
-  GearIcon,
   GlobeIcon,
   HistoryIcon,
   ListIcon,
@@ -82,7 +82,7 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
   {
     id: "project",
     label: "Project",
-    icon: GearIcon,
+    icon: BriefcaseIcon,
     Component: ProjectSidebarView,
     useBadge: useNoBadge,
     useEnabled: useAlwaysEnabled,

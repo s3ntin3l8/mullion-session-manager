@@ -10,6 +10,7 @@ import { mockFetch } from "../test/mockFetch.js";
 import { makeSession } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
 import { useDashboardStore } from "../store/index.js";
+import launcherCss from "../styles/session-launcher.css?raw";
 
 const PROJECT: Project = {
   id: 5,
@@ -368,6 +369,34 @@ describe("SessionLauncher — desktop dialog", () => {
 });
 
 describe("SessionLauncher — skip permissions", () => {
+  it("renders the override row with the same structure for every agent (#3055)", async () => {
+    const OPENCODE: Launcher = {
+      id: "agent:opencode",
+      kind: "agent",
+      title: "opencode",
+      command: "opencode",
+    };
+    stubFetch({ launchers: [CLAUDE, OPENCODE, BASH] });
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+    const shape = () => {
+      const row = screen.getByRole("group", { name: /^Options for/ });
+      return [...row.children]
+        .filter((el) => el.classList.contains("session-launcher-option"))
+        .map((el) => el.className + ":" + [...el.children].map((c) => c.className).join("|"))
+        .slice(-1)[0];
+    };
+    await screen.findByRole("switch", { name: "Skip permission prompts" });
+    const claude = shape();
+    await user.click(screen.getByRole("radio", { name: "opencode" }));
+    const toggle = await screen.findByRole("switch", { name: "Skip permission prompts" });
+    expect(toggle).toHaveAccessibleDescription("Off in settings for opencode");
+    expect(shape()).toBe(claude);
+    // The row is a two-column grid in CSS, not a wrapping flex row.
+    expect(launcherCss).toMatch(/\.session-launcher-options \{[^}]*display:\s*grid/);
+  });
+
   it("off in settings: the switch starts off, launches off, and the override turns it on", async () => {
     const onCreateSession = vi.fn();
     stubFetch({ onCreateSession });
