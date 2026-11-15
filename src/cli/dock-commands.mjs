@@ -99,21 +99,28 @@ export function createDockCommands({ CliUsageError, requireOne }) {
     },
     // `config get [<projectId>]` / `config set [<projectId>] --upsert <json> | --remove <id> | --controls <json>`.
     async config(client, args) {
+      const usage =
+        "usage: dock config get [<projectId>] | set [<projectId>] --upsert <json> | --remove <id> | --controls <json>";
       const [action, ...rest] = args;
-      const flagIdx = rest.findIndex((a) => a.startsWith("--"));
-      const positional = flagIdx === -1 ? rest : rest.slice(0, flagIdx);
+      // One optional projectId and (for set) exactly one flag with a value; anything else is refused.
+      const positional = [];
+      const flags = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (!rest[i].startsWith("--")) {
+          positional.push(rest[i]);
+          continue;
+        }
+        if (rest[i + 1] === undefined) throw new CliUsageError(`${rest[i]} needs a value`);
+        flags.push([rest[i], rest[++i]]);
+      }
+      if (positional.length > 1) throw new CliUsageError(usage);
       const body = positional[0] !== undefined ? { projectId: positional[0] } : {};
       if (action === "get") {
+        if (flags.length > 0) throw new CliUsageError(usage);
         return { json: await client.request("projects.get_dock_config", body) };
       }
-      if (action !== "set" || flagIdx === -1) {
-        throw new CliUsageError(
-          "usage: dock config get | set [<projectId>] --upsert <json> | --remove <id> | --controls <json>",
-        );
-      }
-      const flag = rest[flagIdx];
-      const value = rest[flagIdx + 1];
-      if (value === undefined) throw new CliUsageError(`${flag} needs a value`);
+      if (action !== "set" || flags.length !== 1) throw new CliUsageError(usage);
+      const [flag, value] = flags[0];
       if (flag === "--remove") body.remove = value;
       else if (flag === "--upsert" || flag === "--controls") {
         try {

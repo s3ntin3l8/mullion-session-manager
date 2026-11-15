@@ -6,12 +6,14 @@
  * and size guards and remote-host proxying are exactly the UI's.
  *
  * At session scope the project comes from the session record
- * (resolveTargetProjectId) and the route is pointed at the caller's own
- * checkout with `?sessionId=<conn.sessionId>` — never a body field. Full scope
- * names the project, and may pass `sessionId` to target that session's checkout.
+ * (resolveTargetProjectId) and the route is told the caller's own session with
+ * `?sessionId=<conn.sessionId>` — never a body field. That selects the
+ * session's HOST: the file is the project's `.crs/dock.json` on that host (the
+ * one the dock reads), not a separate worktree's copy. Full scope names the
+ * project, and may pass `sessionId` to pick the host a session runs on.
  */
 import type { DockControl } from "../shared/types.js";
-import { resolveTargetProjectId } from "../services/control-session-authority.js";
+import { extractIdField, resolveTargetProjectId } from "../services/control-session-authority.js";
 import {
   buildAuthHeaders,
   injectAndShape,
@@ -23,22 +25,36 @@ import {
 
 const bad = (status: number, error: string): ReplyPayload => ({ ok: false, status, error });
 
-/** `/api/projects/:id/dock/config`, aimed at the caller's own checkout at session scope. */
-function configUrl(ctx: OpContext, projectId: string): string {
-  const sessionId =
-    ctx.conn.scope === "session"
-      ? ctx.conn.sessionId
-      : typeof ctx.body?.sessionId === "string"
-        ? ctx.body.sessionId
-        : null;
+/** Which session's checkout the config is read from or written to: the
+ * caller's own at session scope (never a body field); at full scope the
+ * optional `body.sessionId`, a string or a number like every id on this
+ * socket. A present but unusable value is a 400, not a silent fallback to the
+ * project's default checkout. */
+function targetSessionId(
+  ctx: OpContext,
+): { ok: true; id: string | null } | { ok: false; reply: ReplyPayload } {
+  if (ctx.conn.scope === "session") return { ok: true, id: ctx.conn.sessionId };
+  if (ctx.body?.sessionId === undefined) return { ok: true, id: null };
+  const id = extractIdField(ctx.body, "sessionId");
+  return id === null
+    ? { ok: false, reply: bad(400, "'sessionId' must be a non-empty string or a number") }
+    : { ok: true, id };
+}
+
+/** `/api/projects/:id/dock/config`, aimed at `sessionId`'s checkout when given. */
+function configUrl(projectId: string, sessionId: string | null): string {
   const base = `/api/projects/${encodeURIComponent(projectId)}/dock/config`;
   return sessionId ? `${base}?sessionId=${encodeURIComponent(sessionId)}` : base;
 }
 
-function readConfig(ctx: OpContext, projectId: string): Promise<ReplyPayload> {
+function readConfig(
+  ctx: OpContext,
+  projectId: string,
+  sessionId: string | null,
+): Promise<ReplyPayload> {
   return injectAndShape(ctx.app, {
     method: "GET",
-    url: configUrl(ctx, projectId),
+    url: configUrl(projectId, sessionId),
     headers: buildAuthHeaders(ctx.app),
   });
 }
@@ -50,6 +66,8 @@ function isControl(value: unknown): value is DockControl {
 async function setDockConfig(ctx: OpContext): Promise<ReplyPayload> {
   const project = resolveTargetProjectId(ctx.app, ctx.conn, ctx.body);
   if (!project.ok) return project.reply;
+  const session = targetSessionId(ctx);
+  if (!session.ok) return session.reply;
   const { controls, upsert, remove } = ctx.body ?? {};
   const forms = [controls, upsert, remove].filter((v) => v !== undefined).length;
   if (forms !== 1) return bad(400, "pass exactly one of 'controls', 'upsert' or 'remove'");
@@ -60,7 +78,7 @@ async function setDockConfig(ctx: OpContext): Promise<ReplyPayload> {
     next = controls;
   } else {
     // Read-modify-write, so adding one control cannot clobber the user's others.
-    const current = await readConfig(ctx, project.id);
+    const current = await readConfig(ctx, project.id, session.id);
     if (!current.ok) return current;
     const doc = current.result as { controls?: DockControl[]; invalid?: boolean; reason?: string };
     if (doc.invalid === true) {
@@ -84,7 +102,7 @@ async function setDockConfig(ctx: OpContext): Promise<ReplyPayload> {
   }
   return injectAndShape(ctx.app, {
     method: "PUT",
-    url: configUrl(ctx, project.id),
+    url: configUrl(project.id, session.id),
     headers: jsonHeaders(ctx.app),
     payload: JSON.stringify({ controls: next }),
   });
@@ -95,7 +113,10 @@ export const dockConfigOps: Record<string, OpSpec> = {
     scopes: ["full", "session"],
     handler: async (ctx) => {
       const project = resolveTargetProjectId(ctx.app, ctx.conn, ctx.body);
-      ctx.reply(project.ok ? await readConfig(ctx, project.id) : project.reply);
+      const session = targetSessionId(ctx);
+      if (!project.ok) return ctx.reply(project.reply);
+      if (!session.ok) return ctx.reply(session.reply);
+      ctx.reply(await readConfig(ctx, project.id, session.id));
     },
   },
   "projects.set_dock_config": {

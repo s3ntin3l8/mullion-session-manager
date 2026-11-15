@@ -141,7 +141,7 @@ describe("projects.get_dock_config / set_dock_config (#3050)", () => {
     expect(read(cwdB)).toHaveLength(1);
   });
 
-  it("full scope names the project and can target a session's checkout", async () => {
+  it("full scope names the project", async () => {
     const { app, projectB } = await setup();
     const { conn, frames } = sinkConn("full", null);
     await dispatch(app, conn, { id: 1, op: "projects.get_dock_config", body: {} });
@@ -152,5 +152,29 @@ describe("projects.get_dock_config / set_dock_config (#3050)", () => {
     });
     expect(frames.map((f) => f.status)).toEqual([400, 200]);
     expect(read(cwdB)).toEqual([]);
+  });
+
+  it("full scope sessionId picks the session's host, accepts a number or a string, and is never silently dropped", async () => {
+    const { app, projectA } = await setup();
+    const other = Number(
+      app.db.insert(sessions).values({ projectId: projectA, command: "bash", cwd: cwdA }).run()
+        .lastInsertRowid,
+    );
+    const { conn, frames } = sinkConn("full", null);
+    const body = (extra: Record<string, unknown>) => ({ projectId: String(projectA), ...extra });
+    const run = (id: number, op: string, extra: Record<string, unknown>) =>
+      dispatch(app, conn, { id, op, body: body(extra) });
+    await run(1, "projects.get_dock_config", { sessionId: other }); // numeric
+    await run(2, "projects.get_dock_config", { sessionId: String(other) });
+    await run(3, "projects.set_dock_config", { sessionId: other, remove: "dev" });
+    expect(frames.map((f) => f.status)).toEqual([200, 200, 200]);
+    expect(read(cwdA)).toEqual([]); // it is the project's file on that host
+    // Present but unusable, or naming no session: refused, never a fallback to the default.
+    await run(4, "projects.get_dock_config", { sessionId: {} });
+    await run(5, "projects.get_dock_config", { sessionId: "" });
+    await run(6, "projects.set_dock_config", { sessionId: [], upsert: { id: "x", command: "x" } });
+    await run(7, "projects.get_dock_config", { sessionId: 987654 });
+    expect(frames.slice(3).map((f) => f.status)).toEqual([400, 400, 400, 400]);
+    expect(read(cwdA)).toEqual([]);
   });
 });

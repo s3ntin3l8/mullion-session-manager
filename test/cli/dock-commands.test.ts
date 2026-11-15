@@ -188,5 +188,15 @@ describe("mullion dock", () => {
       2,
     );
     expect(await runCommand(["dock", "config", "set"], { client, io })).toBe(2);
+    // Anything beyond one projectId and one flag is refused, never silently dropped.
+    for (const bad of [
+      ["config", "set", "2", "--remove", "dev", "--upsert", "{}"],
+      ["config", "set", "--remove", "a", "--remove", "b"],
+      ["config", "get", "2", "junk"],
+      ["config", "get", "--remove", "dev"],
+      ["config", "set", "--remove"],
+    ]) {
+      expect(await runCommand(["dock", ...bad], { client, io })).toBe(2);
+    }
   });
 });
