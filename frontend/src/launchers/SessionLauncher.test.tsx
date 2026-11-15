@@ -831,6 +831,34 @@ describe("SessionLauncher — a fast Enter from the palette (#3054)", () => {
     expect(screen.getByRole("button", { name: "bash" })).not.toHaveAttribute("aria-current");
   });
 
+  // Review of #3061: a hidden agent is in the fetched list but not a tile,
+  // so it must not count as found (Launch would run the first row instead).
+  it("a hidden agent's id is no preselection either", async () => {
+    const onCreateSession = vi.fn();
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        launchers: { ...DEFAULT_SETTINGS.launchers, hiddenAgents: ["codex"] },
+      },
+    });
+    const release = holdActions([CLAUDE, CODEX, BASH], onCreateSession);
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ launcherId: CODEX.id }));
+
+    await screen.findByText("Loading launchers…");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(release.current).not.toBeNull());
+    await act(async () => release.current!());
+
+    await screen.findByRole("radiogroup", { name: "Agent" });
+    expect(screen.queryByRole("radio", { name: "codex" })).toBeNull();
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("textbox", { name: "Filter agents, shells and scripts" }),
+    ).toHaveFocus();
+  });
+
   it("does not take focus from a user already typing in the filter", async () => {
     const release = holdActions([CLAUDE, CODEX, BASH]);
     const user = userEvent.setup();

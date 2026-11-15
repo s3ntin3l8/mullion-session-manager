@@ -404,12 +404,14 @@ function LauncherNewSession({
   // before they are in (a fast Enter-Enter from the palette lands on the
   // filter) launches once they are, rather than being dropped.
   //
-  // An id the loaded list does not contain (the palette's list was still the
-  // previous project's when the row was picked) is no preselection at all:
+  // An id the launcher does not offer (the palette's list was still the
+  // previous project's when the row was picked, or a hidden agent) is no
+  // preselection at all:
   // the launcher opens as a plain open, and the early Enter is dropped rather
   // than launching whatever happens to be first.
-  const preselectionFound =
-    initialLauncherId !== null && launchers.some((l) => l.id === initialLauncherId);
+  // Found means it is what Launch runs: a hidden agent (in `launchers` but
+  // not a tile) or one the filter excludes does not count.
+  const preselectionFound = initialLauncherId !== null && primary?.id === initialLauncherId;
   const contentRef = useRef<HTMLDivElement>(null);
   const launchButtonRef = useRef<HTMLButtonElement>(null);
   const focusedLaunchRef = useRef(false);
