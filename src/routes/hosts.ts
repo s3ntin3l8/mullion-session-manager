@@ -195,6 +195,11 @@ export async function hostsRoute(app: FastifyInstance) {
     for (const leak of listLeakedBrowserCloses(app)) {
       leakedByHost.set(leak.hostId, (leakedByHost.get(leak.hostId) ?? 0) + 1);
     }
+    // Issue #2969 — an older offline row a newer registration replaced is a
+    // leftover, not an agent waiting for an upgrade: its successor already
+    // has an identity, so flagging the leftover would say "upgrade" about an
+    // agent that already did. It is reported as a possible duplicate instead.
+    const superseded = new Set([...duplicates.values()].flat());
     return listHosts(app).map((host) => {
       const health = app.hostHeartbeatTracker?.getHealth(host.id) ?? {
         status: "pending" as const,
@@ -233,6 +238,7 @@ export async function hostsRoute(app: FastifyInstance) {
       const agentEntry = app.hostAgentTracker?.get(host.id);
       return {
         ...host,
+        legacyAgent: host.legacyAgent && !superseded.has(host.id),
         agents: agentEntry?.agents ?? null,
         capabilities: agentEntry?.capabilities ?? null,
         protocol: protocolStatus(agentEntry?.protocol),

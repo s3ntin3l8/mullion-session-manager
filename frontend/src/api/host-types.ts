@@ -33,6 +33,10 @@ export interface Host {
   // revoked it. Never the credential. Absent from an older primary.
   hasMachineIdentity?: boolean;
   machineIdentityRevoked?: boolean;
+  // Issue #2969 — an address-dialled agent with no machine identity: it cannot
+  // open the outbound channel, so it is unreachable off the primary's network.
+  // Absent from an older primary.
+  legacyAgent?: boolean;
   // Issue #2449 — created by redeeming a one-time pairing code. Absent from an
   // older primary.
   paired?: boolean;

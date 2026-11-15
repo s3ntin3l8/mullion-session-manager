@@ -1,5 +1,10 @@
 import type { Host } from "./api/index.js";
-import { deriveHostStatus, type PingState } from "./hostStatus.js";
+import {
+  deriveHostStatus,
+  LEGACY_AGENT_LABEL,
+  legacyAgentTitle,
+  type PingState,
+} from "./hostStatus.js";
 
 // Surfaces that name a host have no "Test connection" button, so there is
 // no click to report. deriveHostStatus treats "unknown" as "the user has
@@ -26,7 +31,8 @@ const KNOWN_HEALTH = new Set<Host["health"]>(["pending", "online", "degraded", "
 export function HostStatusLabel({ host }: { host: Host }) {
   const display = KNOWN_HEALTH.has(host.health) ? deriveHostStatus(host, IDLE_PING) : null;
   const parked = host.drained === true;
-  if (!display?.label && !parked) return null;
+  const legacy = host.legacyAgent === true;
+  if (!display?.label && !parked && !legacy) return null;
   return (
     <span className="host-derived-status">
       {display?.label && (
@@ -39,6 +45,11 @@ export function HostStatusLabel({ host }: { host: Host }) {
             <span className={`settings-status-dot ${display.dot}`} aria-hidden="true" />
           )}
           {display.label}
+        </span>
+      )}
+      {legacy && (
+        <span className="host-derived-status-legacy" title={legacyAgentTitle(host)}>
+          {LEGACY_AGENT_LABEL}
         </span>
       )}
       {parked && (

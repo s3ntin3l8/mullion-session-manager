@@ -85,4 +85,21 @@ describe("HostStatusLabel (issue #1892)", () => {
     expect(missingView.container).toBeEmptyDOMElement();
     expect(screen.queryByText("unreachable")).toBeNull();
   });
+
+  // Issue #2969
+  it("flags an outdated agent beside the health word, with the upgrade explanation on hover", () => {
+    render(
+      <HostStatusLabel
+        host={makeHost({ health: "online", legacyAgent: true, mullionVersion: "0.3.50" })}
+      />,
+    );
+    expect(screen.getByText("online")).toBeInTheDocument();
+    const chip = screen.getByText("outdated agent");
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/v0\.3\.50.*Upgrade the agent/s));
+  });
+
+  it("shows no outdated-agent chip for a current agent", () => {
+    render(<HostStatusLabel host={makeHost({ health: "online", legacyAgent: false })} />);
+    expect(screen.queryByText("outdated agent")).toBeNull();
+  });
 });

@@ -99,6 +99,27 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText("2 leaked browsers")).toBeInTheDocument();
   });
 
+  it("flags an outdated agent with both versions in the explanation (issue #2969)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({ id: "local", name: "This machine", isLocal: true, mullionVersion: "0.3.62" }),
+        makeHost({
+          id: "old",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          legacyAgent: true,
+          mullionVersion: "0.3.50",
+        }),
+        makeHost({ id: "new", name: "current", legacyAgent: false }),
+      ],
+    });
+    render(<HostsSection />);
+    const badge = screen.getByText("Outdated agent — upgrade");
+    expect(badge).toHaveAttribute("title", expect.stringMatching(/v0\.3\.50.*v0\.3\.62/s));
+    expect(screen.getAllByText("Outdated agent — upgrade")).toHaveLength(1);
+  });
+
   it("flags a possible duplicate and offers Remove stale host on the older row only (issue #2582)", async () => {
     stubFetch({});
     useDashboardStore.setState({
