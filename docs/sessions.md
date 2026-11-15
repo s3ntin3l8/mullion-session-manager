@@ -31,9 +31,10 @@ fold, tablet) each label sits above its control. Nothing appears, disappears
 or moves when a switch is flipped or a menu opened, so the rows below stay put.
 
 1. **Where**
-   - **Project** — the dropdown's last entry is **Add project…** (the arrow
-     keys, End, PageDown and typeahead on the closed dropdown stop at the
-     projects, so it takes a click or the open list). The **⋯**
+   - **Project** — the dropdown's last entry is **Add project…**, for the
+     pointer: the arrow keys, End, PageDown and typeahead in the dropdown stop
+     at the projects, so a key never opens the Add view by surprise. From the
+     keyboard, Add project… is in the ⋯ menu. The **⋯**
      beside it opens the chosen project's menu: **Edit**, **Git pull**,
      **Delete project** (a second click confirms) and **Add project…**. It is
      an anchored menu under a mouse and a bottom sheet under a coarse pointer;

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Session } from "../api/index.js";
@@ -23,6 +23,8 @@ const NO_SESSIONS: Session[] = [];
 // Add project view and leaves the selection where it was.
 const ADD_PROJECT = "__add-project__";
 const ADD_PROJECT_LABEL = "Add project…";
+// How long a typeahead search keeps adding letters (browsers use about 1s).
+const TYPEAHEAD_MS = 1000;
 
 // The Where section's Project row (#3048, #3071): the project dropdown, whose
 // last entry is "Add project…", and a "⋯" menu with the chosen project's
@@ -62,6 +64,9 @@ export function LauncherProjectPicker({
   const actions = useContext(LauncherProjectActionsContext);
   const [pulling, setPulling] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // The typeahead the guard below runs itself once it has taken a letter
+  // from the browser: the letters typed so far and when the last one came.
+  const typeaheadRef = useRef<{ text: string; at: number }>({ text: "", at: 0 });
 
   const projectOptions = [
     ...(projects.length === 0 ? [{ value: "", label: "No projects yet", disabled: true }] : []),
@@ -142,8 +147,9 @@ export function LauncherProjectPicker({
   // A closed native <select> changes its value on ArrowDown, End, PageDown
   // and typeahead (Windows and Linux): any of them could land on "Add
   // project…" and open the Add view by surprise. Those keys stop at the
-  // projects; Add project… stays one deliberate pick away (a click, or the
-  // open list's Enter).
+  // projects. The guard cannot tell the open list from the closed control,
+  // so with the keyboard Add project… is reached through the "⋯" menu; the
+  // dropdown entry is for the pointer.
   const guardAddEntry = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const select = e.target as HTMLElement;
     if (!(select instanceof HTMLSelectElement) || e.altKey || e.metaKey || e.ctrlKey) return;
@@ -159,17 +165,33 @@ export function LauncherProjectPicker({
       if (index >= projects.length - 1) e.preventDefault();
       return;
     }
-    if (e.key.length === 1) {
-      const key = e.key.toLowerCase();
-      if (!ADD_PROJECT_LABEL.toLowerCase().startsWith(key)) return;
-      // The browser's typeahead would cycle through every option starting
-      // with this letter, Add project… among them. Cycle the projects only.
-      e.preventDefault();
-      const matches = projects.filter((p) => p.name.toLowerCase().startsWith(key));
+    if (e.key.length !== 1) return;
+    // Typeahead. A letter Add project… starts with would let the browser
+    // cycle onto it, so the guard takes that letter, and every letter typed
+    // after it within the browser's own typeahead window, and searches the
+    // projects only: "a" cycles the a-projects, "at" narrows to "atlas".
+    const key = e.key.toLowerCase();
+    const now = Date.now();
+    const buffer = typeaheadRef.current;
+    const continuing = buffer.text !== "" && now - buffer.at < TYPEAHEAD_MS;
+    if (!continuing && !ADD_PROJECT_LABEL.toLowerCase().startsWith(key)) {
+      buffer.text = "";
+      return;
+    }
+    e.preventDefault();
+    const text = continuing ? buffer.text + key : key;
+    typeaheadRef.current = { text, at: now };
+    // One letter repeated ("a", "aa") cycles, as the browser's typeahead does.
+    const repeated = [...text].every((c) => c === text[0]);
+    if (repeated) {
+      const matches = projects.filter((p) => p.name.toLowerCase().startsWith(text[0]!));
       if (matches.length === 0) return;
       const at = matches.findIndex((p) => String(p.id) === select.value);
       onChange(matches[(at + 1) % matches.length]!.id);
+      return;
     }
+    const match = projects.find((p) => p.name.toLowerCase().startsWith(text));
+    if (match && String(match.id) !== select.value) onChange(match.id);
   };
 
   return (

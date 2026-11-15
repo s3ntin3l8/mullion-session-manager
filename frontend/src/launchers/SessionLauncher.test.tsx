@@ -1094,9 +1094,13 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     // runway is the last project: ArrowDown would land on Add project….
     expect(fireEvent.keyDown(project, { key: "ArrowDown" })).toBe(false);
     expect(fireEvent.keyDown(project, { key: "End" })).toBe(false);
-    // "a" starts only Add project…; "m" starts a project and is left alone.
+    // "a" starts only Add project…; "m" starts a project and is left alone
+    // (once the typeahead window "a" opened has closed).
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     expect(fireEvent.keyDown(project, { key: "a" })).toBe(false);
+    now.mockReturnValue(5_000);
     expect(fireEvent.keyDown(project, { key: "m" })).toBe(true);
+    now.mockRestore();
     // From the first project, ArrowDown moves on as usual.
     await userEvent.setup().selectOptions(project, "mullion");
     expect(fireEvent.keyDown(project, { key: "ArrowDown" })).toBe(true);
@@ -1130,6 +1134,34 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     expect(fireEvent.keyDown(project, { key: "A" })).toBe(false);
     expect(project).toHaveValue(String(ALPHA.id));
     expect(screen.queryByRole("group", { name: "Add project" })).toBeNull();
+  });
+
+  it("a search that starts with that letter still narrows by the letters after it", async () => {
+    const ALPHA = { ...PROJECT, id: 7, name: "alpha" };
+    const ATLAS = { ...PROJECT, id: 8, name: "atlas" };
+    const MULL = { ...PROJECT, id: 9, name: "mull" };
+    resetStore({
+      projects: [ALPHA, ATLAS, MULL],
+      sessions: [],
+      settings: DEFAULT_SETTINGS,
+      viewMode: "list",
+      activePanelId: null,
+    });
+    stubFetch();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ projectId: MULL.id }));
+
+    const project = await screen.findByRole("combobox", { name: "Project" });
+    // "a" then "t" within the typeahead window: atlas, not a fresh "t" search.
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    expect(fireEvent.keyDown(project, { key: "a" })).toBe(false);
+    now.mockReturnValue(1_200);
+    expect(fireEvent.keyDown(project, { key: "t" })).toBe(false);
+    expect(project).toHaveValue(String(ATLAS.id));
+    // A letter after the window has closed is the browser's again.
+    now.mockReturnValue(5_000);
+    expect(fireEvent.keyDown(project, { key: "m" })).toBe(true);
+    now.mockRestore();
   });
 
   it("the project ⋯ opens an anchored menu under a fine pointer", async () => {
