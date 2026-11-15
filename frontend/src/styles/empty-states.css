@@ -1000,8 +1000,15 @@
 
 /* Empty tiled grid — a dashed dropzone in the actual grid area, closer to
    the design doc's own size since .grid-area is wide, unlike the sidebar
-   states above. */
+   states above.
+   Above dockview's watermark (`.dv-watermark-container`, absolute, full size,
+   z-index 1), which otherwise took every tap on the buttons below (#3053).
+   Lifted, it would also take a session dragged in from the sidebar, whose
+   drop listener sits on dockview's own element underneath: so the box lets
+   the pointer through and only its buttons catch it. */
 .empty-grid-dropzone {
+  z-index: 2;
+  pointer-events: none;
   flex: 1;
   margin: 12px;
   border: 1.5px dashed var(--border);
@@ -1025,6 +1032,7 @@
 }
 /* #2978 — the touch form of the hint above: two buttons at the 44px floor. */
 .empty-grid-actions > button {
+  pointer-events: auto;
   min-height: 44px;
   padding: 0 16px;
   font-size: 0.8125rem;
