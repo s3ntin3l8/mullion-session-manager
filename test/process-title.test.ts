@@ -9,6 +9,19 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 // Mullion because its command line was the generic `node dist/server.js`.
 // src/process-title.ts (first import of src/server.ts) renames the process;
 // /proc/<pid>/cmdline is what `pgrep -f` / `pkill -f` match against.
+describe("process title (in-process)", () => {
+  it("sets process.title to mullion-server on import", async () => {
+    const original = process.title;
+    try {
+      process.title = "node";
+      await import("../src/process-title.js");
+      expect(process.title).toBe("mullion-server");
+    } finally {
+      process.title = original;
+    }
+  });
+});
+
 describe.skipIf(process.platform !== "linux")("process title", () => {
   it("replaces the generic server.js command line with mullion-server", async () => {
     const child = spawn(
