@@ -264,8 +264,19 @@ export function KebabMenu({
     if (!popoverOpen || menuPlacement !== "side") return;
     const onScroll = (e: Event) => {
       // The menu's own scrolling moves nothing it is anchored to.
-      if (menuRef.current?.contains(e.target as Node)) return;
-      if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
+      if (menuRef.current?.contains(e.target as Node) || !btnRef.current) return;
+      const next = btnRef.current.getBoundingClientRect();
+      // Most scrolls (a terminal behind the menu) move nothing: returning the
+      // same rect skips the re-render and the layout effect's measurement.
+      setTriggerRect((prev) =>
+        prev &&
+        prev.top === next.top &&
+        prev.left === next.left &&
+        prev.bottom === next.bottom &&
+        prev.right === next.right
+          ? prev
+          : next,
+      );
     };
     window.addEventListener("scroll", onScroll, true);
     return () => window.removeEventListener("scroll", onScroll, true);
@@ -372,13 +383,11 @@ export function KebabMenu({
   // measurement the width is unknown (0), which reads as "fits on the right";
   // the layout effect above corrects it before paint.
   const getSideMenuStyle = (rect: DOMRect): React.CSSProperties => {
-    const visible = visibleViewport();
-    // The visible viewport's right edge too (a panned or zoomed iOS visual
+    // The visible viewport's right edge (a panned or zoomed iOS visual
     // viewport), not the layout viewport's.
-    const vv = window.visualViewport;
-    const visibleRight = vv ? vv.offsetLeft + vv.width : window.innerWidth;
+    const visible = visibleViewport();
     const gap = 4;
-    const fitsRight = rect.right + gap + menuWidth <= visibleRight - 8;
+    const fitsRight = rect.right + gap + menuWidth <= visible.right - 8;
     const top = Math.max(
       visible.top + 8,
       Math.min(rect.top - gap, visible.bottom - 8 - menuHeight),

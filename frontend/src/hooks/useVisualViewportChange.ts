@@ -10,17 +10,24 @@ export interface VisibleViewport {
   top: number;
   bottom: number;
   height: number;
+  // The horizontal edges too (#3073, KebabMenu's "side" placement): a
+  // pinch-zoomed or panned visual viewport is narrower than innerWidth.
+  left: number;
+  right: number;
 }
 
 export function visibleViewport(): VisibleViewport {
   const vv = window.visualViewport;
   if (!vv) {
     const height = window.innerHeight;
-    return { top: 0, bottom: height, height };
+    return { top: 0, bottom: height, height, left: 0, right: window.innerWidth };
   }
   const top = vv.offsetTop;
   const height = vv.height;
-  return { top, bottom: top + height, height };
+  // Partial fakes (and older engines) may carry only the vertical fields.
+  const left = typeof vv.offsetLeft === "number" ? vv.offsetLeft : 0;
+  const width = typeof vv.width === "number" ? vv.width : window.innerWidth;
+  return { top, bottom: top + height, height, left, right: left + width };
 }
 
 // A non-positive `max-height` is an invalid length: the browser drops the
