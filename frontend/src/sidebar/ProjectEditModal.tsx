@@ -8,14 +8,18 @@ export function ProjectEditModal({
   project,
   hosts,
   onClose,
+  surface,
 }: {
   project: Project;
   hosts: Host[];
   onClose: () => void;
+  // #3071 — "embedded" in the New session launcher (CreateProjectModal.tsx).
+  surface?: "modal" | "embedded";
 }) {
   return (
     <CreateProjectModal
       mode="edit"
+      surface={surface}
       initialName={project.name}
       initialPath={project.cwd}
       initialDevServerUrl={project.devServerUrl}

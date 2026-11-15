@@ -1,91 +1,86 @@
-/* The launcher's Where row: the project's "⋯" and "Add project", and the
-   panel they open in place under the row (#3048, LauncherProjects.tsx). */
-.launcher-project-tools {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
+/* The launcher's Project row (#3048, #3071, LauncherProjects.tsx): the "⋯"
+   beside the project dropdown, and the Add/Edit project view that replaces
+   the launcher's body. The "⋯" menu itself is ui/KebabMenu.tsx's. */
 .launcher-project-btn {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  gap: 5px;
   min-height: 30px;
   min-width: 30px;
-  padding: 0 8px;
+  padding: 0 6px;
+  border: 0;
   border-radius: 7px;
+  background: transparent;
   color: var(--muted);
+  cursor: pointer;
 }
+.launcher-project-btn:hover,
 .launcher-project-btn[aria-expanded="true"] {
   background: var(--seg);
   color: var(--fg);
 }
-/* A full line of its own, after the host and worktree controls. */
-.launcher-project-panel {
-  order: 99;
-  flex: 1 0 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
+.launcher-project-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
-.launcher-project-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 32px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  font-size: 0.8125rem;
-  text-align: left;
-}
-.launcher-project-row svg {
-  flex-shrink: 0;
-  color: var(--muted);
-}
-.launcher-project-row:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--seg);
-}
-.launcher-project-row:disabled,
-.launcher-project-row[aria-disabled="true"] {
-  opacity: 0.45;
-  cursor: default;
-}
-.launcher-project-row.danger,
-.launcher-project-row.danger svg {
-  color: var(--r);
-}
-/* The delete row is a ConfirmButton with an armed label: its two labels share
-   one grid cell, laid out like the other rows. */
-.launcher-project-row.confirm-btn-stable {
-  display: grid;
-  justify-items: stretch;
-}
-.launcher-project-row.confirm-btn-stable > .confirm-btn-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.launcher-project-message {
-  padding: 4px 8px;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-/* Under a coarse pointer: 44px targets. */
-.launcher-project-tools.coarse .launcher-project-btn {
+/* Under a coarse pointer: a 44px target. */
+.launcher-project-btn.coarse {
   min-height: 44px;
   min-width: 44px;
 }
-.launcher-project-panel.coarse .launcher-project-row {
-  min-height: 44px;
-  font-size: 0.9375rem;
+
+/* The Add/Edit project view: the project form (CreateProjectModal.tsx's
+   embedded shell) in the launcher's body, the discovered repositories under
+   it. */
+.launcher-project-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
-.launcher-project-panel.coarse .discover-add {
+.embedded-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.embedded-form-header {
+  gap: 9px;
+  padding: 10px 18px;
+}
+.embedded-form-back {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.embedded-form-back:hover {
+  background: var(--seg);
+  color: var(--fg);
+}
+.embedded-form-back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The launcher's body scrolls, not the form inside it. */
+.embedded-form-body {
+  overflow-y: visible;
+}
+.launcher-project-discover {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-soft);
+}
+.session-launcher-sheet .embedded-form-back {
+  min-height: 44px;
+}
+.session-launcher-sheet .launcher-project-discover .discover-add {
   min-height: 44px;
 }

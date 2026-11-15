@@ -13,8 +13,8 @@ import { useCoarsePointer } from "../lib/layoutTier.js";
 import { matchesQuery } from "../matchQuery.js";
 import { resolveLauncherLogo } from "../cliLogos.js";
 import { ModelSelect } from "../settings/ModelPicker.js";
-import { WorktreeOptions } from "../command-palette/WorktreeOptions.js";
-import { LauncherProjectPicker } from "./LauncherProjects.js";
+import { LauncherProjectPicker, LauncherProjectView } from "./LauncherProjects.js";
+import { LauncherWorktreeRow } from "./LauncherWorktreeRow.js";
 import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
 import type { LauncherProjectActions } from "./launcherProjectActions.js";
 import { AUTO_VALUE, OWN_HOST_VALUE, describeAutoPreview } from "../command-palette/hostTarget.js";
@@ -364,6 +364,14 @@ function LauncherNewSession({
     null,
   );
   const ids = useId();
+  // #3071 — Add project and Edit project replace the body with their form
+  // (LauncherProjects.tsx). This component stays mounted underneath, so the
+  // choices made here survive the round trip.
+  const [view, setView] = useState<
+    { kind: "launcher" } | { kind: "add" } | { kind: "edit"; projectId: number }
+  >({ kind: "launcher" });
+  // Where focus lands when the form hands back: the control that opened it.
+  const returnFocusRef = useRef<"project" | "menu" | null>(null);
 
   const matches = (l: Launcher) => query.trim() === "" || matchesQuery([l.title, l.command], query);
   const agents = launchers.filter(
@@ -476,7 +484,8 @@ function LauncherNewSession({
   const onKeyDownCapture = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (coarse || !filterRef?.current) return;
     const el = e.target as HTMLElement;
-    if (el.closest("input, select, textarea")) return;
+    // The project menu is portaled, but its keys still bubble through here.
+    if (el.closest('input, select, textarea, [role="menu"]')) return;
     if (e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
       filterRef.current.focus();
     }
@@ -538,6 +547,29 @@ function LauncherNewSession({
 
   const { hosts, hostOptions, showHostChip, hostChoice, onHostChange, autoPreview } = launchTarget;
 
+  // Back from the Add/Edit project view: focus the control that opened it.
+  useEffect(() => {
+    if (view.kind !== "launcher" || returnFocusRef.current === null) return;
+    const selector =
+      returnFocusRef.current === "menu" ? ".launcher-project-btn" : `[id="${ids}-project-select"]`;
+    returnFocusRef.current = null;
+    contentRef.current?.querySelector<HTMLElement>(selector)?.focus();
+  }, [view, ids]);
+
+  if (view.kind !== "launcher") {
+    const back = () => setView({ kind: "launcher" });
+    return (
+      <LauncherProjectView
+        view={view}
+        onBack={back}
+        onAdded={(id) => {
+          returnFocusRef.current = "project";
+          setProjectId(id);
+        }}
+      />
+    );
+  }
+
   return (
     <div ref={contentRef} className="session-launcher-content" onKeyDownCapture={onKeyDownCapture}>
       {!coarse && (
@@ -558,36 +590,76 @@ function LauncherNewSession({
         <h3 id={`${ids}-where`} className="session-launcher-heading">
           Where
         </h3>
-        <div className="session-launcher-where">
-          <LauncherProjectPicker projectId={projectId} onChange={setProjectId} coarse={coarse} />
-          {showHostChip && target && (
-            <Dropdown
-              ariaLabel="Host"
-              value={
-                hostChoice === null || hostChoice === target.hostId ? OWN_HOST_VALUE : hostChoice
-              }
-              onChange={onHostChange}
-              options={hostOptions}
+        <div className="launcher-form">
+          <div className="launcher-form-row">
+            <label
+              id={`${ids}-project`}
+              htmlFor={`${ids}-project-select`}
+              className="launcher-form-label"
+            >
+              Project
+            </label>
+            <LauncherProjectPicker
+              projectId={projectId}
+              onChange={setProjectId}
+              coarse={coarse}
+              labelId={`${ids}-project`}
+              onAddProject={() => {
+                returnFocusRef.current = "project";
+                setView({ kind: "add" });
+              }}
+              onEditProject={(id) => {
+                returnFocusRef.current = "menu";
+                setView({ kind: "edit", projectId: id });
+              }}
             />
+          </div>
+          {showHostChip && target && (
+            <div className="launcher-form-row">
+              <label htmlFor={`${ids}-host`} className="launcher-form-label">
+                Host
+              </label>
+              <div className="launcher-form-control launcher-form-stack">
+                <Dropdown
+                  id={`${ids}-host`}
+                  className="launcher-form-fill"
+                  ariaLabel="Host"
+                  value={
+                    hostChoice === null || hostChoice === target.hostId
+                      ? OWN_HOST_VALUE
+                      : hostChoice
+                  }
+                  onChange={onHostChange}
+                  options={hostOptions}
+                />
+                {hostChoice === AUTO_VALUE && (
+                  <span className="session-launcher-hint">
+                    {autoPreview
+                      ? describeAutoPreview(autoPreview, hosts)
+                      : "Auto picks the host when you launch."}
+                  </span>
+                )}
+              </div>
+            </div>
           )}
           {target && (
-            <WorktreeOptions
-              projectId={target.id}
-              enabled={launchTarget.worktreeEnabled}
-              onEnabledChange={launchTarget.setWorktreeEnabled}
-              baseRef={launchTarget.worktreeBaseRef}
-              onBaseRefChange={launchTarget.setWorktreeBaseRef}
-              baseOnPlacedHost={launchTarget.placedElsewhere}
-            />
+            <div className="launcher-form-row">
+              <span id={`${ids}-worktree`} className="launcher-form-label">
+                Worktree
+              </span>
+              <LauncherWorktreeRow
+                projectId={target.id}
+                labelId={`${ids}-worktree`}
+                enabled={launchTarget.worktreeEnabled}
+                onEnabledChange={launchTarget.setWorktreeEnabled}
+                baseRef={launchTarget.worktreeBaseRef}
+                onBaseRefChange={launchTarget.setWorktreeBaseRef}
+                baseOnPlacedHost={launchTarget.placedElsewhere}
+                coarse={coarse}
+              />
+            </div>
           )}
         </div>
-        {showHostChip && hostChoice === AUTO_VALUE && (
-          <div className="session-launcher-hint">
-            {autoPreview
-              ? describeAutoPreview(autoPreview, hosts)
-              : "Auto picks the host when you launch."}
-          </div>
-        )}
       </section>
 
       {target && !loaded && (
@@ -648,7 +720,13 @@ function LauncherNewSession({
                 })}
               </div>
             )}
-            {selected && (
+          </section>
+
+          {selected && (
+            <section className="session-launcher-section" aria-labelledby={`${ids}-options`}>
+              <h3 id={`${ids}-options`} className="session-launcher-heading">
+                Options
+              </h3>
               <AgentOptions
                 agentTitle={selected.title}
                 idPrefix={ids}
@@ -658,8 +736,8 @@ function LauncherNewSession({
                 overridden={skipOverrideValue !== null}
                 onSkipChange={(value) => setSkipOverride({ agentId: selected.id, value })}
               />
-            )}
-          </section>
+            </section>
+          )}
 
           <section className="session-launcher-section" aria-labelledby={`${ids}-rows`}>
             <h3 id={`${ids}-rows`} className="session-launcher-heading">
@@ -755,8 +833,12 @@ function AgentOptions({
     ? `For this session only (${skipSetting ? "on" : "off"} in settings)`
     : `${skipSetting ? "On" : "Off"} in settings for ${agentTitle}`;
   return (
-    <div className="session-launcher-options" role="group" aria-labelledby={`${idPrefix}-options`}>
-      <span id={`${idPrefix}-options`} className="visually-hidden">
+    <div
+      className="launcher-form session-launcher-options"
+      role="group"
+      aria-labelledby={`${idPrefix}-options-for`}
+    >
+      <span id={`${idPrefix}-options-for`} className="visually-hidden">
         Options for {agentTitle}
       </span>
       {/* Announces a selection change: the region's contents swap in place,
@@ -765,38 +847,49 @@ function AgentOptions({
         {agentTitle} selected. Skip permission prompts {skipValue ? "on" : "off"}.
       </span>
       {model.show && (
-        <label className="session-launcher-option">
-          <span className="session-launcher-option-label">Model</span>
-          <ModelSelect
-            ariaLabel="Model for this session"
-            value={model.value}
-            options={model.catalog.options}
-            defaultLabel={model.defaultLabel}
-            allowCustom={model.catalog.allowCustom}
-            onChange={model.setValue}
-          />
-        </label>
+        <div className="launcher-form-row">
+          <span className="launcher-form-label" aria-hidden="true">
+            Model
+          </span>
+          <div className="launcher-form-control">
+            <ModelSelect
+              ariaLabel="Model for this session"
+              value={model.value}
+              options={model.catalog.options}
+              defaultLabel={model.defaultLabel}
+              allowCustom={model.catalog.allowCustom}
+              onChange={model.setValue}
+              stretch
+            />
+          </div>
+        </div>
       )}
-      <div className="session-launcher-option">
-        <span className="session-launcher-option-text">
-          <span id={`${idPrefix}-skip`} className="session-launcher-option-label">
-            Skip permission prompts
-          </span>
-          <span id={`${idPrefix}-skip-hint`} className="session-launcher-hint">
-            {skipHint}
-          </span>
+      {/* A form row like Worktree: the switch at the start of the control
+          column, its short text and the hint after it, wrapping inside the
+          column. The switch keeps its full accessible name. */}
+      <div className="launcher-form-row launcher-form-switch-row">
+        <span className="launcher-form-label" aria-hidden="true">
+          Permissions
         </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={skipValue}
-          aria-labelledby={`${idPrefix}-skip`}
-          aria-describedby={`${idPrefix}-skip-hint`}
-          className={`settings-toggle session-launcher-switch${skipValue ? " on" : ""}`}
-          onClick={() => onSkipChange(!skipValue)}
-        >
-          <span className="settings-toggle-knob" />
-        </button>
+        <div className="launcher-form-control launcher-form-switch-control">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={skipValue}
+            aria-label="Skip permission prompts"
+            aria-describedby={`${idPrefix}-skip-hint`}
+            className={`settings-toggle session-launcher-switch${skipValue ? " on" : ""}`}
+            onClick={() => onSkipChange(!skipValue)}
+          >
+            <span className="settings-toggle-knob" />
+          </button>
+          <span className="launcher-form-switch-text">
+            <span aria-hidden="true">Skip prompts</span>{" "}
+            <span id={`${idPrefix}-skip-hint`} className="session-launcher-hint launcher-form-hint">
+              {skipHint}
+            </span>
+          </span>
+        </div>
       </div>
     </div>
   );

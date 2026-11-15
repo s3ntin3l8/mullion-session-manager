@@ -108,12 +108,16 @@ describe("New session launcher -> worktree isolation toggle", () => {
     vi.unstubAllGlobals();
   });
 
-  it("is off by default and shows no base-ref picker", async () => {
+  // #3071 — a project with no branches (the 204 "not a git repository"
+  // answer) gets a disabled switch and a reason, never an empty dropdown.
+  it("is off by default; a project without branches shows the reason and no dropdown", async () => {
     vi.stubGlobal("fetch", mockFetch({}));
     renderLauncher();
 
     const toggle = await screen.findByLabelText("Isolate in a new worktree");
     expect(toggle).not.toBeChecked();
+    expect(await screen.findByText("No branches")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
     expect(baseRefPickers()).toHaveLength(0);
   });
 
@@ -263,7 +267,7 @@ describe("New session launcher -> WorktreeOptions -> P9 silent failures", () => 
     vi.unstubAllGlobals();
   });
 
-  it("a failed branches fetch (worktree toggle) surfaces an inline error instead of leaving the picker silently empty forever", async () => {
+  it("a failed branches fetch surfaces its reason in the Worktree row instead of an empty picker", async () => {
     useDashboardStore.setState({
       projects: [PROJECT],
       sessions: [],
@@ -281,8 +285,11 @@ describe("New session launcher -> WorktreeOptions -> P9 silent failures", () => 
     const user = userEvent.setup();
     renderLauncher();
 
-    await user.click(await screen.findByLabelText("Isolate in a new worktree"));
-
+    const toggle = await screen.findByLabelText("Isolate in a new worktree");
     expect(await screen.findByText(/network down/i)).toBeInTheDocument();
+    // #3071 — nothing to branch from: the switch stays off.
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("combobox", { name: "Base branch" })).toBeNull();
   });
 });

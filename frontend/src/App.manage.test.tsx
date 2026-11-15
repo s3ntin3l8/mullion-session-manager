@@ -208,7 +208,7 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
   });
 });
 
-describe("App: projects in the launcher's Where row (#3048)", () => {
+describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
   const MULLION: Project = makeProject({ id: 5, name: "mullion", cwd: "/home/x/mullion" });
   beforeEach(() => {
     realHarness.real = true;
@@ -236,7 +236,10 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     return screen.findByRole("dialog", { name: "New session" });
   }
 
-  it("adds a project with the Add project dialog and selects it", async () => {
+  // #3071 — "Add project…" is the dropdown's last entry; the form replaces
+  // the launcher's body (no dialog over it) and hands back with the new
+  // project selected and the dropdown focused.
+  it("adds a project from the dropdown's Add project… and selects it", async () => {
     stubPxWidth(1000);
     stubFetch();
     const created = makeProject({ id: 9, name: "runway", cwd: "/home/x/runway" });
@@ -247,19 +250,62 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     useDashboardStore.setState({ createProject });
     const user = userEvent.setup();
     const launcher = await openLauncher();
-    await user.click(within(launcher).getByRole("button", { name: "Add project" }));
-    await user.click(within(launcher).getByRole("button", { name: "New project…" }));
-    const modal = await screen.findByRole("dialog", { name: "Add project" });
-    await user.type(within(modal).getByPlaceholderText("~/code/my-project"), "/home/x/runway");
-    await user.click(within(modal).getByRole("button", { name: "Add project" }));
+    await user.selectOptions(
+      within(launcher).getByRole("combobox", { name: "Project" }),
+      "Add project…",
+    );
+    const form = within(launcher).getByRole("group", { name: "Add project" });
+    expect(screen.queryByRole("dialog", { name: "Add project" })).toBeNull();
+    const path = within(form).getByPlaceholderText("~/code/my-project");
+    expect(path).toHaveFocus();
+    await user.type(path, "/home/x/runway");
+    await user.click(within(form).getByRole("button", { name: "Add project" }));
     await waitFor(() => expect(createProject).toHaveBeenCalled());
     expect(createProject.mock.calls[0][1]).toBe("/home/x/runway");
+    const project = await within(launcher).findByRole("combobox", { name: "Project" });
+    expect(project).toHaveValue("9");
+    await waitFor(() => expect(project).toHaveFocus());
+  });
+
+  it("holds Back and Escape while the create is in flight", async () => {
+    stubPxWidth(1000);
+    stubFetch();
+    const created = makeProject({ id: 9, name: "runway", cwd: "/home/x/runway" });
+    let finish: (() => void) | null = null;
+    const createProject = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => {
+            useDashboardStore.setState({ projects: [MULLION, created] });
+            resolve(created);
+          };
+        }),
+    );
+    useDashboardStore.setState({ createProject });
+    const user = userEvent.setup();
+    const launcher = await openLauncher();
+    await user.selectOptions(
+      within(launcher).getByRole("combobox", { name: "Project" }),
+      "Add project…",
+    );
+    const form = within(launcher).getByRole("group", { name: "Add project" });
+    await user.type(within(form).getByPlaceholderText("~/code/my-project"), "/home/x/runway");
+    await user.click(within(form).getByRole("button", { name: "Add project" }));
+    await waitFor(() => expect(createProject).toHaveBeenCalled());
+
+    const back = within(form).getByRole("button", { name: "Back" });
+    expect(back).toHaveAttribute("aria-disabled", "true");
+    await user.click(back);
+    await user.keyboard("{Escape}");
+    expect(within(launcher).getByRole("group", { name: "Add project" })).toBeInTheDocument();
+
+    await act(async () => finish!());
     await waitFor(() =>
       expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("9"),
     );
   });
 
-  it("adds a discovered repository and selects it", async () => {
+  it("adds a discovered repository from the Add project view and selects it", async () => {
     stubPxWidth(1000);
     stubFetch([{ name: "landing", cwd: "/home/x/landing", isGitRepo: true, isRegistered: false }]);
     const created = makeProject({ id: 11, name: "landing", cwd: "/home/x/landing" });
@@ -270,7 +316,8 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     useDashboardStore.setState({ createProject });
     const user = userEvent.setup();
     const launcher = await openLauncher();
-    await user.click(within(launcher).getByRole("button", { name: "Add project" }));
+    await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
+    await user.click(screen.getByRole("menuitem", { name: "Add project…" }));
     await user.click(await within(launcher).findByRole("button", { name: "Add" }));
     expect(createProject).toHaveBeenCalledWith("landing", "/home/x/landing", "local", undefined);
     await waitFor(() =>
@@ -278,7 +325,7 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     );
   });
 
-  it("edits the selected project from its ⋯", async () => {
+  it("edits the selected project from its ⋯ in place, and Escape goes back", async () => {
     stubPxWidth(1000);
     stubFetch();
     const updateProject = vi.fn().mockResolvedValue(undefined);
@@ -286,22 +333,36 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     const user = userEvent.setup();
     const launcher = await openLauncher();
     await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
-    const panel = within(launcher).getByRole("group", { name: "Manage mullion" });
+    const menu = screen.getByRole("menu", { name: "mullion actions" });
     // Nothing to pull without a git status.
-    expect(within(panel).getByRole("button", { name: "Git pull" })).toHaveAttribute(
+    expect(within(menu).getByRole("menuitem", { name: "Git pull" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
-    await user.click(within(panel).getByRole("button", { name: "Edit" }));
-    const modal = await screen.findByRole("dialog", { name: "Edit project" });
-    const name = within(modal).getByDisplayValue("mullion");
+    await user.click(within(menu).getByRole("menuitem", { name: "Edit" }));
+    // The focus is in the form: the path field.
+    expect(within(launcher).getByRole("group", { name: "Edit project" })).toContainElement(
+      document.activeElement as HTMLElement,
+    );
+    // Escape leaves the form, not the launcher.
+    await user.keyboard("{Escape}");
+    expect(within(launcher).queryByRole("group", { name: "Edit project" })).toBeNull();
+    await waitFor(() =>
+      expect(within(launcher).getByRole("button", { name: "Manage mullion" })).toHaveFocus(),
+    );
+
+    await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    const form = within(launcher).getByRole("group", { name: "Edit project" });
+    const name = within(form).getByDisplayValue("mullion");
     await user.clear(name);
     await user.type(name, "mullion-core");
-    await user.click(within(modal).getByRole("button", { name: "Save changes" }));
+    await user.click(within(form).getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(updateProject).toHaveBeenCalled());
     expect(updateProject.mock.calls[0][0]).toBe(5);
     expect(updateProject.mock.calls[0][1]).toMatchObject({ name: "mullion-core" });
-    // The launcher is still open behind it.
+    // Back in the launcher, which never closed.
+    expect(await within(launcher).findByRole("combobox", { name: "Project" })).toHaveValue("5");
     expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
   });
 
@@ -314,6 +375,7 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
       .mockResolvedValueOnce({ pulled: false, reason: "dirty-tree" });
     useDashboardStore.setState({
       pullProjectGit,
+      toasts: [],
       refreshGitStatuses: vi.fn().mockResolvedValue(undefined),
       refreshGitRefs: vi.fn().mockResolvedValue(undefined),
       gitStatuses: {
@@ -327,18 +389,20 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
         } as never,
       },
     });
+    const toasts = () => useDashboardStore.getState().toasts.map((t) => t.message);
     const user = userEvent.setup();
     const launcher = await openLauncher();
     await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
-    const pull = within(launcher).getByRole("button", { name: "Git pull" });
+    const pull = screen.getByRole("menuitem", { name: "Git pull" });
     expect(pull).toHaveAttribute("title", "Pull 2 commits from tracking branch");
     await user.click(pull);
     expect(pullProjectGit).toHaveBeenCalledWith(5);
-    expect(await within(launcher).findByRole("status")).toHaveTextContent("Pulled.");
-    await user.click(within(launcher).getByRole("button", { name: "Git pull" }));
-    await waitFor(() =>
-      expect(within(launcher).getByRole("status")).toHaveTextContent(/uncommitted changes/),
-    );
+    // The menu closed; the result is a toast, not a line that pushes the form.
+    expect(screen.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(toasts()).toContain("Pulled mullion."));
+    await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
+    await user.click(screen.getByRole("menuitem", { name: "Git pull" }));
+    await waitFor(() => expect(toasts().some((m) => /uncommitted changes/.test(m))).toBe(true));
   });
 
   it("deletes the selected project after a confirming click and selects another", async () => {
@@ -352,9 +416,9 @@ describe("App: projects in the launcher's Where row (#3048)", () => {
     const user = userEvent.setup();
     const launcher = await openLauncher();
     await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
-    await user.click(within(launcher).getByRole("button", { name: "Delete project" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete project" }));
     expect(deleteProject).not.toHaveBeenCalled();
-    await user.click(within(launcher).getByRole("button", { name: /Click again to delete/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Click again to delete/ }));
     expect(deleteProject).toHaveBeenCalledWith(5);
     await waitFor(() =>
       expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("6"),

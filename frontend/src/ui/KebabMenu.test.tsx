@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { KebabMenu } from "./KebabMenu.js";
@@ -509,5 +509,138 @@ describe("ui/KebabMenu exit", () => {
     );
     await user.click(screen.getByRole("button"));
     expect(screen.getByRole("menu")).toHaveAttribute("data-placement", "top");
+  });
+});
+
+// #3071 — the opt-in touch variant and the outside press that must not strand
+// focus on <body>.
+describe("ui/KebabMenu sheet variant and focus", () => {
+  function stubPointer(coarse: boolean) {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: coarse && query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const SHEET = { title: "mullion", closeLabel: "Close project actions" };
+
+  it("opens a sheet under a coarse pointer, with the same items, and runs one", async () => {
+    stubPointer(true);
+    const onClick = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <KebabMenu
+        title="Manage mullion"
+        menuLabel="mullion actions"
+        items={[{ key: "edit", label: "Edit", onClick }]}
+        sheet={SHEET}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Manage mullion" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(trigger);
+    const sheet = screen.getByRole("dialog", { name: "mullion actions" });
+    expect(document.querySelector(".pane-tab-overflow-menu")).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(sheet).not.toBeInTheDocument();
+  });
+
+  it("keeps the popover under a fine pointer, and without `sheet` on any pointer", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <KebabMenu
+        title="Manage"
+        items={[{ key: "a", label: "A", onClick: vi.fn() }]}
+        sheet={SHEET}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    expect(document.querySelector(".pane-tab-overflow-menu")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    unmount();
+
+    stubPointer(true);
+    render(<KebabMenu title="Plain" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />);
+    const plain = screen.getByRole("button", { name: "Plain" });
+    expect(plain).toHaveAttribute("aria-haspopup", "menu");
+    await user.click(plain);
+    expect(screen.getByRole("menu", { name: "Plain" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("arrow keys move between items in the sheet", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    render(
+      <KebabMenu
+        title="Manage"
+        items={[
+          { key: "a", label: "A", onClick: vi.fn() },
+          { key: "b", label: "B", onClick: vi.fn() },
+        ]}
+        sheet={SHEET}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    screen.getByRole("menuitem", { name: "A" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "B" })).toHaveFocus();
+  });
+
+  it("a press outside on nothing focusable closes the popover and keeps focus on the trigger", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    render(
+      <div>
+        <p>Plain text</p>
+        <KebabMenu title="Manage" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "Manage" });
+    await user.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.click(screen.getByText("Plain text"));
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(trigger).toHaveFocus();
+  });
+
+  it("a press outside on a control lets that control take focus", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    render(
+      <div>
+        <input aria-label="Elsewhere" />
+        <KebabMenu title="Manage" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    await user.click(screen.getByRole("textbox", { name: "Elsewhere" }));
+    expect(screen.getByRole("textbox", { name: "Elsewhere" })).toHaveFocus();
+  });
+
+  it("a press outside on a tabindex=-1 container lets it take focus (a dockview pane)", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    render(
+      <div>
+        <div tabIndex={-1} data-testid="pane">
+          <p>Pane text</p>
+        </div>
+        <KebabMenu title="Manage" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    await user.click(screen.getByText("Pane text"));
+    expect(screen.getByTestId("pane")).toHaveFocus();
   });
 });

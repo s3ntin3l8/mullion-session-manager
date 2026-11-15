@@ -135,7 +135,7 @@ describe("New session launcher -> host target (#2237)", () => {
     const user = userEvent.setup();
     renderLauncher(MULTI.id);
     await user.selectOptions(await screen.findByLabelText("Host"), "mac");
-    await user.click(screen.getByRole("checkbox", { name: /isolate in a new worktree/i }));
+    await user.click(screen.getByRole("switch", { name: /isolate in a new worktree/i }));
     expect(screen.getByText(/the host's default branch/)).toBeInTheDocument();
     await user.click((await screen.findAllByText("bash"))[0]);
     await vi.waitFor(() => expect(posted).toHaveLength(1));

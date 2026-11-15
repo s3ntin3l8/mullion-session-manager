@@ -128,8 +128,9 @@ export function useLaunchTarget(target: Project | null, sessions: Session[]) {
     projectId: number;
     preview: PlacementPreview | null;
   } | null>(null);
-  // Off by default; <WorktreeOptions> only fetches branches once the toggle
-  // is switched on. Lifted here because the launch reads both at launch time.
+  // Off by default. Lifted here because the launch reads both at launch time;
+  // the launcher's Worktree row (LauncherWorktreeRow.tsx) seeds the base ref
+  // from the project's branches.
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
 

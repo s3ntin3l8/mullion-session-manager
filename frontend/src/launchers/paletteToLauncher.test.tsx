@@ -75,6 +75,7 @@ beforeEach(() => {
   const result = mockFetch({
     "GET /api/projects/:id/actions": () => jsonResponse(200, [CLAUDE, CODEX, BASH]),
     "GET /api/projects/:id/urls": empty,
+    "GET /api/projects/:id/git-branches": () => new Response(null, { status: 204 }),
     "GET /api/codex/models": empty,
     "GET /api/agy/models": empty,
     "GET /api/opencode/models": empty,
