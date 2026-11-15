@@ -106,7 +106,11 @@ export interface ModalProps {
   // body and footer render in place inside the surface that holds them (the
   // New session launcher's body), with a Back control where the close button
   // is; `onClose` is then "back". The caller's own dialog keeps the focus
-  // trap and the modal semantics.
+  // trap and the modal semantics. `ariaLabel` names the embedded group and
+  // `closeDisabled` holds Back and Escape; the dialog-shell props
+  // (`backdropClassName`, `modalClassName`, `headerClassName`,
+  // `bodyClassName`, `footerClassName`, `headerContent`, `suppressRestoreRef`)
+  // are modal-only and ignored there.
   surface?: "modal" | "embedded";
 }
 
@@ -133,6 +137,8 @@ export function Modal({
     return (
       <EmbeddedForm
         onClose={onClose}
+        ariaLabel={ariaLabel}
+        closeDisabled={closeDisabled}
         icon={icon}
         title={title}
         subtitle={subtitle}
@@ -276,6 +282,8 @@ function DialogModal({
 // stake, so it does not close whatever surrounds the form).
 function EmbeddedForm({
   onClose,
+  ariaLabel,
+  closeDisabled = false,
   icon,
   title,
   subtitle,
@@ -284,7 +292,15 @@ function EmbeddedForm({
   initialFocusRef,
 }: Pick<
   ModalProps,
-  "onClose" | "icon" | "title" | "subtitle" | "children" | "footer" | "initialFocusRef"
+  | "onClose"
+  | "ariaLabel"
+  | "closeDisabled"
+  | "icon"
+  | "title"
+  | "subtitle"
+  | "children"
+  | "footer"
+  | "initialFocusRef"
 >) {
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -299,17 +315,25 @@ function EmbeddedForm({
       ref={rootRef}
       className="embedded-form"
       role="group"
-      aria-label={typeof title === "string" ? title : undefined}
+      aria-label={ariaLabel ?? (typeof title === "string" ? title : undefined)}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
+          // Held, not passed on: Escape must not close the surrounding
+          // launcher while the form is busy either.
           e.stopPropagation();
           e.preventDefault();
-          onClose();
+          if (!closeDisabled) onClose();
         }
       }}
     >
       <div className="create-modal-header embedded-form-header">
-        <button type="button" className="embedded-form-back" onClick={onClose}>
+        <button
+          type="button"
+          className="embedded-form-back"
+          // aria-disabled, not disabled: focus must not drop out of the form.
+          aria-disabled={closeDisabled || undefined}
+          onClick={closeDisabled ? undefined : onClose}
+        >
           <ChevronLeftIcon size={15} aria-hidden="true" />
           Back
         </button>

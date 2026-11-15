@@ -116,7 +116,7 @@ describe("New session launcher -> worktree isolation toggle", () => {
 
     const toggle = await screen.findByLabelText("Isolate in a new worktree");
     expect(toggle).not.toBeChecked();
-    expect(await screen.findByText("Not a git repository")).toBeInTheDocument();
+    expect(await screen.findByText("No branches")).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-disabled", "true");
     expect(baseRefPickers()).toHaveLength(0);
   });

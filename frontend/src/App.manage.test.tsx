@@ -267,6 +267,44 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     await waitFor(() => expect(project).toHaveFocus());
   });
 
+  it("holds Back and Escape while the create is in flight", async () => {
+    stubPxWidth(1000);
+    stubFetch();
+    const created = makeProject({ id: 9, name: "runway", cwd: "/home/x/runway" });
+    let finish: (() => void) | null = null;
+    const createProject = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => {
+            useDashboardStore.setState({ projects: [MULLION, created] });
+            resolve(created);
+          };
+        }),
+    );
+    useDashboardStore.setState({ createProject });
+    const user = userEvent.setup();
+    const launcher = await openLauncher();
+    await user.selectOptions(
+      within(launcher).getByRole("combobox", { name: "Project" }),
+      "Add project…",
+    );
+    const form = within(launcher).getByRole("group", { name: "Add project" });
+    await user.type(within(form).getByPlaceholderText("~/code/my-project"), "/home/x/runway");
+    await user.click(within(form).getByRole("button", { name: "Add project" }));
+    await waitFor(() => expect(createProject).toHaveBeenCalled());
+
+    const back = within(form).getByRole("button", { name: "Back" });
+    expect(back).toHaveAttribute("aria-disabled", "true");
+    await user.click(back);
+    await user.keyboard("{Escape}");
+    expect(within(launcher).getByRole("group", { name: "Add project" })).toBeInTheDocument();
+
+    await act(async () => finish!());
+    await waitFor(() =>
+      expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("9"),
+    );
+  });
+
   it("adds a discovered repository from the Add project view and selects it", async () => {
     stubPxWidth(1000);
     stubFetch([{ name: "landing", cwd: "/home/x/landing", isGitRepo: true, isRegistered: false }]);

@@ -982,7 +982,7 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     renderHost();
     openLauncher();
 
-    expect(await screen.findByText("Not a git repository")).toBeInTheDocument();
+    expect(await screen.findByText("No branches")).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "Base branch" })).toBeNull();
     const toggle = screen.getByRole("switch", { name: "Isolate in a new worktree" });
     expect(toggle).toHaveAttribute("aria-disabled", "true");
@@ -1100,6 +1100,36 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     // From the first project, ArrowDown moves on as usual.
     await userEvent.setup().selectOptions(project, "mullion");
     expect(fireEvent.keyDown(project, { key: "ArrowDown" })).toBe(true);
+    // End and PageDown from an earlier project stop at the last project
+    // rather than jumping to the final option, Add project….
+    expect(fireEvent.keyDown(project, { key: "End" })).toBe(false);
+    expect(project).toHaveValue(String(OTHER.id));
+    await userEvent.setup().selectOptions(project, "mullion");
+    expect(fireEvent.keyDown(project, { key: "PageDown" })).toBe(false);
+    expect(project).toHaveValue(String(OTHER.id));
+    expect(screen.queryByRole("group", { name: "Add project" })).toBeNull();
+  });
+
+  it("typeahead on a letter a project shares with Add project… cycles the projects only", async () => {
+    const ALPHA = { ...PROJECT, id: 7, name: "alpha" };
+    const ATLAS = { ...PROJECT, id: 8, name: "atlas" };
+    resetStore({
+      projects: [ALPHA, ATLAS],
+      sessions: [],
+      settings: DEFAULT_SETTINGS,
+      viewMode: "list",
+      activePanelId: null,
+    });
+    stubFetch();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ projectId: ALPHA.id }));
+
+    const project = await screen.findByRole("combobox", { name: "Project" });
+    expect(fireEvent.keyDown(project, { key: "a" })).toBe(false);
+    expect(project).toHaveValue(String(ATLAS.id));
+    expect(fireEvent.keyDown(project, { key: "A" })).toBe(false);
+    expect(project).toHaveValue(String(ALPHA.id));
+    expect(screen.queryByRole("group", { name: "Add project" })).toBeNull();
   });
 
   it("the project ⋯ opens an anchored menu under a fine pointer", async () => {

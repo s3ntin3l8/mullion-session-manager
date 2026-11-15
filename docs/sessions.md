@@ -31,7 +31,9 @@ fold, tablet) each label sits above its control. Nothing appears, disappears
 or moves when a switch is flipped or a menu opened, so the rows below stay put.
 
 1. **Where**
-   - **Project** — the dropdown's last entry is **Add project…**. The **⋯**
+   - **Project** — the dropdown's last entry is **Add project…** (the arrow
+     keys, End, PageDown and typeahead on the closed dropdown stop at the
+     projects, so it takes a click or the open list). The **⋯**
      beside it opens the chosen project's menu: **Edit**, **Git pull**,
      **Delete project** (a second click confirms) and **Add project…**. It is
      an anchored menu under a mouse and a bottom sheet under a coarse pointer;
@@ -43,8 +45,8 @@ or moves when a switch is flipped or a menu opened, so the rows below stay put.
      branch beside it. The branch dropdown is always there, disabled while the
      switch is off; a launch placed on another host shows "the host's default
      branch" instead (the server picks it). A project with no branches (not a
-     git repository, or the branch list failed) shows the reason and the
-     switch stays off. Switching project picks the new project's default
+     git repository, or none committed yet) says "No branches"; a failed
+     branch list says so and offers Retry. Either way the switch stays off. Switching project picks the new project's default
      branch.
 2. **Agent** — the project's detected agents as tiles, minus the ones hidden
    in Settings → Launchers & agents; the default agent starts selected. A small

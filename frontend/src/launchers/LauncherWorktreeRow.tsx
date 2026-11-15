@@ -8,7 +8,8 @@ import { Dropdown } from "../ui/primitives.js";
 // beside it, one row that never changes height. The dropdown is always
 // there, disabled while the switch is off; a launch placed on another host
 // shows "the host's default branch" in its place (the server picks it, #2237);
-// a project without branches (not a git repository, or the list failed)
+// a project without branches (not a git repository, a repository with no
+// commits yet, or the list failed)
 // disables the row with a one-line reason instead of an empty dropdown.
 //
 // It replaces command-palette/WorktreeOptions.tsx's checkbox, which only
@@ -59,7 +60,7 @@ export function LauncherWorktreeRow({
       const local = (result?.branches ?? []).map((b) => b.name);
       const options = [...local, ...(result?.remoteBranches ?? [])];
       if (options.length === 0) {
-        setLoaded({ projectId, status: "none", reason: "Not a git repository", retry: false });
+        setLoaded({ projectId, status: "none", reason: "No branches", retry: false });
         onEnabledChange(false);
         return;
       }

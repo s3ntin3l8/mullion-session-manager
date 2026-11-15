@@ -757,6 +757,9 @@ export function CreateProjectModal({
   return (
     <Modal
       surface={surface}
+      // Embedded, Back and Escape wait for a create or save in flight, as its
+      // Cancel does. (The dialog keeps its existing close behaviour.)
+      closeDisabled={surface === "embedded" && submitting}
       onClose={onClose}
       icon={<FolderIcon size={16} />}
       title={isEdit ? "Edit project" : "Add project"}

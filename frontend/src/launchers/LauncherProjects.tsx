@@ -139,24 +139,36 @@ export function LauncherProjectPicker({
     onClick: onAddProject,
   });
 
-  // A closed native <select> changes its value on ArrowDown and on typeahead
-  // (Windows and Linux): arrowing past the last project, or typing a letter
-  // only "Add project…" starts with, would open the Add view by surprise.
-  // Those keys stop at the last project; Add project… stays one deliberate
-  // pick away (a click, or the open list's Enter).
+  // A closed native <select> changes its value on ArrowDown, End, PageDown
+  // and typeahead (Windows and Linux): any of them could land on "Add
+  // project…" and open the Add view by surprise. Those keys stop at the
+  // projects; Add project… stays one deliberate pick away (a click, or the
+  // open list's Enter).
   const guardAddEntry = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const select = e.target as HTMLElement;
     if (!(select instanceof HTMLSelectElement) || e.altKey || e.metaKey || e.ctrlKey) return;
-    const lastProject = projects.length - 1;
     const index = projects.findIndex((p) => String(p.id) === select.value);
-    if (["ArrowDown", "ArrowRight", "End", "PageDown"].includes(e.key)) {
-      if (index >= lastProject) e.preventDefault();
+    const last = projects.at(-1);
+    if (e.key === "End" || e.key === "PageDown") {
+      // The browser would jump to the final option, which is Add project….
+      e.preventDefault();
+      if (last && index !== projects.length - 1) onChange(last.id);
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+      if (index >= projects.length - 1) e.preventDefault();
       return;
     }
     if (e.key.length === 1) {
       const key = e.key.toLowerCase();
-      const projectMatch = projects.some((p) => p.name.toLowerCase().startsWith(key));
-      if (!projectMatch && ADD_PROJECT_LABEL.toLowerCase().startsWith(key)) e.preventDefault();
+      if (!ADD_PROJECT_LABEL.toLowerCase().startsWith(key)) return;
+      // The browser's typeahead would cycle through every option starting
+      // with this letter, Add project… among them. Cycle the projects only.
+      e.preventDefault();
+      const matches = projects.filter((p) => p.name.toLowerCase().startsWith(key));
+      if (matches.length === 0) return;
+      const at = matches.findIndex((p) => String(p.id) === select.value);
+      onChange(matches[(at + 1) % matches.length]!.id);
     }
   };
 
