@@ -372,7 +372,9 @@ describe("Sidebar has no Tasks entry", () => {
     viewMode = mode;
     renderSidebar();
     expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
-    expect(document.querySelector(".sidebar-tasks-entry")).toBeNull();
+    // Scoped to the sidebar's top level, where the row sat: the class itself
+    // lives on as SidebarDevices' device-row class.
+    expect(document.querySelector(".sidebar > .sidebar-tasks-entry")).toBeNull();
   });
 });
 

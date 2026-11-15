@@ -498,6 +498,7 @@
 .rail-ws-new-row {
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 /* Under a coarse pointer: touch-size rows (48px) and a 1rem (16px) search field, so
    iOS does not zoom into it. */

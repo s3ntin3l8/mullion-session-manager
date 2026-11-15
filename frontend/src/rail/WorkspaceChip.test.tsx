@@ -272,5 +272,7 @@ describe("workspace list alignment", () => {
 
   it("stacks New workspace and New group instead of halving the width", () => {
     expect(rule(".rail-ws-new-row")).toMatch(/flex-direction:\s*column/);
+    // ...with the rows' 2px gap, so the two buttons still read as two targets.
+    expect(rule(".rail-ws-new-row")).toMatch(/gap:\s*2px/);
   });
 });
