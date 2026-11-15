@@ -353,8 +353,10 @@ describe("useFoldHalves", () => {
     act(() => useDashboardStore.getState().setFocusedHalf("right"));
     act(() => void panels.splice(0, 1));
     rerender({ ...props, panelsVersion: 2 });
-    // session-3 was shown on the right (moved there last).
+    // session-3 was shown on the right (moved there last); the right half
+    // falls back to session-2 rather than going blank.
     expect(halves().right).toEqual(["session-2"]);
+    expect(halves().shownRight).toBe("session-2");
     expect(halves().shownLeft).toBe("session-3");
     expect(maximized()).toBe("session-3");
     expect(useDashboardStore.getState().focusedHalf).toBe("left");

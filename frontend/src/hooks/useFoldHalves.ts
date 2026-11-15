@@ -187,10 +187,21 @@ export function useFoldHalves({
       const tiled = dockviewApi.panels.filter(isTiledPanel);
       if (tiled.length > 0 && tiled.every((p) => halfOf(halves, p.id) === "right")) {
         const promote = tiled.find((p) => p.id === halves.shownRight) ?? tiled[0]!;
+        const wasShown = promote.id === halves.shownRight;
         const store = useDashboardStore.getState();
-        store.moveToHalf(promote.id, "left", []);
+        store.moveToHalf(
+          promote.id,
+          "left",
+          tiled.map((p) => p.id),
+        );
         store.setFocusedHalf("left");
         halves = currentHalves();
+        // The right half showed the pane that moved: it falls back to the
+        // one still assigned to it that went there last, rather than blank.
+        if (wasShown && halves.right.length > 0) {
+          store.showRightPane(halves.right.at(-1)!);
+          halves = currentHalves();
+        }
       }
     }
     const current = dockviewApi.activePanel;

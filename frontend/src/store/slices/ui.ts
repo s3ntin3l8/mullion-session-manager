@@ -52,7 +52,10 @@ import {
   sameSidebarTarget,
 } from "../sidebarHistory.js";
 
-// Right sidebar views that are not reopened on load, though left open (#3053).
+// Right sidebar views that are not reopened on load, though left open (#3053):
+// the ones right-sidebar/views-registry.ts restricts to the two halves (their
+// `bands`), where an open view covers the right half. A new halves-only view
+// belongs here too.
 const NOT_RESTORED_OPEN_VIEWS: readonly string[] = ["browser", "dock"];
 
 // State patch that clears the transient drill-ins when the right sidebar is
