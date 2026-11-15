@@ -400,10 +400,15 @@ describe("SessionLauncher — skip permissions", () => {
     const toggle = await screen.findByRole("switch", { name: "Skip permission prompts" });
     expect(toggle).toHaveAccessibleDescription("Off in settings for opencode");
     expect(shape()).toBe(claude);
-    // #3071 — a form row: a grid with a fixed label column, not a wrapping
-    // flex row, and the hint keeps to one line whatever it says.
+    // #3071 — a form row like Worktree: a grid with a fixed label column
+    // ("Permissions"), the switch at the start of the control column.
     expect(launcherCss).toMatch(/\.launcher-form-row \{[^}]*display:\s*grid/);
-    expect(launcherCss).toMatch(/\.launcher-form-hint \{[^}]*white-space:\s*nowrap/);
+    const row = toggle.closest(".launcher-form-row")!;
+    expect(row.querySelector(".launcher-form-label")).toHaveTextContent("Permissions");
+    const control = toggle.parentElement!;
+    expect(control).toHaveClass("launcher-form-control");
+    expect(control.firstElementChild).toBe(toggle);
+    expect(control).toHaveTextContent("Skip prompts");
   });
 
   it("off in settings: the switch starts off, launches off, and the override turns it on", async () => {

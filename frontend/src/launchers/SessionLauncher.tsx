@@ -864,24 +864,32 @@ function AgentOptions({
           </div>
         </div>
       )}
+      {/* A form row like Worktree: the switch at the start of the control
+          column, its short text and the hint after it, wrapping inside the
+          column. The switch keeps its full accessible name. */}
       <div className="launcher-form-row launcher-form-switch-row">
-        <span id={`${idPrefix}-skip`} className="launcher-form-switch-label">
-          Skip permission prompts
+        <span className="launcher-form-label" aria-hidden="true">
+          Permissions
         </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={skipValue}
-          aria-labelledby={`${idPrefix}-skip`}
-          aria-describedby={`${idPrefix}-skip-hint`}
-          className={`settings-toggle session-launcher-switch${skipValue ? " on" : ""}`}
-          onClick={() => onSkipChange(!skipValue)}
-        >
-          <span className="settings-toggle-knob" />
-        </button>
-        <span id={`${idPrefix}-skip-hint`} className="session-launcher-hint launcher-form-hint">
-          {skipHint}
-        </span>
+        <div className="launcher-form-control launcher-form-switch-control">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={skipValue}
+            aria-label="Skip permission prompts"
+            aria-describedby={`${idPrefix}-skip-hint`}
+            className={`settings-toggle session-launcher-switch${skipValue ? " on" : ""}`}
+            onClick={() => onSkipChange(!skipValue)}
+          >
+            <span className="settings-toggle-knob" />
+          </button>
+          <span className="launcher-form-switch-text">
+            <span aria-hidden="true">Skip prompts</span>{" "}
+            <span id={`${idPrefix}-skip-hint`} className="session-launcher-hint launcher-form-hint">
+              {skipHint}
+            </span>
+          </span>
+        </div>
       </div>
     </div>
   );

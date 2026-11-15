@@ -175,24 +175,24 @@
 .session-launcher-sheet .launcher-form-retry {
   min-height: 44px;
 }
-/* "Skip permission prompts": the label spans both columns, the switch sits
-   at the end, the hint lines up under the control column on one line. */
-.launcher-form-switch-row {
-  grid-template-columns: 6.5rem minmax(0, 1fr) auto;
+/* "Permissions": the switch at the start of the control column, like
+   Worktree's; "Skip prompts" and the hint follow it and wrap inside the
+   column. */
+.launcher-form-switch-control {
+  align-items: flex-start;
 }
-.launcher-form-switch-label {
-  grid-column: 1 / 3;
+.launcher-form-switch-control .session-launcher-switch {
+  margin-top: 1px;
+}
+.launcher-form-switch-text {
+  flex: 1 1 0;
+  min-width: 0;
   font-size: 0.78125rem;
   color: var(--fg);
-}
-.launcher-form-switch-row .session-launcher-switch {
-  grid-column: 3;
+  overflow-wrap: anywhere;
 }
 .launcher-form-hint {
-  grid-column: 2 / 4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin-left: 6px;
 }
 .session-launcher-switch[aria-disabled="true"] {
   opacity: 0.45;
@@ -202,22 +202,11 @@
 .session-launcher-sheet .launcher-form-row {
   grid-template-columns: minmax(0, 1fr);
 }
-.session-launcher-sheet .launcher-form-switch-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-.session-launcher-sheet .launcher-form-switch-label {
-  grid-column: 1;
-  font-size: 0.875rem;
-}
-.session-launcher-sheet .launcher-form-switch-row .session-launcher-switch {
-  grid-column: 2;
-}
-.session-launcher-sheet .launcher-form-hint {
-  grid-column: 1 / 3;
-  grid-row: 2;
-}
 .session-launcher-sheet .launcher-form-control {
   min-height: 48px;
+}
+.session-launcher-sheet .launcher-form-switch-control {
+  align-items: center;
 }
 .session-launcher-rows {
   display: flex;
