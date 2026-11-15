@@ -363,7 +363,7 @@ describe("docks.* ops (#2494)", () => {
         body: { dockControlId: "dev-server", worktreePath: `${cwdA}/web/../web` },
       });
       expect(frames[0]).toMatchObject({ ok: true, status: 201 });
-      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(cwdA, "web") });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
     });
 
     it("docks.switch anchors a relative worktreePath at the project checkout", async () => {
@@ -374,7 +374,39 @@ describe("docks.* ops (#2494)", () => {
         body: { dockControlId: "dev-server", worktreePath: "web" },
       });
       expect(frames[0]).toMatchObject({ ok: true, status: 201 });
-      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(cwdA, "web") });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
+    });
+
+    it("docks.start accepts a worktreePath and refuses one outside the project", async () => {
+      const { app, agentSession } = await setup();
+      const { conn, frames } = sinkConn("session", agentSession);
+      await dispatch(app, conn, {
+        id: 15,
+        op: "docks.start",
+        body: { dockControlId: "logs", worktreePath: "web" },
+      });
+      await dispatch(app, conn, {
+        id: 16,
+        op: "docks.start",
+        body: { dockControlId: "dev-server", worktreePath: cwdB },
+      });
+      expect(frames.map((f) => f.status)).toEqual([201, 400]);
+      expect(launch.calls).toHaveLength(1);
+      expect(launch.calls[0]).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
+    });
+
+    it("docks.switch refuses a symlink that escapes the checkout, before stopping anything", async () => {
+      const { app, conn, frames, sessionId } = await running();
+      fs.symlinkSync(cwdB, path.join(cwdA, "escape"));
+      await dispatch(app, conn, {
+        id: 17,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: "escape" },
+      });
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+      expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
+        "active",
+      );
     });
 
     it("docks.switch accepts a path inside the project checkout", async () => {
@@ -385,7 +417,7 @@ describe("docks.* ops (#2494)", () => {
         body: { dockControlId: "dev-server", worktreePath: path.join(cwdA, "web") },
       });
       expect(frames[0]).toMatchObject({ ok: true, status: 201 });
-      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(cwdA, "web") });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
     });
   });
 });

@@ -12,6 +12,7 @@
  * (it shows as not running); stop it from the dashboard once.
  */
 import type { FastifyInstance } from "fastify";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
@@ -145,29 +146,51 @@ function resolveTargetPath(projectCwd: string, worktreePath: string): string {
   return path.resolve(projectCwd, worktreePath);
 }
 
-/** A bad target is refused before anything is stopped or launched. */
+/** `realpath` that tolerates a path that does not exist yet: the deepest
+ * existing ancestor is resolved and the rest appended, so a symlink inside the
+ * checkout cannot make an outside directory look like it is inside. */
+function realpathLoose(p: string): string {
+  const missing: string[] = [];
+  let cur = p;
+  for (;;) {
+    try {
+      return path.join(realpathSync(cur), ...missing.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return p;
+      missing.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/** A bad target is refused before anything is stopped or launched. On success
+ * the value is the cwd to launch in (the validated path itself), or undefined
+ * when the target is a branch or nothing. */
 async function validateTarget(
   app: FastifyInstance,
   projectId: number,
   target: StartTarget,
-): Promise<DockControlResult<never> | null> {
+): Promise<DockControlResult<string | undefined>> {
   if (target.branch !== undefined && target.worktreePath !== undefined) {
     return fail(400, "pass either branch or worktreePath, not both");
   }
-  if (target.worktreePath === undefined) return null;
+  if (target.worktreePath === undefined) return { ok: true, value: undefined };
   // The dock session's cwd must be the project checkout, a directory inside it
   // (a monorepo package), or one of its git worktrees; nothing else (a session
   // has no parent here, so createSessionRecord's child-cwd containment does
-  // not apply).
+  // not apply). On the local host symlinks are resolved first.
   const project = getProjectRow(app, projectId)!;
-  const root = path.resolve(project.cwd);
-  const resolved = resolveTargetPath(root, target.worktreePath);
+  const local = project.hostId === LOCAL_HOST_ID;
+  const fix = (p: string) => (local ? realpathLoose(p) : p);
+  const root = fix(path.resolve(project.cwd));
+  const resolved = fix(resolveTargetPath(path.resolve(project.cwd), target.worktreePath));
   const ok =
     resolved === root ||
     resolved.startsWith(root + path.sep) ||
     (await isSiblingWorktreeCwd({ cwd: project.cwd, hostId: project.hostId }, resolved));
   return ok
-    ? null
+    ? { ok: true, value: resolved }
     : fail(
         400,
         "worktreePath must be the project checkout, a directory inside it, or one of its git worktrees",
@@ -201,8 +224,8 @@ export async function startDockControl(
     await killSession(app, running.id, "detach");
   }
   const c = control.value;
-  const invalid = await validateTarget(app, projectId, target);
-  if (invalid) return invalid;
+  const checked = await validateTarget(app, projectId, target);
+  if (!checked.ok) return checked;
   const worktreeRefresh =
     c.worktreeRefresh ?? getStoredSettings(app.db).dock?.defaultWorktreeRefresh ?? false;
   const payload = {
@@ -214,7 +237,7 @@ export async function startDockControl(
     ...(target.branch !== undefined
       ? { worktree: { branch: target.branch }, worktreeRefresh }
       : target.worktreePath !== undefined
-        ? { cwd: resolveTargetPath(getProjectRow(app, projectId)!.cwd, target.worktreePath) }
+        ? { cwd: checked.value }
         : c.cwd
           ? { cwd: c.cwd }
           : {}),
@@ -257,9 +280,12 @@ export async function switchDockControl(
   const control = await resolveControl(app, projectId, controlId);
   if (!control.ok) return control;
   // Validate before stopping: a bad target must not kill a healthy server.
-  const invalid = await validateTarget(app, projectId, target);
-  if (invalid) return invalid;
+  const checked = await validateTarget(app, projectId, target);
+  if (!checked.ok) return checked;
   const stopped = await stopDockControl(app, projectId, controlId);
   if (!stopped.ok) return stopped;
-  return startDockControl(app, projectId, controlId, target, launch);
+  const started = await startDockControl(app, projectId, controlId, target, launch);
+  if (started.ok || stopped.value.sessionId === null) return started;
+  // The old session is already stopped: say so, so the caller knows to start it again.
+  return { ...started, message: `${started.message} (the control was stopped; start it again)` };
 }

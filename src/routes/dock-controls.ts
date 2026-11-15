@@ -51,7 +51,10 @@ export async function dockControlsRoute(app: FastifyInstance) {
     async (request, reply) => send(reply, await listDockControls(app, request.params.id)),
   );
 
-  app.post<{ Params: { id: number; controlId: string }; Body: { branch?: string } }>(
+  app.post<{
+    Params: { id: number; controlId: string };
+    Body: { branch?: string; worktreePath?: string };
+  }>(
     "/api/projects/:id/dock/controls/:controlId/start",
     {
       schema: {
