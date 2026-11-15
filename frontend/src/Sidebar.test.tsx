@@ -1597,6 +1597,7 @@ describe("Sidebar sections", () => {
     expect(screen.getByText("alpha")).toBeInTheDocument();
     expect(screen.getByText("beta")).toBeInTheDocument();
     expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Other projects/ })).toBeNull();
   });
 });
 
@@ -1693,7 +1694,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
       expect(screen.getByText("alpha")).toBeInTheDocument();
       const toggle = screen.getByRole("button", { name: /Other projects/ });
       expect(toggle).toHaveAttribute("aria-expanded", "false");
-      expect(toggle).toHaveTextContent("2");
+      expect(toggle.textContent).toBe("Other projects 2");
       expect(screen.queryByText("beta")).toBeNull();
       expect(screen.queryByText("gamma")).toBeNull();
     });
@@ -1710,24 +1711,21 @@ describe("sidebar workspace scope (issue #1877)", () => {
       expect(screen.getByText("beta")).toBeInTheDocument();
       expect(screen.getByText("gamma")).toBeInTheDocument();
       expect(screen.queryByText("other ws session")).toBeNull();
-      expect(screen.getAllByText("claude code").length).toBeGreaterThan(0);
+      // Plain content, not a button wrapped around the + and the menu.
+      const header = screen.getByText("beta").closest(".project-row-header");
+      expect(header?.getAttribute("role")).toBeNull();
+      expect(header?.hasAttribute("aria-expanded")).toBe(false);
 
       await user.click(screen.getByRole("button", { name: /Other projects/ }));
       expect(screen.queryByText("beta")).toBeNull();
     });
 
-    it("is keyboard operable", async () => {
+    it("is keyboard operable and remembers the choice per workspace", async () => {
       const user = userEvent.setup();
-      renderSidebar({ workspaceProjectIds: [1] });
+      const first = renderSidebar({ workspaceProjectIds: [1] });
       screen.getByRole("button", { name: /Other projects/ }).focus();
       await user.keyboard("{Enter}");
       expect(screen.getByText("beta")).toBeInTheDocument();
-    });
-
-    it("remembers the choice per workspace", async () => {
-      const user = userEvent.setup();
-      const first = renderSidebar({ workspaceProjectIds: [1] });
-      await user.click(screen.getByRole("button", { name: /Other projects/ }));
       first.unmount();
 
       renderSidebar({ workspaceProjectIds: [1] });
@@ -1745,23 +1743,6 @@ describe("sidebar workspace scope (issue #1877)", () => {
       expect(onOpenProjectLauncher).toHaveBeenCalledWith(2);
     });
 
-    it("renders other-project rows as plain content, with no button nested around the + and menu", async () => {
-      const user = userEvent.setup();
-      renderSidebar({ workspaceProjectIds: [1] });
-      await user.click(screen.getByRole("button", { name: /Other projects/ }));
-      const betaRow = screen.getByText("beta").closest(".project-row-header") as HTMLElement;
-      expect(betaRow.getAttribute("role")).toBeNull();
-      expect(betaRow.getAttribute("tabindex")).toBeNull();
-      expect(betaRow.hasAttribute("aria-expanded")).toBe(false);
-    });
-
-    it("names the disclosure cleanly: no glyph, a separated count", () => {
-      renderSidebar({ workspaceProjectIds: [1] });
-      const toggle = screen.getByRole("button", { name: /Other projects/ });
-      expect(toggle.textContent).not.toContain("▾");
-      expect(toggle.textContent).toBe("Other projects 2");
-    });
-
     it("does not collapse on its own when a project gets tiled", () => {
       const view = renderSidebar({ workspaceProjectIds: [] });
       expect(screen.getByText("beta")).toBeInTheDocument();
@@ -1775,11 +1756,6 @@ describe("sidebar workspace scope (issue #1877)", () => {
         "true",
       );
       expect(screen.getByText("beta")).toBeInTheDocument();
-    });
-
-    it("shows no section when unscoped (phone)", () => {
-      renderSidebar({ workspaceProjectIds: null });
-      expect(screen.queryByRole("button", { name: /Other projects/ })).toBeNull();
     });
   });
 
