@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { api } from "./api/index.js";
@@ -320,7 +320,7 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
       await user.click(screen.getByText("Split right"));
 
-      expect(requestSplit).toHaveBeenCalledWith("session-42", "right");
+      expect(requestSplit).toHaveBeenCalledWith("session-42", "right", 1);
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     });
 
@@ -339,7 +339,7 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
       await user.click(screen.getByText("Split down"));
 
-      expect(requestSplit).toHaveBeenCalledWith("session-42", "below");
+      expect(requestSplit).toHaveBeenCalledWith("session-42", "below", 1);
     });
   });
 
@@ -969,5 +969,143 @@ describe("failed kill (audit finding 11)", () => {
       expect(deleteSession).toHaveBeenCalledWith(session.id);
     });
     expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+// #3054 — under a coarse pointer the menu is a bottom sheet: the same items
+// as rows of at least 44px (styles/terminal.css), portaled to the body so no
+// tab strip or phone session sheet clips it. A fine pointer keeps the popover.
+describe("PaneActionsMenu -> touch sheet (#3054)", () => {
+  function stubPointer(coarse: boolean) {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: coarse && query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  }
+
+  function renderMenu(onRename = vi.fn()) {
+    render(
+      <div data-testid="tab-strip" style={{ overflow: "hidden" }}>
+        <PaneActionsMenu
+          api={makeApi({ id: "session-42" })}
+          params={{ sessionId: session.id }}
+          containerApi={CONTAINER_API}
+          onRename={onRename}
+          triggerClassName="mobile-tab-btn"
+        />
+      </div>,
+    );
+    return onRename;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens as a sheet of menu rows outside the trigger's container under a coarse pointer", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    renderMenu();
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(trigger);
+
+    const sheet = screen.getByRole("dialog", { name: "claude code actions" });
+    expect(sheet).toHaveClass("mobile-session-sheet", "pane-actions-sheet");
+    expect(screen.getByTestId("tab-strip")).not.toContainElement(sheet);
+    const menu = within(sheet).getByRole("menu", { name: "claude code actions" });
+    expect(menu).toHaveClass("pane-actions-sheet-menu");
+    expect(within(menu).getByRole("menuitem", { name: /Rename/ })).toHaveClass(
+      "pane-tab-overflow-item",
+    );
+    expect(document.querySelector(".pane-tab-overflow-menu")).toBeNull();
+  });
+
+  it("an item acts and closes the sheet; the close button and Escape close it too", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    renderMenu();
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /Split right/ }));
+    expect(requestSplit).toHaveBeenCalledWith("session-42", "right", 1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("button", { name: "Close pane actions" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("arrow keys move between the sheet's items", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    renderMenu();
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    items[0]!.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(items[items.length - 1]).toHaveFocus();
+  });
+
+  it("Rename hands focus to the rename field instead of back to the trigger", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    const onRename = renderMenu();
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: /Rename/ }));
+    expect(onRename).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(trigger).not.toHaveFocus();
+  });
+
+  // #3053's "Close pane" (a fold half's header) is in the shared items, so
+  // the touch sheet offers it too.
+  it("offers Close pane in the sheet when given onClose", async () => {
+    stubPointer(true);
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi({ id: "session-42" })}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        onClose={onClose}
+        triggerClassName="half-header-btn half-header-menu"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const sheet = screen.getByRole("dialog", { name: "claude code actions" });
+    await user.click(within(sheet).getByRole("menuitem", { name: "Close pane" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("stays a popover under a fine pointer", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    renderMenu();
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    await user.click(trigger);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("menu")).toHaveClass("pane-tab-overflow-menu");
   });
 });

@@ -100,12 +100,18 @@ export interface TerminalPrefs {
 
 // Issue #3013 — an open New session launcher (SessionLauncher.tsx). `target`
 // is where the session should land: `projectId` preselects the project (a
-// sidebar project's "+"); `half` is the fold's left or right half, which a
-// later slice acts on — until then it is stored and passed through only.
-// Null while the launcher is closed.
+// sidebar project's "+", a pane's split, a palette entry); `half` is the
+// fold's left or right half. Null while the launcher is closed.
 export interface LauncherTarget {
   half?: "left" | "right";
   projectId?: number;
+  // #3054 — a launcher entry chosen in the command palette (an agent, a
+  // shell or a script, by its `Launcher.id`): preselected, and the launch
+  // button takes focus so Enter launches it.
+  launcherId?: string;
+  // #3054 — a pane's "Split right"/"Split down": the session lands next to
+  // this pane instead of through the normal open path.
+  split?: SplitRequest;
 }
 
 export interface LauncherRequest {
@@ -116,14 +122,10 @@ export interface LauncherRequest {
 }
 
 // A pane's split-right/split-down action (PaneHeaderActions.tsx, a dockview
-// `rightHeaderActionsComponent`) can't receive custom props from App.tsx —
-// dockview owns that component's render — so it signals intent through the
-// store instead (same reason PaneTab.tsx already reads/writes the store
-// directly). App.tsx reacts to a new `splitRequest` by opening the command
-// palette scoped to the reference panel's project; the palette's own launch
-// handler reads it back to decide whether to add the new panel via a normal
-// open-or-focus or as a real split (`position: {referencePanel, direction}`).
-// Cleared on launch or on palette close, whichever comes first.
+// `rightHeaderActionsComponent`, and PaneActionsMenu.tsx) can't receive
+// custom props from App.tsx — dockview owns that component's render — so it
+// opens the launcher through the store with this as its target (#3054); App's
+// launch handler places the session beside `referencePanelId`.
 export interface SplitRequest {
   referencePanelId: string;
   direction: "right" | "below";
@@ -771,7 +773,6 @@ export interface UiSlice {
   dismissedCodexHookTrustVersion: string | null;
   checkCodexHookTrust: () => Promise<void>;
   dismissCodexHookTrust: () => void;
-  splitRequest: SplitRequest | null;
   // Panel id to show a brief highlight flash on (set via triggerPanelHighlight,
   // auto-clears after HIGHLIGHT_DURATION_MS). Both the tab (PaneTab.tsx) and
   // the panel body (TerminalPanelWrapper) read this to apply the flash.
@@ -809,7 +810,7 @@ export interface UiSlice {
   // precedent, and a dock save is rare enough that every OTHER mounted
   // column doing one harmless extra fetch isn't worth a per-project map's
   // added complexity. Kept in ui (not workspaces/hosts) as a generic
-  // cross-cutting UI refresh signal, the same bucket splitRequest/
+  // cross-cutting UI refresh signal, the same bucket
   // notificationsPanelOpenRequest live in.
   dockConfigRefreshTrigger: number;
   bumpDockConfigRefreshTrigger: () => void;
@@ -898,8 +899,13 @@ export interface UiSlice {
   // mirrors setSidebarWidth's "component computes, store just stores" shape
   // above.
   setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
-  requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
-  clearSplitRequest: () => void;
+  // #3054 — opens the launcher with the pane's project preselected and a
+  // split target (see SplitRequest).
+  requestSplit: (
+    referencePanelId: string,
+    direction: "right" | "below",
+    projectId?: number,
+  ) => void;
   // Issue #3013 — the New session launcher. The store cannot import
   // `canLaunchTerminal` (panelUtils.ts imports the store), so the view-mode
   // gate is applied where the launcher renders (SessionLauncherHost).
@@ -927,8 +933,8 @@ export interface UiSlice {
   // Hermes review, PR #1456 — cosmetic (the nonce check already prevents a
   // resolved request from re-firing on its own), but a resolved request
   // otherwise sits in the store forever, one stale object per session ever
-  // opened via notification. Symmetric with clearSplitRequest above, EXCEPT
-  // it takes the nonce being cleared and only actually clears when the
+  // opened via notification. A clear that
+  // takes the nonce being cleared and only actually clears when the
   // store's current request still has that exact nonce — a bare
   // unconditional clear could otherwise wipe out a BRAND NEW request that
   // arrived in the narrow gap between useOpenSessionRequest.ts's own

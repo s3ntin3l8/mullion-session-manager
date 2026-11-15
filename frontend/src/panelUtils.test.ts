@@ -2667,28 +2667,17 @@ describe("resolveActiveProjectId (issue #433's Source Control section)", () => {
 
 // U9 — App.tsx's global window-level Escape handler calls this directly
 // (see its own doc comment for why it lives here rather than as an
-// App.test.tsx mount test: App.tsx pulls in real dockview/xterm/WS
-// machinery this suite has never had to mock, so there's no existing
-// full-mount pattern to extend). The bug this closes: the handler used to
-// only clear `palette.open`, never `clearSplitRequest()` — but the palette
-// also renders for a pending split-right/split-down splitRequest
-// (App.tsx's own `paletteOpen = palette.open || (splitRequest !== null &&
-// ...)`), and the palette's OWN Escape handler only fires while focus is
-// inside its search input, so a split-triggered palette with focus moved
-// elsewhere inside it (the project picker, a launcher row, the worktree
-// checkbox, the base-ref dropdown) had no way to close via Escape at all.
+// App.test.tsx mount test). A split no longer opens the palette (#3054): it
+// opens the launcher, which closes through its own dialog or sheet.
 describe("handleGlobalEscape (U9)", () => {
-  it("clears the palette, closes settings, AND clears the split request", () => {
+  it("clears the palette and closes settings", () => {
     const clearPalette = vi.fn();
     const closeSettings = vi.fn();
-    const clearSplitRequest = vi.fn();
 
-    handleGlobalEscape({ clearPalette, closeSettings, clearSplitRequest });
+    handleGlobalEscape({ clearPalette, closeSettings });
 
     expect(clearPalette).toHaveBeenCalledTimes(1);
     expect(closeSettings).toHaveBeenCalledTimes(1);
-    // The actual regression: this used to never be called at all.
-    expect(clearSplitRequest).toHaveBeenCalledTimes(1);
   });
 });
 

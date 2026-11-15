@@ -33,7 +33,6 @@ describe("CommandPalette exit", () => {
         scope="global"
         projectId={null}
         onClose={onClose}
-        onLaunched={noop}
         onOpenSession={noop}
         onOpenGitHub={noop}
         onOpenAgentRules={noop}
@@ -64,7 +63,9 @@ describe("CommandPalette exit", () => {
       const user = userEvent.setup();
       const onClose = vi.fn();
       renderPalette(onClose);
-      const input = await screen.findByPlaceholderText("Launch a session or run a command…");
+      const input = await screen.findByPlaceholderText(
+        "Run a command, or find a session or agent…",
+      );
       expect(input).toHaveFocus();
       await user.keyboard("{Escape}");
       expect(globalEscape).not.toHaveBeenCalled();

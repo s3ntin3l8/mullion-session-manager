@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { IDockviewHeaderActionsProps } from "dockview";
 import { useDashboardStore } from "./store/index.js";
+import type { TerminalPaneParams } from "./TerminalPane.js";
 import { SplitDownIcon, SplitRightIcon } from "./ui/icons.js";
 
 // Ported 1:1 from the design's pane-header anatomy (Cmux States.dc.html,
@@ -95,8 +96,15 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
 
   if (!props.activePanel) return null;
 
+  // #3054 — opens the launcher with the pane's project preselected; a pane
+  // that is not a session's opens it on the usual default project.
   const split = (direction: "right" | "below") => {
-    requestSplit(props.activePanel!.id, direction);
+    const panel = props.activePanel!;
+    const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
+    const projectId = useDashboardStore
+      .getState()
+      .sessions.find((s) => s.id === sessionId)?.projectId;
+    requestSplit(panel.id, direction, projectId);
   };
 
   return (

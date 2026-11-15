@@ -72,7 +72,7 @@ export interface UseGlobalShortcutsParams {
 // `matchMedia` "change" subscription, or the push service-worker's
 // "message" listener, none of which are keyboard-related). Its effect reads
 // no shared ref and no piece of state also written by another effect in
-// this file: `setPalette`/`openSettings`/`clearSplitRequest` are setters/
+// this file: `setPalette`/`openSettings` are setters/
 // stable callbacks passed in, not values this effect derives from anything
 // else's output, and nothing else in App.tsx depends on THIS effect having
 // already run (unlike `useWorkspacePersistence`/`useMobileLayout`, whose
@@ -128,20 +128,9 @@ export function useGlobalShortcuts({
         e.preventDefault();
         useDashboardStore.getState().toggleViewMode();
       } else if (matchShortcut(DISMISS_SHORTCUT, e)) {
-        // U9 — see handleGlobalEscape's own doc comment for why
-        // clearSplitRequest belongs here: the palette also renders for a
-        // pending split-right/split-down splitRequest (App.tsx's own
-        // `palette.open || (splitRequest !== null && ...)` computation),
-        // and the palette's OWN Escape handler only fires while focus is
-        // actually inside its search input — moving focus to the
-        // project picker, a launcher row, the worktree checkbox, or the
-        // base-ref dropdown (all still inside the palette) leaves this
-        // global, window-level handler as the only one that still sees the
-        // keypress.
         handleGlobalEscape({
           clearPalette: () => setPalette((p) => ({ ...p, open: false })),
           closeSettings: () => setSettingsOpen(false),
-          clearSplitRequest: () => useDashboardStore.getState().clearSplitRequest(),
         });
       }
     };

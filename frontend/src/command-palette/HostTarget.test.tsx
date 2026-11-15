@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 // Issue #2237 — the launcher's host target chip, mounted inside the real
-// <CommandPalette> (the launch() handler reads the choice at launch time).
-import type { ComponentProps } from "react";
+// New session launcher (the launch reads the choice at launch time). It
+// lived in the command palette until #3054 moved every launch there.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { CommandPalette } from "../CommandPalette.js";
+import { SessionLauncherHost } from "../launchers/SessionLauncher.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Launcher } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
@@ -30,31 +30,15 @@ const MULTI = makeProject({
 });
 const SINGLE = makeProject({ id: 6, name: "solo", hostId: "local", hostCwds: {} });
 
-function renderPalette(projectId: number) {
-  const props: ComponentProps<typeof CommandPalette> = {
-    scope: "project",
-    projectId,
-    onClose: vi.fn(),
-    onLaunched: vi.fn(),
-    onOpenSession: vi.fn(),
-    onOpenGitHub: vi.fn(),
-    onOpenAgentRules: vi.fn(),
-    onOpenFileEditor: vi.fn(),
-    onOpenExternalFile: vi.fn(),
-    onOpenProjectBriefing: vi.fn(),
-    onOpenProjectSetup: vi.fn(),
-    onOpenDockConfig: vi.fn(),
-    onOpenSkills: vi.fn(),
-    onOpenBrowser: vi.fn(),
-    onOpenBlankBrowser: vi.fn(),
-    onOpenSettingsSection: vi.fn(),
-    onOpenTasks: vi.fn(),
-    onOpenBrowserUrl: vi.fn(),
-  };
-  return render(<CommandPalette {...props} />);
+function renderLauncher(projectId: number) {
+  const utils = render(
+    <SessionLauncherHost panels={[]} phone={false} onLaunched={vi.fn()} onOpenSession={vi.fn()} />,
+  );
+  act(() => useDashboardStore.getState().openLauncher({ projectId }));
+  return utils;
 }
 
-describe("CommandPalette -> launcher host target (#2237)", () => {
+describe("New session launcher -> host target (#2237)", () => {
   let posted: Array<Record<string, unknown>>;
 
   beforeEach(() => {
@@ -64,6 +48,8 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
       projects: [MULTI, SINGLE],
       sessions: [],
       hosts: [MAC, OFFLINE, PARKED],
+      viewMode: "list",
+      launcherRequest: null,
     });
     vi.stubGlobal(
       "fetch",
@@ -106,8 +92,8 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
     });
     useDashboardStore.setState({ projects: [AUTO], hosts: [MAC] });
     const user = userEvent.setup();
-    renderPalette(AUTO.id);
-    const select = (await screen.findByLabelText("Target host")) as HTMLSelectElement;
+    renderLauncher(AUTO.id);
+    const select = (await screen.findByLabelText("Host")) as HTMLSelectElement;
     expect(select.value).toBe("auto");
     await user.selectOptions(select, "__own__");
     await user.click((await screen.findAllByText("bash"))[0]);
@@ -117,14 +103,14 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
   });
 
   it("shows no chip for a single-host project", async () => {
-    renderPalette(SINGLE.id);
+    renderLauncher(SINGLE.id);
     await screen.findAllByText("bash");
-    expect(screen.queryByLabelText("Target host")).toBeNull();
+    expect(screen.queryByLabelText("Host")).toBeNull();
   });
 
   it("lists this server, each host and Auto, with unavailable hosts disabled", async () => {
-    renderPalette(MULTI.id);
-    const select = (await screen.findByLabelText("Target host")) as HTMLSelectElement;
+    renderLauncher(MULTI.id);
+    const select = (await screen.findByLabelText("Host")) as HTMLSelectElement;
     const opts = Array.from(select.options).map((o) => [o.textContent, o.disabled]);
     expect(opts).toEqual([
       ["this server", false],
@@ -138,7 +124,7 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
 
   it("a no-interaction launch sends no host fields", async () => {
     const user = userEvent.setup();
-    renderPalette(MULTI.id);
+    renderLauncher(MULTI.id);
     await user.click((await screen.findAllByText("bash"))[0]);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).not.toHaveProperty("targetHostId");
@@ -147,8 +133,8 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
 
   it("choosing a host sends targetHostId, and the worktree toggle becomes isolate", async () => {
     const user = userEvent.setup();
-    renderPalette(MULTI.id);
-    await user.selectOptions(await screen.findByLabelText("Target host"), "mac");
+    renderLauncher(MULTI.id);
+    await user.selectOptions(await screen.findByLabelText("Host"), "mac");
     await user.click(screen.getByRole("checkbox", { name: /isolate in a new worktree/i }));
     expect(screen.getByText(/the host's default branch/)).toBeInTheDocument();
     await user.click((await screen.findAllByText("bash"))[0]);
@@ -160,8 +146,8 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
 
   it("Auto sends placement and shows the preview with excluded hosts", async () => {
     const user = userEvent.setup();
-    renderPalette(MULTI.id);
-    await user.selectOptions(await screen.findByLabelText("Target host"), "auto");
+    renderLauncher(MULTI.id);
+    await user.selectOptions(await screen.findByLabelText("Host"), "auto");
     expect(await screen.findByText(/Mac mini: lowest load/)).toHaveTextContent(
       /not considered: Old box \(offline\)/,
     );
@@ -177,23 +163,21 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
 
   it("remembers the choice per project across a remount", async () => {
     const user = userEvent.setup();
-    const first = renderPalette(MULTI.id);
-    await user.selectOptions(await screen.findByLabelText("Target host"), "mac");
+    const first = renderLauncher(MULTI.id);
+    await user.selectOptions(await screen.findByLabelText("Host"), "mac");
     expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.lastLaunchHostByProject) ?? "{}")).toEqual({
       "5": "mac",
     });
     first.unmount();
-    renderPalette(MULTI.id);
-    expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe("mac");
+    renderLauncher(MULTI.id);
+    expect(((await screen.findByLabelText("Host")) as HTMLSelectElement).value).toBe("mac");
   });
 
   it("ignores an Auto left in storage by an older build for a pinned project", async () => {
     localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "auto" }));
     const user = userEvent.setup();
-    renderPalette(MULTI.id);
-    expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe(
-      "__own__",
-    );
+    renderLauncher(MULTI.id);
+    expect(((await screen.findByLabelText("Host")) as HTMLSelectElement).value).toBe("__own__");
     await user.click((await screen.findAllByText("bash"))[0]);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).not.toHaveProperty("placement");
@@ -209,10 +193,8 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
     useDashboardStore.setState({ projects: [MULTI, OTHER], hosts: [MAC] });
     localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "mac" }));
     const user = userEvent.setup();
-    renderPalette(OTHER.id);
-    expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe(
-      "__own__",
-    );
+    renderLauncher(OTHER.id);
+    expect(((await screen.findByLabelText("Host")) as HTMLSelectElement).value).toBe("__own__");
     await user.click((await screen.findAllByText("bash"))[0]);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).not.toHaveProperty("targetHostId");

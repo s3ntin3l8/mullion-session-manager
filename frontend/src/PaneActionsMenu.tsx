@@ -33,7 +33,8 @@ import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange, visibleViewport } from "./hooks/useVisualViewportChange.js";
-import { useLayoutContext } from "./lib/layoutTier.js";
+import { useCoarsePointer, useLayoutContext } from "./lib/layoutTier.js";
+import { BottomSheet } from "./ui/BottomSheet.js";
 import { describeError } from "./lib/describeError.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
@@ -123,6 +124,13 @@ export function PaneActionsMenu({
   const requestSplit = useDashboardStore((s) => s.requestSplit);
 
   const [overflowOpen, setOverflowOpen] = useState(false);
+  // #3054 — under a coarse pointer the menu is a bottom sheet (rows of 44px
+  // and more, never clipped by the tab strip or the phone's session sheet);
+  // under a fine pointer it stays the popover anchored to its trigger.
+  const coarse = useCoarsePointer();
+  const popoverOpen = overflowOpen && !coarse;
+  // The sheet's own focus-restore suppressor (BottomSheet owns that trap).
+  const sheetSuppressRestoreRef = useRef<(() => void) | null>(null);
   const [overflowPos, setOverflowPos] = useState<{ top: number; right: number } | null>(null);
   // Bumped by positionMenu() so the clamp/flip layout effect below re-runs
   // after a reposition (issue #1399), not only when the menu first opens.
@@ -156,7 +164,7 @@ export function PaneActionsMenu({
   // that entirely, rather than fighting dockview's internal stacking
   // context.
   useEffect(() => {
-    if (!overflowOpen) return;
+    if (!popoverOpen) return;
     const onOutsideClick = (e: MouseEvent) => {
       const target = e.target as Node;
       if (overflowBtnRef.current?.contains(target)) return;
@@ -172,18 +180,22 @@ export function PaneActionsMenu({
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [overflowOpen]);
+  }, [popoverOpen]);
 
   // P11 — same shared hook as Settings/CommandPalette/NotificationBell/the
   // original PaneTab menu. No `aria-modal`: there's no backdrop and the rest
   // of whatever hosts this trigger stays fully interactive while open.
-  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: overflowOpen,
+  const { onKeyDown: onTrapKeyDown, suppressRestore: suppressPopoverRestore } = useFocusTrap({
+    active: popoverOpen,
     containerRef: overflowMenuRef,
   });
+  const suppressRestore = () => {
+    if (coarse) sheetSuppressRestoreRef.current?.();
+    else suppressPopoverRestore();
+  };
   // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
   const { present: overflowPresent, state: overflowPresence } = usePresence(
-    overflowOpen,
+    popoverOpen,
     overflowMenuRef,
   );
   const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -192,6 +204,12 @@ export function PaneActionsMenu({
       setOverflowOpen(false);
       return;
     }
+    if (onMenuArrowKeys(e)) return;
+    onTrapKeyDown(e);
+  };
+  // The sheet's menu: arrows only — BottomSheet owns Escape and the Tab trap.
+  // Returns whether it handled the key.
+  const onMenuArrowKeys = (e: ReactKeyboardEvent<HTMLDivElement>): boolean => {
     // APG menu pattern — ArrowUp/ArrowDown (and Home/End) move focus among
     // `role="menuitem"` children; the shared hook's Tab-trap alone doesn't
     // provide that (Tab/Shift+Tab still work as the fallback a non-menu-
@@ -204,7 +222,7 @@ export function PaneActionsMenu({
             ),
           )
         : [];
-      if (items.length === 0) return;
+      if (items.length === 0) return false;
       e.preventDefault();
       const currentIndex = items.indexOf(document.activeElement as HTMLElement);
       const nextIndex =
@@ -220,9 +238,9 @@ export function PaneActionsMenu({
                 ? items.length - 1
                 : (currentIndex - 1 + items.length) % items.length;
       items[nextIndex]?.focus();
-      return;
+      return true;
     }
-    onTrapKeyDown(e);
+    return false;
   };
   // Every menu item action below already closes the menu by ALSO doing
   // something else (rename, opening a timeline/browser panel, opening the
@@ -298,13 +316,13 @@ export function PaneActionsMenu({
   }, []);
 
   const openMenu = useCallback(() => {
-    if (positionMenu()) setOverflowOpen(true);
-  }, [positionMenu]);
+    if (coarse || positionMenu()) setOverflowOpen(true);
+  }, [coarse, positionMenu]);
 
   // Issue #1399 — since #1398 `.app` (and this trigger with it) moves with the
   // iOS visual viewport when it pans with the keyboard open; re-anchor the
   // portaled menu to the trigger's new rect rather than leaving it behind.
-  useVisualViewportChange(overflowOpen, positionMenu);
+  useVisualViewportChange(popoverOpen, positionMenu);
 
   // Hermes review, PR #613 — re-clamps against the menu's real rendered
   // width instead of a hardcoded constant. useLayoutEffect (not useEffect)
@@ -313,7 +331,7 @@ export function PaneActionsMenu({
   // menu's own left edge has actually run past the viewport; a menu that
   // already fits (the common case) is left untouched.
   useLayoutEffect(() => {
-    if (!overflowOpen) return;
+    if (!popoverOpen) return;
     const menu = overflowMenuRef.current;
     if (!menu) return;
     const rect = menu.getBoundingClientRect();
@@ -334,7 +352,7 @@ export function PaneActionsMenu({
     setOverflowPos((pos) =>
       pos ? { top: flippedTop ?? pos.top, right: pos.right + overflowBy } : pos,
     );
-  }, [overflowOpen, repositionTick]);
+  }, [popoverOpen, repositionTick]);
 
   // Read fresh on every open, not memoized — dockview's own group layout is
   // live state this component doesn't own, so a value computed once and
@@ -360,6 +378,278 @@ export function PaneActionsMenu({
     ownGroup.api.location.type === "grid" &&
     ownGroup.panels.length > 1;
 
+  // The items, the same in the popover and in the sheet.
+  const menuItems = (
+    <>
+      {/* Hermes review, PR #613 — gated on `session`, not rendered
+            unconditionally like "Move" below. On desktop this component
+            only ever mounted for terminal panels (PaneTab.tsx's
+            tabComponents mapping), so `session` was always present and
+            this never mattered; the phone session switcher now renders this
+            menu for every panel type, including timeline/Agent-Browser/
+            task-detail panels whose params carry no plain `sessionId`
+            (timeline's is `sessionIds`, plural). Ungated, Rename opened
+            an input whose commit silently discarded the typed name
+            (commitMobileRename's own `sessionId === undefined` guard),
+            and Kill was a no-op button that looked destructive but did
+            nothing (armOrKill's `if (!session) return`). Keyed on the
+            `session` store lookup, not the stable `sessionId` prop
+            childCount above deliberately uses — intentional: a pane
+            restored before its session row lands in the store briefly
+            renders without Rename/Kill, which is the correct fail-safe
+            direction (matches the non-terminal-panel case above) rather
+            than offering actions against a session that doesn't exist
+            in the store yet. */}
+      {session && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() => closeMenuAfterAction(onRename)}
+        >
+          <RenameIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Rename</span>
+          <span className="pane-tab-overflow-hint">↵</span>
+        </button>
+      )}
+      {session?.model && (
+        <div
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          aria-disabled="true"
+          aria-label={`Model: ${session.model}`}
+          style={{ opacity: 0.6, cursor: "default" }}
+        >
+          <BotIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Model</span>
+          <span className="pane-tab-overflow-hint">{session.model}</span>
+        </div>
+      )}
+      {session?.smallModel && (
+        <div
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          aria-disabled="true"
+          aria-label={`Small model: ${session.smallModel}`}
+          style={{ opacity: 0.45, cursor: "default" }}
+        >
+          <BotIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Small model</span>
+          <span className="pane-tab-overflow-hint">{session.smallModel}</span>
+        </div>
+      )}
+      {/* Issue: narrow headers overflow — PaneHeaderActions.tsx's
+            header-level split buttons hide once their group gets too
+            narrow; this is the fallback entry point for a TERMINAL
+            pane that's cramped enough to need it (independent code
+            review, PR #709 — this menu only ever renders for terminal
+            panels, tabComponents in panels/registry.tsx, so a narrow
+            group made up of non-terminal panels — github/git/timeline/
+            browser — has no such fallback once its header buttons
+            hide; that's a pre-existing gap in this menu's own
+            coverage, not something this change introduces or closes).
+            Gated on `session`, same as Rename above: splitting is
+            meaningless for a pane whose session hasn't loaded yet.
+            Reference panel is THIS tab's own `api.id`, not the group's
+            active one — this menu is opened from a specific tab, so
+            split acts relative to that tab regardless of which one in
+            the group happens to be active. */}
+      {session && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() =>
+            closeMenuAfterAction(() => requestSplit(api.id, "right", session.projectId))
+          }
+        >
+          <SplitRightIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Split right</span>
+        </button>
+      )}
+      {session && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() =>
+            closeMenuAfterAction(() => requestSplit(api.id, "below", session.projectId))
+          }
+        >
+          <SplitDownIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Split down</span>
+        </button>
+      )}
+      {/* aria-disabled, not the native `disabled` attribute — a
+            disabled button doesn't reliably carry an explanatory
+            `title` across engines (issue #1106, same fix applied to
+            KebabMenu.tsx). No onClick here at all, so there's nothing
+            for a click guard to intercept. */}
+      <button
+        className="pane-tab-overflow-item"
+        role="menuitem"
+        aria-disabled="true"
+        title="Drag the tab to move it between panes/workspaces"
+      >
+        <MoveIcon size={14} style={{ color: "var(--muted)" }} />
+        <span style={{ flex: 1 }}>Move (drag tab)</span>
+      </button>
+      {/* Manual repair for the fold/unfold pane-skew bug
+            (snapshotTiledGroupWidths/restoreTiledGroupWidths's own header
+            comment in panelUtils.ts) — dockview's own maximize/exit cache
+            can freeze a tiled group at its 100px minimum, which the fix
+            itself now prevents going forward but can't retroactively
+            repair a workspace that was already skewed before it shipped.
+            No `session` gate — this acts on the whole tiled grid, not
+            this pane specifically, so it's offered from every panel type
+            (including non-terminal ones), same as it's a layout action
+            rather than a session one.
+
+            Disabled (not just a silent no-op click) whenever
+            balanceSiblingsOf itself has nothing to balance — this
+            pane has no siblings in its row or column, or the layout is
+            maximized — same
+            aria-disabled+explanatory-title pattern as "Move (drag tab)"
+            above, rather than leaving a user-invoked "repair my layout"
+            action clickable with no way to tell whether it did
+            anything. `canReset` (computed above, once, only while the
+            menu is open) rather than re-deriving it here twice.
+            aria-disabled, not `disabled` (issue #1106) — a disabled
+            button doesn't reliably carry the explanatory `title`, so
+            the guard against firing when `!canReset` moves into the
+            onClick handler itself instead. */}
+      {moveTargets.map(({ group, number }) => (
+        <button
+          key={group.id}
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() => closeMenuAfterAction(() => api.moveTo({ group }))}
+        >
+          <GridIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>
+            {moveTargets.length === 1 ? "Move to other pane" : `Move to pane ${number}`}
+          </span>
+        </button>
+      ))}
+      {canSplitOut && ownGroup && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() =>
+            closeMenuAfterAction(() => api.moveTo({ group: ownGroup, position: "right" }))
+          }
+        >
+          <GridIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Move to new pane</span>
+        </button>
+      )}
+      <button
+        className="pane-tab-overflow-item"
+        role="menuitem"
+        aria-disabled={!canReset || undefined}
+        title={canReset ? undefined : "No neighbouring panes in this row or column to balance"}
+        onClick={() => {
+          if (!canReset) return;
+          const groupId = api.group?.id;
+          if (groupId) closeMenuAfterAction(() => balanceSiblingsOf(containerApi, groupId));
+        }}
+      >
+        <GridIcon size={14} style={{ color: "var(--muted)" }} />
+        <span style={{ flex: 1 }}>Reset pane sizes</span>
+      </button>
+      {session && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() => {
+            closeMenuAfterAction(() => openTimelinePanel(containerApi, session, layout));
+          }}
+        >
+          <ListIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>View timeline</span>
+        </button>
+      )}
+      {session && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() => {
+            closeMenuAfterAction(() => openBrowserPanePanel(containerApi, session, layout));
+          }}
+        >
+          <BotIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Open Agent Browser</span>
+        </button>
+      )}
+      {session && project && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() => {
+            closeMenuAfterAction(() => setPromoteOpen(true));
+          }}
+        >
+          <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Promote to worktree…</span>
+        </button>
+      )}
+      {session && <div className="pane-tab-overflow-divider" />}
+      {session && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() => closeMenuAfterAction(() => toggleSessionMute(session.id))}
+          title={
+            muted
+              ? "Notifications for this session are muted — click to unmute"
+              : "Silence notifications for this session (OS popup, sound, and unread badge)"
+          }
+        >
+          {muted ? (
+            <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
+          ) : (
+            <BellIcon size={14} style={{ color: "var(--muted)" }} />
+          )}
+          <span style={{ flex: 1 }}>{muted ? "Unmute notifications" : "Mute notifications"}</span>
+        </button>
+      )}
+      {onClose && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          onClick={() => closeMenuAfterAction(onClose)}
+        >
+          <CloseIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Close pane</span>
+        </button>
+      )}
+      {session && (
+        <button
+          className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
+          role="menuitem"
+          onClick={armOrKill}
+          title={
+            childCount > 0
+              ? `${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
+              : undefined
+          }
+        >
+          <KillIcon size={14} />
+          <span style={{ flex: 1 }}>
+            {killArmed
+              ? "Click again to kill"
+              : childCount > 0
+                ? `Kill session (${childCount} child${childCount === 1 ? "" : "ren"} will detach)`
+                : "Kill session"}
+          </span>
+          {killArmed && (
+            <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
+              {killSecondsLeft}s
+            </span>
+          )}
+        </button>
+      )}
+    </>
+  );
+  const menuLabel = `${api.title ?? "Pane"} actions`;
+
   return (
     <>
       <button
@@ -367,7 +657,8 @@ export function PaneActionsMenu({
         className={triggerClassName}
         title="More…"
         aria-label="More actions"
-        aria-haspopup="menu"
+        // Under a coarse pointer the items open in a sheet (a dialog).
+        aria-haspopup={coarse ? "dialog" : "menu"}
         aria-expanded={overflowOpen}
         onClick={() => {
           if (overflowOpen) setOverflowOpen(false);
@@ -376,7 +667,8 @@ export function PaneActionsMenu({
       >
         <OverflowIcon size={16} />
       </button>
-      {overflowPresent &&
+      {!coarse &&
+        overflowPresent &&
         overflowPos &&
         createPortal(
           <div
@@ -399,277 +691,35 @@ export function PaneActionsMenu({
               overflowY: "auto",
             }}
             role="menu"
-            aria-label={`${api.title ?? "Pane"} actions`}
+            aria-label={menuLabel}
             onKeyDown={onMenuKeyDown}
           >
-            {/* Hermes review, PR #613 — gated on `session`, not rendered
-                unconditionally like "Move" below. On desktop this component
-                only ever mounted for terminal panels (PaneTab.tsx's
-                tabComponents mapping), so `session` was always present and
-                this never mattered; the phone session switcher now renders this
-                menu for every panel type, including timeline/Agent-Browser/
-                task-detail panels whose params carry no plain `sessionId`
-                (timeline's is `sessionIds`, plural). Ungated, Rename opened
-                an input whose commit silently discarded the typed name
-                (commitMobileRename's own `sessionId === undefined` guard),
-                and Kill was a no-op button that looked destructive but did
-                nothing (armOrKill's `if (!session) return`). Keyed on the
-                `session` store lookup, not the stable `sessionId` prop
-                childCount above deliberately uses — intentional: a pane
-                restored before its session row lands in the store briefly
-                renders without Rename/Kill, which is the correct fail-safe
-                direction (matches the non-terminal-panel case above) rather
-                than offering actions against a session that doesn't exist
-                in the store yet. */}
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => closeMenuAfterAction(onRename)}
-              >
-                <RenameIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Rename</span>
-                <span className="pane-tab-overflow-hint">↵</span>
-              </button>
-            )}
-            {session?.model && (
-              <div
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                aria-disabled="true"
-                aria-label={`Model: ${session.model}`}
-                style={{ opacity: 0.6, cursor: "default" }}
-              >
-                <BotIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Model</span>
-                <span className="pane-tab-overflow-hint">{session.model}</span>
-              </div>
-            )}
-            {session?.smallModel && (
-              <div
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                aria-disabled="true"
-                aria-label={`Small model: ${session.smallModel}`}
-                style={{ opacity: 0.45, cursor: "default" }}
-              >
-                <BotIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Small model</span>
-                <span className="pane-tab-overflow-hint">{session.smallModel}</span>
-              </div>
-            )}
-            {/* Issue: narrow headers overflow — PaneHeaderActions.tsx's
-                header-level split buttons hide once their group gets too
-                narrow; this is the fallback entry point for a TERMINAL
-                pane that's cramped enough to need it (independent code
-                review, PR #709 — this menu only ever renders for terminal
-                panels, tabComponents in panels/registry.tsx, so a narrow
-                group made up of non-terminal panels — github/git/timeline/
-                browser — has no such fallback once its header buttons
-                hide; that's a pre-existing gap in this menu's own
-                coverage, not something this change introduces or closes).
-                Gated on `session`, same as Rename above: splitting is
-                meaningless for a pane whose session hasn't loaded yet.
-                Reference panel is THIS tab's own `api.id`, not the group's
-                active one — this menu is opened from a specific tab, so
-                split acts relative to that tab regardless of which one in
-                the group happens to be active. */}
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => closeMenuAfterAction(() => requestSplit(api.id, "right"))}
-              >
-                <SplitRightIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Split right</span>
-              </button>
-            )}
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => closeMenuAfterAction(() => requestSplit(api.id, "below"))}
-              >
-                <SplitDownIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Split down</span>
-              </button>
-            )}
-            {/* aria-disabled, not the native `disabled` attribute — a
-                disabled button doesn't reliably carry an explanatory
-                `title` across engines (issue #1106, same fix applied to
-                KebabMenu.tsx). No onClick here at all, so there's nothing
-                for a click guard to intercept. */}
-            <button
-              className="pane-tab-overflow-item"
-              role="menuitem"
-              aria-disabled="true"
-              title="Drag the tab to move it between panes/workspaces"
-            >
-              <MoveIcon size={14} style={{ color: "var(--muted)" }} />
-              <span style={{ flex: 1 }}>Move (drag tab)</span>
-            </button>
-            {/* Manual repair for the fold/unfold pane-skew bug
-                (snapshotTiledGroupWidths/restoreTiledGroupWidths's own header
-                comment in panelUtils.ts) — dockview's own maximize/exit cache
-                can freeze a tiled group at its 100px minimum, which the fix
-                itself now prevents going forward but can't retroactively
-                repair a workspace that was already skewed before it shipped.
-                No `session` gate — this acts on the whole tiled grid, not
-                this pane specifically, so it's offered from every panel type
-                (including non-terminal ones), same as it's a layout action
-                rather than a session one.
-
-                Disabled (not just a silent no-op click) whenever
-                balanceSiblingsOf itself has nothing to balance — this
-                pane has no siblings in its row or column, or the layout is
-                maximized — same
-                aria-disabled+explanatory-title pattern as "Move (drag tab)"
-                above, rather than leaving a user-invoked "repair my layout"
-                action clickable with no way to tell whether it did
-                anything. `canReset` (computed above, once, only while the
-                menu is open) rather than re-deriving it here twice.
-                aria-disabled, not `disabled` (issue #1106) — a disabled
-                button doesn't reliably carry the explanatory `title`, so
-                the guard against firing when `!canReset` moves into the
-                onClick handler itself instead. */}
-            {moveTargets.map(({ group, number }) => (
-              <button
-                key={group.id}
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => closeMenuAfterAction(() => api.moveTo({ group }))}
-              >
-                <GridIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>
-                  {moveTargets.length === 1 ? "Move to other pane" : `Move to pane ${number}`}
-                </span>
-              </button>
-            ))}
-            {canSplitOut && ownGroup && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() =>
-                  closeMenuAfterAction(() => api.moveTo({ group: ownGroup, position: "right" }))
-                }
-              >
-                <GridIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Move to new pane</span>
-              </button>
-            )}
-            <button
-              className="pane-tab-overflow-item"
-              role="menuitem"
-              aria-disabled={!canReset || undefined}
-              title={
-                canReset ? undefined : "No neighbouring panes in this row or column to balance"
-              }
-              onClick={() => {
-                if (!canReset) return;
-                const groupId = api.group?.id;
-                if (groupId) closeMenuAfterAction(() => balanceSiblingsOf(containerApi, groupId));
-              }}
-            >
-              <GridIcon size={14} style={{ color: "var(--muted)" }} />
-              <span style={{ flex: 1 }}>Reset pane sizes</span>
-            </button>
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => {
-                  closeMenuAfterAction(() => openTimelinePanel(containerApi, session, layout));
-                }}
-              >
-                <ListIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>View timeline</span>
-              </button>
-            )}
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => {
-                  closeMenuAfterAction(() => openBrowserPanePanel(containerApi, session, layout));
-                }}
-              >
-                <BotIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Open Agent Browser</span>
-              </button>
-            )}
-            {session && project && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => {
-                  closeMenuAfterAction(() => setPromoteOpen(true));
-                }}
-              >
-                <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Promote to worktree…</span>
-              </button>
-            )}
-            {session && <div className="pane-tab-overflow-divider" />}
-            {session && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => closeMenuAfterAction(() => toggleSessionMute(session.id))}
-                title={
-                  muted
-                    ? "Notifications for this session are muted — click to unmute"
-                    : "Silence notifications for this session (OS popup, sound, and unread badge)"
-                }
-              >
-                {muted ? (
-                  <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
-                ) : (
-                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
-                )}
-                <span style={{ flex: 1 }}>
-                  {muted ? "Unmute notifications" : "Mute notifications"}
-                </span>
-              </button>
-            )}
-            {onClose && (
-              <button
-                className="pane-tab-overflow-item"
-                role="menuitem"
-                onClick={() => closeMenuAfterAction(onClose)}
-              >
-                <CloseIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Close pane</span>
-              </button>
-            )}
-            {session && (
-              <button
-                className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
-                role="menuitem"
-                onClick={armOrKill}
-                title={
-                  childCount > 0
-                    ? `${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
-                    : undefined
-                }
-              >
-                <KillIcon size={14} />
-                <span style={{ flex: 1 }}>
-                  {killArmed
-                    ? "Click again to kill"
-                    : childCount > 0
-                      ? `Kill session (${childCount} child${childCount === 1 ? "" : "ren"} will detach)`
-                      : "Kill session"}
-                </span>
-                {killArmed && (
-                  <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
-                    {killSecondsLeft}s
-                  </span>
-                )}
-              </button>
-            )}
+            {menuItems}
           </div>,
           document.body,
         )}
+      {coarse && (
+        <BottomSheet
+          open={overflowOpen}
+          onClose={() => setOverflowOpen(false)}
+          label={menuLabel}
+          closeLabel="Close pane actions"
+          title={api.title ?? "Pane"}
+          backStack
+          sheetClassName={`pane-actions-sheet${layout.tier === "phone" ? "" : " mobile-session-sheet--tablet"}`}
+          suppressRestoreRef={sheetSuppressRestoreRef}
+        >
+          <div
+            ref={overflowMenuRef}
+            className="pane-actions-sheet-menu"
+            role="menu"
+            aria-label={menuLabel}
+            onKeyDown={(e) => void onMenuArrowKeys(e)}
+          >
+            {menuItems}
+          </div>
+        </BottomSheet>
+      )}
       {promoteOpen && session && project && (
         <PromoteDialog
           session={session}
