@@ -11,10 +11,12 @@ import {
   setLayoutMode,
   stubWidth,
   stubLiveWidth,
+  persistenceHarness,
 } from "./test/appHarness.js";
 import { App } from "./App.js";
 import { useDashboardStore } from "./store/index.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
+import { EMPTY_FOLD_HALVES } from "./lib/foldHalves.js";
 
 // #3010 — the two halves between 800 and 1099px.
 describe("App two halves", () => {
@@ -148,6 +150,92 @@ describe("App two halves", () => {
       useDashboardStore.setState({ rightSidebarOpen: true });
     });
     expect(screen.getByTestId("key-bar")).toHaveAttribute("data-session", "10");
+  });
+
+  // #3053 — one bar under both halves, not inside the left one: the two
+  // terminals keep the same height, and a tap on a key is not a use of the
+  // left half (which would retarget the bar away from the right session).
+  it("puts one key bar under both halves, typing into the right half after it is used", async () => {
+    const { container } = await renderHalves(true);
+    act(() => useDashboardStore.setState({ activePanelId: "session-10" }));
+    act(() =>
+      useDashboardStore.getState().moveToHalf("session-11", "right", ["session-10", "session-11"]),
+    );
+    act(() => foldHarness.rightHalf!.onUse());
+    const bars = screen.getAllByTestId("key-bar");
+    expect(bars).toHaveLength(1);
+    expect(bars[0]!.parentElement).toBe(container.querySelector(".app"));
+    expect(container.querySelector(".grid-area [data-testid='key-bar']")).toBeNull();
+    expect(bars[0]).toHaveAttribute("data-session", "11");
+    // Pressing the bar is not pressing the left half: the target stays.
+    fireEvent.pointerDown(bars[0]!);
+    expect(useDashboardStore.getState().focusedHalf).toBe("right");
+    expect(screen.getByTestId("key-bar")).toHaveAttribute("data-session", "11");
+    // Using the left half moves the bar to it, and marks its header.
+    fireEvent.pointerDown(container.querySelector(".fold-half-left")!);
+    expect(screen.getByTestId("key-bar")).toHaveAttribute("data-session", "10");
+    expect(container.querySelector(".half-header[data-half='left']")).toHaveClass("focused");
+  });
+
+  // #3053 — a stale stored assignment can put every open pane on the right
+  // half; on load the right half's shown one comes to the left, which has
+  // the header, the "x" and the menu.
+  it("moves the right half's pane to the left half when no tiled pane is left there", async () => {
+    persistenceHarness.restoredWorkspaceIdRef.current = 1;
+    useDashboardStore.setState({
+      sessionsLoaded: true,
+      foldHalves: {
+        1: { ...EMPTY_FOLD_HALVES, right: ["session-10", "session-11"], shownRight: "session-11" },
+      },
+    });
+    try {
+      const api = makeApi();
+      await renderHalves(false, api);
+      const state = useDashboardStore.getState().foldHalves[1]!;
+      expect(state.right).toEqual(["session-10"]);
+      expect(state.shownLeft).toBe("session-11");
+      expect(api.maximizeGroup).toHaveBeenCalledWith(api.panels[1]);
+      expect(railHarness.props?.panes.map((p) => p.id)).toEqual(["session-11"]);
+    } finally {
+      persistenceHarness.restoredWorkspaceIdRef.current = null;
+    }
+  });
+
+  // #3053 — the Browser and Dock views exist only on the halves, where an
+  // open one covers the right half: a fresh start does not reopen them.
+  // Through a fresh store, since the store reads localStorage once, at load.
+  it("does not restore an open Browser or Dock view on load; other views come back", async () => {
+    for (const [view, open] of [
+      ["browser", false],
+      ["dock", false],
+      ["git", true],
+    ] as const) {
+      localStorage.setItem("crs.rightSidebarOpen", "1");
+      localStorage.setItem("crs.rightSidebarView", view);
+      vi.resetModules();
+      const fresh = await import("./store/index.js");
+      const { App: FreshApp } = await import("./App.js");
+      fresh.useDashboardStore.setState({
+        activeWorkspaceId: 1,
+        sessions: [session(10), session(11)],
+        refreshWorkspaces: vi.fn().mockResolvedValue(undefined),
+        hydrateSettings: vi.fn(),
+        startThemeWatch: vi.fn(() => () => {}),
+      });
+      stubWidth("halves");
+      splitHarness.api = makeApi();
+      const { container } = render(<FreshApp />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(fresh.useDashboardStore.getState().rightSidebarOpen, view).toBe(open);
+      expect(fresh.useDashboardStore.getState().rightSidebarView).toBe(view);
+      expect(
+        !!container.querySelector('aside.right-sidebar-panel[aria-label$=" sidebar"]'),
+        view,
+      ).toBe(open);
+      cleanup();
+    }
   });
 
   it("lands a session launched from a half's + on that half", async () => {

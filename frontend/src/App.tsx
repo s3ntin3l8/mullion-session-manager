@@ -1615,7 +1615,7 @@ export function App() {
                 `isMobile`) so a tablet's touch-primary input gets the key
                 bar too; a touchscreen laptop at desktop width gets it as
                 well, for the same reason. */}
-            {isCoarsePointer && activeTerminalSession && (
+            {isCoarsePointer && activeTerminalSession && !foldHalves && (
               <MobileKeyBar sessionId={activeTerminalSession.id} />
             )}
           </div>
@@ -1670,6 +1670,14 @@ export function App() {
           }
         />
       </div>
+      {/* #3053 — on the two halves, one key bar under both, so both terminals
+          keep the same height and it is plain that one bar serves the two.
+          It types into the half used last (activeTerminalSession), which its
+          header marks. Outside both halves, so a tap on it is not a use of
+          the left half (onUseLeftHalf). */}
+      {foldHalves && isCoarsePointer && activeTerminalSession && (
+        <MobileKeyBar sessionId={activeTerminalSession.id} />
+      )}
       {/* Phone (#3014): the mode bar, last in .app's column so it sits under
           the key bar, at the bottom edge. */}
       {isMobile && <PhoneModeBar onOpenSettings={() => openSettings()} />}
