@@ -71,6 +71,38 @@ describe("styles/motion.css", () => {
     expect(selectors).toContain(".mobile-key-bar-btn");
   });
 
+  // #3053 — `:active` matches every ancestor of the pressed element too, so
+  // pressing the "x" in a lone pane tab scaled the whole tab and pulled the
+  // "x" out from under the pointer before release. Only the innermost
+  // pressed control moves: both press rules skip a control that holds a
+  // pressed control, listing every control either rule presses.
+  it("presses only the innermost control, at both rules' own specificity", () => {
+    const press = rules(css, ":active").filter(([, body]) => /scale:\s*0\.9\d/.test(body));
+    expect(press).toHaveLength(2);
+    const controls = (list: string) =>
+      list
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+    const pressed = new Set<string>();
+    for (const [selector] of press) {
+      for (const c of controls(selector.match(/^:is\(([^)]*(?:\([^)]*\)[^)]*)*)\)/)![1]!)) {
+        pressed.add(c);
+      }
+    }
+    for (const [selector] of press) {
+      const guard = selector.match(
+        /:where\(\s*:has\(\s*:is\(([\s\S]*?)\):active:not\(\.ws-row-btn\)\s*\)\s*\)/,
+      );
+      expect(guard, selector).not.toBeNull();
+      const inner = new Set(controls(guard![1]!));
+      for (const c of pressed) expect(inner, c).toContain(c);
+      // Inside the :not() list, after the others: :where() adds nothing to
+      // the specificity the two rules' order relies on.
+      expect(selector.indexOf(guard![0])).toBeGreaterThan(selector.indexOf(":not("));
+    }
+  });
+
   it("eases the press over the press token, at zero specificity", () => {
     const [selector, body] = rules(css, ":where(")[0];
     expect(selector.startsWith(":where(")).toBe(true);

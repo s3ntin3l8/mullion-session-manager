@@ -68,6 +68,7 @@ export function useHalfActions(
           params={panel.params as TerminalPaneParams | undefined}
           containerApi={dockviewApi}
           onRename={startRename}
+          onClose={() => panel.api.close()}
           triggerClassName="half-header-btn half-header-menu"
         />
       );
