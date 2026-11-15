@@ -122,7 +122,10 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
       if (btnRef.current?.contains(target) || panelRef.current?.contains(target)) return;
       // A row's "⋯" menu is open (#3073). It is portaled outside the panel,
       // and a press outside closes that menu first (KebabMenu's own
-      // listener), the picker only on the next press.
+      // listener), the picker only on the next press. This probe relies on
+      // KebabMenu rendering its trigger inline (inside the panel, with
+      // `aria-expanded`) and portaling only the menu: if the trigger ever
+      // moves out of the panel, this check must change with it.
       if (panelRef.current?.querySelector('.rail-ws-more[aria-expanded="true"]')) return;
       setOpen(false);
       // The focused search box goes with the popover. Unless the click put

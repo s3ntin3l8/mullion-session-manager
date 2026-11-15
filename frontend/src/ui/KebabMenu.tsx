@@ -258,6 +258,18 @@ export function KebabMenu({
   useVisualViewportChange(popoverOpen, () => {
     if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
   });
+  // A "side" menu belongs to a row inside a scrolling list (the workspace
+  // picker, #3073): follow the row when that list scrolls.
+  useEffect(() => {
+    if (!popoverOpen || menuPlacement !== "side") return;
+    const onScroll = (e: Event) => {
+      // The menu's own scrolling moves nothing it is anchored to.
+      if (menuRef.current?.contains(e.target as Node)) return;
+      if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [popoverOpen, menuPlacement]);
 
   // Re-clamp after rendering, as PaneActionsMenu does for its measured
   // width. scrollHeight includes content hidden by maxHeight; measuring the
@@ -274,10 +286,12 @@ export function KebabMenu({
     if (item.disabled) return;
     // The action is about to take focus somewhere else (another overlay).
     // Tell the focus trap not to pull it back to this menu's trigger when
-    // the menu closes — see `opensOverlay` on KebabMenuItem.
-    if (item.opensOverlay) suppressRestore();
+    // the menu closes — see `opensOverlay` on KebabMenuItem. Only on the
+    // click that runs the action: an arming click that is then cancelled
+    // (Escape, a press outside) must still return focus to the trigger.
     if (item.confirm) {
       if (armedKey === item.key) {
+        if (item.opensOverlay) suppressRestore();
         clearArmTimer();
         setArmedKey(null);
         setOpen(false);
@@ -300,6 +314,7 @@ export function KebabMenu({
       }
       return;
     }
+    if (item.opensOverlay) suppressRestore();
     setOpen(false);
     item.onClick();
   };
@@ -358,8 +373,12 @@ export function KebabMenu({
   // the layout effect above corrects it before paint.
   const getSideMenuStyle = (rect: DOMRect): React.CSSProperties => {
     const visible = visibleViewport();
+    // The visible viewport's right edge too (a panned or zoomed iOS visual
+    // viewport), not the layout viewport's.
+    const vv = window.visualViewport;
+    const visibleRight = vv ? vv.offsetLeft + vv.width : window.innerWidth;
     const gap = 4;
-    const fitsRight = rect.right + gap + menuWidth <= window.innerWidth - 8;
+    const fitsRight = rect.right + gap + menuWidth <= visibleRight - 8;
     const top = Math.max(
       visible.top + 8,
       Math.min(rect.top - gap, visible.bottom - 8 - menuHeight),
@@ -462,7 +481,15 @@ export function KebabMenu({
             className={themeClassName(theme, "pane-tab-overflow-menu", menuClassName)}
             style={menuStyle}
             data-presence={presence}
-            data-placement={menuPlacement === "side" ? "side" : opensUpward ? "top" : "bottom"}
+            data-placement={
+              menuPlacement === "side"
+                ? menuStyle.left === "auto"
+                  ? "side-left"
+                  : "side"
+                : opensUpward
+                  ? "top"
+                  : "bottom"
+            }
             inert={presence === "leaving"}
             role="menu"
             aria-label={menuLabel ?? title}

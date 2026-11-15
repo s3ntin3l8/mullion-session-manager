@@ -241,6 +241,22 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
   });
 
+  it("returns focus to the ⋯ when an armed delete is cancelled", async () => {
+    stubPxWidth(1000);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(chip());
+    const list = await openMenu(user, "Manage Beta");
+    await user.click(screen.getByRole("menuitem", { name: "Delete workspace" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(within(list).getByRole("button", { name: "Manage Beta" })).toHaveFocus();
+    expect(actions.deleteWorkspace).not.toHaveBeenCalled();
+    // And Escape still closes the picker.
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Workspaces" })).toBeNull();
+  });
+
   it("closes the menu first, then the picker, on Escape and on an outside click", async () => {
     stubPxWidth(1000);
     const user = userEvent.setup();

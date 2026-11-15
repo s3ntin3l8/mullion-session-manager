@@ -716,6 +716,41 @@ describe('ui/KebabMenu menuPlacement="side"', () => {
       const menu = await openMenu();
       expect(menu.style.left).toBe("auto");
       expect(menu.style.right).toBe("204px");
+      // Grows from the trigger's edge, which is now its right.
+      expect(menu).toHaveAttribute("data-placement", "side-left");
+    } finally {
+      restore();
+    }
+  });
+
+  it("follows its trigger when a list it sits in scrolls", async () => {
+    const restore = mockGeometry({ top: 100, left: 300 }, { width: 1024, height: 800 });
+    const rectAt = (top: number) => ({
+      top,
+      bottom: top + 20,
+      left: 300,
+      right: 320,
+      width: 20,
+      height: 20,
+      x: 300,
+      y: top,
+      toJSON: () => ({}),
+    });
+    try {
+      const menu = await openMenu();
+      expect(menu.style.top).toBe("96px");
+      // The same spy mockGeometry installed: the row scrolled up 60px.
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(rectAt(40));
+      act(() => {
+        document.body.dispatchEvent(new Event("scroll"));
+      });
+      expect(menu.style.top).toBe("36px");
+      // The menu's own scroll moves nothing it is anchored to.
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(rectAt(300));
+      act(() => {
+        menu.dispatchEvent(new Event("scroll"));
+      });
+      expect(menu.style.top).toBe("36px");
     } finally {
       restore();
     }
@@ -731,5 +766,38 @@ describe('ui/KebabMenu menuPlacement="side"', () => {
     } finally {
       restore();
     }
+  });
+});
+
+// PR #3081 review — an `opensOverlay` confirm item suppresses the focus
+// restore only on the click that fires it: arming it and then cancelling
+// still returns focus to the trigger.
+describe("ui/KebabMenu confirm + opensOverlay", () => {
+  it("returns focus to the trigger when an armed item is cancelled", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    render(
+      <KebabMenu
+        title="Manage"
+        items={[
+          {
+            key: "delete",
+            label: "Delete",
+            armLabel: "Click again to delete",
+            confirm: true,
+            opensOverlay: true,
+            onClick,
+          },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Manage" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(screen.getByRole("menuitem", { name: /Click again/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(onClick).not.toHaveBeenCalled();
   });
 });
