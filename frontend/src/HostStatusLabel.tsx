@@ -1,7 +1,7 @@
 import type { Host } from "./api/index.js";
 import {
   deriveHostStatus,
-  LEGACY_AGENT_LABEL,
+  legacyAgentLabels,
   legacyAgentTitle,
   type PingState,
 } from "./hostStatus.js";
@@ -49,7 +49,7 @@ export function HostStatusLabel({ host }: { host: Host }) {
       )}
       {legacy && (
         <span className="host-derived-status-legacy" title={legacyAgentTitle(host)}>
-          {LEGACY_AGENT_LABEL}
+          {legacyAgentLabels(host).short}
         </span>
       )}
       {parked && (

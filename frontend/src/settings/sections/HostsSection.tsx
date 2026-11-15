@@ -7,7 +7,12 @@ import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { AgentInstallInstructions } from "../../AgentInstallInstructions.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
-import { deriveHostStatus, legacyAgentTitle, type PingState } from "../../hostStatus.js";
+import {
+  deriveHostStatus,
+  legacyAgentLabels,
+  legacyAgentTitle,
+  type PingState,
+} from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
@@ -461,7 +466,7 @@ export function HostsSection() {
                           style={{ color: "var(--y)" }}
                           title={legacyAgentTitle(host, primaryVersion)}
                         >
-                          Outdated agent — upgrade
+                          {legacyAgentLabels(host).long}
                         </span>
                       </>
                     )}

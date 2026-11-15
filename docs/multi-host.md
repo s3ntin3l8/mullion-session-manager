@@ -2059,13 +2059,17 @@ channel. The primary has to dial the agent's stored `baseUrl`, which is an
 address only the home network can route.
 
 **How to see it.** Settings → Hosts shows **Outdated agent — upgrade** on the
-row, and the sidebar and pane tabs show `outdated agent` beside the host name.
-The hover text gives the agent's reported version and the primary's. The
-`GET /api/hosts` field is `legacyAgent`: true for a non-local host that has a
-`baseUrl`, no machine identity and no revoked identity. An older row that a
-newer registration replaced is not flagged (it shows as a possible duplicate
-instead). The server logs the "legacy agent registered" notice once per host per
-process, not on every renewal.
+row. Wherever the app names a host (the sidebar project header, pane tabs and
+session rows) it shows `outdated agent` beside the name. An agent that already
+reports v0.3.59 or later reads **Agent not registered — set MULLION_PRIMARY_URL**
+(`not registered` as the chip) instead, because upgrading would change nothing
+for it; see Fix. Every surface has a hover with the agent's reported version, but
+only the Settings hover also gives the primary's version. The `GET /api/hosts`
+field is `legacyAgent`: true for a non-local host that has a `baseUrl`, no
+machine identity and no revoked identity. An older row that a newer registration
+replaced is not flagged (it shows as a possible duplicate instead). The server
+logs the "legacy agent registered" notice once per host per process, not on every
+renewal.
 
 **Fix.** Upgrade the agent to v0.3.59 or later and restart it. It then
 registers with a machine identity and dials out to `MULLION_PRIMARY_URL`; the

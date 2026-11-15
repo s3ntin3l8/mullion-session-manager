@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { CHANNEL_SATURATED_REASON } from "../../src/shared/constants.js";
-import { legacyAgentTitle, deriveHostStatus, type PingState } from "./hostStatus.js";
+import {
+  deriveHostStatus,
+  legacyAgentFix,
+  legacyAgentLabels,
+  legacyAgentTitle,
+  type PingState,
+} from "./hostStatus.js";
 import { makeHost } from "./test/fixtures.js";
 
 const NO_CLICK: PingState = { status: "unknown", lastCheckedAtSnapshot: null };
@@ -171,5 +177,26 @@ describe("deriveHostStatus (issue #246)", () => {
         /Upgrade the agent/,
       );
     }
+  });
+
+  it("treats a pre-release of the channel floor as older, and a pre-release above it as current", () => {
+    for (const v of ["0.3.59-rc.1", "0.3.59.dev", "0.3.58", "garbage", ""]) {
+      expect(legacyAgentFix(makeHost({ mullionVersion: v }))).toBe("upgrade");
+    }
+    for (const v of ["0.3.59", "0.3.60-rc.1", "0.4.0"]) {
+      expect(legacyAgentFix(makeHost({ mullionVersion: v }))).toBe("register");
+    }
+  });
+
+  it("words the visible label from the same decision as the hover", () => {
+    const old = makeHost({ legacyAgent: true, mullionVersion: "0.3.50" });
+    const current = makeHost({ legacyAgent: true, mullionVersion: "0.3.62" });
+    expect(legacyAgentLabels(old)).toEqual({
+      short: "outdated agent",
+      long: "Outdated agent — upgrade",
+    });
+    expect(legacyAgentLabels(current).long).toMatch(/not registered.*MULLION_PRIMARY_URL/);
+    expect(legacyAgentTitle(old)).toMatch(/Upgrade the agent/);
+    expect(legacyAgentTitle(current)).toMatch(/MULLION_PRIMARY_URL/);
   });
 });

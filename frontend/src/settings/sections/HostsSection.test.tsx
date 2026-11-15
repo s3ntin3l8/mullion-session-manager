@@ -120,6 +120,17 @@ describe("HostsSection token rotation", () => {
     expect(screen.getAllByText("Outdated agent — upgrade")).toHaveLength(1);
   });
 
+  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [makeHost({ id: "h", name: "mac", legacyAgent: true, mullionVersion: "0.3.62" })],
+    });
+    render(<HostsSection />);
+    const label = screen.getByText(/Agent not registered — set MULLION_PRIMARY_URL/);
+    expect(label).toHaveAttribute("title", expect.stringMatching(/has not registered/));
+    expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
+  });
+
   it("flags a possible duplicate and offers Remove stale host on the older row only (issue #2582)", async () => {
     stubFetch({});
     useDashboardStore.setState({
