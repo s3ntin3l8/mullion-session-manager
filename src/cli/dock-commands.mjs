@@ -110,7 +110,9 @@ export function createDockCommands({ CliUsageError, requireOne }) {
           positional.push(rest[i]);
           continue;
         }
-        if (rest[i + 1] === undefined) throw new CliUsageError(`${rest[i]} needs a value`);
+        if (rest[i + 1] === undefined || rest[i + 1].startsWith("--")) {
+          throw new CliUsageError(`${rest[i]} needs a value`);
+        }
         flags.push([rest[i], rest[++i]]);
       }
       if (positional.length > 1) throw new CliUsageError(usage);

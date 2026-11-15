@@ -195,6 +195,7 @@ describe("mullion dock", () => {
       ["config", "get", "2", "junk"],
       ["config", "get", "--remove", "dev"],
       ["config", "set", "--remove"],
+      ["config", "set", "--remove", "--upsert", "{}"],
     ]) {
       expect(await runCommand(["dock", ...bad], { client, io })).toBe(2);
     }
