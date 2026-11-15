@@ -62,6 +62,48 @@ describe("buildPaletteCommands", () => {
     expect(commands.filter((c) => c.drillIn).map((c) => c.id)).toEqual(["project"]);
   });
 
+  it("offers New session… as a top command wired to its opener", () => {
+    const { context } = ctx();
+    const newSession = vi.fn();
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, newSession },
+    });
+    const command = commands.find((c) => c.id === "new-session")!;
+
+    expect(command.placement).toBe("top");
+    expect(command.title).toBe("New session…");
+    expect(command.subtitle).toBe("Choose an agent, shell or script");
+    command.run();
+    expect(newSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("leads the top commands with New session… when there is no project", () => {
+    const { context } = ctx({ projectId: null });
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, newSession: vi.fn() },
+    });
+
+    expect(commands.filter((c) => c.placement === "top")[0]?.id).toBe("new-session");
+  });
+
+  it("leads the top commands with New session… when there is a project", () => {
+    const { context } = ctx();
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, newSession: vi.fn() },
+    });
+
+    expect(commands.filter((c) => c.placement === "top")[0]?.id).toBe("new-session");
+  });
+
+  it("omits New session… when no opener is given", () => {
+    const commands = buildPaletteCommands(ctx().context);
+
+    expect(commands.some((c) => c.id === "new-session")).toBe(false);
+  });
+
   it("wires each command to its opener with the project id", () => {
     const { context, open } = ctx();
     const byId = Object.fromEntries(buildPaletteCommands(context).map((c) => [c.id, c]));

@@ -365,10 +365,11 @@ describe("CommandPalette -> Integrations section", () => {
   });
 });
 
-// #3054 — the palette starts no session itself. Its agents, shells and
-// scripts open the New session launcher with the palette's project and that
-// entry preselected; the launcher starts the session (and owns a failed
-// launch's inline error, SessionLauncher.test.tsx).
+// #3054 — the palette starts no session itself. "New session…" opens the
+// New session launcher on the palette's project; an agent, shell or script
+// found by a typed query opens it with that entry preselected. The launcher
+// starts the session (and owns a failed launch's inline error,
+// SessionLauncher.test.tsx).
 describe("CommandPalette -> entries open the launcher (#3054)", () => {
   const CLAUDE: Launcher = {
     id: "agent:claude",
@@ -428,12 +429,83 @@ describe("CommandPalette -> entries open the launcher (#3054)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("a clicked shell opens the launcher on it and the project, and creates no session", async () => {
+  const SEARCH = "Run a command, or find a session or agent…";
+
+  // #3069 — the blank view offers the one command and lists no agent, shell
+  // or script.
+  it("lists no agent, shell or script on a blank query, only New session… under Commands", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    // Typing proves the launchers have loaded; clearing returns to the
+    // blank view with them in hand.
+    await user.type(await screen.findByPlaceholderText(SEARCH), "bash");
+    await screen.findByRole("button", { name: /bash/ });
+    await user.clear(screen.getByPlaceholderText(SEARCH));
+
+    const row = screen.getByRole("button", { name: /New session…/ });
+    expect(row).toHaveTextContent("Choose an agent, shell or script");
+    expect(screen.getByText("Commands")).toBeInTheDocument();
+    expect(screen.queryByText("New session")).toBeNull();
+    expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /claude/ })).toBeNull();
+    expect(screen.queryByText("Loading agents, shells and scripts…")).toBeNull();
+    expect(screen.queryByText("No matching agents, shells or scripts.")).toBeNull();
+  });
+
+  it("highlights New session… on open, so Enter opens the launcher on the project with no entry preselected", async () => {
+    const onClose = vi.fn();
+    const onOpenGitHub = vi.fn();
+    const user = userEvent.setup();
+    renderPalette({ onClose, onOpenGitHub });
+
+    const row = await screen.findByRole("button", { name: /New session…/ });
+    expect(row).toHaveClass("selected");
+    expect(document.querySelector(".cmd-palette-footer")?.textContent).toContain(
+      "Run New session…",
+    );
+    await user.keyboard("{Enter}");
+
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+    });
+    expect(onOpenGitHub).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+  });
+
+  it("a clicked New session… opens the launcher on the project, and creates no session", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     renderPalette({ onClose });
 
-    await user.click((await screen.findAllByText("bash"))[0]!);
+    await user.click(await screen.findByRole("button", { name: /New session…/ }));
+
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+  });
+
+  it("New session… opens the launcher with no target when there is no project", async () => {
+    useDashboardStore.setState({ projects: [] });
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.click(await screen.findByRole("button", { name: /New session…/ }));
+
+    expect(useDashboardStore.getState().launcherRequest).toMatchObject({ target: null });
+    expect(posts).toBe(0);
+  });
+
+  it("a typed shell, clicked, opens the launcher on it and the project, and creates no session", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette({ onClose });
+
+    await user.type(await screen.findByPlaceholderText(SEARCH), "bash");
+    await user.click(await screen.findByRole("button", { name: /bash/ }));
 
     expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
       projectId: PROJECT.id,
@@ -443,17 +515,20 @@ describe("CommandPalette -> entries open the launcher (#3054)", () => {
     expect(posts).toBe(0);
   });
 
-  it("Enter on the highlighted default agent opens the launcher on that agent", async () => {
+  it("a typed agent name lists the agent under New session, and Enter opens the launcher on that agent", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     renderPalette({ onClose });
 
-    // claude is the default agent: highlighted once the list loads.
-    await screen.findAllByText("claude");
-    await waitFor(() =>
-      expect(document.querySelector(".cmd-palette-footer")?.textContent).toMatch(
-        /New session in mullion…/,
-      ),
+    await user.type(await screen.findByPlaceholderText(SEARCH), "claude");
+
+    const claude = await screen.findByRole("button", { name: /claude/ });
+    expect(screen.getByText("New session")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
+    // The matching agent is the first result, so it is the selection.
+    await waitFor(() => expect(claude).toHaveClass("selected"));
+    expect(document.querySelector(".cmd-palette-footer")?.textContent).toMatch(
+      /New session in mullion…/,
     );
     await user.keyboard("{Enter}");
 
@@ -465,44 +540,80 @@ describe("CommandPalette -> entries open the launcher (#3054)", () => {
     expect(posts).toBe(0);
   });
 
-  it("says the list is loading until the project's agents, shells and scripts arrive", async () => {
-    let release: (() => void) | null = null;
+  function holdActions() {
+    const held: { release: (() => void) | null } = { release: null };
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("/actions")) {
           return new Promise<Response>((resolve) => {
-            release = () => resolve(jsonResponse(200, [CLAUDE, BASH]));
+            held.release = () => resolve(jsonResponse(200, [CLAUDE, BASH]));
           });
         }
         if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
         return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
       }),
     );
-    renderPalette();
+    return held;
+  }
 
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Loading agents, shells and scripts…",
-    );
-    await waitFor(() => expect(release).not.toBeNull());
-    release!();
-    await screen.findAllByText("bash");
-    expect(screen.queryByText("Loading agents, shells and scripts…")).toBeNull();
-  });
-
-  it("no longer promises a launch: no launch options, and the empty list names what is missing", async () => {
+  it("says, under a typed query only, that the list is loading until the project's agents, shells and scripts arrive", async () => {
+    const held = holdActions();
     const user = userEvent.setup();
     renderPalette();
 
-    await screen.findAllByText("bash");
-    expect(screen.getByPlaceholderText("Run a command, or find a session or agent…")).toBeVisible();
+    // The blank view has nothing to wait for.
+    await screen.findByRole("button", { name: /New session…/ });
+    await waitFor(() => expect(held.release).not.toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("New session")).toBeNull();
+
+    await user.type(screen.getByPlaceholderText(SEARCH), "bash");
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Loading agents, shells and scripts…",
+    );
+    expect(screen.getByText("New session")).toBeInTheDocument();
+
+    held.release!();
+    await screen.findByRole("button", { name: /bash/ });
+    expect(screen.queryByText("Loading agents, shells and scripts…")).toBeNull();
+    expect(screen.getByText("New session")).toBeInTheDocument();
+  });
+
+  it("moves the selection back to the first result when the list arrives under a typed query", async () => {
+    const held = holdActions();
+    const user = userEvent.setup();
+    renderPalette();
+
+    await waitFor(() => expect(held.release).not.toBeNull());
+    // "s" finds several commands while the launchers are still loading.
+    await user.type(screen.getByPlaceholderText(SEARCH), "s");
+    await user.keyboard("{ArrowDown}");
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>(".cmd-row"));
+    expect(rows().length).toBeGreaterThan(1);
+    expect(rows()[1]).toHaveClass("selected");
+
+    held.release!();
+    // "s" matches bash, which leads the list once it arrives.
+    const bash = await screen.findByRole("button", { name: /bash/ });
+    await waitFor(() => expect(bash).toHaveClass("selected"));
+    expect(rows()[0]).toBe(bash);
+  });
+
+  it("starts no session itself: no launch options, and a query nothing matches names what is missing", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByRole("button", { name: /New session…/ });
+    expect(screen.getByPlaceholderText(SEARCH)).toBeVisible();
     expect(screen.queryByRole("combobox", { name: "Model for this session" })).toBeNull();
     expect(screen.queryByText(/Skip permissions/)).toBeNull();
     expect(screen.queryByText(/Isolate in a new worktree/)).toBeNull();
     expect(screen.queryByText(/Launch in/)).toBeNull();
-    await user.type(screen.getByPlaceholderText(/Run a command/), "zzzz-nothing");
-    expect(screen.getByText("No matching agents, shells or scripts.")).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText(SEARCH), "zzzz-nothing");
+    expect(await screen.findByText("No matching agents, shells or scripts.")).toBeInTheDocument();
+    expect(screen.queryByText("New session")).toBeNull();
   });
 });
 
@@ -560,7 +671,7 @@ describe("CommandPalette -> focus management (P11)", () => {
   });
 
   // Mobile/tablet touch fix — autofocusing the search input on open used to
-  // raise the on-screen keyboard immediately, covering the launcher list a
+  // raise the on-screen keyboard immediately, covering the command list a
   // touch user opened this to read. Same matchMedia-stub pattern as
   // Dock.test.tsx's own coarse-pointer test.
   function stubCoarsePointer() {
@@ -666,11 +777,33 @@ describe("CommandPalette -> focus management (P11)", () => {
     expect(trigger).toHaveFocus();
   });
 
-  // #3054 — an entry no longer launches: it opens the launcher. The
+  // #3054 — an entry opens the launcher rather than launching. The
   // palette's own restore runs, so the launcher (opening in the same commit)
   // records the palette's opener as its own, and closing the launcher
   // returns focus there rather than to <body>.
-  it("restores focus to the trigger when an entry hands over to the launcher", async () => {
+  it("restores focus to the trigger when New session… hands over to the launcher", async () => {
+    render(<button>open palette</button>);
+    const trigger = screen.getByText("open palette");
+    trigger.focus();
+    useDashboardStore.setState({ launcherRequest: null });
+
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = renderPalette({ onClose });
+
+    await user.click(await screen.findByRole("button", { name: /New session…/ }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+    });
+
+    // App.tsx's real close path is a conditional-mount flip.
+    unmount();
+
+    expect(trigger).toHaveFocus();
+  });
+
+  it("restores focus to the trigger when a typed entry hands over to the launcher", async () => {
     render(<button>open palette</button>);
     const trigger = screen.getByText("open palette");
     trigger.focus();
@@ -689,7 +822,11 @@ describe("CommandPalette -> focus management (P11)", () => {
     const user = userEvent.setup();
     const { unmount } = renderPalette({ onClose });
 
-    await user.click((await screen.findAllByText("bash"))[0]!);
+    await user.type(
+      await screen.findByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
+    await user.click(await screen.findByRole("button", { name: /bash/ }));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(useDashboardStore.getState().launcherRequest?.target?.launcherId).toBe("agent:bash");
 
@@ -982,7 +1119,7 @@ describe("CommandPalette -> focus management (P11)", () => {
   it("traps Tab within the palette", async () => {
     const user = userEvent.setup();
     const { container } = renderPalette();
-    await screen.findAllByText("bash");
+    await screen.findByRole("button", { name: /New session…/ });
 
     const dialog = container.querySelector(".cmd-palette") as HTMLElement;
     const focusable = Array.from(
@@ -1085,7 +1222,10 @@ describe("CommandPalette -> skip-permissions badge", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    // "c" matches claude, codex and opencode, so the count of 2 still leaves
+    // opencode out.
+    await userEvent.setup().type(await screen.findByPlaceholderText(/Run a command/), "c");
+    await screen.findByRole("button", { name: /opencode/ });
     // claude (global settings list) + codex (launcher skipPermissions:true) = 2 badges
     expect(screen.getAllByText("⚠ skip perms")).toHaveLength(2);
   });
@@ -1116,7 +1256,7 @@ describe("CommandPalette -> skip-permissions badge", () => {
 
     // opencode has skipPermissions: false in launcher config and is NOT in
     // the global settings list — no badge expected.
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await userEvent.setup().click(screen.getByPlaceholderText(/Run a command/));
     await userEvent.setup().clear(screen.getByPlaceholderText(/Run a command/));
     await userEvent.setup().type(screen.getByPlaceholderText(/Run a command/), "opencode");
@@ -1147,7 +1287,7 @@ describe("CommandPalette -> skip-permissions badge", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await userEvent.setup().click(screen.getByPlaceholderText(/Run a command/));
     await userEvent.setup().clear(screen.getByPlaceholderText(/Run a command/));
     await userEvent.setup().type(screen.getByPlaceholderText(/Run a command/), "bash");
@@ -1295,7 +1435,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "hotfix");
 
     expect(await screen.findByText("Sessions")).toBeInTheDocument();
@@ -1342,7 +1482,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "match");
 
     await screen.findByText("matchme live");
@@ -1387,7 +1527,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "match");
 
     // The target strip reads "Runs in mullion" for this scope, and the
@@ -1434,7 +1574,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "match");
 
     // Global scope's own project picker isn't bound to one project (unlike
@@ -1482,7 +1622,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "release");
 
     expect(await screen.findByText("Workspaces")).toBeInTheDocument();
@@ -1527,7 +1667,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     // Matches all three groups: the session/workspace names both contain
     // "bash", and "bash" is also the shell launcher's own title.
     await user.type(screen.getByPlaceholderText(/Run a command/), "bash");
@@ -1589,7 +1729,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "bash");
     await screen.findByText("bashful session");
     await screen.findByText("bashful workspace");
@@ -1640,7 +1780,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "bash");
     await screen.findByText("bashful session");
     await screen.findByText("bashful workspace");
@@ -1684,7 +1824,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
 
     expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
     expect(screen.queryByText("Workspaces")).not.toBeInTheDocument();
@@ -1730,7 +1870,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "bashful");
     await screen.findByText("bashful workspace");
     await user.keyboard("{Enter}");
@@ -1772,7 +1912,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("New session");
+    await screen.findByText("New session…");
     await user.type(screen.getByPlaceholderText(/Run a command/), "clickable");
     await user.click(await screen.findByText("clickable workspace"));
 
@@ -1888,7 +2028,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
+    await screen.findByRole("button", { name: /New session…/ });
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     expect(targetButton).toHaveAttribute("aria-expanded", "false");
 
@@ -1926,7 +2066,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
+    await screen.findByRole("button", { name: /New session…/ });
     await user.click(screen.getByRole("button", { name: /Target project:/ }));
 
     expect(screen.getByRole("listbox")).toHaveClass("project-picker");
@@ -1959,7 +2099,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
+    await screen.findByRole("button", { name: /New session…/ });
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
 
@@ -1996,6 +2136,13 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
+    // A typed query lists the target project's launchers, so the switch
+    // shows as one project's shell replacing the other's.
+    await screen.findByRole("button", { name: /New session…/ });
+    await user.type(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
     await screen.findByText("bash alpha");
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2003,6 +2150,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     await user.click(screen.getByText("beta-project"));
     expect(screen.queryByText("Which project?")).not.toBeInTheDocument();
     await screen.findByText("bash beta");
+    expect(screen.queryByText("bash alpha")).not.toBeInTheDocument();
   });
 
   it("navigates projects with ArrowDown/ArrowUp and selects with Enter without launching background commands", async () => {
@@ -2030,6 +2178,11 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
+    await screen.findByRole("button", { name: /New session…/ });
+    await user.type(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
     await screen.findByText("bash alpha");
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2068,6 +2221,11 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
+    await screen.findByRole("button", { name: /New session…/ });
+    await user.type(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
     await screen.findByText("bash alpha");
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2106,10 +2264,11 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
-    const searchInput = screen.getByPlaceholderText("Run a command, or find a session or agent…");
+    const searchInput = await screen.findByPlaceholderText(
+      "Run a command, or find a session or agent…",
+    );
     await user.type(searchInput, "bash");
-    expect(screen.getByText("bash alpha")).toBeInTheDocument();
+    expect(await screen.findByText("bash alpha")).toBeInTheDocument();
 
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2123,7 +2282,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     const restoredInput = screen.getByPlaceholderText("Run a command, or find a session or agent…");
     expect(restoredInput).toHaveValue("bash");
     await screen.findByText("bash beta");
-    expect(screen.queryByText("No matching launchers.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No matching agents, shells or scripts.")).not.toBeInTheDocument();
   });
 
   it("restores the pre-picker search query after closing the picker with Escape", async () => {
@@ -2150,9 +2309,11 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
-    const searchInput = screen.getByPlaceholderText("Run a command, or find a session or agent…");
+    const searchInput = await screen.findByPlaceholderText(
+      "Run a command, or find a session or agent…",
+    );
     await user.type(searchInput, "bash");
+    await screen.findByText("bash alpha");
 
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2565,11 +2726,13 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
   });
 
-  it("labels the empty list Commands and Launchers, and has no Navigate group", async () => {
+  it("labels the empty list Commands only, and has no New session or Navigate group", async () => {
     renderPalette(openers());
 
-    expect(await screen.findByText("New session")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /New session…/ })).toBeTruthy();
     expect(screen.getByText("Commands")).toBeTruthy();
+    expect(document.querySelectorAll(".cmd-palette-group-label")).toHaveLength(1);
+    expect(screen.queryByText("New session")).toBeNull();
     expect(screen.queryByText("Navigate")).toBeNull();
     expect(screen.queryByText("Matching commands")).toBeNull();
     expect(screen.queryByText("Integrations")).toBeNull();
@@ -2765,7 +2928,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     }
   });
 
-  it("arrow keys reach the Commands group on a blank query", async () => {
+  it("arrow keys walk the Commands group on a blank query", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -2779,13 +2942,14 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(o, { onOpenSettings, layoutTier: "phone" });
 
-    // No claude in this list, so the default-agent seed lands on the first
-    // launcher. Commands are painted above it; ArrowUp walks into them
-    // from the bottom (Task board, then Settings).
-    const bash = await screen.findByRole("button", { name: /bash/ });
-    await waitFor(() => expect(bash).toHaveClass("selected"));
+    // The Commands rows are the whole arrow list. ArrowDown stops on the
+    // last row (Task board), so one ArrowUp from there is Settings.
+    await screen.findByRole("button", { name: /New session…/ });
+    expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
     await user.click(screen.getByPlaceholderText(/Run a command/));
-    await user.keyboard("{ArrowUp}{ArrowUp}{Enter}");
+    await user.keyboard("{ArrowDown>12/}");
+    expect(screen.getByRole("button", { name: /Task board/ })).toHaveClass("selected");
+    await user.keyboard("{ArrowUp}{Enter}");
 
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(o.onOpenTasks).not.toHaveBeenCalled();
@@ -2803,12 +2967,11 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenSettings: vi.fn(), layoutTier: "phone" });
 
-    // Same walk as the arrow-key test: the default seed is the first
-    // launcher, ArrowUp steps into Task board, then Settings.
-    const bash = await screen.findByRole("button", { name: /bash/ });
-    await waitFor(() => expect(bash).toHaveClass("selected"));
+    // Same walk as the arrow-key test: down to the last row (Task board),
+    // then one up to Settings.
+    await screen.findByRole("button", { name: /New session…/ });
     await user.click(screen.getByPlaceholderText(/Run a command/));
-    await user.keyboard("{ArrowUp}{ArrowUp}");
+    await user.keyboard("{ArrowDown>12/}{ArrowUp}");
 
     const footer = screen.getByText("navigate").closest(".cmd-palette-footer");
     expect(footer).toBeTruthy();

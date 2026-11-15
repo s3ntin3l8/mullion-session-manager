@@ -99,6 +99,9 @@ export interface PaletteCommandOpeners {
   // only tells the palette to stay open while the name is typed — it is not
   // the behaviour itself.
   newWorkspace: () => void;
+  // #3069 — "New session…": opens the launcher on the palette's project.
+  // Optional like the rows above: a caller without a launcher omits it.
+  newSession?: () => void;
   // Source Control / GitHub deep links. All take the palette's project.
   goToPr: (projectId: number, number: number) => void;
   openSessionOnBranch: (projectId: number, branch: string) => void;
@@ -140,6 +143,22 @@ export function buildPaletteCommands({
 }: PaletteCommandContext): PaletteCommand[] {
   const name = projectName ?? "this project";
   const commands: PaletteCommand[] = [];
+
+  // #3069 — the sort below keeps it first, so it leads the blank view and
+  // ⌘K then Enter opens the launcher. The palette lists no agent, shell or
+  // script until one is typed.
+  if (open.newSession) {
+    const newSession = open.newSession;
+    commands.push({
+      id: "new-session",
+      title: "New session…",
+      subtitle: "Choose an agent, shell or script",
+      icon: PlusIcon,
+      keywords: ["new session", "launch", "start", "agent", "shell", "terminal"],
+      placement: "top",
+      run: () => newSession(),
+    });
+  }
 
   if (projectId !== null) {
     const id = projectId;
@@ -452,9 +471,16 @@ export function buildPaletteCommands({
     });
   }
 
-  // Within each placement the row order is the title. Callers render one
-  // group per placement, so sorting the whole list sorts each group.
-  commands.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
+  // Within each placement the row order is the title, except that "New
+  // session…" leads. Callers render one group per placement, so sorting the
+  // whole list sorts each group.
+  commands.sort((a, b) =>
+    a.id === "new-session"
+      ? -1
+      : b.id === "new-session"
+        ? 1
+        : a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+  );
 
   return commands;
 }

@@ -38,12 +38,13 @@ import {
   WORKSPACE_FOCUS_FALLBACK_SELECTOR,
 } from "./paletteFocusTargets.js";
 
-// The command palette (⌘K): commands, session and workspace search, and the
-// target project's agents, shells and scripts (GET /api/projects/:id/actions,
-// the fully merged list). Since #3054 it starts no session itself: choosing
-// an agent, shell or script opens the New session launcher
-// (launchers/SessionLauncher.tsx) with that project and entry preselected,
-// Launch focused, so Enter then Enter still launches it. `scope: "project"`
+// The command palette (⌘K): commands, and a search over sessions, workspaces
+// and the target project's agents, shells and scripts (GET
+// /api/projects/:id/actions, the fully merged list). It starts no session
+// itself (#3054). A blank query lists commands only, led by "New session…",
+// which opens the New session launcher (launchers/SessionLauncher.tsx) on
+// the target project (#3069). A typed agent, shell or script name opens the
+// launcher with that entry preselected, Launch focused. `scope: "project"`
 // (a read-only "Runs in" strip) was the split path's; App no longer opens it.
 const SOURCE_LABEL: Record<Launcher["kind"], string | null> = {
   shell: null,
@@ -479,10 +480,9 @@ export function CommandPalette({
   // Seeded once per settled fetch for the target project (see
   // `seedLauncherSelection` below, which needs the search state declared
   // further down).
-  const seedLauncherSelectionRef = useRef<(fetched: Launcher[]) => void>(() => {});
-  const { launchers, loaded: launchersLoaded } = useProjectLaunchers(
-    effectiveProjectId,
-    (fetched) => seedLauncherSelectionRef.current(fetched),
+  const seedLauncherSelectionRef = useRef<() => void>(() => {});
+  const { launchers, loaded: launchersLoaded } = useProjectLaunchers(effectiveProjectId, () =>
+    seedLauncherSelectionRef.current(),
   );
 
   // The project drill-in and the "New workspace" name step. Declared up
@@ -555,6 +555,12 @@ export function CommandPalette({
         setSubView("workspace-name");
         setSubIndex(0);
       },
+      newSession: () =>
+        useDashboardStore
+          .getState()
+          .openLauncher(
+            effectiveProjectId !== null ? { projectId: effectiveProjectId } : undefined,
+          ),
     },
   });
   const topCommands = commands.filter((c) => c.placement === "top");
@@ -585,42 +591,19 @@ export function CommandPalette({
     commands,
   });
 
-  // Settings -> Launchers & agents "Default agent" — pre-select the matching
-  // launcher (by id, since a shell/agent launcher's id is `${kind}:${bin}`,
-  // e.g. "agent:claude" — see agent-detect.ts) so hitting Enter immediately
-  // opens the launcher on it instead of whatever GET /api/projects/:id/actions
-  // listed first. Only on a genuine project switch (the hook runs this once per
-  // settled fetch) — re-seeding whenever the default itself changes would
-  // yank the selection out from under a mid-search user.
-  const seedLauncherSelection = (fetched: Launcher[]) => {
-    const defaultIndex = fetched.findIndex(
-      (l) => l.id === `agent:${settings.launchers.defaultAgent}`,
-    );
-    // A project switch mid-search (e.g. via the target picker while a
-    // query is already typed) can leave the Sessions/Workspaces groups
-    // occupying the front of the flattened `entries` list — resetting
-    // to 0 there lands on whichever group is actually first, rather
-    // than aiming this launcher-only `defaultIndex` at an unrelated
-    // flattened slot. On a blank query the Commands group leads the
-    // arrow list (it is painted above the launchers), so the seed adds
-    // that same lead — Enter still picks the default agent, and a
-    // list with no default agent still starts on the first launcher.
-    const commandLead = query.trim() === "" ? topCommands.length : 0;
-    setSelectedIndex(
-      query.trim() !== "" ? 0 : commandLead + (defaultIndex >= 0 ? defaultIndex : 0),
-    );
+  // A fetch that settles under a typed query puts its matches ahead of the
+  // commands, so the selection restarts at the first result. The blank view
+  // lists no launcher (#3069), so nothing moves and the selection stays.
+  const seedLauncherSelection = () => {
+    if (query.trim() !== "") setSelectedIndex(0);
   };
   useEffect(() => {
     seedLauncherSelectionRef.current = seedLauncherSelection;
   });
 
-  // Blank query: the Commands group is painted above Launchers, but
-  // `matchingCommands` stays empty until there is a query, so `entries`
-  // would otherwise be launchers only and arrows could not reach New
-  // workspace, Settings or Devices. Prepend the painted rows. Search
-  // ranking is unchanged — a typed query still uses `entries` as
-  // useCommandSearch built it (commands after launchers). The default-agent
-  // seed below adds the same lead, so Enter still picks that launcher.
+  // Blank query: `matchingCommands` stays empty until there is a query, so
+  // the painted `top` commands are the arrow list. A typed query uses
+  // `entries` as useCommandSearch built it.
   const blankCommands = query.trim() === "" ? topCommands : [];
   const navEntries: PaletteEntry[] =
     blankCommands.length === 0
@@ -1162,25 +1145,30 @@ export function CommandPalette({
               </>
             )}
             {/* #3054 — these open the launcher; the launcher starts the
-                session. */}
-            <div className="cmd-palette-group-label">New session</div>
-            {effectiveProjectId !== null && !launchersLoaded ? (
-              <div
-                role="status"
-                style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}
-              >
-                Loading agents, shells and scripts…
-              </div>
-            ) : (
-              filtered.length === 0 &&
-              matchingCommands.length === 0 && (
-                <div
-                  style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}
-                >
-                  No matching agents, shells or scripts.
-                </div>
-              )
-            )}
+                session. #3069 — only for a typed query; the blank view has
+                the one "New session…" command instead. */}
+            {query.trim() !== "" &&
+              (effectiveProjectId !== null && !launchersLoaded ? (
+                <>
+                  <div className="cmd-palette-group-label">New session</div>
+                  <div
+                    role="status"
+                    style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}
+                  >
+                    Loading agents, shells and scripts…
+                  </div>
+                </>
+              ) : filtered.length > 0 ? (
+                <div className="cmd-palette-group-label">New session</div>
+              ) : (
+                matchingCommands.length === 0 && (
+                  <div
+                    style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}
+                  >
+                    No matching agents, shells or scripts.
+                  </div>
+                )
+              ))}
             {filtered.map((launcher, i) => {
               // Blank query prepends the Commands rows to the arrow list;
               // a typed query does not (`blankCommands` is empty), so this

@@ -110,13 +110,15 @@ export function useCommandSearch({
   // raw id lookup, which won't match the Settings toggle's always-bare stored
   // names — an acknowledged edge case that only affects projects with custom
   // actions.json overrides.
+  // #3069 — nothing on a blank query: the blank view offers one "New
+  // session…" command instead of the launcher's whole list.
   const filtered = useMemo(
     () =>
-      launchers.filter(
-        (l) =>
-          !isHiddenAgent(l, hiddenAgents) &&
-          (query.trim() === "" || matchesQuery([l.title, l.command], query)),
-      ),
+      query.trim() === ""
+        ? []
+        : launchers.filter(
+            (l) => !isHiddenAgent(l, hiddenAgents) && matchesQuery([l.title, l.command], query),
+          ),
     [launchers, query, hiddenAgents],
   );
 
