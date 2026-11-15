@@ -731,7 +731,16 @@ export function NotificationBell({
             data-presence={panelPresence}
             inert={panelPresence === "leaving"}
             className={themeClassName(theme, "pane-tab-overflow-menu", "notif-panel")}
-            style={{ position: "fixed", ...pos }}
+            // Every side is set: the shared `.pane-tab-overflow-menu` shell
+            // (terminal.css) carries `top: 31px; right: 6px` for PaneTab's
+            // in-pane menu. The rail's bell sets only `bottom`, and with the
+            // panel's height capped by max-height a leftover `top` wins over
+            // `bottom`, which pinned the panel to the window's top edge
+            // instead of beside the bell (#3072).
+            style={{ position: "fixed", top: "auto", right: "auto", bottom: "auto", ...pos }}
+            // Opening upward from the rail's bell, it grows from its bottom
+            // edge (styles/motion.css), toward the bell it came from.
+            data-placement={placement === "beside" ? "top" : undefined}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={onPanelKeyDown}
             role="dialog"

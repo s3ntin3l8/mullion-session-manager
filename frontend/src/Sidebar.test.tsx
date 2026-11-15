@@ -187,7 +187,6 @@ const NOOP_PROPS = {
   onSessionEnded: vi.fn(),
   onOpenProjectLauncher: vi.fn(),
   onOpenSettingsProjects: vi.fn(),
-  onOpenTasks: vi.fn(),
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
   showSourceControl: false,
@@ -366,48 +365,16 @@ describe("VirtualizedProjectTree size math (independent review, PR #583)", () =>
   });
 });
 
-describe("Sidebar Tasks entry — Tasks-as-a-destination", () => {
-  it("is not marked active when viewMode is not kanban", () => {
+// #3072 — Tasks is a mode on the left rail's mode switch (LeftRail.tsx), so
+// the sidebar no longer carries its own "Tasks" row, in either view mode.
+describe("Sidebar has no Tasks entry", () => {
+  it.each(["list", "kanban"] as const)("renders no Tasks button in %s view", (mode) => {
+    viewMode = mode;
     renderSidebar();
-    const entry = screen.getByRole("button", { name: /Tasks/ });
-    expect(entry).not.toHaveClass("active");
-    expect(entry).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it("is marked active while the Tasks board is the active view", () => {
-    viewMode = "kanban";
-    renderSidebar();
-    const entry = screen.getByRole("button", { name: /Tasks/ });
-    expect(entry).toHaveClass("active");
-    expect(entry).toHaveAttribute("aria-pressed", "true");
-  });
-
-  // Issue: this entry already advertised itself as a toggle via
-  // aria-pressed, but the click handler only ever called onOpenTasks
-  // (always -> "kanban"), so clicking it a second time while already in
-  // Tasks did nothing — the Toolbar's "Back" chevron was the only way out.
-  it("clicking it while already in Tasks switches back to list view instead of calling onOpenTasks again", async () => {
-    viewMode = "kanban";
-    const onOpenTasks = vi.fn();
-    const user = userEvent.setup();
-    renderSidebar({ onOpenTasks });
-
-    await user.click(screen.getByRole("button", { name: /Tasks/ }));
-
-    expect(setViewMode).toHaveBeenCalledWith("list");
-    expect(onOpenTasks).not.toHaveBeenCalled();
-  });
-
-  it("clicking it while NOT in Tasks still calls onOpenTasks, not setViewMode directly", async () => {
-    viewMode = "list";
-    const onOpenTasks = vi.fn();
-    const user = userEvent.setup();
-    renderSidebar({ onOpenTasks });
-
-    await user.click(screen.getByRole("button", { name: /Tasks/ }));
-
-    expect(onOpenTasks).toHaveBeenCalled();
-    expect(setViewMode).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
+    // Scoped to the sidebar's top level, where the row sat: the class itself
+    // lives on as SidebarDevices' device-row class.
+    expect(document.querySelector(".sidebar > .sidebar-tasks-entry")).toBeNull();
   });
 });
 
@@ -1575,9 +1542,9 @@ describe("Sidebar sections", () => {
     expect(screen.getByTestId("source-control")).toBeInTheDocument();
   });
 
-  it("renders the Tasks entry and the project tree, with no Devices section", () => {
+  it("renders the project tree, with no Tasks entry and no Devices section", () => {
     renderSection();
-    expect(screen.getByRole("button", { name: /Tasks/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
     expect(screen.getByText("Projects")).toBeInTheDocument();
     // Devices moved to the right sidebar (#3012): its one home.
     expect(document.querySelector(".sidebar-devices")).toBeNull();

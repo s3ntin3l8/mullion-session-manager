@@ -317,11 +317,16 @@
 .rail-ws-group + .rail-ws-group {
   margin-top: 6px;
 }
+/* The header lines up with the rows under it (#3072): its colour square sits
+   in a 14px slot like a row's icon and the name follows at the same 8px gap,
+   so group and workspace names start on one indent; no right padding, so its
+   "⋯" sits on the same vertical line as every row's "⋯" (.rail-ws-item has
+   none either). */
 .rail-ws-group-header {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 4px 8px 2px;
+  gap: 8px;
+  padding: 4px 0 2px 8px;
   color: var(--muted);
   font-size: 0.6875rem;
   font-weight: 600;
@@ -331,6 +336,7 @@
 .rail-ws-group-color {
   width: 8px;
   height: 8px;
+  margin: 0 3px;
   border-radius: 2px;
   flex-shrink: 0;
 }
@@ -486,13 +492,13 @@
   flex-direction: column;
   gap: 2px;
 }
+/* "New workspace" and "New group" stack (#3072): side by side, half the
+   picker's width cut "New workspace" short on desktop, and more so at the
+   sheet's larger font. */
 .rail-ws-new-row {
   display: flex;
-  gap: 4px;
-}
-.rail-ws-new-row .rail-ws-row {
-  flex: 1;
-  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
 }
 /* Under a coarse pointer: touch-size rows (48px) and a 1rem (16px) search field, so
    iOS does not zoom into it. */
