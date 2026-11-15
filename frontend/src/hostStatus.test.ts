@@ -195,7 +195,7 @@ describe("deriveHostStatus (issue #246)", () => {
       short: "outdated agent",
       long: "Outdated agent — upgrade",
     });
-    expect(legacyAgentLabels(current).long).toMatch(/not registered.*MULLION_PRIMARY_URL/);
+    expect(legacyAgentLabels(current).long).toBe("Not registered — set primary URL");
     expect(legacyAgentTitle(old)).toMatch(/Upgrade the agent/);
     expect(legacyAgentTitle(current)).toMatch(/MULLION_PRIMARY_URL/);
   });

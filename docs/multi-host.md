@@ -2061,7 +2061,7 @@ address only the home network can route.
 **How to see it.** Settings → Hosts shows **Outdated agent — upgrade** on the
 row. Wherever the app names a host (the sidebar project header, pane tabs and
 session rows) it shows `outdated agent` beside the name. An agent that already
-reports v0.3.59 or later reads **Agent not registered — set MULLION_PRIMARY_URL**
+reports v0.3.59 or later reads **Not registered — set primary URL**
 (`not registered` as the chip) instead, because upgrading would change nothing
 for it; see Fix. Every surface has a hover with the agent's reported version, but
 only the Settings hover also gives the primary's version. The `GET /api/hosts`

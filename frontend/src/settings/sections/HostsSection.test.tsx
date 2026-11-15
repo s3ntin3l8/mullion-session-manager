@@ -126,8 +126,8 @@ describe("HostsSection token rotation", () => {
       hosts: [makeHost({ id: "h", name: "mac", legacyAgent: true, mullionVersion: "0.3.62" })],
     });
     render(<HostsSection />);
-    const label = screen.getByText(/Agent not registered — set MULLION_PRIMARY_URL/);
-    expect(label).toHaveAttribute("title", expect.stringMatching(/has not registered/));
+    const label = screen.getByText("Not registered — set primary URL");
+    expect(label).toHaveAttribute("title", expect.stringMatching(/MULLION_PRIMARY_URL/));
     expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
   });
 

@@ -815,13 +815,6 @@
 .host-derived-status-parked {
   color: var(--y);
 }
-/* Issue #2969 — the longest chip here; truncate rather than crowd the project
-   name at a narrow sidebar. The full text is in the hover. */
-.host-derived-status-legacy {
-  max-width: 90px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .host-derived-status .settings-status-dot {
   width: 7px;
   height: 7px;

@@ -69,7 +69,7 @@ export function legacyAgentFix(host: Host): "upgrade" | "register" {
  */
 export function legacyAgentLabels(host: Host): { short: string; long: string } {
   return legacyAgentFix(host) === "register"
-    ? { short: "not registered", long: "Agent not registered — set MULLION_PRIMARY_URL" }
+    ? { short: "not registered", long: "Not registered — set primary URL" }
     : { short: "outdated agent", long: "Outdated agent — upgrade" };
 }
 
