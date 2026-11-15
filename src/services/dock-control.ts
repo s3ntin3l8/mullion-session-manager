@@ -139,6 +139,12 @@ export type LaunchSession = (
   payload: Record<string, unknown>,
 ) => Promise<{ statusCode: number; body: { id?: number; message?: string; code?: unknown } }>;
 
+/** A relative `worktreePath` is anchored at the project checkout (what a
+ * session user means), never at the Mullion process's cwd. */
+function resolveTargetPath(projectCwd: string, worktreePath: string): string {
+  return path.resolve(projectCwd, worktreePath);
+}
+
 /** A bad target is refused before anything is stopped or launched. */
 async function validateTarget(
   app: FastifyInstance,
@@ -154,8 +160,8 @@ async function validateTarget(
   // has no parent here, so createSessionRecord's child-cwd containment does
   // not apply).
   const project = getProjectRow(app, projectId)!;
-  const resolved = path.resolve(target.worktreePath);
   const root = path.resolve(project.cwd);
+  const resolved = resolveTargetPath(root, target.worktreePath);
   const ok =
     resolved === root ||
     resolved.startsWith(root + path.sep) ||
@@ -208,7 +214,7 @@ export async function startDockControl(
     ...(target.branch !== undefined
       ? { worktree: { branch: target.branch }, worktreeRefresh }
       : target.worktreePath !== undefined
-        ? { cwd: path.resolve(target.worktreePath) }
+        ? { cwd: resolveTargetPath(getProjectRow(app, projectId)!.cwd, target.worktreePath) }
         : c.cwd
           ? { cwd: c.cwd }
           : {}),

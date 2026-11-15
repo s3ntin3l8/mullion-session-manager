@@ -360,7 +360,18 @@ describe("docks.* ops (#2494)", () => {
       await dispatch(app, conn, {
         id: 13,
         op: "docks.switch",
-        body: { dockControlId: "dev-server", worktreePath: path.join(cwdA, "web", "..", "web") },
+        body: { dockControlId: "dev-server", worktreePath: `${cwdA}/web/../web` },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(cwdA, "web") });
+    });
+
+    it("docks.switch anchors a relative worktreePath at the project checkout", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 14,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: "web" },
       });
       expect(frames[0]).toMatchObject({ ok: true, status: 201 });
       expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(cwdA, "web") });

@@ -290,7 +290,7 @@ already have.
 Read a running control's output with `mullion dock logs <controlId>` /
 `get_dock_logs`, block until it prints something with `wait_for_dock_output`,
 and move it to another branch with `mullion dock switch <controlId> <branch>`
-(or `--worktree <path>`: the project checkout, a directory inside it, or one of its git worktrees; a control that is not running is started there) /
+(or `--worktree <path>`: the project checkout, a directory inside it, or one of its git worktrees; a relative path is anchored at the project checkout; a control that is not running is started there) /
 `switch_dock_branch`. A switch validates the target first, then stops and
 restarts the control; `list` shows where it runs now.
 
