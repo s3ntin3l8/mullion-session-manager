@@ -182,6 +182,11 @@ function realpathLoose(p: string): string {
   }
 }
 
+/** A distinct shape from DockControlResult on purpose: the validated path
+ * (`cwd`) is for the launch only and never travels in a reply value. */
+type TargetCheck =
+  { ok: true; cwd: string | undefined } | { ok: false; error: DockControlResult<never> };
+
 /** A bad target is refused before anything is stopped or launched. On success
  * the value is the cwd to launch in (the validated path itself), or undefined
  * when the target is a branch or nothing. */
@@ -189,11 +194,11 @@ async function validateTarget(
   app: FastifyInstance,
   projectId: number,
   target: StartTarget,
-): Promise<DockControlResult<string | undefined>> {
+): Promise<TargetCheck> {
   if (target.branch !== undefined && target.worktreePath !== undefined) {
-    return fail(400, "pass either branch or worktreePath, not both");
+    return { ok: false, error: fail(400, "pass either branch or worktreePath, not both") };
   }
-  if (target.worktreePath === undefined) return { ok: true, value: undefined };
+  if (target.worktreePath === undefined) return { ok: true, cwd: undefined };
   // The dock session's cwd must be the project checkout, a directory inside it
   // (a monorepo package), or one of its git worktrees; nothing else (a session
   // has no parent here, so createSessionRecord's child-cwd containment does
@@ -208,11 +213,14 @@ async function validateTarget(
     resolved.startsWith(root + path.sep) ||
     (await isSiblingWorktreeCwd({ cwd: project.cwd, hostId: project.hostId }, resolved));
   return ok
-    ? { ok: true, value: resolved }
-    : fail(
-        400,
-        "worktreePath must be the project checkout, a directory inside it, or one of its git worktrees",
-      );
+    ? { ok: true, cwd: resolved }
+    : {
+        ok: false,
+        error: fail(
+          400,
+          "worktreePath must be the project checkout, a directory inside it, or one of its git worktrees",
+        ),
+      };
 }
 
 export async function startDockControl(
@@ -243,7 +251,7 @@ export async function startDockControl(
   }
   const c = control.value;
   const checked = await validateTarget(app, projectId, target);
-  if (!checked.ok) return checked;
+  if (!checked.ok) return checked.error;
   const worktreeRefresh =
     c.worktreeRefresh ?? getStoredSettings(app.db).dock?.defaultWorktreeRefresh ?? false;
   const payload = {
@@ -255,7 +263,7 @@ export async function startDockControl(
     ...(target.branch !== undefined
       ? { worktree: { branch: target.branch }, worktreeRefresh }
       : target.worktreePath !== undefined
-        ? { cwd: checked.value }
+        ? { cwd: checked.cwd }
         : c.cwd
           ? { cwd: c.cwd }
           : {}),
@@ -302,7 +310,7 @@ export async function switchDockControl(
   if (!control.ok) return control;
   // Validate before stopping: a bad target must not kill a healthy server.
   const checked = await validateTarget(app, projectId, target);
-  if (!checked.ok) return checked;
+  if (!checked.ok) return checked.error;
   const stopped = await stopDockControl(app, projectId, controlId);
   if (!stopped.ok) return stopped;
   const started = await startDockControl(app, projectId, controlId, target, launch);
