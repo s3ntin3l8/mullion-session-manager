@@ -13,14 +13,15 @@ describe("ui/ErrorText", () => {
     const el = screen.getByRole("alert");
     expect(el).toHaveTextContent("Something went wrong");
     expect(el.style.fontSize).toBe("0.75rem");
-    expect(el).toHaveStyle({ color: "var(--r)" });
+    expect(el.style.color).toBe("var(--r)");
   });
 
   it("merges per-site style overrides (e.g. marginTop, flex) without dropping the base style", () => {
     render(<ErrorText style={{ marginTop: 8 }}>Failed</ErrorText>);
     const el = screen.getByRole("alert");
     expect(el.style.fontSize).toBe("0.75rem");
-    expect(el).toHaveStyle({ color: "var(--r)", marginTop: "8px" });
+    expect(el.style.color).toBe("var(--r)");
+    expect(el.style.marginTop).toBe("8px");
   });
 
   it("passes through an optional className", () => {
