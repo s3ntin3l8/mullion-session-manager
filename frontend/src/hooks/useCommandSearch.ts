@@ -45,13 +45,13 @@ export interface UseCommandSearchResult {
    * selection at the top of the (new) combined list. */
   setQuery: (query: string) => void;
   selectedIndex: number;
-  /** Raw setter, exposed alongside `setQuery` above — CommandPalette's own
-   * launcher-fetch effect needs to seed a specific default index (the
-   * configured default agent's row, or 0) on a project switch, not just the
-   * +/-1-against-`activeIndex` nav this hook's callers do inline. */
+  /** Raw setter, exposed alongside `setQuery` above — CommandPalette moves
+   * the selection itself: arrow keys, row hover, and back to the first
+   * result when a launcher fetch settles under a typed query. */
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   /** Launchers matching the current query, with hidden agents stripped —
-   * renders as "New session" (#3054: they open the launcher). */
+   * renders as "New session" (#3054: they open the launcher). Empty on a
+   * blank query (#3069). */
   filtered: Launcher[];
   /** Live, non-killed terminal sessions matching the current query — empty
    * on a blank query (this is search, not an always-on browse list; the
@@ -110,13 +110,15 @@ export function useCommandSearch({
   // raw id lookup, which won't match the Settings toggle's always-bare stored
   // names — an acknowledged edge case that only affects projects with custom
   // actions.json overrides.
+  // #3069 — nothing on a blank query: the blank view offers one "New
+  // session…" command instead of the launcher's whole list.
   const filtered = useMemo(
     () =>
-      launchers.filter(
-        (l) =>
-          !isHiddenAgent(l, hiddenAgents) &&
-          (query.trim() === "" || matchesQuery([l.title, l.command], query)),
-      ),
+      query.trim() === ""
+        ? []
+        : launchers.filter(
+            (l) => !isHiddenAgent(l, hiddenAgents) && matchesQuery([l.title, l.command], query),
+          ),
     [launchers, query, hiddenAgents],
   );
 
@@ -171,8 +173,7 @@ export function useCommandSearch({
   // Sessions, Workspaces, Launchers and Commands render as separate groups
   // but share ONE selection index across all of them for arrow-key nav —
   // this flattens the result arrays into one ordered list purely for index
-  // math. Commands come last so the launcher offsets (and the default-agent
-  // selection seed) are unchanged.
+  // math. Commands come last so the launcher offsets are unchanged.
   const entries = useMemo<PaletteEntry[]>(
     () => [
       ...matchingSessions.map((session): PaletteEntry => ({ type: "session", session })),

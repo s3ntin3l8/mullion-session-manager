@@ -37,19 +37,37 @@ function baseOptions(overrides: Partial<Parameters<typeof useCommandSearch>[0]> 
 }
 
 describe("useCommandSearch -> filter pipelines", () => {
-  it("returns every launcher and no Sessions/Workspaces groups on a blank query", () => {
+  it("returns no launchers and no Sessions/Workspaces groups on a blank query", () => {
     const { result } = renderHook(() => useCommandSearch(baseOptions()));
 
-    expect(result.current.filtered).toEqual([BASH, CLAUDE]);
+    expect(result.current.filtered).toEqual([]);
     expect(result.current.matchingSessions).toEqual([]);
     expect(result.current.matchingWorkspaces).toEqual([]);
-    expect(result.current.entries).toHaveLength(2);
+    expect(result.current.entries).toEqual([]);
+
+    // Whitespace alone is still a blank query.
+    act(() => result.current.setQuery("   "));
+    expect(result.current.filtered).toEqual([]);
+  });
+
+  it("lists the launchers a typed query matches", () => {
+    const { result } = renderHook(() => useCommandSearch(baseOptions()));
+
+    // "a" is in both titles; "claude" only in one.
+    act(() => result.current.setQuery("a"));
+    expect(result.current.filtered).toEqual([BASH, CLAUDE]);
+
+    act(() => result.current.setQuery("claude"));
+    expect(result.current.filtered).toEqual([CLAUDE]);
   });
 
   it("strips hidden agents from the launcher pipeline but leaves other kinds alone", () => {
     const { result } = renderHook(() =>
       useCommandSearch(baseOptions({ hiddenAgents: ["claude"] })),
     );
+
+    // "a" matches both launchers, so only the hiding removes claude.
+    act(() => result.current.setQuery("a"));
 
     expect(result.current.filtered).toEqual([BASH]);
   });
@@ -149,16 +167,28 @@ describe("useCommandSearch -> combined-index math", () => {
   it("clamps activeIndex to the last entry when selectedIndex is set past the end (e.g. a live session dropping out of the match set mid-poll)", () => {
     const { result } = renderHook(() => useCommandSearch(baseOptions()));
 
+    // "a" matches both launchers and nothing else.
+    act(() => result.current.setQuery("a"));
     act(() => result.current.setSelectedIndex(50));
 
-    // Only 2 launchers (no query -> no Sessions/Workspaces groups) — the
-    // last valid index is 1.
+    // Only 2 launchers (no sessions or workspaces to match) — the last
+    // valid index is 1.
     expect(result.current.activeIndex).toBe(1);
     expect(result.current.activeEntry).toEqual({ type: "launcher", launcher: CLAUDE });
   });
 
   it("activeIndex is -1 and activeEntry is undefined when every pipeline is empty", () => {
     const { result } = renderHook(() => useCommandSearch(baseOptions({ launchers: [] })));
+
+    act(() => result.current.setQuery("a"));
+
+    expect(result.current.entries).toEqual([]);
+    expect(result.current.activeIndex).toBe(-1);
+    expect(result.current.activeEntry).toBeUndefined();
+  });
+
+  it("activeIndex is -1 on a blank query, which has no entries even with launchers", () => {
+    const { result } = renderHook(() => useCommandSearch(baseOptions()));
 
     expect(result.current.entries).toEqual([]);
     expect(result.current.activeIndex).toBe(-1);
@@ -205,7 +235,8 @@ describe("useCommandSearch -> Integrations commands", () => {
     );
 
     expect(result.current.matchingCommands).toEqual([]);
-    expect(result.current.entries.every((e) => e.type === "launcher")).toBe(true);
+    expect(result.current.filtered).toEqual([]);
+    expect(result.current.entries).toEqual([]);
   });
 
   it("finds a sub-item from the top level by title or keyword, ignoring the drill-in row", () => {

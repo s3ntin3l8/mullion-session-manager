@@ -112,8 +112,9 @@ describe("palette to launcher, by keyboard (#3054)", () => {
       render(<Harness onLaunched={onLaunched} />);
 
       const search = await screen.findByPlaceholderText(/Run a command/);
-      await screen.findAllByText("bash");
+      // The palette lists an agent or shell only once its name is typed.
       await user.type(search, query);
+      await screen.findAllByText(query);
       await user.keyboard("{Enter}");
 
       expect(screen.queryByRole("dialog", { name: "Command palette" })).toBeNull();

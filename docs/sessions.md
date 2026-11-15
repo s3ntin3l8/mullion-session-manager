@@ -14,9 +14,11 @@ it:
   **Split down** (with the pane's project preselected; the session, or an
   existing one opened from the touch sheet, lands beside that pane).
 - **The command palette** (⌘K / Ctrl+K, and the left rail's command box) —
-  commands, sessions and workspaces, plus every agent, shell and script by
-  typing its name. The palette starts no session itself: choosing one opens
-  the launcher with that project and entry preselected and **Launch** focused,
+  commands, sessions and workspaces. It starts no session itself. Its first
+  entry, **New session…**, opens the launcher on the palette's project, so
+  ⌘K then Enter gets there. Agents, shells and scripts are not listed until
+  you type a name; choosing a match opens the launcher with that project and
+  entry preselected and **Launch** focused,
   so Enter launches it. The one exception is the search-only "Open session on
   branch …", which starts the default agent on that branch directly.
 

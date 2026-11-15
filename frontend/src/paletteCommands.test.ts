@@ -62,6 +62,44 @@ describe("buildPaletteCommands", () => {
     expect(commands.filter((c) => c.drillIn).map((c) => c.id)).toEqual(["project"]);
   });
 
+  it("offers New session… as a top command wired to its opener", () => {
+    const { context } = ctx();
+    const newSession = vi.fn();
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, newSession },
+    });
+    const command = commands.find((c) => c.id === "new-session")!;
+
+    expect(command.placement).toBe("top");
+    expect(command.title).toBe("New session…");
+    expect(command.subtitle).toBe("Choose an agent, shell or script");
+    command.run();
+    expect(newSession).toHaveBeenCalledTimes(1);
+  });
+
+  // Title order would put GitHub first; "New session…" is pinned ahead of it.
+  it("leads the top commands with New session…, ahead of the title order", () => {
+    const { context } = ctx();
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, newSession: vi.fn() },
+    });
+
+    expect(commands.filter((c) => c.placement === "top").map((c) => c.id)).toEqual([
+      "new-session",
+      "github",
+      "new-workspace",
+      "project",
+    ]);
+  });
+
+  it("omits New session… when no opener is given", () => {
+    const commands = buildPaletteCommands(ctx().context);
+
+    expect(commands.some((c) => c.id === "new-session")).toBe(false);
+  });
+
   it("wires each command to its opener with the project id", () => {
     const { context, open } = ctx();
     const byId = Object.fromEntries(buildPaletteCommands(context).map((c) => [c.id, c]));
