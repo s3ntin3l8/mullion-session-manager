@@ -116,8 +116,8 @@ describe("WorkspaceChip", () => {
     expect(
       within(ai)
         .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["Mullion", "Runway"]);
+        .map((b) => b.getAttribute("aria-label") ?? b.textContent),
+    ).toEqual(["Manage group AI Usage", "Mullion", "Manage Mullion", "Runway", "Manage Runway"]);
     expect(within(ai).getByRole("button", { name: "Mullion" })).toHaveAttribute(
       "aria-current",
       "true",
@@ -147,8 +147,8 @@ describe("WorkspaceChip", () => {
     expect(
       within(list)
         .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["Runway", "New workspace"]);
+        .map((b) => b.getAttribute("aria-label") ?? b.textContent),
+    ).toEqual(["Manage group AI Usage", "Runway", "Manage Runway", "New workspace", "New group"]);
     await user.clear(within(list).getByRole("searchbox"));
     await user.type(within(list).getByRole("searchbox"), "homelab");
     expect(within(list).getByRole("button", { name: "Landing" })).toBeInTheDocument();

@@ -11,10 +11,14 @@ import { matchesQuery } from "../matchQuery.js";
 import { useDashboardStore } from "../store/index.js";
 import { themeClassName } from "../store/theme.js";
 import { BottomSheet } from "../ui/BottomSheet.js";
-import { GridIcon, PlusIcon } from "../ui/icons.js";
+import { GridIcon, OverflowIcon, PlusIcon } from "../ui/icons.js";
 import { SearchInput } from "../ui/primitives.js";
 import { NewWorkspaceForm } from "../WorkspaceSwitcher.js";
 import { chipPopoverPosition } from "../lib/railPopoverPosition.js";
+import { CreateGroupModal } from "../CreateGroupModal.js";
+import { ThemedPortal } from "../ui/ThemedPortal.js";
+import { WorkspaceManage } from "./WorkspaceManage.js";
+import type { ManageTarget } from "./WorkspaceManage.js";
 
 export interface WorkspaceChipProps {
   /** Switch to a workspace (App's handleSelectWorkspace). */
@@ -83,6 +87,13 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
   }, [open, sheet, reposition]);
 
   const close = () => setOpen(false);
+  // "New group" leaves the list for CreateGroupModal: a modal inside the
+  // popover would close with it on the first click, which lands outside it.
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const newGroup = () => {
+    setOpen(false);
+    setNewGroupOpen(true);
+  };
   const pick = (id: number) => {
     setOpen(false);
     onSelectWorkspace(id);
@@ -177,7 +188,7 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
           sheetClassName="mobile-session-sheet--tablet"
           backStack
         >
-          {open && <WorkspaceListContent onPick={pick} touch />}
+          {open && <WorkspaceListContent onPick={pick} onNewGroup={newGroup} touch />}
         </BottomSheet>
       ) : (
         popoverPresent &&
@@ -193,10 +204,26 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
             aria-label="Workspaces"
             onKeyDown={onPanelKeyDown}
           >
-            <WorkspaceListContent onPick={pick} touch={false} />
+            <WorkspaceListContent onPick={pick} onNewGroup={newGroup} touch={false} />
           </div>,
           document.body,
         )
+      )}
+      {newGroupOpen && (
+        <ThemedPortal>
+          <CreateGroupModal
+            onClose={() => {
+              setNewGroupOpen(false);
+              // "New group" closed the list on its way here, so the dialog's
+              // own focus return has nothing to go back to: the chip it was
+              // opened from takes focus instead.
+              btnRef.current?.focus();
+            }}
+            onCreate={(groupName, color) =>
+              useDashboardStore.getState().createGroup(groupName, color)
+            }
+          />
+        </ThemedPortal>
       )}
     </>
   );
@@ -209,15 +236,20 @@ function LiveDot({ status }: { status: WorkspaceLiveStatus }) {
   return null;
 }
 
-// The list's body: the sidebar's Workspaces section without its editing
-// (groups in their colour with their workspaces, then the ungrouped ones, live
-// dots, "New workspace"), plus a search box. Groups are shown expanded here:
-// their collapsed state belongs to the sidebar, which persists it.
+// The list's body: the sidebar's Workspaces section (groups in their colour
+// with their workspaces, then the ungrouped ones, live dots, "New workspace"),
+// plus a search box. Groups are shown expanded here: their collapsed state
+// belongs to the sidebar, which persists it. A row's one tap switches; its
+// "⋯" opens that workspace's (or group's) actions in place of the list
+// (#3048, WorkspaceManage.tsx).
 export function WorkspaceListContent({
   onPick,
+  onNewGroup,
   touch,
 }: {
   onPick: (workspaceId: number) => void;
+  // "New group": the caller closes the list and opens CreateGroupModal.
+  onNewGroup: () => void;
   /** Touch-size rows, and no autofocus that would raise the keyboard. */
   touch: boolean;
 }) {
@@ -225,6 +257,27 @@ export function WorkspaceListContent({
   const activeWorkspaceId = useDashboardStore((s) => s.activeWorkspaceId);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
+  const [manage, setManage] = useState<ManageTarget | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // The "⋯" that opened the actions, focused again on the way back.
+  const returnFocusRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (manage !== null || returnFocusRef.current === null) return;
+    const key = returnFocusRef.current;
+    returnFocusRef.current = null;
+    // A deleted workspace or group took its "⋯" with it: the search box then.
+    const target =
+      listRef.current?.querySelector<HTMLElement>(`[data-manage="${key}"]`) ??
+      listRef.current?.querySelector<HTMLElement>(".rail-ws-search");
+    target?.focus();
+  }, [manage]);
+
+  const openManage = (target: ManageTarget) => {
+    returnFocusRef.current = `${target.kind}-${target.id}`;
+    setManage(target);
+  };
+  const closeManage = useCallback(() => setManage(null), []);
 
   const matching = (items: Workspace[], groupName: string | null) =>
     query.trim() ? items.filter((w) => matchesQuery([w.name, groupName], query)) : items;
@@ -236,21 +289,40 @@ export function WorkspaceListContent({
   const nothing = query.trim() !== "" && groupSections.length === 0 && ungrouped.length === 0;
 
   const row = (w: Workspace) => (
-    <button
-      key={w.id}
-      type="button"
-      className={`rail-ws-row${w.id === activeWorkspaceId ? " active" : ""}`}
-      aria-current={w.id === activeWorkspaceId ? "true" : undefined}
-      onClick={() => onPick(w.id)}
-    >
-      <GridIcon size={14} aria-hidden="true" />
-      <span className="rail-ws-row-name">{w.name}</span>
-      <LiveDot status={tree.liveStatusOf(w.id)} />
-    </button>
+    <div key={w.id} className="rail-ws-item">
+      <button
+        type="button"
+        className={`rail-ws-row${w.id === activeWorkspaceId ? " active" : ""}`}
+        aria-current={w.id === activeWorkspaceId ? "true" : undefined}
+        onClick={() => onPick(w.id)}
+      >
+        <GridIcon size={14} aria-hidden="true" />
+        <span className="rail-ws-row-name">{w.name}</span>
+        <LiveDot status={tree.liveStatusOf(w.id)} />
+      </button>
+      <button
+        type="button"
+        className="rail-ws-more"
+        data-manage={`workspace-${w.id}`}
+        aria-label={`Manage ${w.name}`}
+        title={`Rename, move or delete ${w.name}`}
+        onClick={() => openManage({ kind: "workspace", id: w.id, step: "menu" })}
+      >
+        <OverflowIcon size={15} aria-hidden="true" />
+      </button>
+    </div>
   );
 
+  if (manage !== null) {
+    return (
+      <div ref={listRef} className={`rail-ws-list${touch ? " touch" : ""}`}>
+        <WorkspaceManage target={manage} onChange={setManage} onBack={closeManage} touch={touch} />
+      </div>
+    );
+  }
+
   return (
-    <div className={`rail-ws-list${touch ? " touch" : ""}`}>
+    <div ref={listRef} className={`rail-ws-list${touch ? " touch" : ""}`}>
       <SearchInput
         small={!touch}
         className="rail-ws-search"
@@ -263,9 +335,21 @@ export function WorkspaceListContent({
       <div className="rail-ws-scroll">
         {groupSections.map(({ group, items }) => (
           <div key={group.id} className="rail-ws-group" role="group" aria-label={group.name}>
-            <div className="rail-ws-group-header" aria-hidden="true">
+            <div className="rail-ws-group-header">
               <span className="rail-ws-group-color" style={{ background: groupColor(group) }} />
-              <span className="rail-ws-group-name">{group.name}</span>
+              <span className="rail-ws-group-name" aria-hidden="true">
+                {group.name}
+              </span>
+              <button
+                type="button"
+                className="rail-ws-more"
+                data-manage={`group-${group.id}`}
+                aria-label={`Manage group ${group.name}`}
+                title={`Rename or delete the group ${group.name}`}
+                onClick={() => openManage({ kind: "group", id: group.id, step: "menu" })}
+              >
+                <OverflowIcon size={15} aria-hidden="true" />
+              </button>
             </div>
             {items.map(row)}
           </div>
@@ -284,14 +368,20 @@ export function WorkspaceListContent({
             createWorkspace={(name) => useDashboardStore.getState().createWorkspace(name)}
           />
         ) : (
-          <button
-            type="button"
-            className="rail-ws-row rail-ws-new-btn"
-            onClick={() => setCreating(true)}
-          >
-            <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} aria-hidden="true" />
-            <span className="rail-ws-row-name">New workspace</span>
-          </button>
+          <div className="rail-ws-new-row">
+            <button
+              type="button"
+              className="rail-ws-row rail-ws-new-btn"
+              onClick={() => setCreating(true)}
+            >
+              <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} aria-hidden="true" />
+              <span className="rail-ws-row-name">New workspace</span>
+            </button>
+            <button type="button" className="rail-ws-row rail-ws-new-btn" onClick={onNewGroup}>
+              <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} aria-hidden="true" />
+              <span className="rail-ws-row-name">New group</span>
+            </button>
+          </div>
         )}
       </div>
     </div>

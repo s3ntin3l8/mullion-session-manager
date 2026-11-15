@@ -30,7 +30,16 @@
    browsers that strands `:active` after the finger lifts (tablet.css's
    .mobile-key-bar-btn comment); the key bar has its own JS-driven press
    state. Disabled controls do not answer, and a row whose drag handle is
-   being pressed stays still: it is the drag image the browser captures. */
+   being pressed stays still: it is the drag image the browser captures.
+
+   Only the innermost pressed control moves (#3053). `:active` also matches
+   every ancestor of the pressed element, so pressing the "x" in a pane tab
+   used to scale the whole tab too: a lone tab is as wide as its header, and
+   0.96 of it pulled the "x" at its far end ~30px out from under the pointer
+   before release, so no `click` reached it. A control with a pressed control
+   inside it (the last, `:where()`-wrapped entry of both `:not()` lists below)
+   stays still; a workspace row's own `.ws-row-btn` does not count, since the
+   row presses for it. `:where()` keeps both rules' specificity unchanged. */
 :where(
   button,
   [role="button"],
@@ -54,7 +63,30 @@
     .device-toolbar button,
     .terminal-voice-btn,
     .ws-row-btn,
-    :has(.ws-drag-handle:active)
+    :has(.ws-drag-handle:active),
+    :where(
+      :has(
+        :is(
+            button,
+            [role="button"],
+            [role="tab"],
+            [role="menuitem"],
+            [role="option"],
+            summary,
+            .session-item,
+            .task-card,
+            .rail-ws-row,
+            .phone-more-row,
+            .pane-tab-overflow-item,
+            .workspace-item,
+            .ws-section-header,
+            .ws-group-header,
+            .dock-monitor,
+            .sidebar-device-row,
+            .update-banner
+          ):active:not(.ws-row-btn)
+      )
+    )
   ) {
   scale: 0.96;
   background-image: linear-gradient(var(--press-tint), var(--press-tint));
@@ -86,7 +118,30 @@
     .device-toolbar button,
     .terminal-voice-btn,
     .ws-row-btn,
-    :has(.ws-drag-handle:active)
+    :has(.ws-drag-handle:active),
+    :where(
+      :has(
+        :is(
+            button,
+            [role="button"],
+            [role="tab"],
+            [role="menuitem"],
+            [role="option"],
+            summary,
+            .session-item,
+            .task-card,
+            .rail-ws-row,
+            .phone-more-row,
+            .pane-tab-overflow-item,
+            .workspace-item,
+            .ws-section-header,
+            .ws-group-header,
+            .dock-monitor,
+            .sidebar-device-row,
+            .update-banner
+          ):active:not(.ws-row-btn)
+      )
+    )
   ) {
   scale: 0.98;
   background-image: linear-gradient(var(--press-tint), var(--press-tint));

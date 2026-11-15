@@ -381,11 +381,133 @@
   color: var(--muted);
   font-size: 0.8125rem;
 }
+/* #3048 — a workspace row is its switch button plus a "⋯" that opens the
+   workspace's actions in place of the list; a group header has its own. */
+.rail-ws-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.rail-ws-item .rail-ws-row {
+  flex: 1;
+  min-width: 0;
+}
+.rail-ws-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-ws-more,
+.rail-ws-back {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail-ws-more:hover,
+.rail-ws-back:hover {
+  background: var(--seg);
+  color: var(--fg);
+}
+.rail-ws-row:disabled,
+.rail-ws-row[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+.rail-ws-row:disabled:hover,
+.rail-ws-row[aria-disabled="true"]:hover {
+  background: transparent;
+}
+.rail-ws-row.danger {
+  color: var(--r);
+}
+.rail-ws-row.danger svg {
+  color: var(--r);
+}
+.rail-ws-row.danger.armed {
+  background: color-mix(in srgb, var(--r) 14%, transparent);
+}
+/* A delete row is a ConfirmButton with an armed label: its two labels share
+   one grid cell, laid out like the other rows. */
+.rail-ws-row.confirm-btn-stable {
+  display: grid;
+  justify-items: stretch;
+}
+.rail-ws-row.confirm-btn-stable > .confirm-btn-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rail-ws-manage {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+.rail-ws-manage-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.rail-ws-manage-title {
+  color: var(--fg);
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.rail-ws-manage-sub {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 400;
+}
+.rail-ws-manage-body {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rail-ws-new-row {
+  display: flex;
+  gap: 4px;
+}
+.rail-ws-new-row .rail-ws-row {
+  flex: 1;
+  min-width: 0;
+}
 /* Under a coarse pointer: touch-size rows (48px) and a 1rem (16px) search field, so
    iOS does not zoom into it. */
 .rail-ws-list.touch .rail-ws-row {
   min-height: 48px;
   font-size: 0.9375rem;
+}
+.rail-ws-list.touch .rail-ws-more,
+.rail-ws-list.touch .rail-ws-back {
+  width: 44px;
+  height: 44px;
+}
+.rail-ws-list.touch .workspace-rename-input {
+  min-height: 44px;
+  font-size: 1rem;
 }
 .rail-ws-list.touch .rail-ws-search {
   min-height: 44px;
