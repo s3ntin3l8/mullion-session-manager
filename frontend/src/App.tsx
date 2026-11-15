@@ -1160,7 +1160,6 @@ export function App() {
       onSessionEnded={onSessionEnded}
       onOpenProjectLauncher={openProjectLauncher}
       onOpenSettingsProjects={() => openSettings("projects")}
-      onOpenTasks={onOpenTasks}
       onOpenGit={onOpenGit}
       onOpenProjectSetup={onOpenProjectSetup}
     />

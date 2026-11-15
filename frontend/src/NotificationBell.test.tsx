@@ -1226,6 +1226,54 @@ describe("NotificationBell visual-viewport pan (issue #1399)", () => {
   });
 });
 
+// #3072 — the left rail's bell sits at the bottom of the screen. The panel
+// used to land at the window's top edge: the shared .pane-tab-overflow-menu
+// shell carries `top: 31px`, which won over the inline `bottom`.
+describe("NotificationBell beside the left rail (#3072)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("opens to the right of the rail's bell, bottom-anchored, with no top left over", async () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1280);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(720);
+    render(
+      <NotificationBell
+        onOpenSession={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        placement="beside"
+        triggerClassName="left-rail-btn"
+      />,
+    );
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    vi.spyOn(bell, "getBoundingClientRect").mockImplementation(
+      () => ({ top: 640, bottom: 674, left: 3.5, right: 43.5 }) as DOMRect,
+    );
+    await userEvent.click(bell);
+    const panel = screen.getByRole("dialog", { name: "Notifications" });
+    expect(panel.style.position).toBe("fixed");
+    expect(panel.style.left).toBe("49.5px");
+    expect(panel.style.bottom).toBe("46px");
+    // `auto`, so the stylesheet's `top: 31px` cannot pin it to the top edge.
+    expect(panel.style.top).toBe("auto");
+    expect(panel.style.right).toBe("auto");
+    expect(panel).toHaveAttribute("data-placement", "top");
+  });
+
+  it("keeps the phone bar's below-the-bell placement, with no bottom set", async () => {
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
+    const bell = screen.getByRole("button", { name: /notifications/i });
+    vi.spyOn(bell, "getBoundingClientRect").mockImplementation(
+      () => ({ bottom: 40, left: 20 }) as DOMRect,
+    );
+    await userEvent.click(bell);
+    const panel = screen.getByRole("dialog", { name: "Notifications" });
+    expect(panel.style.top).toBe("46px");
+    expect(panel.style.bottom).toBe("auto");
+    expect(panel).not.toHaveAttribute("data-placement");
+  });
+});
+
 describe("NotificationBell phone sheet", () => {
   async function openPhoneSheet(
     props: Partial<Parameters<typeof NotificationBell>[0]> = {},

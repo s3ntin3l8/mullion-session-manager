@@ -248,3 +248,29 @@ describe("workspace list rows", () => {
     expect(railCss.slice(start, railCss.indexOf("}", start))).toMatch(/min-height:\s*48px/);
   });
 });
+
+// #3072 — the picker's columns line up: every "⋯" on one vertical line, group
+// and workspace names on one indent, and both footer actions readable.
+describe("workspace list alignment", () => {
+  const rule = (selector: string) => {
+    const start = railCss.indexOf(`${selector} {`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    return railCss.slice(start, railCss.indexOf("}", start));
+  };
+
+  it("gives a group header no right padding, like a workspace row, so the ⋯ buttons align", () => {
+    expect(rule(".rail-ws-group-header")).toMatch(/padding:\s*4px 0 2px 8px/);
+    expect(rule(".rail-ws-item")).not.toMatch(/padding/);
+  });
+
+  it("puts a group's colour square in a row icon's 14px slot, at a row's 8px gap", () => {
+    // 8px square + 3px either side = the rows' 14px icon; gap matches .rail-ws-row.
+    expect(rule(".rail-ws-group-color")).toMatch(/width:\s*8px[\s\S]*margin:\s*0 3px/);
+    expect(rule(".rail-ws-group-header")).toMatch(/gap:\s*8px/);
+    expect(rule(".rail-ws-row")).toMatch(/gap:\s*8px/);
+  });
+
+  it("stacks New workspace and New group instead of halving the width", () => {
+    expect(rule(".rail-ws-new-row")).toMatch(/flex-direction:\s*column/);
+  });
+});

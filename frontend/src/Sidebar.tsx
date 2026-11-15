@@ -21,7 +21,6 @@ import { ErrorText } from "./ui/ErrorText.js";
 import {
   ChevronDownIcon,
   CloseIcon,
-  LayersIcon,
   PlusIcon,
   RefreshIcon,
   SearchIcon,
@@ -88,9 +87,6 @@ export interface SidebarProps {
   // "Configure search roots" in the discovery empty state (design section
   // 03·1C) opens Settings straight to the Projects tab.
   onOpenSettingsProjects: () => void;
-  // Phase 6 (6.5/#218) — opens (or focuses) the global task board, replacing
-  // 2.5's own ad hoc TasksSection list.
-  onOpenTasks: () => void;
   // Issue #433 scope B — SourceControlSection's own "Open Git Panel" action.
   // App.tsx already had this callback (for Source Control's own command-palette
   // entry, issue #76) but never threaded it down to Sidebar until now.
@@ -123,7 +119,6 @@ export function Sidebar({
   onSessionEnded,
   onOpenProjectLauncher,
   onOpenSettingsProjects,
-  onOpenTasks,
   onOpenGit,
   onOpenProjectSetup,
   workspaceProjectIds = null,
@@ -144,7 +139,6 @@ export function Sidebar({
     settings,
     settingsLoaded,
     hierarchicalView,
-    viewMode,
     projectsLoaded,
     projectsError,
     activeWorkspaceId,
@@ -159,7 +153,6 @@ export function Sidebar({
       settings: s.settings,
       settingsLoaded: s.settingsLoaded,
       hierarchicalView: s.hierarchicalView,
-      viewMode: s.viewMode,
       // The three states an empty project list can be in — still loading,
       // loaded-and-empty, and failed. Without these, "Welcome to Mullion"
       // covered all three, so a failed fetch looked like a fresh install
@@ -234,19 +227,11 @@ export function Sidebar({
     void store.refreshSessions();
     void store.refreshHosts();
     // Loaded on mount alongside everything else above rather than waiting
-    // for startLiveRefresh's ~60s-throttled tick to reach it first — this is
-    // what lets the Tasks nav entry's count badge below be accurate right
-    // away.
+    // for startLiveRefresh's ~60s-throttled tick to reach it first, so the
+    // task-linked session filter below is right from the first render.
     void store.refreshTasks();
   }, []);
 
-  // Phase 6 (6.5/#218) — count of tasks needing human attention right now:
-  // "ready" (claimable) and "reviewing" (awaiting Approve/Reject). Neither
-  // "claimed"/"in_progress" (the agent is already working, nothing for a
-  // human to do yet) nor "done"/"failed"/"backlog" belong in this count.
-  const actionableTaskCount = tasks.filter(
-    (t) => t.status === "ready" || t.status === "reviewing",
-  ).length;
   // #9 — a "killed" task session is already excluded by the `s.status !==
   // "killed"` check above/below regardless of this toggle (see PR 8's own
   // cleanup, which flips a superseded task session to "killed" rather than
@@ -534,24 +519,6 @@ export function Sidebar({
 
   return (
     <div className="sidebar">
-      <button
-        className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
-        aria-pressed={viewMode === "kanban"}
-        // Issue: this already claimed to be a toggle via aria-pressed, but
-        // onOpenTasks only ever set viewMode to "kanban" — clicking it a
-        // second time while already in Tasks did nothing, leaving the
-        // Toolbar's "Back" chevron as the only way out. Honoring what the
-        // a11y attribute already advertised.
-        onClick={() =>
-          viewMode === "kanban" ? useDashboardStore.getState().setViewMode("list") : onOpenTasks()
-        }
-      >
-        <LayersIcon size={14} />
-        <span className="sidebar-tasks-entry-label">Tasks</span>
-        {actionableTaskCount > 0 && (
-          <span className="project-attn-pill">{actionableTaskCount}</span>
-        )}
-      </button>
       <>
         <div className="sidebar-section-header">
           <h2 className="sidebar-section-title">Projects</h2>
