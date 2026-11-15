@@ -642,7 +642,8 @@ export function PaneActionsMenu({
         className={triggerClassName}
         title="More…"
         aria-label="More actions"
-        aria-haspopup="menu"
+        // Under a coarse pointer the items open in a sheet (a dialog).
+        aria-haspopup={coarse ? "dialog" : "menu"}
         aria-expanded={overflowOpen}
         onClick={() => {
           if (overflowOpen) setOverflowOpen(false);

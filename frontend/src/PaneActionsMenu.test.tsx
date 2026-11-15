@@ -973,7 +973,9 @@ describe("PaneActionsMenu -> touch sheet (#3054)", () => {
     const user = userEvent.setup();
     renderMenu();
 
-    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(trigger);
 
     const sheet = screen.getByRole("dialog", { name: "claude code actions" });
     expect(sheet).toHaveClass("mobile-session-sheet", "pane-actions-sheet");
@@ -1037,7 +1039,9 @@ describe("PaneActionsMenu -> touch sheet (#3054)", () => {
     const user = userEvent.setup();
     renderMenu();
 
-    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    await user.click(trigger);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("menu")).toHaveClass("pane-tab-overflow-menu");
   });

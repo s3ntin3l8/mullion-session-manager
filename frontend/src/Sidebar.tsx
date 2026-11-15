@@ -81,8 +81,8 @@ export interface SidebarProps {
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
-  // Opens the command palette scoped to this project (design's project-row
-  // "+" button) — cwd is bound implicitly, no target-picker step needed.
+  // Opens the New session launcher with this project preselected (design's
+  // project-row "+" button); the project stays changeable there.
   onOpenProjectLauncher: (projectId: number) => void;
   // "Configure search roots" in the discovery empty state (design section
   // 03·1C) opens Settings straight to the Projects tab.

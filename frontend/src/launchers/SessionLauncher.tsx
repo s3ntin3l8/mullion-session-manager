@@ -399,8 +399,18 @@ function LauncherNewSession({
 
   // #3054 — opened from a palette entry: once the launchers are in (Launch is
   // disabled until then, so it cannot take focus at mount), Launch takes
-  // focus, once per open. An Enter pressed before they are in (a fast Enter-Enter from the palette
-  // lands on the filter) launches once they are, rather than being dropped.
+  // focus, once per open, unless the user has already moved on (typed in the
+  // filter, or focused something else in the launcher). An Enter pressed
+  // before they are in (a fast Enter-Enter from the palette lands on the
+  // filter) launches once they are, rather than being dropped.
+  //
+  // An id the loaded list does not contain (the palette's list was still the
+  // previous project's when the row was picked) is no preselection at all:
+  // the launcher opens as a plain open, and the early Enter is dropped rather
+  // than launching whatever happens to be first.
+  const preselectionFound =
+    initialLauncherId !== null && launchers.some((l) => l.id === initialLauncherId);
+  const contentRef = useRef<HTMLDivElement>(null);
   const launchButtonRef = useRef<HTMLButtonElement>(null);
   const focusedLaunchRef = useRef(false);
   const pendingLaunchRef = useRef(false);
@@ -411,12 +421,23 @@ function LauncherNewSession({
   useEffect(() => {
     if (initialLauncherId === null || !loaded || focusedLaunchRef.current) return;
     focusedLaunchRef.current = true;
-    launchButtonRef.current?.focus();
-    if (pendingLaunchRef.current) {
-      pendingLaunchRef.current = false;
+    const pending = pendingLaunchRef.current;
+    pendingLaunchRef.current = false;
+    if (!preselectionFound) return;
+    if (pending) {
+      launchButtonRef.current?.focus();
       launchPrimaryRef.current();
+      return;
     }
-  }, [initialLauncherId, loaded]);
+    const active = document.activeElement;
+    const filter = filterRef?.current ?? null;
+    const untouched =
+      active === null ||
+      active === document.body ||
+      !contentRef.current?.contains(active) ||
+      (active === filter && filter.value === "");
+    if (untouched) launchButtonRef.current?.focus();
+  }, [initialLauncherId, loaded, preselectionFound, filterRef]);
 
   const tilesRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -502,7 +523,7 @@ function LauncherNewSession({
   const { hosts, hostOptions, showHostChip, hostChoice, onHostChange, autoPreview } = launchTarget;
 
   return (
-    <div className="session-launcher-content" onKeyDownCapture={onKeyDownCapture}>
+    <div ref={contentRef} className="session-launcher-content" onKeyDownCapture={onKeyDownCapture}>
       {!coarse && (
         <div className="session-launcher-filter">
           <SearchIcon size={15} strokeWidth={1.9} />

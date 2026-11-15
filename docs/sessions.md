@@ -1,7 +1,9 @@
 # Starting a session
 
-Two surfaces start a session, and they send exactly the same request for the
-same choices (`frontend/src/launchers/useSessionLaunch.ts`):
+Every session starts in the New session launcher
+(`frontend/src/launchers/SessionLauncher.tsx`, launching through
+`frontend/src/launchers/useSessionLaunch.ts`); the command palette leads into
+it:
 
 - **The New session launcher** — the one place a session starts. It opens
   from a sidebar project's "+" (with that project preselected, still
