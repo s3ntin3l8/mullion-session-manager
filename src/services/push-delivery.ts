@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { sessions } from "../db/schema.js";
 import type { NotificationEvent } from "./pty-manager.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";

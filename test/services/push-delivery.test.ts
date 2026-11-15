@@ -7,16 +7,11 @@ import type * as WebPush from "web-push";
 import type { NotificationEvent } from "../../src/services/pty-manager.js";
 
 const mockSendNotification = vi.hoisted(() => vi.fn());
-// web-push is CJS (module.exports = {...}) — its named exports only reach
-// ESM `import { x } from "web-push"` (push-store.ts's own import style) via
-// its `default` object, not as separately-detected top-level bindings, so
-// this spreads `actual.default` into both the mock's named exports AND its
-// own `default` to satisfy both that style and push-delivery.ts's own
-// `import webpush from "web-push"` default import.
+// web-push 4 is native ESM with named exports only; spread the real module
+// and swap in the mocked sendNotification.
 vi.mock("web-push", async (importOriginal) => {
   const actual = await importOriginal<typeof WebPush>();
-  const merged = { ...actual, ...actual.default, sendNotification: mockSendNotification };
-  return { ...merged, default: merged };
+  return { ...actual, sendNotification: mockSendNotification };
 });
 
 const { buildApp } = await import("../../src/app.js");

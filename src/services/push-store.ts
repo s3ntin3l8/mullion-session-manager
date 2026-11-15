@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { pushKeys, pushSubscriptions } from "../db/schema.js";
 
 // Singleton row id — see db/schema.ts's `push_keys` table doc comment. Same
