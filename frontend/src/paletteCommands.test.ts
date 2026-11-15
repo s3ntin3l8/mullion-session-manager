@@ -78,24 +78,20 @@ describe("buildPaletteCommands", () => {
     expect(newSession).toHaveBeenCalledTimes(1);
   });
 
-  it("leads the top commands with New session… when there is no project", () => {
-    const { context } = ctx({ projectId: null });
-    const commands = buildPaletteCommands({
-      ...context,
-      open: { ...context.open, newSession: vi.fn() },
-    });
-
-    expect(commands.filter((c) => c.placement === "top")[0]?.id).toBe("new-session");
-  });
-
-  it("leads the top commands with New session… when there is a project", () => {
+  // Title order would put GitHub first; "New session…" is pinned ahead of it.
+  it("leads the top commands with New session…, ahead of the title order", () => {
     const { context } = ctx();
     const commands = buildPaletteCommands({
       ...context,
       open: { ...context.open, newSession: vi.fn() },
     });
 
-    expect(commands.filter((c) => c.placement === "top")[0]?.id).toBe("new-session");
+    expect(commands.filter((c) => c.placement === "top").map((c) => c.id)).toEqual([
+      "new-session",
+      "github",
+      "new-workspace",
+      "project",
+    ]);
   });
 
   it("omits New session… when no opener is given", () => {
