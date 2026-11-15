@@ -16,7 +16,11 @@ interface LaunchParams extends Record<string, unknown> {
   name?: string;
   dockControlId?: string;
 }
-const launch = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[], live: "idle" }));
+const launch = vi.hoisted(() => ({
+  calls: [] as Record<string, unknown>[],
+  live: "idle",
+  fail: false,
+}));
 vi.mock("../../src/services/session-live-info.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -34,6 +38,7 @@ vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
     // Records what the launch asked for and inserts a row, with no real spawn.
     createSessionRecord: vi.fn(async (app: FastifyInstance, params: LaunchParams) => {
       launch.calls.push(params);
+      if (launch.fail) return { ok: false, reason: "invalid-options", detail: "boom" };
       const { sessions: sessionsTable } = await import("../../src/db/schema.js");
       const row = app.db
         .insert(sessionsTable)
@@ -407,6 +412,39 @@ describe("docks.* ops (#2494)", () => {
       expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
         "active",
       );
+    });
+
+    it("docks.switch resolves symlinks in the existing part of a not-yet-existing path", async () => {
+      const { app, conn, frames } = await running();
+      fs.mkdirSync(path.join(cwdA, "pkg"));
+      fs.symlinkSync(path.join(cwdA, "pkg"), path.join(cwdA, "alias"));
+      fs.symlinkSync(cwdB, path.join(cwdA, "out"));
+      const sw = (id: number, worktreePath: string) =>
+        dispatch(app, conn, {
+          id,
+          op: "docks.switch",
+          body: { dockControlId: "dev-server", worktreePath },
+        });
+      await sw(18, "out/nope/sub");
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+      await sw(19, "alias/nope/sub");
+      expect(frames[1]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({
+        cwd: path.join(fs.realpathSync(cwdA), "pkg", "nope", "sub"),
+      });
+    });
+
+    it("docks.switch says the control was stopped when the restart fails", async () => {
+      const { app, conn, frames } = await running();
+      launch.fail = true;
+      await dispatch(app, conn, {
+        id: 20,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", branch: "feat/x" },
+      });
+      launch.fail = false;
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+      expect(String(frames[0].error)).toContain("was stopped but could not be restarted");
     });
 
     it("docks.switch accepts a path inside the project checkout", async () => {

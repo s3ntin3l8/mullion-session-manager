@@ -286,6 +286,11 @@ export async function switchDockControl(
   if (!stopped.ok) return stopped;
   const started = await startDockControl(app, projectId, controlId, target, launch);
   if (started.ok || stopped.value.sessionId === null) return started;
-  // The old session is already stopped: say so, so the caller knows to start it again.
-  return { ...started, message: `${started.message} (the control was stopped; start it again)` };
+  // The old session is already stopped: say so, so the caller knows to start
+  // it again. A constant message (plus the numeric status and the machine
+  // `code`), not the upstream text echoed back.
+  return {
+    ...started,
+    message: `The control was stopped but could not be restarted (HTTP ${started.status}); start it again.`,
+  };
 }
