@@ -14,6 +14,9 @@ import { matchesQuery } from "../matchQuery.js";
 import { resolveLauncherLogo } from "../cliLogos.js";
 import { ModelSelect } from "../settings/ModelPicker.js";
 import { WorktreeOptions } from "../command-palette/WorktreeOptions.js";
+import { LauncherProjectPicker } from "./LauncherProjects.js";
+import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
+import type { LauncherProjectActions } from "./launcherProjectActions.js";
 import { AUTO_VALUE, OWN_HOST_VALUE, describeAutoPreview } from "../command-palette/hostTarget.js";
 import { buildPickerSections } from "../lib/mobileSessionPicker.js";
 import type { PickerPanel } from "../lib/mobileSessionPicker.js";
@@ -52,6 +55,8 @@ export interface SessionLauncherHostProps {
   // on). Passed through, not acted on yet: a later slice places by it.
   onLaunched: (session: Session, target: LauncherTarget | null) => void;
   onOpenSession: (session: Session, target: LauncherTarget | null) => void;
+  // The Where row's project management (#3048, LauncherProjects.tsx).
+  projectActions?: LauncherProjectActions;
 }
 
 // Mounted once by App. Reads the open request from the store; a dialog is a
@@ -61,6 +66,7 @@ export function SessionLauncherHost({
   phone,
   onLaunched,
   onOpenSession,
+  projectActions = NO_PROJECT_ACTIONS,
 }: SessionLauncherHostProps) {
   const request = useDashboardStore((s) => s.launcherRequest);
   const viewMode = useDashboardStore((s) => s.viewMode);
@@ -94,28 +100,37 @@ export function SessionLauncherHost({
   if (!coarse) {
     if (!open || request === null) return null;
     return (
-      <LauncherDialog
-        key={request.seq}
-        request={request}
-        onClose={close}
-        onLaunched={onLaunched}
-        suppressRestoreRef={suppressRestoreRef}
-      />
+      <LauncherProjectActionsContext.Provider value={projectActions}>
+        <LauncherDialog
+          key={request.seq}
+          request={request}
+          onClose={close}
+          onLaunched={onLaunched}
+          suppressRestoreRef={suppressRestoreRef}
+        />
+      </LauncherProjectActionsContext.Provider>
     );
   }
   return (
-    <LauncherSheet
-      open={open}
-      request={shown}
-      phone={phone}
-      panels={pickerPanels}
-      onClose={close}
-      onLaunched={onLaunched}
-      onOpenSession={onOpenSession}
-      suppressRestoreRef={suppressRestoreRef}
-    />
+    <LauncherProjectActionsContext.Provider value={projectActions}>
+      <LauncherSheet
+        open={open}
+        request={shown}
+        phone={phone}
+        panels={pickerPanels}
+        onClose={close}
+        onLaunched={onLaunched}
+        onOpenSession={onOpenSession}
+        suppressRestoreRef={suppressRestoreRef}
+      />
+    </LauncherProjectActionsContext.Provider>
   );
 }
+
+const NO_PROJECT_ACTIONS: LauncherProjectActions = {
+  onSessionEnded: () => {},
+  onOpenSettingsProjects: () => {},
+};
 
 // After a launch (or an Open existing pick) settles: close the launcher and
 // keep focus off the opener — but only if the launcher is still the open the
@@ -521,7 +536,6 @@ function LauncherNewSession({
     }
   };
 
-  const projectOptions = projects.map((p) => ({ value: String(p.id), label: p.name }));
   const { hosts, hostOptions, showHostChip, hostChoice, onHostChange, autoPreview } = launchTarget;
 
   return (
@@ -545,17 +559,7 @@ function LauncherNewSession({
           Where
         </h3>
         <div className="session-launcher-where">
-          {projects.length > 0 ? (
-            <Dropdown
-              ariaLabel="Project"
-              className="session-launcher-project"
-              value={projectId !== null ? String(projectId) : ""}
-              onChange={(v) => setProjectId(Number(v))}
-              options={projectOptions}
-            />
-          ) : (
-            <span className="session-launcher-hint">Add a project first.</span>
-          )}
+          <LauncherProjectPicker projectId={projectId} onChange={setProjectId} coarse={coarse} />
           {showHostChip && target && (
             <Dropdown
               ariaLabel="Host"

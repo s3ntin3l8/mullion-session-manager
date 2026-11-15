@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useDashboardStore } from "../store/index.js";
-import { CreateProjectModal } from "../CreateProjectModal.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
-import { staleLockMessage } from "../git/gitReasons.js";
+import { deleteProjectAndEndSessions, gitPullState, pullProject } from "./projectActions.js";
+import { ProjectEditModal } from "./ProjectEditModal.js";
 import { LOCAL_HOST_ID } from "../api/index.js";
 import type { Host, Project, Session } from "../api/index.js";
 import { HostStatusLabel } from "../HostStatusLabel.js";
@@ -22,42 +22,6 @@ import {
 // arbitrary but reasonable line between "you'll want to pull soon" and
 // "you're working from a very stale checkout".
 const BEHIND_STALE_THRESHOLD = 10;
-
-// Issue #431-adjacent — short, user-facing copy for `git pull` refusal
-// reasons. Mirrors the message shape SourceControlSection.tsx already uses
-// for the same backend response, but trimmed to the one-line slot the
-// kebab-error affordance has. Kept inline here rather than promoted to a
-// shared helper because the two surfaces have different copy needs and a
-// premature consolidation would just drag them both around.
-function formatPullReasonMessage(reason: string | undefined, detail?: string): string {
-  switch (reason) {
-    case "not-a-repo":
-      return "Not a git repository.";
-    case "unborn-head":
-      return "Cannot pull in an unborn branch.";
-    case "detached-head":
-      return "Cannot pull in a detached HEAD state.";
-    case "no-upstream":
-      return "No upstream tracking branch configured.";
-    case "dirty-tree":
-      return "Working tree has uncommitted changes — commit or stash them first.";
-    case "not-fast-forward":
-      return "Local branch has diverged from origin — pull cannot fast-forward.";
-    case "already-up-to-date":
-      return "Already up to date with tracking branch.";
-    case "pull-failed":
-      return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
-    // Issue #1896 — a git operation (a clone repair) holds the clone. Not a
-    // failure: the pull was refused, and trying again in a moment works. The
-    // default branch would say "Pull failed: …", which is the wrong story.
-    case "busy":
-      return "A git operation is already running for this repository — try again in a moment.";
-    case "stale-lock":
-      return staleLockMessage(detail);
-    default:
-      return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
-  }
-}
 
 // Extracted out of ProjectSection so both the plain (below-threshold) and
 // virtualized (above-threshold) rendering paths share the exact same header
@@ -89,7 +53,10 @@ export function ProjectHeader({
   sessions: Session[];
   hosts: Host[];
   collapsed: boolean;
-  onToggleCollapsed: () => void;
+  // Omitted for a row with no body to open (#2075's "Other projects"): the
+  // header is then plain content, not a disclosure button, so its own "+"
+  // and menu are not nested inside a button.
+  onToggleCollapsed?: () => void;
   onOpenLauncher: () => void;
   onSessionEnded: (session: Session) => void;
   // Phase 4 (Gap F) — "Scaffold Mullion" kebab-menu entry, bound to this
@@ -188,22 +155,28 @@ export function ProjectHeader({
         // (both already wrapped in `onClick={(e) => e.stopPropagation()}`
         // for the mouse case), and without the guard tabbing to either and
         // pressing Enter/Space would ALSO toggle this row's collapse state.
-        role="button"
-        tabIndex={0}
-        aria-expanded={!collapsed}
-        aria-controls={bodyId}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggleCollapsed();
-          }
-        }}
+        role={onToggleCollapsed ? "button" : undefined}
+        tabIndex={onToggleCollapsed ? 0 : undefined}
+        aria-expanded={onToggleCollapsed ? !collapsed : undefined}
+        aria-controls={onToggleCollapsed ? bodyId : undefined}
+        onKeyDown={
+          onToggleCollapsed
+            ? (e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggleCollapsed();
+                }
+              }
+            : undefined
+        }
       >
-        <ChevronDownIcon
-          size={12}
-          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
-        />
+        {onToggleCollapsed ? (
+          <ChevronDownIcon
+            size={12}
+            className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+          />
+        ) : null}
         <FolderIcon size={15} />
         <span
           className="project-row-name"
@@ -305,56 +278,10 @@ export function ProjectHeader({
                 // fixed for the kill-session overflow item.
                 label: "Git pull",
                 icon: <PullIcon size={14} style={{ color: "var(--muted)" }} />,
-                disabled: !gitStatus || gitStatus.behind === 0,
-                // gitStatuses[id] === null collapses three distinct states
-                // (SourceControlSection.tsx:188-194): durably not a repo,
-                // never fetched yet, and — for a remote-hosted project only
-                // — the agent host being unreachable. A local project's
-                // host is this process itself, so "not a repo" is the
-                // honest read there; a remote-hosted project's null is
-                // genuinely ambiguous, so its label says so rather than
-                // asserting a specific cause that might be wrong (Hermes
-                // review, PR #1366). The branch must key on
-                // `project.hostId !== LOCAL_HOST_ID`, NOT on the `host`
-                // lookup at line 821 — the latter is `hosts.find(...)`,
-                // which is `undefined` whenever the hosts list hasn't
-                // loaded yet, collapsing the "remote ambiguous" case back
-                // to "not a repo" on first mount and defeating the fix
-                // (Hermes review, PR #1366, line 1006). SourceControlSection.tsx:193
-                // uses the same direct-property check.
-                title: !gitStatus
-                  ? project.hostId !== LOCAL_HOST_ID
-                    ? "Not a git repository, or the host is unreachable."
-                    : "Not a git repository"
-                  : gitStatus.behind === 0
-                    ? "Already up to date with tracking branch"
-                    : `Pull ${gitStatus.behind} commit${gitStatus.behind === 1 ? "" : "s"} from tracking branch`,
+                ...gitPullState(project, gitStatus),
                 onClick: async () => {
                   setPullError(null);
-                  try {
-                    const result = await useDashboardStore.getState().pullProjectGit(project.id);
-                    if (!result.pulled) {
-                      // No `&& result.reason` guard — let formatPullReasonMessage's
-                      // default branch fire on `{pulled: false}` without a reason,
-                      // matching SourceControlSection.tsx's unconditional shape so
-                      // a missing-reason response never falls through silently.
-                      setPullError(formatPullReasonMessage(result.reason, result.detail));
-                    }
-                    // Hermes review, PR #1366, line 1023 — other pull
-                    // surfaces invalidate refs too (SourceControlSection.tsx:254
-                    // and the Source Control view both fire `refreshGitRefs` after a
-                    // successful pull). Without this call, branch labels and
-                    // diff stats stay stale until their own poll tick lands.
-                    // SourceControlSection also writes a fresh status
-                    // into the store inline; refreshGitStatuses covers the
-                    // same data path here without the per-project round-trip.
-                    await Promise.all([
-                      useDashboardStore.getState().refreshGitStatuses(),
-                      useDashboardStore.getState().refreshGitRefs([project.id]),
-                    ]);
-                  } catch (err) {
-                    setPullError(err instanceof Error ? err.message : "Pull failed — try again.");
-                  }
+                  setPullError(await pullProject(project.id));
                 },
               },
               {
@@ -370,23 +297,11 @@ export function ProjectHeader({
                 icon: <CloseIcon size={14} />,
                 danger: true,
                 confirm: true,
-                onClick: () => {
-                  const endedSessions = sessions;
+                onClick: async () => {
                   setDeleteError(null);
-                  useDashboardStore
-                    .getState()
-                    .deleteProject(project.id)
-                    .then(() => {
-                      endedSessions.forEach(onSessionEnded);
-                    })
-                    .catch((err: unknown) => {
-                      console.debug("[Sidebar] deleteProject failed", err);
-                      setDeleteError(
-                        err instanceof Error
-                          ? err.message
-                          : "Failed to delete project — try again.",
-                      );
-                    });
+                  setDeleteError(
+                    await deleteProjectAndEndSessions(project.id, sessions, onSessionEnded),
+                  );
                 },
               },
             ]}
@@ -394,93 +309,7 @@ export function ProjectHeader({
         </span>
         {editOpen && (
           <span onClick={(e) => e.stopPropagation()}>
-            <CreateProjectModal
-              mode="edit"
-              initialName={project.name}
-              initialPath={project.cwd}
-              initialDevServerUrl={project.devServerUrl}
-              detectedDevServerPort={project.detectedDevServerPort}
-              projectId={project.id}
-              initialDefaultAgent={project.defaultAgent}
-              initialDefaultReviewAgent={project.defaultReviewAgent}
-              initialMergeOnApprove={project.mergeOnApprove}
-              initialAutoApprove={project.autoApprove}
-              initialAllowCrossProjectSpawn={project.allowCrossProjectSpawn}
-              initialCrossProjectTargets={project.crossProjectTargets}
-              initialAcceptsChildrenFrom={project.acceptsChildrenFrom}
-              initialAcceptsChildrenFromList={project.acceptsChildrenFromList}
-              initialAcceptsMessagesFrom={project.acceptsMessagesFrom}
-              initialAcceptsMessagesFromList={project.acceptsMessagesFromList}
-              initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
-              initialConventionalCommitTitles={project.conventionalCommitTitles}
-              initialAutoTagRelease={project.autoTagRelease}
-              // Issue #1726 / roadmap 8.12 — the project's own placement
-              // mode, so the control opens showing what it is today.
-              initialPlacement={project.placement}
-              // Issue #1951 follow-up — the project's own host and where it
-              // lives on the others, so the "Also lives on" rows open filled.
-              hosts={hosts}
-              projectHostId={project.hostId}
-              initialHostCwds={project.hostCwds}
-              initialHostCwdsMeta={project.hostCwdsMeta}
-              initialPlacementConstraints={project.placementConstraints}
-              initialPreProvision={project.preProvision}
-              onClose={() => setEditOpen(false)}
-              onCreate={({
-                name,
-                cwd,
-                devServerUrl,
-                defaultAgent,
-                defaultReviewAgent,
-                mergeOnApprove,
-                autoApprove,
-                allowCrossProjectSpawn,
-                crossProjectTargets,
-                acceptsChildrenFrom,
-                acceptsChildrenFromList,
-                acceptsMessagesFrom,
-                acceptsMessagesFromList,
-                maxAutoReturnRounds,
-                conventionalCommitTitles,
-                autoTagRelease,
-                createDir,
-                gitInit,
-                placement,
-                hostCwds,
-                placementConstraints,
-                preProvision,
-                allowDuplicate,
-              }) =>
-                useDashboardStore.getState().updateProject(project.id, {
-                  name,
-                  cwd,
-                  devServerUrl,
-                  defaultAgent,
-                  defaultReviewAgent,
-                  mergeOnApprove,
-                  autoApprove,
-                  allowCrossProjectSpawn,
-                  crossProjectTargets,
-                  acceptsChildrenFrom,
-                  acceptsChildrenFromList,
-                  acceptsMessagesFrom,
-                  acceptsMessagesFromList,
-                  maxAutoReturnRounds,
-                  conventionalCommitTitles,
-                  autoTagRelease,
-                  createDir,
-                  gitInit,
-                  // Issue #1726 / roadmap 8.12 — the placement mode is a
-                  // plain patch field (updateProject's Pick union already
-                  // accepts it).
-                  placement,
-                  hostCwds,
-                  placementConstraints,
-                  preProvision,
-                  allowDuplicate,
-                })
-              }
-            />
+            <ProjectEditModal project={project} hosts={hosts} onClose={() => setEditOpen(false)} />
           </span>
         )}
       </div>

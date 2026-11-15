@@ -6,6 +6,8 @@ import { vi } from "vitest";
 import type { LayoutMode } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LauncherTarget } from "../store/types.js";
+import type * as RailWorkspaceSectionModule from "../rail/RailWorkspaceSection.js";
+import type * as SessionLauncherModule from "../launchers/SessionLauncher.js";
 
 // Set by the split test before render. Null keeps every other test on the
 // old path: DockviewReact never reports an api. `launch` is the session the
@@ -120,12 +122,19 @@ const railHarness = vi.hoisted(() => ({
     menuItems?: (entry: { panelId: string }) => Array<{ label: string; onSelect: () => void }>;
   },
 }));
-vi.mock("../rail/RailWorkspaceSection.js", () => ({
-  RailWorkspaceSection: (props: NonNullable<typeof railHarness.props>) => {
-    railHarness.props = props;
-    return <div data-testid="rail-middle" data-show-panes={String(props.showPanes)} />;
-  },
-}));
+// `real` (#3048's tests) renders the real rail section and launcher instead,
+// for a test that drives the workspace picker or the launcher through App.
+const realHarness = vi.hoisted(() => ({ real: false }));
+vi.mock("../rail/RailWorkspaceSection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof RailWorkspaceSectionModule>();
+  return {
+    RailWorkspaceSection: (props: NonNullable<typeof railHarness.props>) => {
+      railHarness.props = props;
+      if (realHarness.real) return <actual.RailWorkspaceSection {...props} />;
+      return <div data-testid="rail-middle" data-show-panes={String(props.showPanes)} />;
+    },
+  };
+});
 vi.mock("../MobileKeyBar.js", () => ({
   MobileKeyBar: ({ sessionId }: { sessionId: number }) => (
     <div data-testid="key-bar" data-session={sessionId} />
@@ -146,12 +155,22 @@ vi.mock("../fold/RightHalfPane.js", () => ({
     return <div data-testid="right-half" data-session={p.sessionId} />;
   },
 }));
-vi.mock("../launchers/SessionLauncher.js", () => ({
-  SessionLauncherHost: (p: NonNullable<typeof foldHarness.launcher>) => {
-    foldHarness.launcher = p;
-    return null;
-  },
-}));
+vi.mock("../launchers/SessionLauncher.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof SessionLauncherModule>();
+  return {
+    SessionLauncherHost: (p: NonNullable<typeof foldHarness.launcher>) => {
+      foldHarness.launcher = p;
+      if (realHarness.real) {
+        return (
+          <actual.SessionLauncherHost
+            {...(p as unknown as Parameters<typeof actual.SessionLauncherHost>[0])}
+          />
+        );
+      }
+      return null;
+    },
+  };
+});
 vi.mock("../MobileSessionBar.js", () => ({
   MobileSessionBar: () => <span data-testid="session-bar" />,
 }));
@@ -282,4 +301,12 @@ export function stubLiveWidth(initial: StubWidth | number) {
   };
 }
 
-export { splitHarness, sidebarHarness, dockHarness, persistenceHarness, railHarness, foldHarness };
+export {
+  splitHarness,
+  sidebarHarness,
+  dockHarness,
+  persistenceHarness,
+  railHarness,
+  foldHarness,
+  realHarness,
+};
