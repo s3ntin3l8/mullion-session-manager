@@ -5,6 +5,8 @@ import { useDashboardStore } from "../store/index.js";
 import { themeClassName } from "../store/theme.js";
 import { OverflowIcon } from "./icons.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { useCoarsePointer, useLayoutContext } from "../lib/layoutTier.js";
+import { BottomSheet } from "./BottomSheet.js";
 import { usePresence } from "../hooks/usePresence.js";
 import {
   useVisualViewportChange,
@@ -62,16 +64,39 @@ export interface KebabMenuItem {
   opensOverlay?: boolean;
 }
 
+// #3071 — opt-in touch variant. Under a coarse pointer a menu given `sheet`
+// opens its items as a bottom sheet (rows of 44px and more, never clipped by
+// a dialog or a sheet it sits in), the split PaneActionsMenu.tsx makes; under
+// a fine pointer it stays the anchored popover. Menus without it keep the
+// popover on every pointer.
+export interface KebabMenuSheet {
+  // The sheet's visible title (the menu's subject: a project's name).
+  title: string;
+  // The sheet's close button.
+  closeLabel: string;
+}
+
+const FOCUSABLE_TARGET =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+
 export function KebabMenu({
   items,
   title = "More…",
   trigger,
   menuPlacement = "bottom",
   menuAlign = "right",
+  triggerClassName = "kebab-trigger-btn",
+  menuLabel,
+  sheet,
 }: {
   items: KebabMenuItem[];
   title?: string;
   trigger?: ReactNode;
+  // Replaces the trigger's default chrome (a launcher-sized "⋯").
+  triggerClassName?: string;
+  // The menu's accessible name; defaults to `title`.
+  menuLabel?: string;
+  sheet?: KebabMenuSheet;
   // "top" grows the portaled menu upward from the trigger instead of
   // dropping it down — for a trigger pinned near the bottom of the
   // viewport (the Dock), a downward menu can run off-screen with no way to
@@ -82,7 +107,13 @@ export function KebabMenu({
   menuAlign?: "left" | "right";
 }) {
   const theme = useDashboardStore((s) => s.theme);
+  const coarse = useCoarsePointer();
+  const layout = useLayoutContext();
+  const asSheet = sheet !== undefined && coarse;
   const [open, setOpen] = useState(false);
+  const popoverOpen = open && !asSheet;
+  // The sheet's own focus-restore suppressor (BottomSheet owns that trap).
+  const sheetSuppressRestoreRef = useRef<(() => void) | null>(null);
   // DOMRect (not just {top,right}) to mirror CustomSelect's own triggerRect
   // — getMenuStyle below needs rect.top for the "top" placement's `bottom:`
   // calc, which the old {top,right} shape didn't carry.
@@ -112,21 +143,35 @@ export function KebabMenu({
   // `useFocusTrap` is the same shared primitive PaneActionsMenu uses for
   // its overflow menu — see that component for why Escape is scoped to the
   // menu's own `onKeyDown` rather than a window listener.
-  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: open,
+  const { onKeyDown: onTrapKeyDown, suppressRestore: suppressPopoverRestore } = useFocusTrap({
+    active: popoverOpen,
     containerRef: menuRef,
   });
+  const suppressRestore = () => {
+    if (asSheet) sheetSuppressRestoreRef.current?.();
+    else suppressPopoverRestore();
+  };
   // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
-  const { present, state: presence } = usePresence(open, menuRef);
+  const { present, state: presence } = usePresence(popoverOpen, menuRef);
+
+  const close = () => {
+    clearArmTimer();
+    setOpen(false);
+    setArmedKey(null);
+  };
 
   const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      setOpen(false);
-      setArmedKey(null);
-      clearArmTimer();
+      close();
       return;
     }
+    if (onMenuArrowKeys(e)) return;
+    onTrapKeyDown(e);
+  };
+  // Arrows only — in the sheet, BottomSheet owns Escape and the Tab trap.
+  // Returns whether it handled the key.
+  const onMenuArrowKeys = (e: ReactKeyboardEvent<HTMLDivElement>): boolean => {
     // APG menu pattern — ArrowUp/ArrowDown (and Home/End) move focus among
     // the `role="menuitem"` children. The shared hook's Tab-trap alone
     // doesn't provide that.
@@ -134,7 +179,7 @@ export function KebabMenu({
       const items = menuRef.current
         ? Array.from(menuRef.current.querySelectorAll<HTMLElement>('[role="menuitem"]'))
         : [];
-      if (items.length === 0) return;
+      if (items.length === 0) return false;
       e.preventDefault();
       const currentIndex = items.indexOf(document.activeElement as HTMLElement);
       const nextIndex =
@@ -150,9 +195,9 @@ export function KebabMenu({
                 ? items.length - 1
                 : (currentIndex - 1 + items.length) % items.length;
       items[nextIndex]?.focus();
-      return;
+      return true;
     }
-    onTrapKeyDown(e);
+    return false;
   };
 
   const clearArmTimer = () => {
@@ -170,24 +215,29 @@ export function KebabMenu({
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!popoverOpen) return;
     const onOutsideClick = (e: MouseEvent) => {
       const target = e.target as Node;
       if (btnRef.current?.contains(target)) return;
       if (menuRef.current?.contains(target)) return;
+      // #3071 — a press on nothing focusable would move focus to <body> as
+      // its default action, after the trap has put it back on the trigger.
+      // Keep it on the trigger. A press on a control still focuses that
+      // control: that is where the user meant to go.
+      if (!(target instanceof Element && target.closest(FOCUSABLE_TARGET))) e.preventDefault();
       clearArmTimer();
       setOpen(false);
       setArmedKey(null);
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [open]);
+  }, [popoverOpen]);
 
   // Issue #1399 — re-read the trigger's rect when the iOS visual viewport
   // pans/resizes while open: `.app` (and this trigger with it) moves with the
   // visual viewport since #1398, and getMenuStyle below derives everything
   // from `triggerRect`, so refreshing it is enough to keep the menu attached.
-  useVisualViewportChange(open, () => {
+  useVisualViewportChange(popoverOpen, () => {
     if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
   });
 
@@ -196,10 +246,10 @@ export function KebabMenu({
   // capped bounding rect would mistake a tiny scroll box for a menu that fits.
   // A layout effect corrects the first placement before the browser paints.
   useLayoutEffect(() => {
-    if (open && menuPlacement === "auto" && menuRef.current) {
+    if (popoverOpen && menuPlacement === "auto" && menuRef.current) {
       setMenuHeight(menuRef.current.scrollHeight);
     }
-  }, [open, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
+  }, [popoverOpen, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
 
   const handleItemClick = (item: KebabMenuItem) => {
     if (item.disabled) return;
@@ -283,7 +333,39 @@ export function KebabMenu({
     }
     return style;
   };
-  const menuStyle = getMenuStyle();
+  const menuStyle = asSheet ? null : getMenuStyle();
+  const menuItems = (
+    <>
+      {items.map((item) => (
+        <button
+          key={item.key}
+          className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
+            armedKey === item.key ? " armed" : ""
+          }`}
+          role="menuitem"
+          // Issue #1106 — `aria-disabled`, not the native `disabled`
+          // attribute: a disabled button doesn't receive pointer
+          // events, which is exactly what makes a `title` on it
+          // unreliable across engines. handleItemClick's own
+          // `if (item.disabled) return` above is what actually keeps
+          // this inert; aria-disabled is presentation + a11y only.
+          aria-disabled={item.disabled || undefined}
+          title={item.title}
+          onClick={() => handleItemClick(item)}
+        >
+          {item.icon}
+          <span style={{ flex: 1 }}>
+            {armedKey === item.key && item.armLabel ? item.armLabel : item.label}
+          </span>
+          {armedKey === item.key && (
+            <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
+              {armSecondsLeft}s
+            </span>
+          )}
+        </button>
+      ))}
+    </>
+  );
   // An upward menu has its `top` resolved to "auto" (see getMenuStyle).
   const opensUpward = menuStyle?.top === "auto";
 
@@ -291,13 +373,14 @@ export function KebabMenu({
     <>
       <button
         ref={btnRef}
-        className="kebab-trigger-btn"
+        className={triggerClassName}
         title={title}
         // The trigger is an icon-only button, so `title` alone would be its
         // only accessible name — and a tooltip is not a reliable one. The
         // label states what the menu does for this row.
         aria-label={title}
-        aria-haspopup="menu"
+        // Under a coarse pointer a sheet menu opens in a dialog.
+        aria-haspopup={asSheet ? "dialog" : "menu"}
         aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation();
@@ -340,40 +423,37 @@ export function KebabMenu({
             data-placement={opensUpward ? "top" : "bottom"}
             inert={presence === "leaving"}
             role="menu"
+            aria-label={menuLabel ?? title}
             onKeyDown={onMenuKeyDown}
             onClick={(e) => e.stopPropagation()}
           >
-            {items.map((item) => (
-              <button
-                key={item.key}
-                className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
-                  armedKey === item.key ? " armed" : ""
-                }`}
-                role="menuitem"
-                // Issue #1106 — `aria-disabled`, not the native `disabled`
-                // attribute: a disabled button doesn't receive pointer
-                // events, which is exactly what makes a `title` on it
-                // unreliable across engines. handleItemClick's own
-                // `if (item.disabled) return` above is what actually keeps
-                // this inert; aria-disabled is presentation + a11y only.
-                aria-disabled={item.disabled || undefined}
-                title={item.title}
-                onClick={() => handleItemClick(item)}
-              >
-                {item.icon}
-                <span style={{ flex: 1 }}>
-                  {armedKey === item.key && item.armLabel ? item.armLabel : item.label}
-                </span>
-                {armedKey === item.key && (
-                  <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
-                    {armSecondsLeft}s
-                  </span>
-                )}
-              </button>
-            ))}
+            {menuItems}
           </div>,
           document.body,
         )}
+      {asSheet && sheet && (
+        <BottomSheet
+          open={open}
+          onClose={close}
+          label={menuLabel ?? title}
+          closeLabel={sheet.closeLabel}
+          title={sheet.title}
+          backStack
+          sheetClassName={`pane-actions-sheet${layout.tier === "phone" ? "" : " mobile-session-sheet--tablet"}`}
+          suppressRestoreRef={sheetSuppressRestoreRef}
+        >
+          <div
+            ref={menuRef}
+            className="pane-actions-sheet-menu"
+            role="menu"
+            aria-label={menuLabel ?? title}
+            onKeyDown={(e) => void onMenuArrowKeys(e)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {menuItems}
+          </div>
+        </BottomSheet>
+      )}
     </>
   );
 }

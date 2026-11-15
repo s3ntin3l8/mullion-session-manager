@@ -72,6 +72,7 @@ function stubFetch(
     // Replaces the default 201 response, e.g. to hold the request open.
     createSession?: () => Promise<Response>;
     branches?: unknown;
+    branchesByProject?: Record<number, unknown>;
   } = {},
 ) {
   const empty = () => jsonResponse(200, []);
@@ -82,8 +83,11 @@ function stubFetch(
         opts.launchersByProject?.[Number(params.id)] ??
           opts.launchers ?? [CLAUDE, CODEX, BASH, DEV],
       ),
-    "GET /api/projects/:id/git-branches": () =>
-      opts.branches ? jsonResponse(200, opts.branches) : new Response(null, { status: 204 }),
+    "GET /api/projects/:id/git-branches": ({ params }) => {
+      const branches = opts.branchesByProject?.[Number(params.id)] ?? opts.branches;
+      return branches ? jsonResponse(200, branches) : new Response(null, { status: 204 });
+    },
+    "GET /api/projects/discover": empty,
     "GET /api/codex/models": empty,
     "GET /api/agy/models": empty,
     "GET /api/opencode/models": empty,
@@ -115,6 +119,7 @@ function holdActions(list: Launcher[], onCreateSession: (body: unknown) => void 
       new Promise<Response>((resolve) => {
         release.current = () => resolve(jsonResponse(200, list));
       }),
+    "GET /api/projects/:id/git-branches": () => new Response(null, { status: 204 }),
     "GET /api/codex/models": () => jsonResponse(200, []),
     "GET /api/sessions": () => jsonResponse(200, []),
     "POST /api/sessions": ({ init }) => {
@@ -186,7 +191,9 @@ describe("SessionLauncher — desktop dialog", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "New session" });
     expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeInTheDocument();
-    expect(within(dialog).getByText("Isolate in a new worktree")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("switch", { name: "Isolate in a new worktree" }),
+    ).toBeInTheDocument();
     const group = await within(dialog).findByRole("radiogroup", { name: "Agent" });
     const tiles = within(group).getAllByRole("radio");
     expect(tiles.map((t) => t.textContent)).toEqual(["claude", "codex"]);
@@ -286,7 +293,7 @@ describe("SessionLauncher — desktop dialog", () => {
     const { onLaunched } = renderHost();
     openLauncher();
 
-    await user.click(await screen.findByRole("checkbox", { name: /Isolate in a new worktree/ }));
+    await user.click(await screen.findByRole("switch", { name: /Isolate in a new worktree/ }));
     const base = await screen.findByDisplayValue(/main/);
     await user.selectOptions(base, "feature/x");
     await user.click(screen.getByRole("button", { name: "Launch claude" }));
@@ -383,7 +390,7 @@ describe("SessionLauncher — skip permissions", () => {
     const shape = () => {
       const row = screen.getByRole("group", { name: /^Options for/ });
       return [...row.children]
-        .filter((el) => el.classList.contains("session-launcher-option"))
+        .filter((el) => el.classList.contains("launcher-form-switch-row"))
         .map((el) => el.className + ":" + [...el.children].map((c) => c.className).join("|"))
         .slice(-1)[0];
     };
@@ -393,8 +400,10 @@ describe("SessionLauncher — skip permissions", () => {
     const toggle = await screen.findByRole("switch", { name: "Skip permission prompts" });
     expect(toggle).toHaveAccessibleDescription("Off in settings for opencode");
     expect(shape()).toBe(claude);
-    // The row is a two-column grid in CSS, not a wrapping flex row.
-    expect(launcherCss).toMatch(/\.session-launcher-options \{[^}]*display:\s*grid/);
+    // #3071 — a form row: a grid with a fixed label column, not a wrapping
+    // flex row, and the hint keeps to one line whatever it says.
+    expect(launcherCss).toMatch(/\.launcher-form-row \{[^}]*display:\s*grid/);
+    expect(launcherCss).toMatch(/\.launcher-form-hint \{[^}]*white-space:\s*nowrap/);
   });
 
   it("off in settings: the switch starts off, launches off, and the override turns it on", async () => {
@@ -813,6 +822,7 @@ describe("SessionLauncher — a fast Enter from the palette (#3054)", () => {
         new Promise<Response>((resolve) => {
           releaseActions = () => resolve(jsonResponse(200, [CLAUDE, CODEX, BASH]));
         }),
+      "GET /api/projects/:id/git-branches": () => new Response(null, { status: 204 }),
       "GET /api/codex/models": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
       "POST /api/sessions": ({ init }) => {
@@ -910,6 +920,7 @@ describe("SessionLauncher — a fast Enter from the palette (#3054)", () => {
     const result = mockFetch({
       "GET /api/projects/:id/actions": () => jsonResponse(200, [CLAUDE, CODEX]),
       "GET /api/codex/models": () => jsonResponse(200, ["gpt-6-astra", "gpt-6-luna"]),
+      "GET /api/projects/:id/git-branches": () => new Response(null, { status: 204 }),
       "GET /api/sessions": () => jsonResponse(200, []),
     });
     unexpectedCalls = result.unexpectedCalls;
@@ -926,5 +937,189 @@ describe("SessionLauncher — a fast Enter from the palette (#3054)", () => {
     expect(within(select).getByRole("option", { name: "gpt-6-luna" })).toBeInTheDocument();
     // The static fallback list is not shown once the live catalog answers.
     expect(within(select).queryByRole("option", { name: "gpt-6-sol" })).toBeNull();
+  });
+});
+
+// #3071 — the launcher is a fixed form: menus and switches never move the rows
+// below them, and Add/Edit project replace the body instead of expanding.
+describe("SessionLauncher — the fixed form (#3071)", () => {
+  const BRANCHES = {
+    branches: [
+      { name: "main", isCurrent: true },
+      { name: "feature/x", isCurrent: false },
+    ],
+    worktrees: [],
+    remoteBranches: [],
+    defaultBranch: "main",
+  };
+
+  it("the base-branch dropdown is always there, disabled until the switch is on", async () => {
+    stubFetch({ branches: BRANCHES });
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    const toggle = await screen.findByRole("switch", { name: "Isolate in a new worktree" });
+    const base = await screen.findByRole("combobox", { name: "Base branch" });
+    await waitFor(() => expect(base).toHaveValue("main"));
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(base).toBeDisabled();
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    // The same element: switching does not insert or remove anything.
+    expect(screen.getByRole("combobox", { name: "Base branch" })).toBe(base);
+    expect(base).toBeEnabled();
+  });
+
+  it("a project without branches shows the reason and no dropdown", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    expect(await screen.findByText("Not a git repository")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Base branch" })).toBeNull();
+    const toggle = screen.getByRole("switch", { name: "Isolate in a new worktree" });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("a base branch picked in one project does not follow the launch into another", async () => {
+    const onCreateSession = vi.fn();
+    stubFetch({
+      onCreateSession,
+      branchesByProject: {
+        [PROJECT.id]: BRANCHES,
+        [OTHER.id]: {
+          ...BRANCHES,
+          branches: [{ name: "trunk", isCurrent: true }],
+          defaultBranch: "trunk",
+        },
+      },
+    });
+    const user = userEvent.setup();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ projectId: PROJECT.id }));
+
+    const base = await screen.findByRole("combobox", { name: "Base branch" });
+    await waitFor(() => expect(base).toHaveValue("main"));
+    await user.click(screen.getByRole("switch", { name: "Isolate in a new worktree" }));
+    await user.selectOptions(base, "feature/x");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Project" }), "runway");
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Base branch" })).toHaveValue("trunk"),
+    );
+    await user.click(await screen.findByRole("button", { name: "Launch claude" }));
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree: { baseRef: "trunk" } }),
+    );
+  });
+
+  it("the project ⋯ opens an anchored menu under a fine pointer", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    const trigger = await screen.findByRole("button", { name: "Manage mullion" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    await user.click(trigger);
+    const menu = screen.getByRole("menu", { name: "mullion actions" });
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((el) => el.textContent),
+    ).toEqual(["Edit", "Git pull", "Delete project", "Add project…"]);
+    // Not a dialog of its own, and nothing was inserted into the launcher.
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
+    // The launcher is still open.
+    expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
+  });
+
+  it("the project ⋯ opens a sheet under a coarse pointer", async () => {
+    stubCoarsePointer();
+    stubFetch();
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    const trigger = await screen.findByRole("button", { name: "Manage mullion" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(trigger);
+    const sheet = await screen.findByRole("dialog", { name: "mullion actions" });
+    const menu = within(sheet).getByRole("menu", { name: "mullion actions" });
+    expect(within(menu).getByRole("menuitem", { name: "Add project…" })).toBeInTheDocument();
+    await user.click(within(sheet).getByRole("button", { name: "Close project actions" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "mullion actions" })).toBeNull(),
+    );
+  });
+
+  it("Add project… in the dropdown opens the form view, and Back returns", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    const project = await screen.findByRole("combobox", { name: "Project" });
+    await screen.findByRole("radio", { name: "codex" });
+    await user.click(screen.getByRole("radio", { name: "codex" }));
+    await user.selectOptions(project, "Add project…");
+    // The selection did not move to the sentinel entry.
+    const form = screen.getByRole("group", { name: "Add project" });
+    expect(screen.queryByRole("radiogroup", { name: "Agent" })).toBeNull();
+    await user.click(within(form).getByRole("button", { name: "Back" }));
+
+    const again = await screen.findByRole("combobox", { name: "Project" });
+    expect(again).toHaveValue(String(PROJECT.id));
+    await waitFor(() => expect(again).toHaveFocus());
+    // The choices made before survive the round trip.
+    expect(await screen.findByRole("radio", { name: "codex" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("an Edit view whose project is deleted elsewhere goes back to the launcher", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    await user.click(await screen.findByRole("button", { name: "Manage mullion" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect(screen.getByRole("group", { name: "Edit project" })).toBeInTheDocument();
+    act(() => useDashboardStore.setState({ projects: [OTHER] }));
+    expect(await screen.findByRole("combobox", { name: "Project" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Edit project" })).toBeNull();
+  });
+
+  it("with no project yet, the dropdown still offers Add project…", async () => {
+    resetStore({
+      projects: [],
+      sessions: [],
+      settings: DEFAULT_SETTINGS,
+      viewMode: "list",
+      activePanelId: null,
+    });
+    stubFetch();
+    const user = userEvent.setup();
+    renderHost();
+    openLauncher();
+
+    const project = await screen.findByRole("combobox", { name: "Project" });
+    expect(
+      within(project)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["No projects yet", "Add project…"]);
+    await user.selectOptions(project, "Add project…");
+    expect(screen.getByRole("group", { name: "Add project" })).toBeInTheDocument();
   });
 });

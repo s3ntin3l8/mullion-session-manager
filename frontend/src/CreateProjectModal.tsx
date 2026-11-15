@@ -186,6 +186,10 @@ interface CreateProjectModalProps {
   // an operator): they carry an "auto-detected" badge, and saving the dialog
   // acknowledges them.
   initialHostCwdsMeta?: HostCwdsMeta;
+  // #3071 — "embedded": the form fills the surface it is rendered in (the
+  // New session launcher's body) with a Back control, instead of opening a
+  // dialog over it. `onClose` is then "back".
+  surface?: "modal" | "embedded";
 }
 
 export function CreateProjectModal({
@@ -215,6 +219,7 @@ export function CreateProjectModal({
   projectHostId = LOCAL_HOST_ID,
   initialHostCwds = {},
   initialHostCwdsMeta,
+  surface = "modal",
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [pickerPath, setPickerPath] = useState<string | null>(null);
@@ -751,6 +756,7 @@ export function CreateProjectModal({
 
   return (
     <Modal
+      surface={surface}
       onClose={onClose}
       icon={<FolderIcon size={16} />}
       title={isEdit ? "Edit project" : "Add project"}
