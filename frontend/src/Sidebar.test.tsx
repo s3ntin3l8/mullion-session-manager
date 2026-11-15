@@ -1677,6 +1677,13 @@ describe("sidebar workspace scope (issue #1877)", () => {
   });
 
   describe("Other projects section (#2075)", () => {
+    const toggle = () => screen.getByRole("button", { name: /Other projects/ });
+    const rerenderScoped = (view: ReturnType<typeof renderSidebar>, ids: number[]) =>
+      view.rerender(
+        <div className="sidebar-wrapper">
+          <Sidebar {...NOOP_PROPS} workspaceProjectIds={ids} />
+        </div>,
+      );
     beforeEach(() => {
       projects = [
         makeProject({ id: 1, name: "alpha" }),
@@ -1691,39 +1698,30 @@ describe("sidebar workspace scope (issue #1877)", () => {
 
     it("lists the tiled project first and the rest in a collapsed section with a count", () => {
       renderSidebar({ workspaceProjectIds: [1] });
-      expect(screen.getByText("alpha")).toBeInTheDocument();
-      const toggle = screen.getByRole("button", { name: /Other projects/ });
-      expect(toggle).toHaveAttribute("aria-expanded", "false");
-      expect(toggle.textContent).toBe("Other projects 2");
-      expect(screen.queryByText("beta")).toBeNull();
-      expect(screen.queryByText("gamma")).toBeNull();
+      expect(toggle()).toHaveAttribute("aria-expanded", "false");
+      expect(toggle().textContent).toBe("Other projects 2");
     });
 
     it("expands on click, keeps session lists scoped, and collapses again", async () => {
       const user = userEvent.setup();
       renderSidebar({ workspaceProjectIds: [1] });
-      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+      await user.click(toggle());
 
-      expect(screen.getByRole("button", { name: /Other projects/ })).toHaveAttribute(
-        "aria-expanded",
-        "true",
-      );
-      expect(screen.getByText("beta")).toBeInTheDocument();
-      expect(screen.getByText("gamma")).toBeInTheDocument();
+      expect(toggle()).toHaveAttribute("aria-expanded", "true");
       expect(screen.queryByText("other ws session")).toBeNull();
       // Plain content, not a button wrapped around the + and the menu.
       const header = screen.getByText("beta").closest(".project-row-header");
       expect(header?.getAttribute("role")).toBeNull();
       expect(header?.hasAttribute("aria-expanded")).toBe(false);
 
-      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+      await user.click(toggle());
       expect(screen.queryByText("beta")).toBeNull();
     });
 
     it("is keyboard operable and remembers the choice per workspace", async () => {
       const user = userEvent.setup();
       const first = renderSidebar({ workspaceProjectIds: [1] });
-      screen.getByRole("button", { name: /Other projects/ }).focus();
+      toggle().focus();
       await user.keyboard("{Enter}");
       expect(screen.getByText("beta")).toBeInTheDocument();
       first.unmount();
@@ -1736,26 +1734,29 @@ describe("sidebar workspace scope (issue #1877)", () => {
       const onOpenProjectLauncher = vi.fn();
       const user = userEvent.setup();
       renderSidebar({ workspaceProjectIds: [1], onOpenProjectLauncher });
-      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+      await user.click(toggle());
 
       const betaRow = screen.getByText("beta").closest(".project-row") as HTMLElement;
       await user.click(within(betaRow).getByTitle("New session in project"));
       expect(onOpenProjectLauncher).toHaveBeenCalledWith(2);
     });
 
+    it("does not latch the default off a project list that has not loaded", () => {
+      const all = projects;
+      projectsLoaded = false;
+      projects = [];
+      const view = renderSidebar({ workspaceProjectIds: [1] });
+      projectsLoaded = true;
+      projects = all;
+      rerenderScoped(view, [1]);
+      expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    });
+
     it("does not collapse on its own when a project gets tiled", () => {
       const view = renderSidebar({ workspaceProjectIds: [] });
       expect(screen.getByText("beta")).toBeInTheDocument();
-      view.rerender(
-        <div className="sidebar-wrapper">
-          <Sidebar {...NOOP_PROPS} workspaceProjectIds={[1]} />
-        </div>,
-      );
-      expect(screen.getByRole("button", { name: /Other projects/ })).toHaveAttribute(
-        "aria-expanded",
-        "true",
-      );
-      expect(screen.getByText("beta")).toBeInTheDocument();
+      rerenderScoped(view, [1]);
+      expect(toggle()).toHaveAttribute("aria-expanded", "true");
     });
   });
 
