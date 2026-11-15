@@ -1,3 +1,6 @@
+// Very first: renames the process so `pkill -f "dist/server.js"` from another
+// project cannot match (and SIGTERM) Mullion. See src/process-title.ts.
+import "./process-title.js";
 // First on purpose: patches child_process before any module-scope
 // `promisify(execFile)` elsewhere in the graph captures the original.
 import "./services/windows-hide-install.js";
