@@ -109,7 +109,9 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     await user.clear(field);
     await user.type(field, "Alpha two{Enter}");
     expect(actions.renameWorkspace).toHaveBeenCalledWith(1, "Alpha two");
-    expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus();
+    await waitFor(() =>
+      expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus(),
+    );
     expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
 
     // Escape cancels a rename without closing the picker.
@@ -119,6 +121,15 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     expect(within(list).queryByRole("textbox", { name: "Workspace name" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
     expect(actions.renameWorkspace).toHaveBeenCalledTimes(1);
+
+    // Ending a rename by clicking elsewhere leaves focus where the click put
+    // it, rather than pulling it back to the row's "⋯".
+    await openMenu(user, "Manage Alpha");
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const search = within(list).getByRole("searchbox", { name: "Search workspaces" });
+    await user.click(search);
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    expect(search).toHaveFocus();
   });
 
   it("moves a workspace up, down and into a group, focus following the row", async () => {
@@ -182,6 +193,32 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     );
   });
 
+  it("moves focus to the search box when a move takes the row out of a search", async () => {
+    stubPxWidth(1000);
+    actions.reorderWorkspaces.mockImplementation(
+      async (order: Array<{ id: number; groupId: number | null; position: number }>) => {
+        useDashboardStore.setState({
+          workspaces: useDashboardStore.getState().workspaces.map((w) => {
+            const next = order.find((o) => o.id === w.id);
+            return next ? { ...w, groupId: next.groupId, position: next.position } : w;
+          }),
+        });
+      },
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(chip());
+    const list = screen.getByRole("dialog", { name: "Workspaces" });
+    // "Infra" matches Gamma through its group's name.
+    await user.type(within(list).getByRole("searchbox", { name: "Search workspaces" }), "infra");
+    await openMenu(user, "Manage Gamma");
+    await user.click(screen.getByRole("menuitem", { name: "Move to No group" }));
+    await waitFor(() =>
+      expect(within(list).getByRole("searchbox", { name: "Search workspaces" })).toHaveFocus(),
+    );
+    expect(within(list).queryByRole("button", { name: "Manage Gamma" })).toBeNull();
+  });
+
   it("deletes a workspace after a second confirming click", async () => {
     stubPxWidth(1000);
     const user = userEvent.setup();
@@ -243,7 +280,9 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     await user.clear(field);
     await user.type(field, "Ops{Enter}");
     expect(actions.updateGroup).toHaveBeenCalledWith(7, { name: "Ops" });
-    expect(within(list).getByRole("button", { name: "Manage group Infra" })).toHaveFocus();
+    await waitFor(() =>
+      expect(within(list).getByRole("button", { name: "Manage group Infra" })).toHaveFocus(),
+    );
     await openMenu(user, "Manage group Infra");
     await user.click(screen.getByRole("menuitem", { name: "Delete group" }));
     await user.click(screen.getByRole("menuitem", { name: /Click again to delete/ }));

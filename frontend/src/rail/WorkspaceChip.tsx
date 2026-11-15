@@ -286,23 +286,35 @@ export function WorkspaceListContent({
   // Where focus goes once the list has re-rendered: a row's "⋯" after a
   // rename, and after a move, which can re-mount the row under another group
   // (the menu's own focus return would find its trigger gone); after a
-  // delete, which took the row's "⋯" with it, the search box, or under touch
-  // (where focusing the field would raise the keyboard) "New workspace". A
-  // fresh object per request; the effect handles each one once.
+  // delete, which took the row's "⋯" with it, or when the row is not shown
+  // (a search filters it out), the search box, or under touch (where
+  // focusing the field would raise the keyboard) "New workspace". Only when
+  // focus has fallen, a frame later: a rename ended by clicking elsewhere
+  // leaves focus where that click put it.
   const [focusRequest, setFocusRequest] = useState<{ key: string } | null>(null);
-  const handledFocusRef = useRef<{ key: string } | null>(null);
   useEffect(() => {
-    if (focusRequest === null || handledFocusRef.current === focusRequest) return;
-    const list = listRef.current;
-    const target =
-      focusRequest.key === DELETED
-        ? list?.querySelector<HTMLElement>(touch ? ".rail-ws-new-btn" : ".rail-ws-search")
-        : list?.querySelector<HTMLElement>(`[data-manage="${focusRequest.key}"] .rail-ws-more`);
-    // Not rendered yet: the next render brings it.
-    if (!target) return;
-    handledFocusRef.current = focusRequest;
-    target.focus();
-  }, [focusRequest, touch, tree.workspaces, tree.sortedGroups]);
+    if (focusRequest === null) return;
+    const frame = requestAnimationFrame(() => {
+      // Focus still on the item just chosen, in the menu playing its exit
+      // (inert), counts as fallen: it drops to <body> once the menu goes.
+      const active = document.activeElement;
+      const fallen =
+        active === null ||
+        active === document.body ||
+        !active.isConnected ||
+        active.closest('[role="menu"], [inert]') !== null;
+      if (!fallen) return;
+      const list = listRef.current;
+      const row =
+        focusRequest.key === DELETED
+          ? null
+          : list?.querySelector<HTMLElement>(`[data-manage="${focusRequest.key}"] .rail-ws-more`);
+      const target =
+        row ?? list?.querySelector<HTMLElement>(touch ? ".rail-ws-new-btn" : ".rail-ws-search");
+      target?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest, touch]);
   const focusAfter = (key: string) => setFocusRequest({ key });
 
   const deleteArmLabel = touch ? "Tap again to delete" : "Click again to delete";
