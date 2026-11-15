@@ -1383,7 +1383,7 @@ project. No match is never a fallback. When **nothing could ever match** (no hos
 that platform, or none with a `hostCwds` path for the project) the task goes
 `claimed → failed` (`via: placement-refusal`, synced to the issue) with the reason in
 `failureReason`, and its claim-time `branchName`/`worktreePath` are cleared,
-since nothing was cut (Retry then refuses with `no-worktree`; the recovery is
+since nothing was cut (Retry has nothing to resume, so it resets the task
 `failed → ready`). The resolved requirement is stored as JSON on
 `tasks.placementRequirement`, beside `agentCommand`, so a past placement can be
 explained; a re-claim re-parses the body like every other directive. The

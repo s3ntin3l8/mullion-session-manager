@@ -85,8 +85,8 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   same issue.
 
   A task that failed this way was never claimed, so it has no preserved
-  branch — Retry (`failed → backlog`/`ready`, below) can't resume it
-  (`no-worktree`), which used to leave it permanently orphaned: not local
+  branch — Retry has nothing to resume, so it resets the task to `ready`
+  instead. Before that, such a task was left permanently orphaned: not local
   (so the delete route refused it), and past `backlog`/`ready` (so did the
   delete route's other guard). `DELETE /api/tasks/:id` (#729) carves out
   exactly this case: a `failed` GitHub-linked task with **no preserved
@@ -951,7 +951,8 @@ The reason is not hidden:
   task is failed (`via: dispatch-give-up`) with
   `gave up after 6h of failed dispatch attempts — last: <reason>`; the usual
   recovery (`failed → ready`) applies. Retry has nothing to resume at that
-  point, since no worktree was ever cut.
+  point, since no worktree was ever cut, so it does exactly that: it resets
+  the task to `ready`.
 
 ## Where a task runs: `Platform:` and `Host:`
 
@@ -1366,11 +1367,11 @@ extensive design comments.
   that does not clear it, parks the task as "worker returned without a change"
   with one PR comment. See
   [`tasks-internals.md`](tasks-internals.md#auto-approve).
-- **Retry says `no-worktree` and refuses.** The task failed before it ever
-  had a branch/worktree (e.g. it failed while still `backlog`/`ready`, or
-  it's a `#729`-deleted-and-recreated GitHub-linked task) — there's nothing
-  for Retry to resume. See "Task model" above for the relabel-resurrection
-  path that handles this case instead.
+- **Retry put the task in Ready instead of running it.** The task failed
+  before it ever had a branch/worktree (e.g. no host matched its `Platform:`
+  line), so there is nothing to resume: Retry resets it to `ready` and a
+  normal claim starts it fresh. If the project's auto-claim is paused, claim
+  it by hand. The issue keeps its `failed` label until it is claimed.
 - **A task's GitHub label/comment never appeared.** Check
   `tasks.githubSyncError` in the task detail — GitHub sync is best-effort
   and does not retry a missed write; see

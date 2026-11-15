@@ -143,7 +143,8 @@ export const tasksApi = {
 
   // #483 — failed -> claimed: queues a resume on the task's preserved
   // mullion/task-<id> branch (no work lost); it starts when a concurrency
-  // slot is free. Same response shape as claimTask.
+  // slot is free. A task with no branch (it never got a worktree) goes
+  // failed -> ready instead, for a normal claim. Same response shape as claimTask.
   retryTask: (id: number, opts?: { agent?: string | null; reviewAgent?: string | null }) =>
     request<Task>(`/api/tasks/${id}/retry`, {
       method: "POST",

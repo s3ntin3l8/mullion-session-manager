@@ -1182,7 +1182,9 @@ export async function tasksRoute(app: FastifyInstance) {
       }
 
       // Queued, not started: the dispatch sweep resumes the branch once a
-      // concurrency slot is free (same 202 as claim).
+      // concurrency slot is free (same 202 as claim). A branchless task is
+      // reset to ready instead and waits for a claim (auto-claim, unless the
+      // project's auto-claim is paused — then claim it by hand).
       reply.code(202);
       return selectTaskRow(taskId);
     },

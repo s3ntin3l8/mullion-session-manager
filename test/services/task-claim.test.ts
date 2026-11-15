@@ -106,6 +106,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { enqueueTask, dispatchClaimedTask } = await import("../../src/services/task-claim.js");
 const { retryTask } = await import("../helpers/retry-task.js");
+const { enqueueRetry } = await import("../../src/services/task-retry.js");
 const { tasks, projects, hosts } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
@@ -1381,7 +1382,7 @@ describe("claimTask", () => {
         "failed",
       );
       // ...and Retry puts it back to ready, since there is nothing to resume.
-      await (await import("../../src/services/task-retry.js")).enqueueRetry(app, task.id);
+      expect(await enqueueRetry(app, task.id)).toMatchObject({ ok: true });
       expect(getTask(app, task.id).status).toBe("ready");
 
       await app.close();
@@ -2206,7 +2207,6 @@ describe("retryTask (#483)", () => {
       .returning()
       .all();
 
-    const { enqueueRetry } = await import("../../src/services/task-retry.js");
     const outcome = await enqueueRetry(app, task.id);
 
     expect(outcome).toMatchObject({ ok: true });
