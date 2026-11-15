@@ -149,9 +149,10 @@ async function validateTarget(
     return fail(400, "pass either branch or worktreePath, not both");
   }
   if (target.worktreePath === undefined) return null;
-  // The dashboard offers only the project's checkout and its git worktrees;
-  // nothing else may become a dock session's cwd (a session has no parent
-  // here, so createSessionRecord's child-cwd containment does not apply).
+  // The dock session's cwd must be the project checkout, a directory inside it
+  // (a monorepo package), or one of its git worktrees; nothing else (a session
+  // has no parent here, so createSessionRecord's child-cwd containment does
+  // not apply).
   const project = getProjectRow(app, projectId)!;
   const resolved = path.resolve(target.worktreePath);
   const root = path.resolve(project.cwd);
@@ -161,7 +162,10 @@ async function validateTarget(
     (await isSiblingWorktreeCwd({ cwd: project.cwd, hostId: project.hostId }, resolved));
   return ok
     ? null
-    : fail(400, "worktreePath must be the project checkout or one of its git worktrees");
+    : fail(
+        400,
+        "worktreePath must be the project checkout, a directory inside it, or one of its git worktrees",
+      );
 }
 
 export async function startDockControl(
@@ -204,7 +208,7 @@ export async function startDockControl(
     ...(target.branch !== undefined
       ? { worktree: { branch: target.branch }, worktreeRefresh }
       : target.worktreePath !== undefined
-        ? { cwd: target.worktreePath }
+        ? { cwd: path.resolve(target.worktreePath) }
         : c.cwd
           ? { cwd: c.cwd }
           : {}),
@@ -232,7 +236,8 @@ export async function stopDockControl(
   return { ok: true, value: { sessionId: running.id } };
 }
 
-/** Stops the control if it is running, then starts it on `target`. */
+/** Stops the control if it is running, then starts it on `target` (a stopped
+ * control is simply started there). */
 export async function switchDockControl(
   app: FastifyInstance,
   projectId: number,

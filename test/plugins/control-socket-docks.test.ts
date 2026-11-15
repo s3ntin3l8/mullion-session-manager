@@ -281,11 +281,9 @@ describe("docks.* ops (#2494)", () => {
       await dispatch(app, conn, { id: 2, op: "docks.logs", body: { dockControlId: "logs" } });
       await dispatch(app, conn, { id: 3, op: "docks.logs", body: {} });
       expect(frames.map((f) => f.status)).toEqual([404, 400]);
-      // The running one is resolved (the scrollback route itself answers for a
-      // session with no live PTY here; what matters is it is not refused).
+      // The running one resolves to its session's scrollback (empty: no live PTY here).
       await dispatch(app, conn, { id: 4, op: "docks.logs", body: { dockControlId: "dev-server" } });
-      expect(frames[2].status).not.toBe(403);
-      expect(frames[2].error).not.toBe("Dock control is not running");
+      expect(frames[2]).toMatchObject({ ok: true, status: 200, result: { text: "" } });
     });
 
     it("docks.logs and docks.wait_for_output refuse another project and a stopped control", async () => {
@@ -341,6 +339,31 @@ describe("docks.* ops (#2494)", () => {
       expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
         "active",
       );
+    });
+
+    it("docks.switch on a stopped control starts it on the target", async () => {
+      const { app, conn, frames } = await running("logs");
+      await dispatch(app, conn, { id: 11, op: "docks.stop", body: { dockControlId: "logs" } });
+      launch.calls.length = 0;
+      await dispatch(app, conn, {
+        id: 12,
+        op: "docks.switch",
+        body: { dockControlId: "logs", branch: "feat/z" },
+      });
+      expect(frames[1]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls).toHaveLength(1);
+      expect(launch.calls[0]).toMatchObject({ worktree: { branch: "feat/z" } });
+    });
+
+    it("docks.switch launches the resolved path it validated, not the raw input", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 13,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: path.join(cwdA, "web", "..", "web") },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(cwdA, "web") });
     });
 
     it("docks.switch accepts a path inside the project checkout", async () => {

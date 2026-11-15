@@ -115,8 +115,9 @@ export function createDockTools({ normalizeWaitArgs }) {
     name: "switch_dock_branch",
     description:
       "Restart one of your project's dock controls on another branch (`branch`, run in a preview " +
-      "worktree) or in an existing worktree (`worktreePath`: the project checkout or one of its git " +
-      "worktrees). Stops the running control first; a bad target is refused before anything stops. " +
+      "worktree) or in an existing worktree (`worktreePath`: the project checkout, a directory " +
+      "inside it, or one of its git worktrees). Stops the running control first (a control that is " +
+      "not running is just started there); a bad target is refused before anything stops. " +
       "list_dock_controls shows where it runs now.",
     inputSchema: {
       type: "object",

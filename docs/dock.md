@@ -87,7 +87,7 @@ how `list` and `stop` find it. Previews, devices, other projects' docks and
 Docker-discovered controls stay full-scope. The same session can read a running
 control's output (`docks.logs`, `docks.wait_for_output`) and restart it on
 another branch or worktree (`docks.switch`; a `worktreePath` must be the
-project checkout or one of its git worktrees).
+project checkout, a directory inside it, or one of its git worktrees; a relative path is resolved first, and that resolved path is what runs). Switching a control that is not running simply starts it there.
 
 ### Port conflicts
 
