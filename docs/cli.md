@@ -251,6 +251,9 @@ servers, log tails — distinct from one-shot launchers).
 - `dock logs [<projectId>] <dockControlId>` — the running control's screen as text.
 - `dock switch [<projectId>] <dockControlId> <branch>` / `--worktree <path>` (the project checkout, a directory inside it, or a git worktree; a relative path is anchored at the checkout) —
   restart the control on a branch (preview worktree) or an existing worktree.
+- `dock config get [<projectId>]` — the raw `.crs/dock.json` (`{controls, invalid, reason}`).
+- `dock config set [<projectId>] --upsert '<json>' | --remove <id> | --controls '<json>'` —
+  add/replace one control, drop one, or replace the list; validated like Settings → Dock.
 - `dock stop <dockControlId> --control` (your own project) /
   `dock stop <projectId> <dockControlId>` / `dock stop <sessionId>` (full scope
   only: kills any session by id).

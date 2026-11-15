@@ -89,6 +89,11 @@ control's output (`docks.logs`, `docks.wait_for_output`) and restart it on
 another branch or worktree (`docks.switch`; a `worktreePath` must be the
 project checkout, a directory inside it, or one of its git worktrees; a relative path is anchored at the project checkout, and the resolved path is what runs). Switching a control that is not running simply starts it there.
 
+An agent can also edit the dock config itself (`dock config get|set`, MCP
+`get_dock_config` / `set_dock_config`), which rewrites the project's `.crs/dock.json` (the file the dock reads, on
+the session's host; not a separate worktree's copy) under the same validation
+as the Settings editor.
+
 ### Port conflicts
 
 Mullion never picks a dev-server port, so two sessions for one control (two

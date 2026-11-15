@@ -206,6 +206,8 @@ describe("mcp/server.mjs (issue #271)", () => {
       "get_message_status",
       "kill_child_session",
       "stop_dock_session",
+      "get_dock_config",
+      "set_dock_config",
       "get_scrollback",
       "get_session_transcript",
       "push_task_branch",

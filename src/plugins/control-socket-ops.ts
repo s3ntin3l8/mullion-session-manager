@@ -29,6 +29,7 @@ import {
 } from "../services/control-session-authority.js";
 import type { OpContext, OpSpec, ReplyPayload, Route, Scope } from "./control-socket-core.js";
 import { findRunningDockSession } from "../services/dock-control.js";
+import { dockConfigOps } from "./control-socket-dock-config.js";
 import {
   STREAM_UNAVAILABLE,
   bad,
@@ -270,6 +271,7 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
   });
 
 export const OPS: Record<string, OpSpec> = {
+  ...dockConfigOps,
   ping: {
     scopes: ["full", "session"],
     handler: ({ reply }) => {

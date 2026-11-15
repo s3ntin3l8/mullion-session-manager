@@ -166,4 +166,38 @@ describe("mullion dock", () => {
     });
     expect(await runCommand(["dock", "switch", "web"], { client, io })).toBe(2);
   });
+
+  it("dock config get/set use projects.get_dock_config / set_dock_config", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    await runCommand(["dock", "config", "get"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("projects.get_dock_config", {});
+    await runCommand(["dock", "config", "set", "2", "--remove", "dev"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("projects.set_dock_config", {
+      projectId: "2",
+      remove: "dev",
+    });
+    await runCommand(["dock", "config", "set", "--upsert", '{"id":"a","command":"a"}'], {
+      client,
+      io,
+    });
+    expect(client.request).toHaveBeenCalledWith("projects.set_dock_config", {
+      upsert: { id: "a", command: "a" },
+    });
+    expect(await runCommand(["dock", "config", "set", "--upsert", "{nope"], { client, io })).toBe(
+      2,
+    );
+    expect(await runCommand(["dock", "config", "set"], { client, io })).toBe(2);
+    // Anything beyond one projectId and one flag is refused, never silently dropped.
+    for (const bad of [
+      ["config", "set", "2", "--remove", "dev", "--upsert", "{}"],
+      ["config", "set", "--remove", "a", "--remove", "b"],
+      ["config", "get", "2", "junk"],
+      ["config", "get", "--remove", "dev"],
+      ["config", "set", "--remove"],
+      ["config", "set", "--remove", "--upsert", "{}"],
+    ]) {
+      expect(await runCommand(["dock", ...bad], { client, io })).toBe(2);
+    }
+  });
 });
