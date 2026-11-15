@@ -290,11 +290,12 @@ export function Sidebar({
   const emptyWorkspace = workspaceProjectIds != null && treeProjects.length === 0;
   const [, setOtherVersion] = useState(0);
   const otherKey = activeWorkspaceId ?? "none";
-  // An untouched section is open only in a workspace with nothing tiled, so
-  // the tree is never blank; a manual choice wins and sticks per workspace.
-  // The default is latched the first time the scope is known, so tiling a
-  // project later never collapses the section on its own.
-  if (workspaceProjectIds != null && !otherProjectsExpandedState.has(otherKey)) {
+  // A section nobody has touched starts open when the workspace has nothing
+  // tiled, so the tree is never blank; a manual choice wins and sticks per
+  // workspace. The default is latched once the scope AND the project list
+  // are known (not off a still-loading empty list), so tiling a project
+  // later never collapses the section on its own.
+  if (workspaceProjectIds != null && projectsLoaded && !otherProjectsExpandedState.has(otherKey)) {
     otherProjectsExpandedState.set(otherKey, emptyWorkspace);
   }
   const otherExpanded = otherProjectsExpandedState.get(otherKey) ?? false;
