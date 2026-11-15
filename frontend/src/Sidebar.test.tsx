@@ -190,7 +190,6 @@ const NOOP_PROPS = {
   onOpenTasks: vi.fn(),
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
-  onOpenGlobalLauncher: vi.fn(),
   showSourceControl: false,
 };
 
@@ -1744,6 +1743,38 @@ describe("sidebar workspace scope (issue #1877)", () => {
       const betaRow = screen.getByText("beta").closest(".project-row") as HTMLElement;
       await user.click(within(betaRow).getByTitle("New session in project"));
       expect(onOpenProjectLauncher).toHaveBeenCalledWith(2);
+    });
+
+    it("renders other-project rows as plain content, with no button nested around the + and menu", async () => {
+      const user = userEvent.setup();
+      renderSidebar({ workspaceProjectIds: [1] });
+      await user.click(screen.getByRole("button", { name: /Other projects/ }));
+      const betaRow = screen.getByText("beta").closest(".project-row-header") as HTMLElement;
+      expect(betaRow.getAttribute("role")).toBeNull();
+      expect(betaRow.getAttribute("tabindex")).toBeNull();
+      expect(betaRow.hasAttribute("aria-expanded")).toBe(false);
+    });
+
+    it("names the disclosure cleanly: no glyph, a separated count", () => {
+      renderSidebar({ workspaceProjectIds: [1] });
+      const toggle = screen.getByRole("button", { name: /Other projects/ });
+      expect(toggle.textContent).not.toContain("▾");
+      expect(toggle.textContent).toBe("Other projects 2");
+    });
+
+    it("does not collapse on its own when a project gets tiled", () => {
+      const view = renderSidebar({ workspaceProjectIds: [] });
+      expect(screen.getByText("beta")).toBeInTheDocument();
+      view.rerender(
+        <div className="sidebar-wrapper">
+          <Sidebar {...NOOP_PROPS} workspaceProjectIds={[1]} />
+        </div>,
+      );
+      expect(screen.getByRole("button", { name: /Other projects/ })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByText("beta")).toBeInTheDocument();
     });
 
     it("shows no section when unscoped (phone)", () => {

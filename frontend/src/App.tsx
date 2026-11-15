@@ -1176,7 +1176,6 @@ export function App() {
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
       onOpenProjectLauncher={openProjectLauncher}
-      onOpenGlobalLauncher={openNewSessionLauncher}
       onOpenSettingsProjects={() => openSettings("projects")}
       onOpenTasks={onOpenTasks}
       onOpenGit={onOpenGit}

@@ -19,6 +19,7 @@ import { TextInput } from "./ui/primitives.js";
 import { EmptyState, EmptyStateActions, EmptyStateBody, EmptyStateTitle } from "./ui/EmptyState.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import {
+  ChevronDownIcon,
   CloseIcon,
   LayersIcon,
   PlusIcon,
@@ -113,11 +114,6 @@ export interface SidebarProps {
   // these still goes through onOpenSession, which focuses the existing pane
   // rather than opening a second one — see usePanelOpener.
   openSessionIds?: number[] | null;
-  // No longer read here: the "Nothing tiled in this workspace" empty state
-  // it served is gone (#2075) — an empty workspace lists every project
-  // under "Other projects" instead, each with its own "+". Kept on the
-  // props so existing callers still type-check.
-  onOpenGlobalLauncher?: () => void;
 }
 
 export function Sidebar({
@@ -296,12 +292,16 @@ export function Sidebar({
   const otherKey = activeWorkspaceId ?? "none";
   // An untouched section is open only in a workspace with nothing tiled, so
   // the tree is never blank; a manual choice wins and sticks per workspace.
-  const otherExpanded = otherProjectsExpandedState.get(otherKey) ?? emptyWorkspace;
+  // The default is latched the first time the scope is known, so tiling a
+  // project later never collapses the section on its own.
+  if (workspaceProjectIds != null && !otherProjectsExpandedState.has(otherKey)) {
+    otherProjectsExpandedState.set(otherKey, emptyWorkspace);
+  }
+  const otherExpanded = otherProjectsExpandedState.get(otherKey) ?? false;
   const toggleOtherProjects = useCallback(() => {
-    const current = otherProjectsExpandedState.get(otherKey) ?? emptyWorkspace;
-    otherProjectsExpandedState.set(otherKey, !current);
+    otherProjectsExpandedState.set(otherKey, !(otherProjectsExpandedState.get(otherKey) ?? false));
     setOtherVersion((v) => v + 1);
-  }, [otherKey, emptyWorkspace]);
+  }, [otherKey]);
   const showOtherProjects = otherProjects.length > 0 && !filterActive;
   const openSessionIdSet = useMemo(
     () => (openSessionIds == null ? null : new Set(openSessionIds)),
@@ -976,9 +976,15 @@ function OtherProjectsHeader({
       aria-expanded={expanded}
       onClick={onToggle}
     >
-      <span className={expanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}>▾</span>
-      <span className="sidebar-section-title">Other projects</span>
-      <span className="sidebar-section-count">{count}</span>
+      <ChevronDownIcon
+        size={12}
+        className={expanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+        aria-hidden="true"
+      />
+      <span className="sidebar-section-title">Other projects</span>{" "}
+      <span className="sidebar-section-count">
+        <span className="sidebar-section-count-value">{count}</span>
+      </span>
     </button>
   );
 }
@@ -1005,7 +1011,6 @@ function OtherProjectRow({
         sessions={EMPTY_SESSIONS}
         hosts={hosts}
         collapsed
-        onToggleCollapsed={noop}
         onOpenLauncher={onOpenLauncher}
         onSessionEnded={onSessionEnded}
         onOpenProjectSetup={onOpenProjectSetup}
@@ -1013,8 +1018,6 @@ function OtherProjectRow({
     </div>
   );
 }
-
-function noop() {}
 
 // P9 — the identical onEnd / onPromoted pair used by ProjectSection and
 // VirtualizedProjectTree. Returns the promise (not `void`-discarded) so
