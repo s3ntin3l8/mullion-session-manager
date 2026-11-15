@@ -296,6 +296,10 @@
   overflow: hidden;
   padding: 6px;
 }
+/* A row's "⋯" menu opens beside the row, over the list (#3073). */
+.rail-ws-menu {
+  z-index: 49;
+}
 /* A flex child of the popover and of the sheet (both max-height columns), so
    only .rail-ws-scroll scrolls and "New workspace" stays reachable with a
    long list. */
@@ -428,6 +432,7 @@
 /* Rename in place (#3073): the row keeps its icon, the field takes the
    name's place; a group header's field takes its name's. */
 .rail-ws-row.rail-ws-renaming {
+  padding-block: 0;
   cursor: default;
 }
 .rail-ws-row.rail-ws-renaming:hover {

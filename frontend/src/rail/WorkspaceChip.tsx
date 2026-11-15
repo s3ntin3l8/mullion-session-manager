@@ -429,7 +429,9 @@ export function WorkspaceListContent({
       menuLabel={`${subject} actions`}
       triggerClassName="rail-ws-more"
       trigger={<OverflowIcon size={15} aria-hidden="true" />}
-      menuPlacement="auto"
+      // Beside the row, over the picker, the list left visible (#3073).
+      menuPlacement="side"
+      menuClassName="rail-ws-menu"
       sheet={{ title: subject, closeLabel: `Close ${subject} actions` }}
     />
   );

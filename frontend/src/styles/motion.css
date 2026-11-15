@@ -205,6 +205,10 @@
   transform-origin: bottom center;
   --motion-pop-y: 4px;
 }
+/* One that opens beside its trigger (KebabMenu's "side") grows from there. */
+.pane-tab-overflow-menu[data-placement="side"] {
+  transform-origin: left top;
+}
 .pane-tab-overflow-menu[data-presence="leaving"],
 .custom-select-menu[data-presence="leaving"] {
   animation: motionPopOut var(--motion-fade) var(--motion-ease) forwards;
