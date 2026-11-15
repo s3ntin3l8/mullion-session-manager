@@ -188,6 +188,11 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     expect(screen.queryByRole("dialog", { name: "Workspaces" })).toBeNull();
     const modal = await screen.findByRole("dialog", { name: /group/i });
     expect(modal.closest(".cmux-root")).not.toBeNull();
+    // The list that held "New group" is gone: closing the dialog returns
+    // focus to the chip.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /group/i })).toBeNull());
+    expect(chip()).toHaveFocus();
   });
 
   it("offers the same management in the sheet under a coarse pointer", async () => {

@@ -29,7 +29,10 @@ export function deleteWorkspace(id: number): void {
 }
 
 export function renameGroup(id: number, name: string): void {
-  void useDashboardStore.getState().updateGroup(id, { name });
+  void useDashboardStore
+    .getState()
+    .updateGroup(id, { name })
+    .catch(report("Could not rename the group."));
 }
 
 export function deleteGroup(id: number): void {
@@ -46,5 +49,11 @@ export function moveWorkspace(
   index: number,
 ): void {
   const items = workspaces.map((w) => ({ id: w.id, groupId: w.groupId, position: w.position }));
-  void useDashboardStore.getState().reorderWorkspaces(computeReorder(items, id, index, groupId));
+  const store = useDashboardStore.getState();
+  void store.reorderWorkspaces(computeReorder(items, id, index, groupId)).catch((err: unknown) => {
+    report("Could not move the workspace.")(err);
+    // reorderWorkspaces applies the new order before the request: reload the
+    // server's order so a refused move does not stay on screen.
+    void store.refreshWorkspaces().catch(() => {});
+  });
 }

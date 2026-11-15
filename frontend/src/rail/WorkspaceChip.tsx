@@ -212,7 +212,13 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
       {newGroupOpen && (
         <ThemedPortal>
           <CreateGroupModal
-            onClose={() => setNewGroupOpen(false)}
+            onClose={() => {
+              setNewGroupOpen(false);
+              // "New group" closed the list on its way here, so the dialog's
+              // own focus return has nothing to go back to: the chip it was
+              // opened from takes focus instead.
+              btnRef.current?.focus();
+            }}
             onCreate={(groupName, color) =>
               useDashboardStore.getState().createGroup(groupName, color)
             }
