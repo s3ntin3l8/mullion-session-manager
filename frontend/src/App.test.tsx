@@ -592,6 +592,7 @@ describe("App explicit split on the tablet", () => {
   beforeEach(() => {
     stubWidth("tablet");
     splitHarness.announced = false;
+    foldHarness.launcher = null;
     splitHarness.api = makeApi();
     splitHarness.launch = {
       id: 9,
@@ -637,12 +638,20 @@ describe("App explicit split on the tablet", () => {
     vi.clearAllMocks();
   });
 
+  // App learns the dockview api in a microtask after mount; a split before
+  // that would take the normal open path, not the split placement.
+  async function renderWithApi() {
+    render(<App />);
+    await waitFor(() => expect(splitHarness.announced).toBe(true));
+    await act(async () => {});
+    expect(foldHarness.launcher).not.toBeNull();
+  }
+
   // #3054 — a pane's split opens the launcher (not the palette) with the
   // pane's project and a split target; the launched session lands beside the
   // reference pane. #3010 removed the tablet pane cap and its notice.
   it("a split opens the launcher, and the launched session lands right of the reference pane", async () => {
-    render(<App />);
-    await waitFor(() => expect(foldHarness.launcher).not.toBeNull());
+    await renderWithApi();
 
     act(() => useDashboardStore.getState().requestSplit("session-1", "right", 7));
     const target = useDashboardStore.getState().launcherRequest?.target ?? null;
@@ -667,8 +676,7 @@ describe("App explicit split on the tablet", () => {
   });
 
   it("an existing session opened from a split's launcher lands below the reference pane", async () => {
-    render(<App />);
-    await waitFor(() => expect(foldHarness.launcher).not.toBeNull());
+    await renderWithApi();
 
     act(() => useDashboardStore.getState().requestSplit("session-2", "below", 7));
     const target = useDashboardStore.getState().launcherRequest?.target ?? null;
@@ -685,8 +693,7 @@ describe("App explicit split on the tablet", () => {
   });
 
   it("a split whose session is already open focuses that pane instead of adding one", async () => {
-    render(<App />);
-    await waitFor(() => expect(foldHarness.launcher).not.toBeNull());
+    await renderWithApi();
 
     act(() =>
       foldHarness.launcher!.onLaunched(referenceSession(2), {
