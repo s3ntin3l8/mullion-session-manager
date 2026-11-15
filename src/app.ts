@@ -88,6 +88,7 @@ import { taskPushRoute } from "./routes/task-push.js";
 import { reviewsRoute } from "./routes/reviews.js";
 import { projectSetupRoute } from "./routes/project-setup.js";
 import { dockConfigRoute } from "./routes/dock-config.js";
+import { dockControlsRoute } from "./routes/dock-controls.js";
 import { skillsRoute } from "./routes/skills.js";
 import { browserCookiesRoute } from "./routes/browser-cookies.js";
 import { browserUrlsRoute } from "./routes/browser-urls.js";
@@ -617,6 +618,7 @@ export async function buildApp() {
   await app.register(reviewsRoute);
   await app.register(projectSetupRoute);
   await app.register(dockConfigRoute);
+  await app.register(dockControlsRoute);
   await app.register(skillsRoute);
   await app.register(browserCookiesRoute);
   await app.register(browserUrlsRoute);

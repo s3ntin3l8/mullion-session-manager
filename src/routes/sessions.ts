@@ -136,6 +136,8 @@ const createSessionSchema = {
       nameLocked: { type: "boolean" },
       cwd: { type: "string", minLength: 1 },
       kind: { type: "string", enum: ["terminal", "dock"] },
+      // #2494 — which dock control a `kind: "dock"` session runs.
+      dockControlId: { type: "string", minLength: 1, maxLength: 128 },
       worktree: worktreeIntentSchema,
       worktreeRefresh: { type: "boolean" },
       // Issue #1951 — run on a chosen host (an id) or platform; refused with
@@ -765,6 +767,9 @@ export async function sessionsRoute(app: FastifyInstance) {
       // full reasoning (never send both `initialPrompt` and `seedPrompt` to
       // createSessionRecord; a resumed/transferred session isn't a concept
       // here, unlike promote, so there's no third branch to consider).
+      if (body.dockControlId !== undefined && body.kind !== "dock") {
+        return reply.badRequest("dockControlId requires kind: 'dock'");
+      }
       // Issue #2069 — refuse a dock session whose control's port is already
       // taken, rather than spawning one that dies on EADDRINUSE inside its PTY.
       if (

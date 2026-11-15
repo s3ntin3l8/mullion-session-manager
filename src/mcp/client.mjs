@@ -375,7 +375,19 @@ export class MullionClient {
   /** Mirrors `mullion dock start`'s own two-step logic (src/cli/core.mjs):
    * resolve the project's dock controls, find the requested one by id, then
    * create a `kind:"dock"` session from its command/cwd. */
-  async startDockSession(projectId, dockControlId) {
+  async startDockSession(projectId, dockControlId, branch) {
+    // #2494 — the narrow `docks.start` op works at session scope for the
+    // caller's own project. It 404s a docker-sourced control (not agent-
+    // controllable), so only then fall back to the legacy full-scope path.
+    try {
+      return await this.controlRequest("docks.start", {
+        ...(projectId !== undefined ? { projectId } : {}),
+        dockControlId,
+        ...(branch !== undefined ? { branch } : {}),
+      });
+    } catch (err) {
+      if (err?.status !== 404 || branch !== undefined || projectId === undefined) throw err;
+    }
     const controls = await this.controlRequest("projects.dock", { projectId });
     const control = Array.isArray(controls)
       ? controls.find((candidate) => candidate.id === dockControlId)
@@ -406,8 +418,21 @@ export class MullionClient {
     return this.controlRequest("sessions.create", body);
   }
 
-  stopDockSession(sessionId) {
+  /** Stop by dock control (`dockControlId`, own project at session scope) or,
+   * full scope only, by raw `sessionId`. */
+  stopDockSession(sessionId, { projectId, dockControlId } = {}) {
+    if (dockControlId !== undefined) {
+      return this.controlRequest("docks.stop", {
+        ...(projectId !== undefined ? { projectId } : {}),
+        dockControlId,
+      });
+    }
     return this.controlRequest("sessions.kill", { sessionId });
+  }
+
+  /** The caller's own project's dock controls and what is running (#2494). */
+  listDockControls(projectId) {
+    return this.controlRequest("docks.list", projectId !== undefined ? { projectId } : {});
   }
 
   /** Phase 5 (Track B, issue #193 5.3b) — spawns a real child session (own

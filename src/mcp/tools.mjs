@@ -240,21 +240,48 @@ const listSessions = {
 const startDockSession = {
   name: "start_dock_session",
   description:
-    "Start a persistent dock-panel session for a project's dock control (see list_actions/" +
-    "projects.dock for available controls). Requires full scope (MULLION_AUTH_TOKEN) — 403s " +
-    "from inside a normal agent session when authentication is enabled (unrestricted if it's " +
-    "disabled entirely).",
+    "Start one of a project's dock controls (e.g. the dev server) — see list_dock_controls for " +
+    "ids. From an agent session this works for your OWN project only (omit projectId); pass " +
+    "branch to run it on that branch in a preview worktree. Docker-discovered controls need " +
+    "full scope (MULLION_AUTH_TOKEN).",
   inputSchema: {
     type: "object",
-    required: ["projectId", "dockControlId"],
+    required: ["dockControlId"],
     properties: {
-      projectId: { type: "string", description: "The project to start the dock session for." },
-      dockControlId: { type: "string", description: "The dock control's id (from projects.dock)." },
+      projectId: {
+        type: "string",
+        description: "The project (full scope; defaults to your own project in a session).",
+      },
+      dockControlId: { type: "string", description: "The dock control's id (list_dock_controls)." },
+      branch: { type: "string", description: "Optional branch to run the control on." },
     },
   },
   async handler(args, client) {
-    const result = await client.startDockSession(args?.projectId, args?.dockControlId);
+    const result = await client.startDockSession(
+      args?.projectId,
+      args?.dockControlId,
+      args?.branch,
+    );
     return JSON.stringify(result);
+  },
+};
+
+const listDockControls = {
+  name: "list_dock_controls",
+  description:
+    "List your project's dock controls (id, title, command, port) and, for each, the running " +
+    "session if any. Use the ids with start_dock_session / stop_dock_session.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: {
+        type: "string",
+        description: "The project (full scope; defaults to your own project in a session).",
+      },
+    },
+  },
+  async handler(args, client) {
+    return JSON.stringify(await client.listDockControls(args?.projectId));
   },
 };
 
@@ -455,18 +482,28 @@ const listSpawnTargets = {
 const stopDockSession = {
   name: "stop_dock_session",
   description:
-    "Stop a dock-panel (or any other) session by id. Requires full scope (MULLION_AUTH_TOKEN) " +
-    "— 403s from inside a normal agent session when authentication is enabled (unrestricted " +
-    "if it's disabled entirely).",
+    "Stop a dock control by dockControlId (your own project's, from list_dock_controls) — " +
+    "works from an agent session. Passing a raw sessionId instead kills any session by id and " +
+    "needs full scope (MULLION_AUTH_TOKEN).",
   inputSchema: {
     type: "object",
-    required: ["sessionId"],
     properties: {
-      sessionId: { type: "string", description: "The session id to kill." },
+      dockControlId: { type: "string", description: "The dock control to stop." },
+      projectId: {
+        type: "string",
+        description: "The project (full scope; defaults to your own project in a session).",
+      },
+      sessionId: { type: "string", description: "Full scope only: a session id to kill." },
     },
   },
   async handler(args, client) {
-    const result = await client.stopDockSession(args?.sessionId);
+    if (args?.dockControlId === undefined && args?.sessionId === undefined) {
+      throw new Error("pass dockControlId (or, with full scope, sessionId)");
+    }
+    const result = await client.stopDockSession(args?.sessionId, {
+      projectId: args?.projectId,
+      dockControlId: args?.dockControlId,
+    });
     return JSON.stringify(result);
   },
 };
@@ -1351,6 +1388,7 @@ export const TOOLS = [
   deleteDevice,
   listSessions,
   startDockSession,
+  listDockControls,
   spawnChildSession,
   listSpawnTargets,
   listChildSessions,

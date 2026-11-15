@@ -150,6 +150,8 @@ export interface CreateSessionBody {
   // session — lets the client keep dock terminals out of the regular
   // per-project session list. Defaults to "terminal" (the schema default).
   kind?: "terminal" | "dock";
+  // #2494 — the dock control this `kind: "dock"` session was launched from.
+  dockControlId?: string;
   worktree?: WorktreeIntent;
   // Issue #1951 — "give this session its own fresh worktree", with the base
   // ref and branch name chosen by the SERVER on the host the session is
@@ -1586,6 +1588,7 @@ function insertRow(
     name,
     nameLocked,
     kind,
+    dockControlId,
     skipPermissions,
     env,
     model,
@@ -1622,6 +1625,7 @@ function insertRow(
           name: name ?? null,
           cwd: cwd ?? null,
           ...(kind !== undefined ? { kind } : {}),
+          ...(dockControlId !== undefined ? { dockControlId } : {}),
           ...(nameLocked !== undefined ? { nameLocked } : {}),
           ...(skipPermissions !== undefined ? { skipPermissions } : {}),
           ...(parentId !== null ? { parentSessionId: parentId } : {}),

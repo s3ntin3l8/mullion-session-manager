@@ -79,6 +79,8 @@ export const sessionsApi = {
       nameLocked?: boolean;
       cwd?: string;
       kind?: "terminal" | "dock";
+      // #2494 — which dock control a `kind: "dock"` session runs.
+      dockControlId?: string;
       // Issue #271, option 1 — the launcher's opt-in "isolate this session"
       // toggle: create the session inside a fresh worktree instead of `cwd`.
       worktree?: { baseRef: string; branchName?: string } | { branch: string };

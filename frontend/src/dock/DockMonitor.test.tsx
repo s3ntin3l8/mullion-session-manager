@@ -51,6 +51,9 @@ let rebuildByProject: Record<number, unknown> = {};
 let serviceActionResult: { success: boolean } = { success: true };
 let stackActionByProject: Record<number, unknown> = {};
 
+// What a dock control launched from the row sends: kind + the control it ran (#2494).
+const DEV_LAUNCH = { kind: "dock", dockControlId: "dev" } as const;
+
 describe("Dock", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -133,7 +136,7 @@ describe("Dock", () => {
 
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
         cwd: undefined,
-        kind: "dock",
+        ...DEV_LAUNCH,
       });
 
       const runningSession: Session = makeSession({
@@ -1488,6 +1491,7 @@ describe("Dock", () => {
       expect(createSession).toHaveBeenCalledWith(1, dockerControl().command, {
         cwd: undefined,
         kind: "dock",
+        dockControlId: "docker:sanctuary:web",
         name: "docker-logs:sanctuary-web",
         nameLocked: true,
       });
@@ -2771,7 +2775,7 @@ describe("Dock", () => {
 
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
         cwd: "/home/x/mullion",
-        kind: "dock",
+        ...DEV_LAUNCH,
       });
     });
 
@@ -2792,7 +2796,7 @@ describe("Dock", () => {
 
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
         cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
-        kind: "dock",
+        ...DEV_LAUNCH,
       });
     });
 
@@ -2868,7 +2872,7 @@ describe("Dock", () => {
       expect(deleteSession).toHaveBeenCalledWith(99);
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
         cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
-        kind: "dock",
+        ...DEV_LAUNCH,
       });
     });
 
@@ -2979,7 +2983,7 @@ describe("Dock", () => {
       await waitFor(() =>
         expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
           cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
-          kind: "dock",
+          ...DEV_LAUNCH,
         }),
       );
     });
@@ -3124,9 +3128,7 @@ describe("Dock", () => {
 
         await user.click(header);
 
-        expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
-          kind: "dock",
-        });
+        expect(createSession).toHaveBeenCalledWith(1, "npm run dev", DEV_LAUNCH);
       });
 
       // Hermes review round 1 — the header's start affordance used to
@@ -3329,7 +3331,7 @@ describe("Dock", () => {
       await waitFor(() =>
         expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
           cwd: "/home/x/mullion/.mullion-worktrees/feature-y",
-          kind: "dock",
+          ...DEV_LAUNCH,
         }),
       );
       expect(createSession).toHaveBeenCalledTimes(1);
@@ -3658,7 +3660,7 @@ describe("Dock", () => {
 
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
         cwd: "/home/x/mullion",
-        kind: "dock",
+        ...DEV_LAUNCH,
       });
     });
 
@@ -3688,7 +3690,7 @@ describe("Dock", () => {
 
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
         cwd: "/home/x/mullion",
-        kind: "dock",
+        ...DEV_LAUNCH,
       });
     });
 

@@ -518,6 +518,7 @@ export function useDockProject(
         const branchName = effectiveCwd.slice("branch:".length);
         return useDashboardStore.getState().createSession(projectId, control.command, {
           kind: "dock",
+          dockControlId: control.id,
           worktree: { branch: branchName },
           worktreeRefresh: effectiveWorktreeRefresh,
           ...identityOpts,
@@ -527,6 +528,7 @@ export function useDockProject(
       return useDashboardStore.getState().createSession(projectId, control.command, {
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         kind: "dock",
+        dockControlId: control.id,
         ...identityOpts,
         ...(control.env ? { env: control.env } : {}),
       });

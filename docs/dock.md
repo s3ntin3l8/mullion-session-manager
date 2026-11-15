@@ -76,6 +76,16 @@ team-shareable). A global fallback lives at `~/.config/crs/dock.json`
 | `preview`         | `boolean`               | no       | The control branch previews run (see "Branch previews and `PORT`" below; default: `false`)                      |
 | `port`            | `number`                | no       | TCP port (1–65535) the control's server binds; checked before launch (see "Port conflicts" below)               |
 
+### Driving the dock from an agent session
+
+An agent session can list, start and stop its **own project's** dock controls
+(`mullion dock list|start|stop`, or the MCP tools `list_dock_controls`,
+`start_dock_session`, `stop_dock_session`) — see
+[`agent-guide.md`](agent-guide.md#dev-servers-and-the-dock). The dock session
+is tagged with the control it came from (`sessions.dock_control_id`), which is
+how `list` and `stop` find it. Previews, devices, other projects' docks and
+Docker-discovered controls stay full-scope.
+
 ### Port conflicts
 
 Mullion never picks a dev-server port, so two sessions for one control (two
