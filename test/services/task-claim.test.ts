@@ -1359,8 +1359,8 @@ describe("claimTask", () => {
       expect(row.failureReason).toContain("the `Platform:` line in its issue body");
       expect(row.failureReason).toContain("Also lives on");
       expect(row.placementRequirement).toBe(JSON.stringify({ platform: "darwin" }));
-      // Nothing was cut on the way: Retry refuses cleanly instead of trying to
-      // resume a branch that was only ever predicted.
+      // Nothing was cut on the way: Retry resets the task to ready instead of
+      // trying to resume a branch that was only ever predicted.
       expect(row.branchName).toBeNull();
       expect(row.worktreePath).toBeNull();
       expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
@@ -1380,11 +1380,9 @@ describe("claimTask", () => {
         expect.anything(),
         "failed",
       );
-      // ...and Retry says there is nothing to resume.
-      await expect(retryTask(app, task.id)).resolves.toMatchObject({
-        ok: false,
-        reason: "no-worktree",
-      });
+      // ...and Retry puts it back to ready, since there is nothing to resume.
+      await (await import("../../src/services/task-retry.js")).enqueueRetry(app, task.id);
+      expect(getTask(app, task.id).status).toBe("ready");
 
       await app.close();
     });
@@ -2198,7 +2196,7 @@ describe("retryTask (#483)", () => {
     await app.close();
   });
 
-  it("refuses when the task has no recorded branch to resume", async () => {
+  it("resets a branchless failed task to ready instead of refusing (nothing to resume)", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
@@ -2208,9 +2206,11 @@ describe("retryTask (#483)", () => {
       .returning()
       .all();
 
-    const outcome = await retryTask(app, task.id);
+    const { enqueueRetry } = await import("../../src/services/task-retry.js");
+    const outcome = await enqueueRetry(app, task.id);
 
-    expect(outcome).toMatchObject({ ok: false, reason: "no-worktree" });
+    expect(outcome).toMatchObject({ ok: true });
+    expect(getTask(app, task.id)).toMatchObject({ status: "ready", resumeQueued: false });
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

@@ -25,7 +25,5 @@ export function retryRefusal(
       // #2292 — a copy a project merge superseded: another task owns the
       // issue now, so retrying it would start a duplicate worker.
       return reply.conflict(outcome.detail ?? SUPERSEDED_RETRY_DETAIL);
-    case "no-worktree":
-      return reply.badRequest(outcome.detail ?? "Task has no recorded branch to resume");
   }
 }

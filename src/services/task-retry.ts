@@ -10,7 +10,7 @@ export type EnqueueRetryOutcome =
   | { ok: true }
   | {
       ok: false;
-      reason: "not-found" | "not-failed" | "superseded" | "no-worktree";
+      reason: "not-found" | "not-failed" | "superseded";
       detail?: string;
     };
 
@@ -24,6 +24,10 @@ export type EnqueueRetryOutcome =
  * Always human-initiated, so — like a manual claim — it never refuses on an
  * unseedable agent. #2292 still applies: a copy a project merge superseded is
  * refused, because resuming it would start a duplicate worker.
+ *
+ * A failed task with no recorded branch never got a worktree, so there is
+ * nothing to resume: the retry resets it to `ready` instead (a plain claim
+ * then starts it fresh).
  *
  * `worktreePath`/`branchName` are left as they are: they are the deterministic
  * values the dispatch resumes onto.
@@ -70,17 +74,18 @@ export async function enqueueRetry(
       return { reserved: false as const, currentStatus: current?.status };
     }
     // #2292 — checked before the branch gate: "superseded" is the true
-    // diagnosis, "no-worktree" only a symptom of it.
+    // diagnosis; a branchless copy would otherwise just reset to ready.
     if (current.supersededAt !== null) {
       return { reserved: false as const, superseded: true as const };
     }
-    if (!current.branchName) {
-      return { reserved: false as const, noBranch: true as const };
-    }
+    const hasBranch = Boolean(current.branchName);
     const patch: Partial<typeof tasks.$inferInsert> = {
-      status: "claimed",
-      queuedAt: new Date(),
-      resumeQueued: true,
+      // No branch means the run died before it ever got a worktree (e.g. no
+      // agent host could take it), so there is nothing to resume: put the task
+      // back to "ready" and let a normal claim start it fresh, rather than
+      // refusing a retry the user can't otherwise perform.
+      status: hasBranch ? "claimed" : "ready",
+      ...(hasBranch ? { queuedAt: new Date(), resumeQueued: true } : {}),
       // A human retry resumes the same branch with a worker that may well
       // rebase this time: a spent auto-rebase budget must not outlive it
       // (same reasoning as the Reject route in routes/tasks.ts).
@@ -114,7 +119,7 @@ export async function enqueueRetry(
       .set(patch)
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "failed")))
       .run();
-    return { reserved: true as const };
+    return { reserved: true as const, resetToReady: !hasBranch };
   });
 
   if (!reservation.reserved) {
@@ -125,18 +130,22 @@ export async function enqueueRetry(
       );
       return { ok: false, reason: "superseded", detail: SUPERSEDED_RETRY_DETAIL };
     }
-    if ("noBranch" in reservation && reservation.noBranch) {
-      return {
-        ok: false,
-        reason: "no-worktree",
-        detail: "Task has no recorded branch to resume — nothing to retry",
-      };
-    }
     return {
       ok: false,
       reason: "not-failed",
       detail: `Task is not failed (status: ${reservation.currentStatus ?? "unknown"})`,
     };
+  }
+
+  if (reservation.resetToReady) {
+    recordTaskTransition(app, {
+      taskId,
+      projectId: project.id,
+      from: "failed",
+      to: "ready",
+      via: "retry-reset",
+    });
+    return { ok: true };
   }
 
   // Recorded AFTER the write: the transition listener (task-dispatch.ts)
