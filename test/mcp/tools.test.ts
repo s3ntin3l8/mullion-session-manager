@@ -58,6 +58,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "delete_device",
       "list_sessions",
       "start_dock_session",
+      "list_dock_controls",
       "spawn_child_session",
       "list_spawn_targets",
       "list_child_sessions",
@@ -252,7 +253,7 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       { projectId: "3", dockControlId: "vite" },
       { startDockSession },
     );
-    expect(startDockSession).toHaveBeenCalledWith("3", "vite");
+    expect(startDockSession).toHaveBeenCalledWith("3", "vite", undefined);
     expect(JSON.parse(text)).toEqual({ id: 42 });
   });
 
@@ -349,7 +350,10 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const tool = TOOLS.find((t) => t.name === "stop_dock_session")!;
     const stopDockSession = vi.fn().mockResolvedValue({ ok: true });
     const text = await tool.handler({ sessionId: "9" }, { stopDockSession });
-    expect(stopDockSession).toHaveBeenCalledWith("9");
+    expect(stopDockSession).toHaveBeenCalledWith("9", {
+      projectId: undefined,
+      dockControlId: undefined,
+    });
     expect(JSON.parse(text)).toEqual({ ok: true });
   });
 

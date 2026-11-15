@@ -214,6 +214,8 @@ export interface SessionsSlice {
       nameLocked?: boolean;
       cwd?: string;
       kind?: "terminal" | "dock";
+      // #2494 — which dock control a `kind: "dock"` session runs.
+      dockControlId?: string;
       worktree?: { baseRef: string; branchName?: string } | { branch: string };
       worktreeRefresh?: boolean;
       skipPermissions?: boolean;

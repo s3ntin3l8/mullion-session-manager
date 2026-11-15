@@ -1460,18 +1460,47 @@ export const OPS: Record<string, OpSpec> = {
       reply({ ok: true, status: 200, result: targets });
     },
   },
-  // Full scope only, per the plan's per-scope allowlist — unlike
-  // projects.actions above, dock controls are an operator-facing concept
-  // (persistent monitors toggled from the dashboard), not something an
-  // agent inside a session needs to introspect about itself.
+  // Full scope only — the operator's merged view (incl. discovered Docker
+  // services). An agent uses `docks.list` for its own project's controls.
   "projects.dock": routeOp(
     ["full"],
     onField("projectId", (id) => ({ method: "GET", url: `/api/projects/${enc(id)}/dock` })),
   ),
-  // Full scope only — project tooling is operator-authored config, not
-  // something an agent inside a session should modify about an unrelated
-  // project. GET is session-scoped (agents can read their own project's
-  // tooling); SET is full-scope only.
+  // #2494 — an agent may list/start/stop the dock controls of its OWN project
+  // (never another's, never previews/devices). At session scope the project
+  // comes from the session record (onProject → resolveTargetProjectId); an
+  // unknown or docker-sourced control is the same 404 the service gives a
+  // missing one. Full scope names the project explicitly, as before.
+  "docks.list": routeOp(
+    ["full", "session"],
+    onProject((id) => ({ method: "GET", url: `/api/projects/${enc(id)}/dock/controls` })),
+  ),
+  "docks.start": routeOp(
+    ["full", "session"],
+    onProject((id, ctx) => {
+      const controlId = extractIdField(ctx.body, "dockControlId");
+      if (controlId === null) return bad(400, "'dockControlId' is required");
+      const branch = typeof ctx.body?.branch === "string" ? ctx.body.branch : undefined;
+      return {
+        method: "POST",
+        url: `/api/projects/${enc(id)}/dock/controls/${enc(controlId)}/start`,
+        payload: json(branch !== undefined ? { branch } : {}),
+      };
+    }),
+  ),
+  "docks.stop": routeOp(
+    ["full", "session"],
+    onProject((id, ctx) => {
+      const controlId = extractIdField(ctx.body, "dockControlId");
+      if (controlId === null) return bad(400, "'dockControlId' is required");
+      return {
+        method: "POST",
+        url: `/api/projects/${enc(id)}/dock/controls/${enc(controlId)}/stop`,
+      };
+    }),
+  ),
+  // GET is session-scoped (agents can read their own project's tooling);
+  // SET is full-scope only — operator-authored config.
   "projects.get_tooling": routeOp(
     ["full", "session"],
     onProject((id) => ({ method: "GET", url: `/api/projects/${enc(id)}/tooling` })),

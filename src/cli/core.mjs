@@ -7,6 +7,7 @@
 // `process` directly, so it's exercisable with fakes in tests too — the
 // real process-level wiring lives in mullion.mjs.
 
+import { createDockCommands } from "./dock-commands.mjs";
 import fs from "node:fs";
 import { buildBrowserCommands } from "./browser-commands.mjs";
 import { execFileSync } from "node:child_process";
@@ -1246,47 +1247,7 @@ const previewCommands = {
   },
 };
 
-const dockCommands = {
-  async list(client) {
-    const result = await client.request("sessions.list", { kind: "dock" });
-    return { json: result };
-  },
-  async start(client, args) {
-    const projectId = requireOne(args, "project id");
-    const dockId = args[1];
-    if (dockId === undefined) throw new CliUsageError("dock control id is required");
-    const controls = await client.request("projects.dock", { projectId });
-    const control = controls.find((c) => c.id === dockId);
-    if (!control) throw new CliUsageError(`no dock control '${dockId}' for project ${projectId}`);
-    // A docker-sourced control's own stable identity (dockHelpers.ts's
-    // dockerSessionIdentity — this repo's own source of truth, since this
-    // file can't import the frontend's TS helper) — `command` is
-    // reconstructed fresh from live container labels on every discovery
-    // poll and can change text without the underlying service having
-    // changed, which would otherwise leave this session unmatched against
-    // its own control (issue #73 follow-up plan, 5b) the same way a
-    // command-string comparison already fails on the frontend. `nameLocked`
-    // matches Dock.tsx's own identityOpts for the same control.
-    const identity = control.docker ? `docker-logs:${control.docker.containerName}` : null;
-    const body = {
-      projectId,
-      command: control.command,
-      kind: "dock",
-      name: identity ?? control.title,
-      ...(identity ? { nameLocked: true } : {}),
-    };
-    if (control.cwd !== undefined) body.cwd = control.cwd;
-    if (control.worktreeRefresh !== undefined) body.worktreeRefresh = control.worktreeRefresh;
-    if (control.env !== undefined) body.env = control.env;
-    const result = await client.request("sessions.create", body);
-    return { json: result };
-  },
-  async stop(client, args) {
-    const sessionId = requireOne(args, "session id");
-    const result = await client.request("sessions.kill", { sessionId });
-    return { json: result };
-  },
-};
+const dockCommands = createDockCommands({ CliUsageError, requireOne });
 
 // `mullion device <verb> <id> ...` — every action verb takes the device's
 // numeric row id (from `device list`) as its first positional arg,
