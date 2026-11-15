@@ -76,111 +76,232 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     vi.clearAllMocks();
   });
 
-  it("renames a workspace from the picker's ⋯, keeping a row's tap for switching", async () => {
+  // #3073 — the "⋯" opens a menu beside the row; the list stays behind it.
+  const openMenu = async (user: ReturnType<typeof userEvent.setup>, label: string) => {
+    const list = screen.getByRole("dialog", { name: "Workspaces" });
+    await user.click(within(list).getByRole("button", { name: label }));
+    return list;
+  };
+
+  it("opens a workspace's ⋯ as a menu beside the row and renames on the row", async () => {
     stubPxWidth(1000);
     const user = userEvent.setup();
     render(<App />);
     await user.click(chip());
-    const list = screen.getByRole("dialog", { name: "Workspaces" });
-    await user.click(within(list).getByRole("button", { name: "Manage Alpha" }));
-    const manage = within(list).getByRole("group", { name: "Manage Alpha" });
-    await user.click(within(manage).getByRole("button", { name: "Rename" }));
-    const field = within(manage).getByRole("textbox", { name: "Workspace name" });
+    const list = await openMenu(user, "Manage Alpha");
+    const menu = screen.getByRole("menu", { name: "Alpha actions" });
+    // A popover of its own, not the list's content: the list is still there.
+    expect(list).not.toContainElement(menu);
+    expect(within(list).getByRole("button", { name: "Alpha" })).toBeInTheDocument();
+    expect(within(list).getByRole("searchbox", { name: "Search workspaces" })).toBeInTheDocument();
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Rename", "Move up", "Move down", "Move to Infra", "Delete workspace"]);
+
+    await user.click(within(menu).getByRole("menuitem", { name: "Rename" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    // On the row itself, in place of its name.
+    const field = within(list).getByRole("textbox", { name: "Workspace name" });
+    expect(field).toHaveFocus();
+    expect(within(list).queryByRole("button", { name: "Alpha" })).toBeNull();
     await user.clear(field);
     await user.type(field, "Alpha two{Enter}");
     expect(actions.renameWorkspace).toHaveBeenCalledWith(1, "Alpha two");
-    // Escape steps back to the list rather than closing it.
-    await user.keyboard("{Escape}");
-    expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus();
+    await waitFor(() =>
+      expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus(),
+    );
     expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
+
+    // Escape cancels a rename without closing the picker.
+    await openMenu(user, "Manage Alpha");
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    await user.keyboard("{Escape}");
+    expect(within(list).queryByRole("textbox", { name: "Workspace name" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
+    expect(actions.renameWorkspace).toHaveBeenCalledTimes(1);
+
+    // Ending a rename by clicking elsewhere leaves focus where the click put
+    // it, rather than pulling it back to the row's "⋯".
+    await openMenu(user, "Manage Alpha");
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const search = within(list).getByRole("searchbox", { name: "Search workspaces" });
+    await user.click(search);
+    await act(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    expect(search).toHaveFocus();
   });
 
-  it("moves a workspace up, down and into a group", async () => {
+  it("moves a workspace up, down and into a group, focus following the row", async () => {
     stubPxWidth(1000);
+    // Apply the order the way the store does, so a moved row re-renders.
+    actions.reorderWorkspaces.mockImplementation(
+      async (order: Array<{ id: number; groupId: number | null; position: number }>) => {
+        useDashboardStore.setState({
+          workspaces: useDashboardStore.getState().workspaces.map((w) => {
+            const next = order.find((o) => o.id === w.id);
+            return next ? { ...w, groupId: next.groupId, position: next.position } : w;
+          }),
+        });
+      },
+    );
     const user = userEvent.setup();
     render(<App />);
     await user.click(chip());
-    const list = screen.getByRole("dialog", { name: "Workspaces" });
-    await user.click(within(list).getByRole("button", { name: "Manage Alpha" }));
-    const manage = within(list).getByRole("group", { name: "Manage Alpha" });
-    expect(within(manage).getByText("1 of 2, no group")).toBeInTheDocument();
-    expect(within(manage).getByRole("button", { name: "Move up" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
-    // Inert, not disabled: nothing happens, and focus is not dropped.
-    await user.click(within(manage).getByRole("button", { name: "Move up" }));
+    const list = await openMenu(user, "Manage Alpha");
+    const up = screen.getByRole("menuitem", { name: "Move up" });
+    expect(up).toHaveAttribute("aria-disabled", "true");
+    // Inert: nothing happens, and the menu stays.
+    await user.click(up);
     expect(actions.reorderWorkspaces).not.toHaveBeenCalled();
-    await user.click(within(manage).getByRole("button", { name: "Move down" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move down" }));
     expect(actions.reorderWorkspaces).toHaveBeenLastCalledWith(
       expect.arrayContaining([
         { id: 2, groupId: null, position: 0 },
         { id: 1, groupId: null, position: 1 },
       ]),
     );
-    await user.click(within(manage).getByRole("button", { name: "Move to group" }));
-    expect(within(manage).getByRole("button", { name: "No group" })).toBeDisabled();
-    await user.click(within(manage).getByRole("button", { name: "Infra" }));
+    await waitFor(() =>
+      expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus(),
+    );
+
+    await openMenu(user, "Manage Alpha");
+    expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Move to Infra" }));
     // To the end of the group it joins.
     expect(actions.reorderWorkspaces).toHaveBeenLastCalledWith(
       expect.arrayContaining([{ id: 1, groupId: 7, position: 1 }]),
     );
-    expect(within(manage).getByRole("button", { name: "Move up" })).toBeInTheDocument();
+    // The row moved under Infra; its "⋯" still takes focus back.
+    const infra = within(list).getByRole("group", { name: "Infra" });
+    await waitFor(() =>
+      expect(within(infra).getByRole("button", { name: "Manage Alpha" })).toHaveFocus(),
+    );
+    await openMenu(user, "Manage Alpha");
+    expect(
+      screen
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent)
+        .filter((t) => t?.startsWith("Move to")),
+    ).toEqual(["Move to No group"]);
+    await user.click(screen.getByRole("menuitem", { name: "Move to No group" }));
+    expect(actions.reorderWorkspaces).toHaveBeenLastCalledWith(
+      expect.arrayContaining([{ id: 1, groupId: null, position: 1 }]),
+    );
   });
 
-  it("deletes a workspace after a second confirming tap", async () => {
+  it("moves focus to the search box when a move takes the row out of a search", async () => {
     stubPxWidth(1000);
+    actions.reorderWorkspaces.mockImplementation(
+      async (order: Array<{ id: number; groupId: number | null; position: number }>) => {
+        useDashboardStore.setState({
+          workspaces: useDashboardStore.getState().workspaces.map((w) => {
+            const next = order.find((o) => o.id === w.id);
+            return next ? { ...w, groupId: next.groupId, position: next.position } : w;
+          }),
+        });
+      },
+    );
     const user = userEvent.setup();
     render(<App />);
     await user.click(chip());
     const list = screen.getByRole("dialog", { name: "Workspaces" });
+    // "Infra" matches Gamma through its group's name.
+    await user.type(within(list).getByRole("searchbox", { name: "Search workspaces" }), "infra");
+    await openMenu(user, "Manage Gamma");
+    await user.click(screen.getByRole("menuitem", { name: "Move to No group" }));
+    await waitFor(() =>
+      expect(within(list).getByRole("searchbox", { name: "Search workspaces" })).toHaveFocus(),
+    );
+    expect(within(list).queryByRole("button", { name: "Manage Gamma" })).toBeNull();
+  });
+
+  it("deletes a workspace after a second confirming click", async () => {
+    stubPxWidth(1000);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(chip());
     actions.deleteWorkspace.mockImplementation(async (id: number) => {
       useDashboardStore.setState({
         workspaces: useDashboardStore.getState().workspaces.filter((w) => w.id !== id),
       });
     });
-    await user.click(within(list).getByRole("button", { name: "Manage Beta" }));
-    const del = within(list).getByRole("button", { name: "Delete workspace" });
-    await user.click(del);
+    const list = await openMenu(user, "Manage Beta");
+    await user.click(screen.getByRole("menuitem", { name: "Delete workspace" }));
     expect(actions.deleteWorkspace).not.toHaveBeenCalled();
-    await user.click(within(list).getByRole("button", { name: /Click again to delete/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Click again to delete/ }));
     expect(actions.deleteWorkspace).toHaveBeenCalledWith(2);
-    // Back on the list; its "⋯" went with the workspace, so the search box.
+    // Its "⋯" went with the workspace, so the search box.
     await waitFor(() =>
       expect(within(list).getByRole("searchbox", { name: "Search workspaces" })).toHaveFocus(),
     );
+    expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
   });
 
-  it("goes back one step from a rename with the Back button", async () => {
+  it("returns focus to the ⋯ when an armed delete is cancelled", async () => {
     stubPxWidth(1000);
     const user = userEvent.setup();
     render(<App />);
     await user.click(chip());
-    const list = screen.getByRole("dialog", { name: "Workspaces" });
-    await user.click(within(list).getByRole("button", { name: "Manage Alpha" }));
-    await user.click(within(list).getByRole("button", { name: "Rename" }));
-    await user.click(within(list).getByRole("button", { name: "Back" }));
-    // The actions again, not the list.
-    expect(within(list).getByRole("button", { name: "Move to group" })).toBeInTheDocument();
-    await user.click(within(list).getByRole("button", { name: "Back to workspaces" }));
+    const list = await openMenu(user, "Manage Beta");
+    await user.click(screen.getByRole("menuitem", { name: "Delete workspace" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(within(list).getByRole("button", { name: "Manage Beta" })).toHaveFocus();
+    expect(actions.deleteWorkspace).not.toHaveBeenCalled();
+    // And Escape still closes the picker.
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Workspaces" })).toBeNull();
+  });
+
+  it("closes the menu first, then the picker, on Escape and on an outside click", async () => {
+    stubPxWidth(1000);
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(chip());
+    const list = await openMenu(user, "Manage Alpha");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
     expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Workspaces" })).toBeNull();
+
+    await user.click(chip());
+    await openMenu(user, "Manage group Infra");
+    expect(screen.getByRole("menu", { name: "Infra actions" })).toBeInTheDocument();
+    await user.click(document.body);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
+    await user.click(document.body);
+    expect(screen.queryByRole("dialog", { name: "Workspaces" })).toBeNull();
   });
 
-  it("renames and deletes a group, and opens New group", async () => {
+  it("renames and deletes a group from its ⋯, and opens New group", async () => {
     stubPxWidth(1000);
     const user = userEvent.setup();
     render(<App />);
     await user.click(chip());
-    let list = screen.getByRole("dialog", { name: "Workspaces" });
-    await user.click(within(list).getByRole("button", { name: "Manage group Infra" }));
-    const manage = within(list).getByRole("group", { name: "Manage Infra" });
-    await user.click(within(manage).getByRole("button", { name: "Rename" }));
-    const field = within(manage).getByRole("textbox", { name: "Group name" });
+    let list = await openMenu(user, "Manage group Infra");
+    expect(
+      within(screen.getByRole("menu", { name: "Infra actions" }))
+        .getAllByRole("menuitem")
+        .map((i) => i.textContent),
+    ).toEqual(["Rename", "Delete group"]);
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const field = within(list).getByRole("textbox", { name: "Group name" });
     await user.clear(field);
     await user.type(field, "Ops{Enter}");
     expect(actions.updateGroup).toHaveBeenCalledWith(7, { name: "Ops" });
-    await user.click(within(manage).getByRole("button", { name: "Delete group" }));
-    await user.click(within(manage).getByRole("button", { name: /Click again to delete/ }));
+    await waitFor(() =>
+      expect(within(list).getByRole("button", { name: "Manage group Infra" })).toHaveFocus(),
+    );
+    await openMenu(user, "Manage group Infra");
+    await user.click(screen.getByRole("menuitem", { name: "Delete group" }));
+    await user.click(screen.getByRole("menuitem", { name: /Click again to delete/ }));
     expect(actions.deleteGroup).toHaveBeenCalledWith(7);
 
     list = screen.getByRole("dialog", { name: "Workspaces" });
@@ -195,16 +316,27 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     expect(chip()).toHaveFocus();
   });
 
-  it("offers the same management in the sheet under a coarse pointer", async () => {
+  it("opens the actions as a sheet under a coarse pointer", async () => {
     stubPxWidth(834, true);
     const user = userEvent.setup();
     render(<App />);
     await user.click(chip());
     const sheet = screen.getByRole("dialog", { name: "Workspaces" });
     expect(sheet.querySelector(".rail-ws-list.touch")).not.toBeNull();
-    await user.click(within(sheet).getByRole("button", { name: "Manage Beta" }));
-    await user.click(within(sheet).getByRole("button", { name: "Delete workspace" }));
-    expect(within(sheet).getByRole("button", { name: /Tap again to delete/ })).toBeInTheDocument();
+    const more = within(sheet).getByRole("button", { name: "Manage Beta" });
+    expect(more).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(more);
+    const actionsSheet = screen.getByRole("dialog", { name: "Beta actions" });
+    expect(actionsSheet).not.toBe(sheet);
+    expect(within(actionsSheet).getByRole("menu", { name: "Beta actions" })).toBeInTheDocument();
+    await user.click(within(actionsSheet).getByRole("menuitem", { name: "Delete workspace" }));
+    expect(
+      within(actionsSheet).getByRole("menuitem", { name: /Tap again to delete/ }),
+    ).toBeInTheDocument();
+    // Escape closes the actions only.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Beta actions" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: "Workspaces" })).toBeInTheDocument();
   });
 });
 

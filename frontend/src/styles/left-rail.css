@@ -296,6 +296,10 @@
   overflow: hidden;
   padding: 6px;
 }
+/* A row's "⋯" menu opens beside the row, over the list (#3073). */
+.rail-ws-menu {
+  z-index: 49;
+}
 /* A flex child of the popover and of the sheet (both max-height columns), so
    only .rail-ws-scroll scrolls and "New workspace" stays reachable with a
    long list. */
@@ -388,7 +392,8 @@
   font-size: 0.8125rem;
 }
 /* #3048 — a workspace row is its switch button plus a "⋯" that opens the
-   workspace's actions in place of the list; a group header has its own. */
+   workspace's actions in a menu beside the row (#3073); a group header has
+   its own. */
 .rail-ws-item {
   display: flex;
   align-items: center;
@@ -405,8 +410,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-ws-more,
-.rail-ws-back {
+.rail-ws-more {
   flex-shrink: 0;
   width: 28px;
   height: 28px;
@@ -421,76 +425,25 @@
   cursor: pointer;
 }
 .rail-ws-more:hover,
-.rail-ws-back:hover {
+.rail-ws-more[aria-expanded="true"] {
   background: var(--seg);
   color: var(--fg);
 }
-.rail-ws-row:disabled,
-.rail-ws-row[aria-disabled="true"] {
-  opacity: 0.45;
+/* Rename in place (#3073): the row keeps its icon, the field takes the
+   name's place; a group header's field takes its name's. */
+.rail-ws-row.rail-ws-renaming {
+  padding-block: 0;
   cursor: default;
 }
-.rail-ws-row:disabled:hover,
-.rail-ws-row[aria-disabled="true"]:hover {
+.rail-ws-row.rail-ws-renaming:hover {
   background: transparent;
 }
-.rail-ws-row.danger {
-  color: var(--r);
-}
-.rail-ws-row.danger svg {
-  color: var(--r);
-}
-.rail-ws-row.danger.armed {
-  background: color-mix(in srgb, var(--r) 14%, transparent);
-}
-/* A delete row is a ConfirmButton with an armed label: its two labels share
-   one grid cell, laid out like the other rows. */
-.rail-ws-row.confirm-btn-stable {
-  display: grid;
-  justify-items: stretch;
-}
-.rail-ws-row.confirm-btn-stable > .confirm-btn-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.rail-ws-manage {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 0;
-}
-.rail-ws-manage-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-}
-.rail-ws-manage-title {
-  color: var(--fg);
+.rail-ws-renaming .workspace-rename-input,
+.rail-ws-group-header .workspace-rename-input {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-}
-.rail-ws-manage-sub {
-  flex-shrink: 0;
-  color: var(--muted);
-  font-size: 0.6875rem;
-  font-weight: 400;
-}
-.rail-ws-manage-body {
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  text-transform: none;
+  letter-spacing: normal;
 }
 /* "New workspace" and "New group" stack (#3072): side by side, half the
    picker's width cut "New workspace" short on desktop, and more so at the
@@ -506,8 +459,7 @@
   min-height: 48px;
   font-size: 0.9375rem;
 }
-.rail-ws-list.touch .rail-ws-more,
-.rail-ws-list.touch .rail-ws-back {
+.rail-ws-list.touch .rail-ws-more {
   width: 44px;
   height: 44px;
 }

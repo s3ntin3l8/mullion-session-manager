@@ -90,6 +90,7 @@ export function KebabMenu({
   menuAlign = "right",
   triggerClassName = "kebab-trigger-btn",
   menuLabel,
+  menuClassName,
   sheet,
 }: {
   items: KebabMenuItem[];
@@ -99,14 +100,20 @@ export function KebabMenu({
   triggerClassName?: string;
   // The menu's accessible name; defaults to `title`.
   menuLabel?: string;
+  // Extra class on the portaled popover (not the sheet), e.g. to stack it
+  // above the popover its trigger sits in.
+  menuClassName?: string;
   sheet?: KebabMenuSheet;
   // "top" grows the portaled menu upward from the trigger instead of
   // dropping it down — for a trigger pinned near the bottom of the
   // viewport (the Dock), a downward menu can run off-screen with no way to
   // scroll to its lower items. "auto" measures the rendered menu and opens
   // upward when it cannot fit below and there is more room above — useful
-  // for sidebar rows whose position changes as the user scrolls.
-  menuPlacement?: "bottom" | "top" | "auto";
+  // for sidebar rows whose position changes as the user scrolls. "side"
+  // (#3073) opens it beside the trigger, to its right (to its left when the
+  // right has no room), top-aligned with it and kept on screen: for a
+  // trigger inside a popover, whose list a dropped-down menu would cover.
+  menuPlacement?: "bottom" | "top" | "auto" | "side";
   menuAlign?: "left" | "right";
 }) {
   const theme = useDashboardStore((s) => s.theme);
@@ -129,6 +136,7 @@ export function KebabMenu({
   // calc, which the old {top,right} shape didn't carry.
   const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
   const [menuHeight, setMenuHeight] = useState(0);
+  const [menuWidth, setMenuWidth] = useState(0);
   const [armedKey, setArmedKey] = useState<string | null>(null);
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting static
   // for the whole arm window — a countdown that doesn't move reads as stuck.
@@ -250,14 +258,38 @@ export function KebabMenu({
   useVisualViewportChange(popoverOpen, () => {
     if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
   });
+  // A "side" menu belongs to a row inside a scrolling list (the workspace
+  // picker, #3073): follow the row when that list scrolls.
+  useEffect(() => {
+    if (!popoverOpen || menuPlacement !== "side") return;
+    const onScroll = (e: Event) => {
+      // The menu's own scrolling moves nothing it is anchored to.
+      if (menuRef.current?.contains(e.target as Node) || !btnRef.current) return;
+      const next = btnRef.current.getBoundingClientRect();
+      // Most scrolls (a terminal behind the menu) move nothing: returning the
+      // same rect skips the re-render and the layout effect's measurement.
+      setTriggerRect((prev) =>
+        prev &&
+        prev.top === next.top &&
+        prev.left === next.left &&
+        prev.bottom === next.bottom &&
+        prev.right === next.right
+          ? prev
+          : next,
+      );
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [popoverOpen, menuPlacement]);
 
   // Re-clamp after rendering, as PaneActionsMenu does for its measured
   // width. scrollHeight includes content hidden by maxHeight; measuring the
   // capped bounding rect would mistake a tiny scroll box for a menu that fits.
   // A layout effect corrects the first placement before the browser paints.
   useLayoutEffect(() => {
-    if (popoverOpen && menuPlacement === "auto" && menuRef.current) {
+    if (popoverOpen && (menuPlacement === "auto" || menuPlacement === "side") && menuRef.current) {
       setMenuHeight(menuRef.current.scrollHeight);
+      setMenuWidth(menuRef.current.offsetWidth);
     }
   }, [popoverOpen, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
 
@@ -265,10 +297,12 @@ export function KebabMenu({
     if (item.disabled) return;
     // The action is about to take focus somewhere else (another overlay).
     // Tell the focus trap not to pull it back to this menu's trigger when
-    // the menu closes — see `opensOverlay` on KebabMenuItem.
-    if (item.opensOverlay) suppressRestore();
+    // the menu closes — see `opensOverlay` on KebabMenuItem. Only on the
+    // click that runs the action: an arming click that is then cancelled
+    // (Escape, a press outside) must still return focus to the trigger.
     if (item.confirm) {
       if (armedKey === item.key) {
+        if (item.opensOverlay) suppressRestore();
         clearArmTimer();
         setArmedKey(null);
         setOpen(false);
@@ -291,6 +325,7 @@ export function KebabMenu({
       }
       return;
     }
+    if (item.opensOverlay) suppressRestore();
     setOpen(false);
     item.onClick();
   };
@@ -318,6 +353,7 @@ export function KebabMenu({
   const getMenuStyle = (): React.CSSProperties | null => {
     const rect = triggerRect;
     if (!rect) return null;
+    if (menuPlacement === "side") return getSideMenuStyle(rect);
     const style: React.CSSProperties = {
       position: "fixed",
       right: menuAlign === "left" ? "auto" : window.innerWidth - rect.right,
@@ -342,6 +378,30 @@ export function KebabMenu({
       style.maxHeight = menuMaxHeight(spaceBelow);
     }
     return style;
+  };
+  // "side": beside the trigger rather than under it. Before the first
+  // measurement the width is unknown (0), which reads as "fits on the right";
+  // the layout effect above corrects it before paint.
+  const getSideMenuStyle = (rect: DOMRect): React.CSSProperties => {
+    // The visible viewport's right edge (a panned or zoomed iOS visual
+    // viewport), not the layout viewport's.
+    const visible = visibleViewport();
+    const gap = 4;
+    const fitsRight = rect.right + gap + menuWidth <= visible.right - 8;
+    const top = Math.max(
+      visible.top + 8,
+      Math.min(rect.top - gap, visible.bottom - 8 - menuHeight),
+    );
+    return {
+      position: "fixed",
+      left: fitsRight ? rect.right + gap : "auto",
+      right: fitsRight ? "auto" : window.innerWidth - rect.left + gap,
+      top,
+      bottom: "auto",
+      maxWidth: window.innerWidth - 16,
+      maxHeight: menuMaxHeight(visible.bottom - top - 8),
+      overflowY: "auto",
+    };
   };
   const menuStyle = asSheet ? null : getMenuStyle();
   const menuItems = (
@@ -427,10 +487,18 @@ export function KebabMenu({
         createPortal(
           <div
             ref={menuRef}
-            className={themeClassName(theme, "pane-tab-overflow-menu")}
+            className={themeClassName(theme, "pane-tab-overflow-menu", menuClassName)}
             style={menuStyle}
             data-presence={presence}
-            data-placement={opensUpward ? "top" : "bottom"}
+            data-placement={
+              menuPlacement === "side"
+                ? menuStyle.left === "auto"
+                  ? "side-left"
+                  : "side"
+                : opensUpward
+                  ? "top"
+                  : "bottom"
+            }
             inert={presence === "leaving"}
             role="menu"
             aria-label={menuLabel ?? title}

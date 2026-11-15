@@ -644,3 +644,160 @@ describe("ui/KebabMenu sheet variant and focus", () => {
     expect(screen.getByTestId("pane")).toHaveFocus();
   });
 });
+
+// #3073 — "side" opens the menu beside its trigger (the workspace picker's
+// row "⋯"), so the popover the trigger sits in stays visible.
+describe('ui/KebabMenu menuPlacement="side"', () => {
+  const items = [{ key: "only", label: "Only item", onClick: vi.fn() }];
+
+  function mockGeometry(
+    trigger: { top: number; left: number },
+    viewport: { width: number; height: number },
+  ) {
+    const original = { width: window.innerWidth, height: window.innerHeight };
+    Object.defineProperty(window, "innerWidth", { value: viewport.width, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: viewport.height, configurable: true });
+    const rect = {
+      top: trigger.top,
+      bottom: trigger.top + 20,
+      left: trigger.left,
+      right: trigger.left + 20,
+      width: 20,
+      height: 20,
+      x: trigger.left,
+      y: trigger.top,
+      toJSON: () => ({}),
+    };
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rect),
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        return this.classList.contains("pane-tab-overflow-menu") ? 180 : 0;
+      }),
+      vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        return this.classList.contains("pane-tab-overflow-menu") ? 214 : 0;
+      }),
+    ];
+    return () => {
+      spies.forEach((s) => s.mockRestore());
+      Object.defineProperty(window, "innerWidth", { value: original.width, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: original.height, configurable: true });
+    };
+  }
+
+  const openMenu = async () => {
+    const user = userEvent.setup();
+    render(<KebabMenu items={items} menuPlacement="side" menuClassName="extra-menu" />);
+    await user.click(screen.getByRole("button"));
+    return screen.getByRole("menu");
+  };
+
+  it("opens to the right of the trigger, top-aligned with it, with the extra class", async () => {
+    const restore = mockGeometry({ top: 100, left: 300 }, { width: 1024, height: 800 });
+    try {
+      const menu = await openMenu();
+      expect(menu).toHaveClass("pane-tab-overflow-menu", "extra-menu");
+      expect(menu).toHaveAttribute("data-placement", "side");
+      expect(menu.style.left).toBe("324px");
+      expect(menu.style.right).toBe("auto");
+      expect(menu.style.top).toBe("96px");
+      expect(menu.style.bottom).toBe("auto");
+    } finally {
+      restore();
+    }
+  });
+
+  it("opens to the left when the right has no room", async () => {
+    const restore = mockGeometry({ top: 100, left: 300 }, { width: 500, height: 800 });
+    try {
+      const menu = await openMenu();
+      expect(menu.style.left).toBe("auto");
+      expect(menu.style.right).toBe("204px");
+      // Grows from the trigger's edge, which is now its right.
+      expect(menu).toHaveAttribute("data-placement", "side-left");
+    } finally {
+      restore();
+    }
+  });
+
+  it("follows its trigger when a list it sits in scrolls", async () => {
+    const restore = mockGeometry({ top: 100, left: 300 }, { width: 1024, height: 800 });
+    const rectAt = (top: number) => ({
+      top,
+      bottom: top + 20,
+      left: 300,
+      right: 320,
+      width: 20,
+      height: 20,
+      x: 300,
+      y: top,
+      toJSON: () => ({}),
+    });
+    try {
+      const menu = await openMenu();
+      expect(menu.style.top).toBe("96px");
+      // The same spy mockGeometry installed: the row scrolled up 60px.
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(rectAt(40));
+      act(() => {
+        document.body.dispatchEvent(new Event("scroll"));
+      });
+      expect(menu.style.top).toBe("36px");
+      // The menu's own scroll moves nothing it is anchored to.
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(rectAt(300));
+      act(() => {
+        menu.dispatchEvent(new Event("scroll"));
+      });
+      expect(menu.style.top).toBe("36px");
+    } finally {
+      restore();
+    }
+  });
+
+  it("moves up to stay on screen for a trigger near the bottom", async () => {
+    const restore = mockGeometry({ top: 700, left: 300 }, { width: 1024, height: 800 });
+    try {
+      const menu = await openMenu();
+      // 800 - 8 - 180: the menu's bottom edge 8px above the viewport's.
+      expect(menu.style.top).toBe("612px");
+      expect(menu.style.maxHeight).toBe("180px");
+    } finally {
+      restore();
+    }
+  });
+});
+
+// PR #3081 review — an `opensOverlay` confirm item suppresses the focus
+// restore only on the click that fires it: arming it and then cancelling
+// still returns focus to the trigger.
+describe("ui/KebabMenu confirm + opensOverlay", () => {
+  it("returns focus to the trigger when an armed item is cancelled", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    render(
+      <KebabMenu
+        title="Manage"
+        items={[
+          {
+            key: "delete",
+            label: "Delete",
+            armLabel: "Click again to delete",
+            confirm: true,
+            opensOverlay: true,
+            onClick,
+          },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Manage" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(screen.getByRole("menuitem", { name: /Click again/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(onClick).not.toHaveBeenCalled();
+  });
+});
