@@ -2045,6 +2045,41 @@ between channel connections. The duplicate-row flag never matches two rows by
 hostname unless both have a `baseUrl`, so two outbound agents with the same
 hostname keep separate rows.
 
+### An agent that works at home and goes dark away from it
+
+**Symptom.** A laptop agent is online on the primary's network and shows
+`unreachable` the moment it leaves it, even though it can still reach the
+primary (for instance over Tailscale). The primary logs a run of
+`connect EHOSTUNREACH <the agent's LAN address>` from the heartbeat, the control
+relay and the git fetcher, and the agent's own `register` calls keep arriving.
+
+**Cause.** The agent has no machine identity (a release before v0.3.59, or a
+manually added host that never registered one), so it never opens the outbound
+channel. The primary has to dial the agent's stored `baseUrl`, which is an
+address only the home network can route.
+
+**How to see it.** Settings → Hosts shows **Outdated agent — upgrade** on the
+row. Wherever the app names a host (the sidebar project header, pane tabs and
+session rows) it shows `outdated agent` beside the name. An agent that already
+reports v0.3.59 or later reads **Not registered — set primary URL**
+(`not registered` as the chip) instead, because upgrading would change nothing
+for it; see Fix. Every surface has a hover with the agent's reported version, but
+only the Settings hover also gives the primary's version. The `GET /api/hosts`
+field is `legacyAgent`: true for a non-local host that has a `baseUrl`, no
+machine identity and no revoked identity. An older row that a newer registration
+replaced is not flagged (it shows as a possible duplicate instead). The server
+logs the "legacy agent registered" notice once per host per process, not on every
+renewal.
+
+**Fix.** Upgrade the agent to v0.3.59 or later and restart it. It then
+registers with a machine identity and dials out to `MULLION_PRIMARY_URL`; the
+flag clears on its own. If the agent already reports v0.3.59 or later and is
+flagged anyway, it has never registered (no `MULLION_PRIMARY_URL`, or its state
+file was lost): set `MULLION_PRIMARY_URL` in its `.env` and restart it — the
+hover text says which case applies. Remove `MULLION_AGENT_ADVERTISE_URL` and leave `HOST`
+on loopback if you want it outbound-only. The primary's `MULLION_PRIMARY_URL`
+must be reachable from wherever the agent roams.
+
 ### Mixed fleets: which transport a host uses
 
 | Agent                                                                                    | Transport for request/response calls and streams                                                                                                                                                                                                                                                                                                                                                                                                                                               |

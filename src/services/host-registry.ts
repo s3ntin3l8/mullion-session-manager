@@ -59,6 +59,14 @@ export interface HostSummary {
   // credential itself.
   hasMachineIdentity: boolean;
   machineIdentityRevoked: boolean;
+  // Issue #2969 — an agent the primary has to dial at its stored baseUrl: it
+  // has an address but no machine identity (a release before the outbound
+  // channel, or a manually added host that never registered one). Off the
+  // primary's network that address is unreachable, and nothing says why — so
+  // the UI says it. Derived, never stored: it clears the moment the agent
+  // registers with an identity. A revoked identity is a deliberate operator
+  // act, not a stale agent, so it is excluded.
+  legacyAgent: boolean;
   // Issue #2449 — created by redeeming a one-time pairing code (vs headless
   // enrollment or a manual add). Set by listHosts; pairing success is separate
   // from transport reachability, which the heartbeat reports.
@@ -131,6 +139,11 @@ function toSummary(row: HostRow): HostSummary {
     role: row.role,
     hasMachineIdentity: row.machineCredentialEnc !== null,
     machineIdentityRevoked: row.machineCredentialRevokedAt !== null,
+    legacyAgent:
+      row.id !== LOCAL_HOST_ID &&
+      row.baseUrl !== null &&
+      row.machineCredentialEnc === null &&
+      row.machineCredentialRevokedAt === null,
     paired: false,
     unclaimed: false,
   };
@@ -418,6 +431,19 @@ const LEGACY_AGENT_NOTICE =
   "(no state file / old release); it keeps working, but upgrade the agent to get a " +
   "persistent identity and renewable credential";
 
+// Issue #2969 — a legacy agent re-registers every renewal, so the notice used
+// to repeat for the life of the process. The host row itself now carries the
+// state (HostSummary.legacyAgent), so the log only needs to say it once per
+// host per process. Cleared when the host gets an identity, so a later
+// downgrade is reported again.
+const legacyAgentNoticed = new Set<string>();
+
+function noteLegacyAgent(app: FastifyInstance, hostId: string): void {
+  if (legacyAgentNoticed.has(hostId)) return;
+  legacyAgentNoticed.add(hostId);
+  app.log.warn({ hostId }, LEGACY_AGENT_NOTICE);
+}
+
 // Both halves of a session credential are generated with real entropy and
 // stored encrypted, same rigor as authTokenEnc — see schema.ts's own
 // comment on why sessionIdEnc in particular can't be a plain
@@ -619,11 +645,12 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
       })
       .where(eq(hosts.id, existing.id))
       .run();
-    app.log.warn({ hostId: existing.id }, LEGACY_AGENT_NOTICE);
+    noteLegacyAgent(app, existing.id);
     return issueSession(app, existing.id);
   }
-  app.log.warn(LEGACY_AGENT_NOTICE);
-  return insertEnrolledHost(app, input);
+  const inserted = insertEnrolledHost(app, input);
+  noteLegacyAgent(app, inserted.hostId);
+  return inserted;
 }
 
 function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): HostRegistration {
@@ -760,9 +787,10 @@ function withMachineCredential(
   input: RegisterAgentInput,
 ): HostRegistration {
   if (!input.wantsMachineCredential) {
-    app.log.warn({ hostId: registration.hostId }, LEGACY_AGENT_NOTICE);
+    noteLegacyAgent(app, registration.hostId);
     return registration;
   }
+  legacyAgentNoticed.delete(registration.hostId);
   return { ...registration, machineCredential: issueMachineCredential(app, registration.hostId) };
 }
 

@@ -20,6 +20,7 @@ import {
   HostHasProjectsError,
   listHosts,
   renewMachineCredential,
+  revokeMachineIdentity,
   rotateSession,
   UnknownHostError,
   updateHost,
@@ -155,6 +156,80 @@ describe("host-registry", () => {
       expect.objectContaining({ id: LOCAL_HOST_ID, origin: "manual" }),
     );
     await app.close();
+  });
+
+  // Issue #2969 — an agent the primary must dial, with no machine identity, is
+  // flagged so the UI can say why it is unreachable off the primary's network.
+  describe("legacyAgent (issue #2969)", () => {
+    const flagOf = (app: Awaited<ReturnType<typeof buildApp>>, id: string) =>
+      listHosts(app).find((h) => h.id === id)?.legacyAgent;
+
+    it("flags a host that has an address but no machine identity, and never the local host", async () => {
+      const app = await buildApp();
+      try {
+        const manual = createHost(app, { name: "old", baseUrl: "http://old:3000", token: "t" });
+        const legacy = enrollHost(app, { baseUrl: "http://legacy:3000", hostname: "legacy" });
+        expect(flagOf(app, manual.id)).toBe(true);
+        expect(flagOf(app, legacy.hostId)).toBe(true);
+        expect(flagOf(app, LOCAL_HOST_ID)).toBe(false);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("clears once the agent claims its row with a machine identity", async () => {
+      const app = await buildApp();
+      try {
+        const created = createHost(app, {
+          name: "upgrading",
+          baseUrl: "http://upgrading:3000",
+          token: "bootstrap",
+        });
+        expect(flagOf(app, created.id)).toBe(true);
+        const claimed = claimHost(app, "bootstrap", {
+          baseUrl: "http://upgrading:3000",
+          hostname: "upgrading",
+          wantsMachineCredential: true,
+        });
+        expect(claimed?.hostId).toBe(created.id);
+        expect(flagOf(app, created.id)).toBe(false);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("does not flag a host with no address yet, or one whose identity an operator revoked", async () => {
+      const app = await buildApp();
+      try {
+        const waiting = createHost(app, { name: "waiting", token: "t" });
+        expect(flagOf(app, waiting.id)).toBe(false);
+        const { hostId } = enrollHost(app, {
+          baseUrl: "http://revoked:3000",
+          hostname: "revoked",
+          wantsMachineCredential: true,
+        });
+        expect(revokeMachineIdentity(app, hostId)).toBe(true);
+        expect(flagOf(app, hostId)).toBe(false);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("logs the legacy-agent notice once per host, however often it re-registers", async () => {
+      const app = await buildApp();
+      try {
+        const warn = vi.spyOn(app.log, "warn");
+        const input = { baseUrl: "http://chatty:3000", hostname: "chatty" };
+        const { hostId } = enrollHost(app, input);
+        expect(enrollHost(app, input).hostId).toBe(hostId);
+        enrollHost(app, input);
+        const notices = warn.mock.calls.filter(([, msg]) => String(msg).includes("legacy agent"));
+        expect(notices).toHaveLength(1);
+        expect(notices[0]![0]).toEqual({ hostId });
+      } finally {
+        await app.close();
+      }
+    });
   });
 
   // Issue #245 / roadmap 7.1 — agent-initiated registration & rotation.

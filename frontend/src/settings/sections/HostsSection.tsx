@@ -7,7 +7,12 @@ import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { AgentInstallInstructions } from "../../AgentInstallInstructions.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
-import { deriveHostStatus, type PingState } from "../../hostStatus.js";
+import {
+  deriveHostStatus,
+  legacyAgentLabels,
+  legacyAgentTitle,
+  type PingState,
+} from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
@@ -153,6 +158,8 @@ export function HostsSection() {
   // ones offered for removal; nothing is ever removed automatically.
   const staleHostIds = new Set(hosts.flatMap((h) => h.possibleDuplicateOf ?? []));
   const hostNameById = new Map(hosts.map((h) => [h.id, h.name]));
+  // The primary's own version, reported on its "local" row (Issue #2969).
+  const primaryVersion = hosts.find((h) => h.id === LOCAL_HOST_ID)?.mullionVersion ?? null;
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   // A freshly rotated token, shown once (the DB only keeps it encrypted).
@@ -452,6 +459,17 @@ export function HostsSection() {
                           : host.hasMachineIdentity
                             ? "outbound only — waiting for the agent to connect"
                             : "waiting for the agent to register")}
+                    {host.legacyAgent && (
+                      <>
+                        {" · "}
+                        <span
+                          style={{ color: "var(--y)" }}
+                          title={legacyAgentTitle(host, primaryVersion)}
+                        >
+                          {legacyAgentLabels(host).long}
+                        </span>
+                      </>
+                    )}
                     {host.unclaimed && (
                       <>
                         {" · "}

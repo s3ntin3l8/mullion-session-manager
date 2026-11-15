@@ -55,4 +55,33 @@ describe("hosts route: possible duplicates", () => {
     );
     await app.close();
   });
+
+  it("GET /api/hosts flags a lone legacy agent but not the legacy row its upgraded successor replaced (issue #2969)", async () => {
+    const app = await buildApp();
+    try {
+      const lone = enrollHost(app, { baseUrl: "http://127.0.0.1:4601", hostname: "lone" });
+      const baseUrl = "http://127.0.0.1:4602";
+      const old = enrollHost(app, { baseUrl, hostname: "moved" });
+      app.db
+        .update(hostsTable)
+        .set({ createdAt: new Date(Date.now() - 60_000) })
+        .where(eq(hostsTable.id, old.hostId))
+        .run();
+      const fresh = enrollHost(app, { baseUrl, hostname: "moved", wantsMachineCredential: true });
+      const row = async (id: string) => {
+        app.hostHeartbeatTracker?.markOffline(old.hostId);
+        app.hostHeartbeatTracker?.recordSuccess(fresh.hostId);
+        const list = (await app.inject({ method: "GET", url: "/api/hosts" })).json();
+        return list.find((h: { id: string }) => h.id === id);
+      };
+      await vi.waitFor(async () => {
+        expect((await row(fresh.hostId)).possibleDuplicateOf).toEqual([old.hostId]);
+      });
+      expect((await row(lone.hostId)).legacyAgent).toBe(true);
+      expect((await row(old.hostId)).legacyAgent).toBe(false);
+      expect((await row(fresh.hostId)).legacyAgent).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
 });

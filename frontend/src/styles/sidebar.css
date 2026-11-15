@@ -804,12 +804,14 @@
   min-width: 0;
 }
 .host-derived-status-health,
+.host-derived-status-legacy,
 .host-derived-status-parked {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   white-space: nowrap;
 }
+.host-derived-status-legacy,
 .host-derived-status-parked {
   color: var(--y);
 }
