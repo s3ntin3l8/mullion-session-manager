@@ -31,6 +31,9 @@ describe.skipIf(process.platform !== "linux")("process title", () => {
         "tsx",
         "-e",
         'await import("./src/process-title.ts"); setInterval(() => {}, 1000); console.log("ready")',
+        // Dummy trailing argument: the initial command line contains
+        // "dist/server.js", so the assertions below prove it was overwritten.
+        "dist/server.js",
       ],
       { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] },
     );
