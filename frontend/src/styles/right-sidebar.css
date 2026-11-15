@@ -59,6 +59,12 @@
   border-radius: 1px;
   background: var(--ring);
 }
+/* The right half's session buttons reuse .left-rail-btn, whose marker sits
+   at -4px: in this rail's 3.5px gutter that is half a pixel outside the
+   clip. Same offset as the view buttons' marker above. */
+.right-rail .left-rail-btn.active::before {
+  left: -3px;
+}
 .right-rail-btn svg {
   display: block;
 }
