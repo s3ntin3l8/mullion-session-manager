@@ -84,7 +84,10 @@ An agent session can list, start and stop its **own project's** dock controls
 [`agent-guide.md`](agent-guide.md#dev-servers-and-the-dock). The dock session
 is tagged with the control it came from (`sessions.dock_control_id`), which is
 how `list` and `stop` find it. Previews, devices, other projects' docks and
-Docker-discovered controls stay full-scope.
+Docker-discovered controls stay full-scope. The same session can read a running
+control's output (`docks.logs`, `docks.wait_for_output`) and restart it on
+another branch or worktree (`docks.switch`; a `worktreePath` must be the
+project checkout, a directory inside it, or one of its git worktrees; a relative path is anchored at the project checkout, and the resolved path is what runs). Switching a control that is not running simply starts it there.
 
 ### Port conflicts
 

@@ -68,6 +68,35 @@ export function createDockCommands({ CliUsageError, requireOne }) {
       const result = await client.request("sessions.create", body);
       return { json: result };
     },
+    // `logs <controlId>` (own project) / `logs <projectId> <controlId>`.
+    async logs(client, args) {
+      const hasProject = args[1] !== undefined;
+      const dockControlId = hasProject ? args[1] : requireOne(args, "dock control id");
+      return {
+        json: await client.request("docks.logs", {
+          ...(hasProject ? { projectId: args[0] } : {}),
+          dockControlId,
+        }),
+      };
+    },
+    // `switch [<projectId>] <controlId> <branch>` or `... --worktree <path>`.
+    async switch(client, args) {
+      const wt = args.indexOf("--worktree");
+      const rest = wt === -1 ? [...args] : args.filter((_, i) => i !== wt && i !== wt + 1);
+      const target = wt === -1 ? rest.pop() : args[wt + 1];
+      if (rest.length === 0 || target === undefined) {
+        throw new CliUsageError(
+          "usage: dock switch [<projectId>] <controlId> <branch|--worktree <path>>",
+        );
+      }
+      return {
+        json: await client.request("docks.switch", {
+          ...(rest.length > 1 ? { projectId: rest[0] } : {}),
+          dockControlId: rest[rest.length - 1],
+          ...(wt === -1 ? { branch: target } : { worktreePath: target }),
+        }),
+      };
+    },
     async stop(client, args) {
       // `stop <controlId> --control` (own project) / `stop <projectId> <controlId>`,
       // else a raw session id (full scope).

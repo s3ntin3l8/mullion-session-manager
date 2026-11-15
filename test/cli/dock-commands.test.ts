@@ -142,4 +142,28 @@ describe("mullion dock", () => {
     await runCommand(["dock", "stop", "5"], { client, io });
     expect(client.request).toHaveBeenCalledWith("sessions.kill", { sessionId: "5" });
   });
+
+  it("dock logs and dock switch use docks.logs / docks.switch", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    await runCommand(["dock", "logs", "web"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("docks.logs", { dockControlId: "web" });
+    await runCommand(["dock", "logs", "2", "web"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("docks.logs", {
+      projectId: "2",
+      dockControlId: "web",
+    });
+    await runCommand(["dock", "switch", "web", "feat/x"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("docks.switch", {
+      dockControlId: "web",
+      branch: "feat/x",
+    });
+    await runCommand(["dock", "switch", "2", "web", "--worktree", "/p/wt"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("docks.switch", {
+      projectId: "2",
+      dockControlId: "web",
+      worktreePath: "/p/wt",
+    });
+    expect(await runCommand(["dock", "switch", "web"], { client, io })).toBe(2);
+  });
 });
