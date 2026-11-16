@@ -248,10 +248,15 @@ export { resolveProjectHostId, resolveSessionHostId };
  * worktree is on.
  *
  * Issue #1724 / roadmap 8.10: the reviewer and the rebase worker READ the
- * task's worktree, so they must run where that worktree is. The worker's own
- * session row records the host it was placed on (sessions.hostId, issue
- * #1722); the project's host is the fallback for a task whose worker never
- * started (or whose row predates placement).
+ * task's worktree, so they must run where that worktree is. Resolution order:
+ * 1. `task.sessionId` when non-null and the session row exists (`resolveSessionHostId`).
+ * 2. When `task.sessionId` is null (e.g. cleared by `enqueueRetry` before
+ *    `dispatchQueuedRetry` runs) and `task.id` is provided, the newest session
+ *    row with `taskId = task.id` whose name ends in `· worker`
+ *    (`resolveSessionHostId`). Callers that omit `id` skip this lookup and
+ *    fall through to the project's host.
+ * 3. The project's host (`project?.hostId ?? resolveProjectHostId`) for a task
+ *    whose worker never started (or whose row predates placement).
  *
  * A task's sessions therefore share ONE host — the worker decides it, and
  * the rest join it.
@@ -280,9 +285,7 @@ export function resolveTaskWorkerHost(
       .orderBy(desc(sessions.id))
       .limit(1)
       .all();
-    if (workerRow !== undefined) {
-      return workerRow.hostId ?? project?.hostId ?? resolveProjectHostId(app, task.projectId);
-    }
+    if (workerRow !== undefined) return resolveSessionHostId(app, workerRow);
   }
   return project?.hostId ?? resolveProjectHostId(app, task.projectId);
 }
