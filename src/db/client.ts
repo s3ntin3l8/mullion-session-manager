@@ -47,6 +47,12 @@ export function getDb(databaseUrl?: string) {
   return dbInstance;
 }
 
+/** The raw connection behind `getDb()` (null before it is opened). Only for
+ * PRAGMA-level maintenance (src/services/db-compaction.ts); queries go through drizzle. */
+export function getSqlite(): Database.Database | null {
+  return sqliteInstance;
+}
+
 export function closeDb() {
   if (sqliteInstance) {
     sqliteInstance.close();

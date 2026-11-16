@@ -5,6 +5,8 @@ import { sessions, projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import type { NotificationEvent } from "./pty-manager.js";
 import { getStoredSettings } from "./settings.js";
+import { getSqlite } from "../db/client.js";
+import { createDbCompactor, type DbCompactor } from "./db-compaction.js";
 import {
   insertSessionEvents,
   sweepOldSessionEvents,
@@ -355,9 +357,34 @@ export interface EventRetentionSweep {
  */
 export function startEventRetentionSweep(
   app: FastifyInstance,
-  opts?: { onTick?: () => void },
+  opts?: { onTick?: () => void; compactor?: DbCompactor },
 ): EventRetentionSweep {
   let sweeping = false;
+  const compactor = opts?.compactor ?? createDbCompactor();
+
+  // Runs after a tick that deleted rows. Own try/catch: a compaction problem
+  // must never mask the sweep's result or skip `onTick`.
+  function compactAfterDelete(): void {
+    try {
+      const sqlite = getSqlite();
+      if (!sqlite) return;
+      const r = compactor.compact(sqlite);
+      if (r.checkpointBusy) {
+        app.log.debug("app database WAL checkpoint busy (a reader holds it); retrying next tick");
+      }
+      if (r.vacuumBusy) {
+        app.log.info("app database VACUUM skipped: database busy; retrying on a later tick");
+      }
+      if (r.vacuumed) {
+        app.log.info(
+          { ...r.vacuumed },
+          `compacted app database: ${r.vacuumed.beforeBytes} -> ${r.vacuumed.afterBytes} bytes`,
+        );
+      }
+    } catch (err) {
+      app.log.error({ err }, "app database compaction failed");
+    }
+  }
 
   async function sweep(): Promise<void> {
     if (sweeping) return;
@@ -369,8 +396,10 @@ export function startEventRetentionSweep(
       // running with age-based retention off but a count cap on, or vice
       // versa, is a legitimate combination).
       const settings = getStoredSettings(app.db).sessions;
+      let totalDeleted = 0;
       if (settings.eventRetentionDays > 0) {
         const deleted = sweepOldSessionEvents(app.db, settings.eventRetentionDays);
+        totalDeleted += deleted;
         if (deleted > 0) {
           app.log.info(
             { deleted, retentionDays: settings.eventRetentionDays },
@@ -380,6 +409,7 @@ export function startEventRetentionSweep(
       }
       if (settings.eventRetentionPerSession > 0) {
         const deleted = sweepSessionEventCap(app.db, settings.eventRetentionPerSession);
+        totalDeleted += deleted;
         if (deleted > 0) {
           app.log.info(
             { deleted, maxPerSession: settings.eventRetentionPerSession },
@@ -387,6 +417,7 @@ export function startEventRetentionSweep(
           );
         }
       }
+      if (totalDeleted > 0) compactAfterDelete();
     } catch (err) {
       app.log.error({ err }, "session_events retention sweep failed");
     } finally {

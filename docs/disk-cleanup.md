@@ -442,3 +442,33 @@ terminate stops the master through the scope backend, which removes the socket
 itself; the sweep handles a master that died without doing so). A session that is alive or of unknown
 state is left alone. The sweep reports a session as swept only when none of its
 files remain; a stuck one is retried on the next pass.
+
+## Mullion's own database
+
+`services/db-compaction.ts`, run by the event-retention sweep
+(`startEventRetentionSweep`, hourly). The sweep deletes `session_events` rows
+but SQLite keeps the freed pages inside `app.db`, and the `-wal` file only
+shrinks when something truncates it. After every tick that deleted at least one
+row:
+
+- **WAL checkpoint.** `PRAGMA wal_checkpoint(TRUNCATE)` folds the WAL back into
+  the main file and truncates it to zero. If a reader holds the WAL it reports
+  busy; that is logged at debug and retried on the next tick.
+- **VACUUM, rarely.** Only when the free pages are at least 64 MiB **and** at
+  least 25% of the file, and at most once per 24 hours (the timestamp is in
+  memory, so a restart may allow one more). One log line records the size
+  before and after. A `SQLITE_BUSY` is not an error: it is logged and the next
+  eligible tick tries again. A failed `VACUUM` is atomic and leaves the database
+  as it was.
+- **What requests see.** The server has one connection to this file and
+  `better-sqlite3` is synchronous, so the checkpoint or `VACUUM` runs to
+  completion on the event loop: requests on that connection wait (they cannot
+  interleave, so they never get a `SQLITE_BUSY` from it) and then proceed.
+  That is why the `VACUUM` is gated so hard. Only another process holding a
+  lock can make it busy, and for the duration of each compaction step the
+  connection's `busy_timeout` is lowered from 5 s to 500 ms (restored after),
+  so a foreign lock makes the compaction give up quickly instead of freezing
+  the server. A `VACUUM` needs about the database's size free in temp space.
+- **Not changed.** `auto_vacuum` stays off (switching it needs a one-off full
+  `VACUUM`), and nothing is deleted beyond what the retention settings already
+  remove.
