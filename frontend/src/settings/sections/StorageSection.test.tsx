@@ -97,7 +97,7 @@ const stepOf = (
     caches: "Caches",
     opencode: "opencode database",
     worktrees: "Developer worktrees",
-  }[source],
+  }[source as "docker"],
   state: "done",
   reclaimedBytes: 0,
   ...over,

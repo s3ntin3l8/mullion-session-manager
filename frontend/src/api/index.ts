@@ -115,7 +115,6 @@ export type {
   CleanupJob,
   CleanupStatus,
   CleanupStepState,
-  CleanupSource,
   Project,
   CreateProjectDirOptions,
   CreateProjectPlacementOptions,
@@ -287,6 +286,7 @@ import { systemApi } from "./system.js";
 import { bundleSyncApi } from "./bundleSync.js";
 import { devicesApi } from "./device.js";
 import { avdsApi } from "./avds.js";
+export type { AndroidImagesStatus, CleanupSource } from "./storage-types.js";
 
 // The single flat namespace object every call site in the frontend calls
 // through (`api.listProjects()`, `api.createSession(...)`, etc.) — assembled

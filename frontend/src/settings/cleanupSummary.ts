@@ -8,6 +8,7 @@ const SENTENCE_LABEL: Record<CleanupSource, string> = {
   caches: "caches",
   opencode: "opencode database",
   worktrees: "developer worktrees",
+  "android-images": "Android system images",
 };
 
 /**

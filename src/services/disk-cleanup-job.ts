@@ -9,7 +9,8 @@ import type { TempPruneMode } from "./temp-storage.js";
 // Both prune services take the same two tiers; the intersection fails to
 // compile if either of them ever diverges from what a job hands to it.
 export type CleanupMode = DockerPruneMode & TempPruneMode;
-export type CleanupSource = "docker" | "temp" | "caches" | "opencode" | "worktrees";
+export type CleanupSource =
+  "docker" | "temp" | "caches" | "opencode" | "worktrees" | "android-images";
 
 export interface CleanupStepResult {
   reclaimedBytes: number;
