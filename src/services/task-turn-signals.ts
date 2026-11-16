@@ -61,11 +61,29 @@ export function turnFinishedSinceClaim(
 // mid-work behind a long job, and the budget deadline (when one is set; `0` is
 // unlimited) is its backstop.
 const SHELL_TAIL_GRACE_MS = 5 * 60_000;
+/** How long a no-commit worker may sit behind a shell tail before getting a nudge. */
+export const SHELL_TAIL_NUDGE_MS = 20 * 60_000;
 const SHELL_TAIL_STATUSES: ReadonlySet<SessionStatus> = new Set([
   "background",
   "tool_failure",
   "needs_input",
 ]);
+
+function isShellTailPast(
+  derivedStatus: SessionStatus,
+  info: SessionInfo | null,
+  task: { claimedAt: Date | null },
+  now: number,
+  minAgeMs: number,
+): boolean {
+  if (!SHELL_TAIL_STATUSES.has(derivedStatus)) return false;
+  if (info === null || !turnFinishedSinceClaim(info, task)) return false;
+  if (info.lastTurnEndedAt === null || now - info.lastTurnEndedAt < minAgeMs) {
+    return false;
+  }
+  const outstanding = info.outstandingBackgroundTasks;
+  return outstanding.length > 0 && outstanding.every((t) => t.type === "shell");
+}
 
 /**
  * True when the worker's turn ended since this claim and the ONLY thing
@@ -84,11 +102,19 @@ export function isShellTailHandoff(
   task: { claimedAt: Date | null },
   now: number,
 ): boolean {
-  if (!SHELL_TAIL_STATUSES.has(derivedStatus)) return false;
-  if (info === null || !turnFinishedSinceClaim(info, task)) return false;
-  if (info.lastTurnEndedAt === null || now - info.lastTurnEndedAt < SHELL_TAIL_GRACE_MS) {
-    return false;
-  }
-  const outstanding = info.outstandingBackgroundTasks;
-  return outstanding.length > 0 && outstanding.every((t) => t.type === "shell");
+  return isShellTailPast(derivedStatus, info, task, now, SHELL_TAIL_GRACE_MS);
+}
+
+/**
+ * True when the shell-tail conditions hold AND `now - lastTurnEndedAt` has
+ * reached `SHELL_TAIL_NUDGE_MS`. Used to nudge a no-commit worker that may
+ * be stuck behind a background shell job that cannot exit on its own.
+ */
+export function isShellTailNudgeDue(
+  derivedStatus: SessionStatus,
+  info: SessionInfo | null,
+  task: { claimedAt: Date | null },
+  now: number,
+): boolean {
+  return isShellTailPast(derivedStatus, info, task, now, SHELL_TAIL_NUDGE_MS);
 }

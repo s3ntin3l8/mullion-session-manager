@@ -23,7 +23,12 @@ import {
   type SessionBackend,
 } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
-import { isShellTailHandoff, turnFinishedSinceClaim } from "./task-turn-signals.js";
+import {
+  isShellTailHandoff,
+  isShellTailNudgeDue,
+  turnFinishedSinceClaim,
+} from "./task-turn-signals.js";
+import { nudgeShellTailWorker } from "./task-nudge.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 // #2416 — the three-state "did the worker commit past the base" verdict.
@@ -1098,10 +1103,8 @@ export async function checkReviewingGate(
   if (!task.baseSha || !task.worktreePath) return { ok: true };
 
   const statusResult = await resolveHostGitStatus(app, hostId, task.worktreePath);
-  if (!statusResult.ok || !statusResult.value.isRepo || statusResult.value.status === null) {
-    return { ok: true };
-  }
-  const { hash } = statusResult.value.status;
+  const hash =
+    statusResult.ok && statusResult.value.isRepo ? (statusResult.value.status?.hash ?? null) : null;
   if (hash === null || !task.baseSha.startsWith(hash)) return { ok: true };
 
   // Best-effort enrichment only — errorState is TTL-backed and often
@@ -1117,12 +1120,9 @@ export async function checkReviewingGate(
   const ERROR_DETAIL_MAX_CHARS = 48;
   const rawDetail = info?.errorState === "api_error" ? info.errorDetail : null;
   const truncatedDetail =
-    rawDetail === null
-      ? null
-      : rawDetail.length <= ERROR_DETAIL_MAX_CHARS
-        ? rawDetail
-        : `${rawDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}…`;
-  const detail = truncatedDetail !== null ? ` (${truncatedDetail})` : "";
+    rawDetail && rawDetail.length > ERROR_DETAIL_MAX_CHARS
+      ? `${rawDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}…`
+      : rawDetail;
   // #1015 follow-up — explicit "rate_limit" prefix so a post-grace failure
   // can be distinguished from the generic "agent ended with no commits" case
   // in the GitHub issue comment. Two conditions trigger the prefix:
@@ -1136,7 +1136,6 @@ export async function checkReviewingGate(
   // api_error classification ("overloaded", "auth …", free-text
   // detail) reads as a different class of failure and doesn't get the
   // prefix.
-  const liveRateLimit = info?.errorState === "api_error" && info?.errorDetail === "rate_limit";
   // The graceMinutes isn't passed in here (checkReviewingGate doesn't
   // resolve it); use the same cap as the env default — if
   // `lastRateLimitAt` is older than the documented 1440-min ceiling,
@@ -1145,22 +1144,20 @@ export async function checkReviewingGate(
   // check and add the prefix, but the prefix is informational, not
   // behavior-changing, and the human-visible failure reason is the
   // operator's signal to manually Retry.
-  const MAX_GRACE_MIN = 1440;
-  const persistedRateLimit =
-    task.lastRateLimitAt !== null &&
-    Date.now() - task.lastRateLimitAt.getTime() < MAX_GRACE_MIN * 60_000;
   const rateLimitPrefix =
-    liveRateLimit || persistedRateLimit ? "rate_limit quota exhausted — " : "";
+    (info?.errorState === "api_error" && info?.errorDetail === "rate_limit") ||
+    (task.lastRateLimitAt !== null && Date.now() - task.lastRateLimitAt.getTime() < 1440 * 60_000)
+      ? "rate_limit quota exhausted — "
+      : "";
   // #2364 — an open blocker is the likelier cause of an empty turn: the
   // worker found what it depends on missing. Name it rather than hide it.
   const openBlockers = (parseBlockedBy(task.blockedBy) ?? []).filter((b) => b.number > 0);
-  const blockedNote =
-    openBlockers.length > 0
-      ? ` — blocked by ${openBlockers.map((b) => `#${b.number}`).join(", ")}`
-      : "";
+  const blockedNote = openBlockers.length
+    ? ` — blocked by ${openBlockers.map((b) => `#${b.number}`).join(", ")}`
+    : "";
   return {
     ok: false,
-    failureReason: `${rateLimitPrefix}agent ended its turn with no commits on ${task.branchName}${detail}${blockedNote}`,
+    failureReason: `${rateLimitPrefix}agent ended its turn with no commits on ${task.branchName}${truncatedDetail !== null ? ` (${truncatedDetail})` : ""}${blockedNote}`,
   };
 }
 
@@ -5121,8 +5118,14 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             const gate = await checkReviewingGate(app, task, project, info, hostId);
             if (!gate.ok) {
               // Shell tail + no commits: mid-work behind a long job (pocket #1264); keep
-              // waiting. The budget deadline, when set, is the backstop.
-              if (shellTail) continue;
+              // waiting. Once the turn has sat behind it for SHELL_TAIL_NUDGE_MS, nudge
+              // once so a stuck wait loop (e.g. pgrep -f matching itself) can be killed;
+              // the budget deadline, when set, stays the backstop.
+              if (shellTail) {
+                if (isShellTailNudgeDue(derived.status, info, task, now.getTime()))
+                  await nudgeShellTailWorker(app, task, info, now);
+                continue;
+              }
               await failReviewingGate(
                 app,
                 task,

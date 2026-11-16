@@ -474,7 +474,9 @@ agent/subagent/MCP background work still blocks the hand-off regardless
 handoff above (once the grace has elapsed, the reconciler stops waiting and
 runs the normal commits-past-base gate; a worker with no commits yet keeps
 waiting instead, since the gate could only fail it, and the budget is its
-backstop), and the per-task time budget
+backstop — though once `now - lastTurnEndedAt` reaches `SHELL_TAIL_NUDGE_MS`
+(20 minutes), `nudgeShellTailWorker` nudges it once to check or kill a stuck
+wait loop), and the per-task time budget
 (`tasks.md`'s Safety envelope) — a task that hits its budget while its
 worker has finished (cleanly, or behind such a shell tail) **with commits on
 the branch** is handed to `reviewing` instead of force-failed, since failing
@@ -514,6 +516,12 @@ done, so `failReviewingGate` (`task-gate-failure.ts`) first asks
 - A worker that cannot be typed into (blocked on a dialog, gone, host
   unreachable) fails as before and does not count a nudge. The per-task budget
   stays the backstop for a nudged turn that never ends.
+- A no-commit worker stuck behind a background shell job past
+  `SHELL_TAIL_NUDGE_MS` (20 minutes) is nudged through `nudgeShellTailWorker`
+  (`task-nudge.ts`), sharing `MAX_WORKER_NUDGES` and the same refusals, but
+  naming the outstanding job's description so it can check or kill a stuck wait
+  loop; if it cannot be typed into or stays behind the same job, it is left
+  alone until a new turn ends and the budget remains the backstop.
 
 ## The agent's contract
 
