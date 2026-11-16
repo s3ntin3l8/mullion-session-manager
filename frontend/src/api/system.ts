@@ -119,10 +119,14 @@ export const systemApi = {
   // which sources take part. Only the ticked cache ids that are ALSO in the
   // saved settings are emptied (settings are saved on a short debounce, so the
   // stored set can briefly lag an untick). 409 means one is already running.
-  startCleanup: (mode: DockerPruneMode, cacheDirs?: string[]) =>
+  startCleanup: (mode: DockerPruneMode, cacheDirs?: string[], optIns?: string[]) =>
     request<CleanupJob>("/api/storage/cleanup", {
       method: "POST",
-      body: JSON.stringify({ mode, ...(cacheDirs ? { cacheDirs } : {}) }),
+      body: JSON.stringify({
+        mode,
+        ...(cacheDirs ? { cacheDirs } : {}),
+        ...(optIns ? { optIns } : {}),
+      }),
     }),
   getCleanupStatus: () => request<CleanupStatus>("/api/storage/cleanup"),
 

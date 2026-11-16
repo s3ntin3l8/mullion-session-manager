@@ -13,7 +13,7 @@ service. Everything here is local to the machine the Mullion server runs on.
 
 A cleanup can take minutes (the temp tier re-scans `/tmp` before it deletes
 anything), so it is a job on the server, not a request the page waits on.
-`POST /api/storage/cleanup` (`{ mode, cacheDirs? }`) answers `202` with the job
+`POST /api/storage/cleanup` (`{ mode, cacheDirs?, optIns? }`) answers `202` with the job
 and runs the sources one after another in the background; `GET
 /api/storage/cleanup` is its status, and the page polls it every two seconds
 while it runs. A reload or a second tab finds the job where it was (and its
@@ -31,6 +31,10 @@ still be read. Only one job runs at a time (`409` otherwise).
   entirely when there is nothing to reclaim), and stale developer worktrees
   (always, whatever the preview says, since fetching is the first thing it
   does).
+- Aggressive only, Docker step: `docker volume prune --force` when
+  `docker-volumes` is in **both** the request's `optIns` and the saved
+  `diskCleanup.optIns` (see "Docker" below). No `optIns` in the request means
+  nothing opted in runs, whatever is saved.
 - A source nobody has measured yet still runs: each prune re-checks its own
   safety. The measurements are never started just to make this decision.
 
@@ -67,7 +71,8 @@ cold start.
 `services/docker-storage.ts`. Safe prunes dangling images (any age), stopped
 containers and unused networks older than 7 days, and build cache older than
 24 hours. Aggressive drops the windows and also removes unused tagged images
-(`docker system prune --all`). Volumes are never touched.
+(`docker system prune --all`). Volumes are not touched unless the opt-in below
+is set.
 
 The status also splits the volumes (parsed from the same `docker system df -v`
 call, no extra docker invocation): **anonymous** volumes have a name of exactly
@@ -75,6 +80,31 @@ call, no extra docker invocation): **anonymous** volumes have a name of exactly
 use; every other volume is **named** and counted as one total, in use or not.
 Named volumes are never cleanup candidates. `volumes` is omitted from the
 status when the verbose call fails, so "none" and "unknown" differ.
+
+**Opt-in volume cleanup.** `diskCleanup.optIns` (settings; ids allowlisted by
+`OPT_IN_IDS` in `services/cleanup-opt-ins.ts`, unknown ids dropped) holds
+opt-ins for sources that are not a directory, so they cannot use `cacheDirs`.
+The only id today is `docker-volumes`, ticked in Settings → Storage as "Also
+remove unused anonymous volumes". Like the caches it needs both sides: the
+request's `optIns` and the saved settings. Unlike the caches, a request with no
+`optIns` runs nothing, so a saved opt-in alone never deletes. Safe mode never
+prunes volumes. When it applies, the Docker step runs exactly
+`docker volume prune --force` after `system prune` (never `--all`, never
+`--filter`) and adds the "Total reclaimed space" to the Docker figure. The
+volumes are deleted permanently: whatever an unused, unnamed volume holds, such
+as a stopped dev database, is lost.
+
+The step is gated on `docker version --format '{{.Server.Version}}'`: only a
+major version of 23 or newer runs it, because older engines' `volume prune`
+also removes unused **named** volumes. A version that is older, unparsable, or
+whose command fails skips the volume prune and the step's note says
+`Docker volume cleanup skipped: needs Docker Engine 23+ (found <version or
+unknown>)`; the rest of the Docker step is unaffected. The aggressive estimate
+adds `volumes.anonymousUnused.bytes` only when the opt-in is saved and the same
+gate passes (the figure follows the saved setting once the Docker probe
+refreshes). The "Where the space is" report does not list Docker volumes (it
+walks the home directory, and volumes live under Docker's own data root), so
+they are not in its covered list.
 
 The aggressive estimate is the larger of the summary rows' `Reclaimable` and
 the sum of the per-entry sizes in `docker system df -v` (unused images,

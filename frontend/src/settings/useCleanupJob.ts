@@ -68,11 +68,11 @@ export function useCleanupJob(onFinished: () => void) {
     immediate: false,
   });
 
-  const start = (mode: DockerPruneMode, cacheDirs: string[]) => {
+  const start = (mode: DockerPruneMode, cacheDirs: string[], optIns: string[] = []) => {
     setError(null);
     setStartingMode(mode);
     return api
-      .startCleanup(mode, cacheDirs)
+      .startCleanup(mode, cacheDirs, optIns)
       .then(apply, (cause: unknown) => {
         // 409: another tab (or an earlier click) already started one. Join it.
         if (cause instanceof ApiError && cause.statusCode === 409) {

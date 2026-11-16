@@ -445,7 +445,7 @@ describe("Settings -> Storage", () => {
       expect(api.startCleanup).not.toHaveBeenCalled();
       await userEvent.click(first);
       await waitFor(() => expect(api.startCleanup).toHaveBeenCalledOnce());
-      expect(api.startCleanup).toHaveBeenCalledWith("safe", []);
+      expect(api.startCleanup).toHaveBeenCalledWith("safe", [], []);
       expect(
         await screen.findByText("Freed 1.0 GiB (Docker 1.0 GiB, temp files 0 B)."),
       ).toBeInTheDocument();
@@ -472,7 +472,7 @@ describe("Settings -> Storage", () => {
       );
       render(<StorageSection />);
       await confirm("Aggressive cleanup…");
-      await waitFor(() => expect(api.startCleanup).toHaveBeenCalledWith("aggressive", []));
+      await waitFor(() => expect(api.startCleanup).toHaveBeenCalledWith("aggressive", [], []));
       expect(
         await screen.findByText("Freed 3.0 GiB, then stopped: step failed"),
       ).toBeInTheDocument();
@@ -487,12 +487,12 @@ describe("Settings -> Storage", () => {
         },
       });
       useDashboardStore.setState({
-        settings: { ...DEFAULT_SETTINGS, diskCleanup: { cacheDirs: ["pip"] } },
+        settings: { ...DEFAULT_SETTINGS, diskCleanup: { cacheDirs: ["pip"], optIns: [] } },
       });
       mockCleanup(jobOf({ mode: "aggressive" }));
       render(<StorageSection />);
       await confirm("Aggressive cleanup…");
-      await waitFor(() => expect(api.startCleanup).toHaveBeenCalledWith("aggressive", ["pip"]));
+      await waitFor(() => expect(api.startCleanup).toHaveBeenCalledWith("aggressive", ["pip"], []));
     });
 
     it("lists each source's outcome, with why one was skipped or failed", async () => {
@@ -1229,7 +1229,7 @@ describe("Settings -> Storage", () => {
     it("keeps an opted-in cache that vanished from disk listed so the stale opt-in can be cleared", async () => {
       setup({ caches });
       useDashboardStore.setState({
-        settings: { ...DEFAULT_SETTINGS, diskCleanup: { cacheDirs: ["go-build"] } },
+        settings: { ...DEFAULT_SETTINGS, diskCleanup: { cacheDirs: ["go-build"], optIns: [] } },
       });
       render(<StorageSection />);
       const toggle = await screen.findByRole("button", {

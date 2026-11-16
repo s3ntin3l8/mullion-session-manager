@@ -2431,8 +2431,9 @@ export interface AppSettings {
   externalReadRoots: string[];
   // Mirrors src/services/settings.ts's AppSettings.diskCleanup: which
   // allowlisted ~/.cache subtrees the aggressive cleanup may empty (ids from
-  // GET /api/storage/caches). Empty = none.
-  diskCleanup: { cacheDirs: string[] };
+  // GET /api/storage/caches). Empty = none. `optIns` are the non-directory
+  // sources (currently only "docker-volumes").
+  diskCleanup: { cacheDirs: string[]; optIns: string[] };
   launchers: {
     defaultShell: string;
     defaultAgent: string;

@@ -160,7 +160,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   projectRoots: [],
   autoDetectHostCheckouts: false,
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
-  diskCleanup: { cacheDirs: [] },
+  diskCleanup: { cacheDirs: [], optIns: [] },
   launchers: {
     defaultShell: "zsh",
     defaultAgent: "claude",
