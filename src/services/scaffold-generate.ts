@@ -93,7 +93,7 @@ export { agentLogLabel, describeSpawnFailure, redactSecrets } from "./scaffold-f
 // issue #1081, 2026-09-05, this repo's own dev sandbox):
 //
 //   bwrap --ro-bind / / --dev /dev --proc /proc --bind <scratch worktree>
-//     <scratch worktree> --die-with-parent -- <agent bin> <agent args...>
+//     <scratch worktree> --unshare-pid --die-with-parent -- <agent bin> <agent args...>
 //
 // — deliberately NOT `--unshare-net`, since the agent CLI itself needs
 // network access to reach its own model API. This blocks a write outside
@@ -108,8 +108,10 @@ export { agentLogLabel, describeSpawnFailure, redactSecrets } from "./scaffold-f
 // cwd, not for git's benefit), and — the load-bearing property — still
 // lets `execFile`'s own `timeout` kill the sandboxed process via SIGTERM
 // with no orphaned children, because `--die-with-parent` ties bwrap's own
-// lifetime (and therefore everything it launched) to its immediate
-// parent.
+// lifetime to its immediate parent and `--unshare-pid` makes the sandbox's
+// init die with bwrap, so the kernel kills every process in the PID
+// namespace (#3089; `--die-with-parent` alone left the inner process alive
+// on Ubuntu 26.04).
 //
 // A second live re-check (2026-09-06, same box) found the worktree bind
 // ALONE is not enough for every agent this module supports: `codex` and
@@ -138,7 +140,7 @@ export { agentLogLabel, describeSpawnFailure, redactSecrets } from "./scaffold-f
 // a different path, or via AppArmor policy instead of sysctl). So instead
 // of `command -v bwrap`, `isSandboxCapable` runs an actual smoke probe
 // (`bwrap --ro-bind / / --dev /dev --proc /proc --bind <tmpdir> <tmpdir>
-// --die-with-parent -- /bin/true` — the same base flags as the real
+// --unshare-pid --die-with-parent -- /bin/true` — the same base flags as the real
 // invocation, minus any per-agent extra binds, which are checked
 // separately by re-verifying live per agent as described above) once per
 // process and caches the boolean result — see that function's own comment
@@ -1103,6 +1105,13 @@ function buildBwrapBaseArgs(
           path.join(fakeHome, "tmp"),
         ]
       : []),
+    // Own PID namespace (#3089): `--die-with-parent` alone only ties bwrap's
+    // direct child to bwrap, and on bubblewrap/kernel combinations such as
+    // Ubuntu 26.04 an `execFile` timeout left the inner process alive. With
+    // its own PID namespace the sandbox's init dies with bwrap and the kernel
+    // then kills every remaining process in the namespace. `--proc` above is
+    // mounted after the unshare, so /proc matches the new namespace.
+    "--unshare-pid",
     "--die-with-parent",
   ];
 }
@@ -1579,7 +1588,8 @@ export function persistAgentSandboxAuth(
  * invocation from this module's own header comment:
  *
  *   bwrap --ro-bind / / --dev /dev --proc /proc --bind <worktreePath>
- *     <worktreePath> [--bind-try <extra> <extra> ...] --die-with-parent
+ *     <worktreePath> [--bind-try <extra> <extra> ...] --unshare-pid
+ *     --die-with-parent
  *     -- <bin> <args...>
  *
  * `extraWritablePaths` defaults to empty so a caller that has none (e.g.
