@@ -205,6 +205,222 @@
     ],
     "console": []
   },
+  "github-issues.desktop.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 2
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 6
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 9
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 12
+      }
+    ],
+    "console": []
+  },
+  "github-issues.desktop.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 2
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 6
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 9
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 12
+      }
+    ],
+    "console": []
+  },
+  "github-issue-epic.desktop.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 2
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 6
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 9
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 12
+      }
+    ],
+    "console": []
+  },
+  "github-issue-epic.desktop.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 2
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 6
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 9
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 12
+      }
+    ],
+    "console": []
+  },
+  "github-issue-child.desktop.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 2
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 6
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 9
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 12
+      }
+    ],
+    "console": []
+  },
+  "github-issue-child.desktop.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 2
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 6
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 9
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 12
+      }
+    ],
+    "console": []
+  },
   "tasks-tab.desktop.dark.png": {
     "status": 200,
     "overflow": false,

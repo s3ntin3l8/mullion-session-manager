@@ -171,6 +171,48 @@ function issuesFor(repo) {
         age: 900,
         labels: ["docs", "mullion-task"],
       },
+      // An epic with four children (two closed, two open): what the issue
+      // detail's Sub-issues card and "Parent:" line render. `children` lists
+      // fixture numbers; `state` defaults to "open" and closed issues stay out
+      // of the list endpoint.
+      {
+        number: 20,
+        title: "Harden the login flow",
+        author: "mira",
+        age: 800,
+        labels: ["enhancement"],
+        children: [21, 22, 23, 24],
+      },
+      {
+        number: 21,
+        title: "Lock accounts after repeated failures",
+        author: "mira",
+        age: 700,
+        labels: ["bug"],
+        state: "closed",
+      },
+      {
+        number: 22,
+        title: "Show a clear error on a wrong password",
+        author: "jonas",
+        age: 650,
+        labels: ["ui"],
+        state: "closed",
+      },
+      {
+        number: 23,
+        title: "Add a CAPTCHA after three failed logins",
+        author: "jonas",
+        age: 600,
+        labels: ["enhancement"],
+      },
+      {
+        number: 24,
+        title: "Email users about unfamiliar sign-ins",
+        author: "mira",
+        age: 500,
+        labels: ["enhancement"],
+      },
     ];
   return [
     {
@@ -189,6 +231,8 @@ function issuesFor(repo) {
     },
   ];
 }
+
+const isOpen = (i) => (i.state ?? "open") === "open";
 
 const LABEL_COLORS = {
   bug: "d73a4a",
@@ -215,6 +259,16 @@ function buildState(now) {
       updated: iso(Math.min(i.age, 60), now),
       body: `Details for "${i.title}".`,
     }));
+    for (const epic of issues)
+      for (const n of epic.children ?? []) {
+        const child = issues.find((c) => c.number === n);
+        if (child) child.parent = epic.number;
+      }
+    for (const epic of issues)
+      if (epic.children)
+        epic.completed = issues.filter(
+          (c) => epic.children.includes(c.number) && c.state === "closed",
+        ).length;
     state[repo] = { pulls, issues };
   }
   return state;
@@ -350,13 +404,13 @@ function prDetailNode(pr, repoName) {
   };
 }
 
-function issueJson(i, repoName, withHtml) {
+function issueJson(i, repoName, withHtml, apiBase) {
   const url = `https://github.com/${DEMO_GITHUB_OWNER}/${repoName}/issues/${i.number}`;
   return {
     number: i.number,
     title: i.title,
     html_url: url,
-    state: "open",
+    state: i.state ?? "open",
     user: { login: i.author },
     // Task Master ignores a labelled issue unless its author is trusted.
     author_association: "MEMBER",
@@ -367,6 +421,16 @@ function issueJson(i, repoName, withHtml) {
     created_at: i.created,
     updated_at: i.updated,
     ...(withHtml ? { body_html: `<p>${esc(i.body)}</p>` } : {}),
+    // The backend only trusts a parent URL under its configured API base
+    // (parseParentIssueUrl), which in the demo is this server's own origin.
+    ...(i.children
+      ? { sub_issues_summary: { total: i.children.length, completed: i.completed } }
+      : {}),
+    ...(i.parent
+      ? {
+          parent_issue_url: `${apiBase}/repos/${DEMO_GITHUB_OWNER}/${repoName}/issues/${i.parent}`,
+        }
+      : {}),
   };
 }
 
@@ -399,6 +463,8 @@ export async function startFakeGithub({
   now = Date.now(),
 } = {}) {
   const state = buildState(now);
+  // Set once the server listens; issueJson reads it per request.
+  let apiBase = "";
   const repoOf = (name) => state[name];
 
   let tickTimer;
@@ -476,7 +542,7 @@ export async function startFakeGithub({
       return json(res, {
         default_branch: "main",
         private: false,
-        open_issues_count: repo.issues.length + repo.pulls.length,
+        open_issues_count: repo.issues.filter(isOpen).length + repo.pulls.length,
         permissions: { push: true, maintain: false, admin: false },
       });
 
@@ -484,12 +550,16 @@ export async function startFakeGithub({
       const wanted = (q.get("labels") ?? "").split(",").filter(Boolean);
       const perPage = Number(q.get("per_page") ?? 30);
       const page = Number(q.get("page") ?? 1);
-      const issues = repo.issues.filter((i) => wanted.every((l) => i.labels.includes(l)));
+      // Only open issues, whatever `state` asks for (closed fixtures exist for
+      // the sub-issue card, not the list).
+      const issues = repo.issues.filter(
+        (i) => isOpen(i) && wanted.every((l) => i.labels.includes(l)),
+      );
       // The unlabelled list is what getRepoStatus reads: PRs show up in it
       // too, marked by `pull_request`.
       const prs = wanted.length === 0 ? repo.pulls : [];
       const items = [
-        ...issues.map((i) => issueJson(i, repoName, false)),
+        ...issues.map((i) => issueJson(i, repoName, false, apiBase)),
         ...prs.map((p) => ({
           number: p.number,
           title: p.title,
@@ -511,11 +581,21 @@ export async function startFakeGithub({
     // Task Master asks for each tracked issue's blockers; none here.
     if (/^\/issues\/\d+\/dependencies\/blocked_by$/.test(sub)) return json(res, []);
 
-    const issueMatch = sub.match(/^\/issues\/(\d+)(\/comments)?$/);
+    const issueMatch = sub.match(/^\/issues\/(\d+)(\/comments|\/sub_issues)?$/);
     if (issueMatch) {
       const issue = repo.issues.find((i) => i.number === Number(issueMatch[1]));
       if (!issue) return json(res, { message: "Not Found" }, 404);
-      return json(res, issueMatch[2] ? [] : issueJson(issue, repoName, true));
+      if (issueMatch[2] === "/sub_issues")
+        return json(
+          res,
+          repo.issues
+            .filter((c) => issue.children?.includes(c.number))
+            .map((c) => ({
+              ...issueJson(c, repoName, false, apiBase),
+              repository_url: `${apiBase}/repos/${DEMO_GITHUB_OWNER}/${repoName}`,
+            })),
+        );
+      return json(res, issueMatch[2] ? [] : issueJson(issue, repoName, true, apiBase));
     }
 
     if (sub === "/pulls")
@@ -603,6 +683,7 @@ export async function startFakeGithub({
     server.listen(0, "127.0.0.1", resolve);
   });
   const { port } = server.address();
+  apiBase = `http://127.0.0.1:${port}`;
 
   return {
     url: `http://127.0.0.1:${port}`,
