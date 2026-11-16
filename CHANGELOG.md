@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.63](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.62...v0.3.63) (2026-11-16)
+
+
+### Features
+
+* **dock:** let an agent session list, start and stop its project's dock controls ([#3052](https://github.com/s3ntin3l8/mullion-session-manager/issues/3052)) ([573e786](https://github.com/s3ntin3l8/mullion-session-manager/commit/573e786086dd801dd37c9a3d8f057639a5a81b0f))
+* **dock:** let an agent session read and edit its project's dock config ([#3067](https://github.com/s3ntin3l8/mullion-session-manager/issues/3067)) ([0e0824f](https://github.com/s3ntin3l8/mullion-session-manager/commit/0e0824f604db9b07c5f285ebbfc7b062a798a6c8))
+* **dock:** let an agent session read dock logs and switch a control's branch ([#3064](https://github.com/s3ntin3l8/mullion-session-manager/issues/3064)) ([37d618f](https://github.com/s3ntin3l8/mullion-session-manager/commit/37d618f7cff5a9fdb2a5c63d05cec7e80b889e46))
+* **github:** show sub-issues and parent in the issue detail sidebar ([#3116](https://github.com/s3ntin3l8/mullion-session-manager/issues/3116)) ([437ebbd](https://github.com/s3ntin3l8/mullion-session-manager/commit/437ebbdb5832752647b93f8881ac39b0cfd31c47))
+* **hosts:** flag legacy agents that cannot be reached off-LAN ([#3079](https://github.com/s3ntin3l8/mullion-session-manager/issues/3079)) ([2382354](https://github.com/s3ntin3l8/mullion-session-manager/commit/2382354ac26a47f9abc07eebd819a23fe3452271)), closes [#2969](https://github.com/s3ntin3l8/mullion-session-manager/issues/2969)
+* **hosts:** let an operator clear a host's address once it has a machine identity ([#3092](https://github.com/s3ntin3l8/mullion-session-manager/issues/3092)) ([c4918c3](https://github.com/s3ntin3l8/mullion-session-manager/commit/c4918c389e315eaeefdd48df141f07701fbbfaaf)), closes [#3091](https://github.com/s3ntin3l8/mullion-session-manager/issues/3091)
+* **hosts:** opt-in to allow Tailscale 100.64.0.0/10 host URLs ([#3000](https://github.com/s3ntin3l8/mullion-session-manager/issues/3000)) ([ec264e3](https://github.com/s3ntin3l8/mullion-session-manager/commit/ec264e312cbf02454e96a859a3396e7c3870e69f)), closes [#2970](https://github.com/s3ntin3l8/mullion-session-manager/issues/2970)
+* **projects:** Add project folder picker works for remote hosts ([6cb9a19](https://github.com/s3ntin3l8/mullion-session-manager/commit/6cb9a19b037970070256ef2d17c93af858014735))
+* **storage:** opt-in cleanup of Trash, the npx cache, gh and Claude CLI caches ([#3093](https://github.com/s3ntin3l8/mullion-session-manager/issues/3093)) ([c543ca8](https://github.com/s3ntin3l8/mullion-session-manager/commit/c543ca82c3726b6729a3cd5dbcdc48daa4ff432a))
+* **tasks:** dismiss a blocking code-scanning alert from the task, with an audit line ([46e2561](https://github.com/s3ntin3l8/mullion-session-manager/commit/46e25614da5420b1595408dd4fea1c7dc140db87))
+* **tasks:** show a blocking code-scanning alert's rule, code and past dismissals on the task ([155233e](https://github.com/s3ntin3l8/mullion-session-manager/commit/155233efd0ebc5ca29d888e19034a9b555bff5dd))
+
+
+### Bug Fixes
+
+* **deploy:** give the server a command line that `pkill -f "dist/server.js"` does not match ([3d3a1fd](https://github.com/s3ntin3l8/mullion-session-manager/commit/3d3a1fd03093939b948571be568dc832b08c90c0))
+* **hosts:** dedupe remote git-status/git-diff reads on the primary ([#2992](https://github.com/s3ntin3l8/mullion-session-manager/issues/2992)) ([3bd617c](https://github.com/s3ntin3l8/mullion-session-manager/commit/3bd617cf93de84ba282857bf57191d397c48a791))
+* **hosts:** skip offline hosts in git batch polling ([#2994](https://github.com/s3ntin3l8/mullion-session-manager/issues/2994)) ([716bd30](https://github.com/s3ntin3l8/mullion-session-manager/commit/716bd30ce7246249813c1e023d769bcd2b8ed169))
+* **scaffold:** bwrap --die-with-parent leaves the inner process alive on ubuntu-26.04 ([49ad417](https://github.com/s3ntin3l8/mullion-session-manager/commit/49ad41769547092c88eb788ccd87b103174c1382))
+* **sessions:** poll exited sessions' git state on the slow cadence ([#2993](https://github.com/s3ntin3l8/mullion-session-manager/issues/2993)) ([5111081](https://github.com/s3ntin3l8/mullion-session-manager/commit/511108144271864d2f40179080234a1461503b9a))
+* **storage:** stop leaking per-session files and test temp dirs ([#3094](https://github.com/s3ntin3l8/mullion-session-manager/issues/3094)) ([7f07076](https://github.com/s3ntin3l8/mullion-session-manager/commit/7f07076969af4ba4eb5e9179e6f5db0491ba7efc))
+* **tasks:** don't fail a zero-commit worker waiting on a long background shell job ([#3105](https://github.com/s3ntin3l8/mullion-session-manager/issues/3105)) ([99a8e73](https://github.com/s3ntin3l8/mullion-session-manager/commit/99a8e730b1ff4a26b95c633a7e8fb0c369419655))
+* **tasks:** ignore directive lines inside fenced code blocks in an issue body ([e53a7c7](https://github.com/s3ntin3l8/mullion-session-manager/commit/e53a7c7a1aa699bb47bd324547f7b3429dae1b9f))
+* **tasks:** re-upload coverage when a non-Actions status stays pending after green CI ([5fcdef6](https://github.com/s3ntin3l8/mullion-session-manager/commit/5fcdef6d395282a43657b5a84be345dde867978a))
+* **tasks:** Retry resets a failed task with no branch to Ready ([#3080](https://github.com/s3ntin3l8/mullion-session-manager/issues/3080)) ([e9b0979](https://github.com/s3ntin3l8/mullion-session-manager/commit/e9b09796052cf254f36d75cc18830412f67eb117))
+* **tasks:** say which review thread blocks a done task's merge, including code-scanning alerts ([fbe9a3a](https://github.com/s3ntin3l8/mullion-session-manager/commit/fbe9a3a40e505c41851b436a318a012cabdb9367))
+* **tasks:** tidy the task sidebar's agent and model editor ([#2984](https://github.com/s3ntin3l8/mullion-session-manager/issues/2984)) ([ce45134](https://github.com/s3ntin3l8/mullion-session-manager/commit/ce45134871c2673e800d81367f4a488ead4c8701))
+* **uiux:** approve a held workflow change from the sidebar task detail ([#3100](https://github.com/s3ntin3l8/mullion-session-manager/issues/3100)) ([d885763](https://github.com/s3ntin3l8/mullion-session-manager/commit/d885763c22c045ac35f22982e5f3fc2322d35824))
+* **uiux:** put Archive beside Retry in the task actions ([#3120](https://github.com/s3ntin3l8/mullion-session-manager/issues/3120)) ([fbce129](https://github.com/s3ntin3l8/mullion-session-manager/commit/fbce1299ff5fd5a0d69b16ba8bc3aea587ab7f42))
+* **uiux:** reopening the Tasks sidebar lands on the list, not a stale detail ([#2986](https://github.com/s3ntin3l8/mullion-session-manager/issues/2986)) ([7fc6b4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/7fc6b4aead33f272c9c56182b3822398c44e3d02))
+* **windows:** hide child consoles and cache the AUTO base ref ([#2990](https://github.com/s3ntin3l8/mullion-session-manager/issues/2990)) ([888e1ca](https://github.com/s3ntin3l8/mullion-session-manager/commit/888e1ca9120e8b5b4c901636675dee777b68c6a6))
+
 ## [0.3.62](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.61...v0.3.62) (2026-11-11)
 
 
