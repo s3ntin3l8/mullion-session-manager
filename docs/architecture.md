@@ -35,7 +35,8 @@ call into one of them.
 **The surviving hook token (issue #3166).** A session's hook token is
 persisted next to its socket (`<sessionsDir>/<id>.token`, minted by
 `loadOrCreateHookToken` in `src/services/hook-token.ts`), so it outlives the
-process that created it; `PtyManager`'s in-memory token map does not. After a
+process that created it; the process-wide hook-token registry
+(`src/services/hook-token-registry.ts`) does not. After a
 restart, every hook handshake a surviving session's agent makes is refused —
 "hook connection presented an unknown or invalid token" — including the final
 `Stop`, which is how a Task Master worker reports that it finished. On the
@@ -46,14 +47,17 @@ all (see `src/app.ts`'s role branch). `src/services/hook-token-adopt.ts` is
 the database-free half: at boot, an agent-role host finds the scopes it still
 owns and registers each one's persisted token with `PtyManager.resolveToken()`
 — without rebuilding the session, without a database row, and without
-touching the running program. The scope backend answers the liveness and
+touching the running program. The registry it writes into
+(`src/services/hook-token-registry.ts`) is PROCESS state, not a field of one
+`PtyManager`: a hook token is a bearer secret for one session of one host,
+and a host runs one Mullion process. The scope backend answers the liveness and
 ownership question (on Linux `listOwnedScopes`, resolving ownership by the
 scope's dtach socket path and never by unit name; on macOS the detached
 backend's probe of that same socket), and the candidate's own socket is
 probed too, so a token is never paired with a scope that is not the one it
 belongs to. It is strictly read-only: no respawn, no reattach, no
 `terminate()`, no scope stop — a dead scope's token stays unresolvable, and
-the summary it logs carries session ids, never a token value.
+the summaries it logs carry session ids and reasons, never a token value.
 
 That re-registration is what the handshake needs, and only that: the hook
 socket now ACCEPTS the surviving session's agent again, and the hook kinds

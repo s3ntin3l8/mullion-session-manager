@@ -78,6 +78,30 @@ const DEAD_TOKEN = "b2".repeat(24);
 const FOREIGN_TOKEN = "c3".repeat(24);
 const MALFORMED_TOKEN = "not-a-well-formed-token";
 
+/**
+ * The boot sweep's log lines (src/plugins/pty.ts).
+ *
+ * `SWEEP_FINISHED` fires whenever the sweep RAN, whatever it decided — so it
+ * is the marker that tells a test "the sweep's verdict is in". `SWEEP_REGISTERED`
+ * fires only when at least one token was registered, and `SWEEP_SKIPPED` only
+ * when at least one candidate was skipped (with the ids and the reasons).
+ */
+const SWEEP_FINISHED = "boot sweep of surviving hook tokens finished";
+const SWEEP_REGISTERED = "re-registered the hook tokens of surviving sessions";
+const SWEEP_SKIPPED = "some surviving hook tokens could not be re-registered";
+
+/** One watched log method — the shape this test needs (the recorded calls). */
+interface LogSpy {
+  mock: { calls: unknown[][] };
+}
+
+/** The log calls this test watches. */
+interface LogSpies {
+  info: LogSpy;
+  warn: LogSpy;
+  error: LogSpy;
+}
+
 /** Connects a raw net socket to `path`, resolving once actually connected. */
 function connect(socketPath: string): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
@@ -156,12 +180,16 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
     // The systemd listing the Linux backend reads. Ownership is resolved
     // from the dtach socket path in the Description (never from the unit
     // name), so the foreign row names a socket outside this instance's dirs
-    // and is therefore not this host's scope.
+    // and is therefore not this host's scope. Its unit carries ANOTHER
+    // instance's id (guaranteed different from this one's), so the backend
+    // reads it as "not ours" rather than as this instance's own unit whose
+    // socket could not be placed.
     const instanceId = deriveInstanceId(sessionsDir);
+    const foreignInstanceId = instanceId === "deadbeef" ? "deadbeee" : "deadbeef";
     childState.scopeListing = [
       `crs-session-${instanceId}-1.scope loaded active running dtach -n ${path.join(sessionsDir, "1.sock")} /bin/bash -lc agent`,
       `crs-session-${instanceId}-3.scope loaded active running dtach -n ${path.join(sessionsDir, "3.sock")} /bin/bash -lc agent`,
-      `crs-session-deadbeef-4.scope loaded active running dtach -n ${path.join(foreignDir, "4.sock")} /bin/bash -lc agent`,
+      `crs-session-${foreignInstanceId}-4.scope loaded active running dtach -n ${path.join(foreignDir, "4.sock")} /bin/bash -lc agent`,
     ].join("\n");
   }
 
@@ -170,22 +198,71 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
    *
    * The sweep is fire-and-forget inside the onReady hook (the same posture
    * the primary's own adoption uses), so "the sweep is done" is observed
-   * through the log line it ends with — never by a sleep.
+   * through the log line it always ends with — never by a sleep.
    */
-  async function bootAgent(): Promise<FastifyInstance> {
+  async function bootAgent(): Promise<{ app: FastifyInstance; logs: LogSpies }> {
     const app = await buildTestApp();
-    const infoSpy = vi.spyOn(app.log, "info");
+    const logs: LogSpies = {
+      info: vi.spyOn(app.log, "info"),
+      warn: vi.spyOn(app.log, "warn"),
+      error: vi.spyOn(app.log, "error"),
+    };
     await app.ready();
+    await waitForLog(logs.info, SWEEP_FINISHED);
+    return { app, logs };
+  }
+
+  /** Waits until `spy` has seen a log call whose message is `message`. */
+  async function waitForLog(spy: LogSpy, message: string): Promise<void> {
     await vi.waitFor(
       () => {
-        const logged = infoSpy.mock.calls.some((call) =>
-          call.some((arg) => typeof arg === "string" && arg.includes("surviving sessions")),
-        );
+        const logged = spy.mock.calls.some((call) => call.some((arg) => arg === message));
         expect(logged).toBe(true);
       },
       { timeout: 10_000, interval: 20 },
     );
-    return app;
+  }
+
+  /**
+   * The sweep's own verdict for one candidate: the session id it skipped and
+   * the reason. `undefined` when the sweep said nothing about that id.
+   *
+   * This is what tells "the sweep ran and skipped this id on purpose" apart
+   * from "the sweep never ran" — without it, a refusal test cannot say which
+   * of the two it is looking at.
+   */
+  function skippedVerdict(
+    logs: LogSpies,
+    sessionId: string,
+  ): { sessionId: string; reason: string } | undefined {
+    for (const call of logs.warn.mock.calls) {
+      if (!call.some((arg) => arg === SWEEP_SKIPPED)) continue;
+      for (const arg of call) {
+        if (typeof arg !== "object" || arg === null) continue;
+        const skipped = (arg as { skipped?: unknown }).skipped;
+        if (!Array.isArray(skipped)) continue;
+        for (const entry of skipped) {
+          if (typeof entry !== "object" || entry === null) continue;
+          const candidate = entry as { sessionId?: unknown; reason?: unknown };
+          if (candidate.sessionId !== sessionId) continue;
+          return { sessionId, reason: String(candidate.reason) };
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /** The session ids the sweep registered (its own summary line). */
+  function registeredIds(logs: LogSpies): string[] {
+    for (const call of logs.info.mock.calls) {
+      if (!call.some((arg) => arg === SWEEP_REGISTERED)) continue;
+      for (const arg of call) {
+        if (typeof arg !== "object" || arg === null) continue;
+        const ids = (arg as { sessionIds?: unknown }).sessionIds;
+        if (Array.isArray(ids)) return ids.map(String);
+      }
+    }
+    return [];
   }
 
   beforeAll(async () => {
@@ -219,7 +296,12 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
   });
 
   it("accepts a surviving live session's pre-restart token after the agent boots", async () => {
-    const app = await bootAgent();
+    const { app, logs } = await bootAgent();
+
+    // The sweep's own summary line: it registered this live scope's id —
+    // the pinned fact this test is about.
+    await waitForLog(logs.info, SWEEP_REGISTERED);
+    expect(registeredIds(logs)).toContain("1");
 
     const socket = await connect(app.pty.hookSocketPath);
     socket.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
@@ -234,7 +316,7 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
   });
 
   it("still refuses an unknown token", async () => {
-    const app = await bootAgent();
+    const { app } = await bootAgent();
 
     const socket = await connect(app.pty.hookSocketPath);
     socket.write(`${JSON.stringify({ token: "f".repeat(48) })}\n`);
@@ -244,7 +326,11 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
   });
 
   it("still refuses the token of a dead scope", async () => {
-    const app = await bootAgent();
+    const { app, logs } = await bootAgent();
+
+    // The sweep RAN and skipped this id on purpose — the refusal below is
+    // the sweep's verdict, not the absence of one.
+    expect(skippedVerdict(logs, "2")).toEqual({ sessionId: "2", reason: "dead-scope" });
 
     const socket = await connect(app.pty.hookSocketPath);
     socket.write(`${JSON.stringify({ token: DEAD_TOKEN })}\n`);
@@ -254,7 +340,12 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
   });
 
   it("still refuses a malformed token file's content", async () => {
-    const app = await bootAgent();
+    const { app, logs } = await bootAgent();
+
+    expect(skippedVerdict(logs, "3")).toEqual({
+      sessionId: "3",
+      reason: "malformed-token",
+    });
 
     const socket = await connect(app.pty.hookSocketPath);
     socket.write(`${JSON.stringify({ token: MALFORMED_TOKEN })}\n`);
@@ -264,7 +355,13 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
   });
 
   it("still refuses the token of a scope this host does not own", async () => {
-    const app = await bootAgent();
+    const { app, logs } = await bootAgent();
+
+    // A scope of ANOTHER Mullion instance is not one of this host's scopes,
+    // so the sweep skipped it — the reason it carries is the backend's
+    // verdict on "this host holds no live scope for that id".
+    expect(skippedVerdict(logs, "4")).toBeDefined();
+    expect(registeredIds(logs)).not.toContain("4");
 
     const socket = await connect(app.pty.hookSocketPath);
     socket.write(`${JSON.stringify({ token: FOREIGN_TOKEN })}\n`);
@@ -275,26 +372,20 @@ describe("agent-role hook-token adoption (issue #3166)", () => {
 
   it("never writes a whole token to a log line", async () => {
     const app = await buildTestApp();
-    const spies = [
-      vi.spyOn(app.log, "info"),
-      vi.spyOn(app.log, "warn"),
-      vi.spyOn(app.log, "error"),
-    ];
+    const spies: LogSpies = {
+      info: vi.spyOn(app.log, "info"),
+      warn: vi.spyOn(app.log, "warn"),
+      error: vi.spyOn(app.log, "error"),
+    };
     await app.ready();
-    await vi.waitFor(
-      () => {
-        const logged = spies[0].mock.calls.some((call) =>
-          call.some((arg) => typeof arg === "string" && arg.includes("surviving sessions")),
-        );
-        expect(logged).toBe(true);
-      },
-      { timeout: 10_000, interval: 20 },
-    );
+    await waitForLog(spies.info, SWEEP_FINISHED);
 
     // Every token this test knows about, whole — the log may carry the
     // existing 8-character prefix (hooks.ts's own rule), never the value.
+    // The sweep's own skip summary (ids + reasons) is part of what is
+    // checked here: it is logged, and it carries no token either.
     for (const token of [LIVE_TOKEN, DEAD_TOKEN, FOREIGN_TOKEN, MALFORMED_TOKEN]) {
-      for (const spy of spies) {
+      for (const spy of [spies.info, spies.warn, spies.error]) {
         for (const call of spy.mock.calls) {
           expect(JSON.stringify(call)).not.toContain(token);
         }

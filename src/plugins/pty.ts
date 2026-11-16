@@ -944,11 +944,12 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // sessions that survived its restart.
   //
   // A session's token is persisted next to its socket (`<id>.token`) and
-  // outlives the process that minted it; `PtyManager`'s in-memory token map
-  // does not. After a restart, every hook handshake the surviving session's
-  // agent makes is refused ("hook connection presented an unknown or invalid
-  // token") — including the final `Stop`, which is how a Task Master worker
-  // reports that it finished.
+  // outlives the process that minted it; the process-wide hook-token
+  // registry (`src/services/hook-token-registry.ts`) does not. After a
+  // restart, every hook handshake the surviving session's agent makes is
+  // refused ("hook connection presented an unknown or invalid token") —
+  // including the final `Stop`, which is how a Task Master worker reports
+  // that it finished.
   //
   // The primary's own answer is `adoptActiveTaskSessions` above (#2945),
   // which rebuilds the `Session` — and re-reading the token file is a side
@@ -991,6 +992,29 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
               "re-registered the hook tokens of surviving sessions",
             );
           }
+          if (result.skipped.length > 0) {
+            // A skipped candidate is a session whose token stays UNRESOLVABLE
+            // for the whole lifetime of this process — its agent's hook
+            // connections keep being refused, with no retry. That is exactly
+            // the symptom an operator comes here to debug, so the skip is
+            // logged instead of swallowed: ids and reasons only, never a
+            // token value.
+            app.log.warn(
+              { skipped: result.skipped },
+              "some surviving hook tokens could not be re-registered",
+            );
+          }
+          // Always: "the sweep ran" is otherwise unobservable (both lines
+          // above are conditional), and that is what tells an operator
+          // whether a refused handshake is a deliberate skip or a sweep that
+          // never ran. Counts only — the ids are in the lines above.
+          app.log.info(
+            {
+              registered: result.registered.length,
+              skipped: result.skipped.length,
+            },
+            "boot sweep of surviving hook tokens finished",
+          );
         })
         .catch((err) => {
           app.log.error({ err }, "boot adoption of surviving hook tokens failed");

@@ -10,9 +10,10 @@ import type { ScopeLiveness } from "./scope/types.js";
 // Issue #3166 — a session's hook token is persisted next to its socket
 // (`<sessionsDir>/<id>.token`, minted by `loadOrCreateHookToken` in
 // hook-token.ts) and therefore SURVIVES a restart of the Mullion process that
-// created it. What does not survive is `PtyManager`'s in-memory map of
-// token -> session id: after a restart the map is empty, so every hook
-// handshake the surviving session's agent makes is refused with
+// created it. What does not survive is the process-wide hook-token registry
+// (src/services/hook-token-registry.ts) of token -> session id: after a
+// restart it is empty, so every hook handshake the surviving session's agent
+// makes is refused with
 // "hook connection presented an unknown or invalid token" (plugins/hooks.ts's
 // own log line) — including the final `Stop`, which is how a Task Master
 // worker reports that it finished.
@@ -73,7 +74,13 @@ const TOKEN_SUFFIX = ".token";
 export type HookTokenSkipReason =
   /** The token file is missing, unreadable, or not a well-formed token. */
   | "malformed-token"
-  /** The scope is confidently not running. */
+  /**
+   * This host holds no live scope for that id — the scope is gone, OR it
+   * belongs to a different Mullion instance (the scope backend answers
+   * "dead" for both: a scope this instance does not own is not one of its
+   * scopes, and ownership is resolved by the scope's socket path, never by
+   * unit name).
+   */
   | "dead-scope"
   /** The scope's liveness (or its ownership) could not be confirmed. */
   | "unverified-scope";

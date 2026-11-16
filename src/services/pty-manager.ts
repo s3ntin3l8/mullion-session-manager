@@ -4447,12 +4447,16 @@ export class PtyManager {
   /** Routes one validated hook message (src/plugins/hooks.ts) to the session
    * it's attributed to — a no-op (not an error) for an id this process
    * isn't tracking, the same "unknown id is harmless" shape as every other
-   * per-id lookup in this class. In practice this should never actually be
-   * unknown: hooks.ts only ever calls this with an id resolveToken() just
-   * returned, and resolveToken() only ever returns ids of tracked sessions —
-   * but a session could in principle be killed in the gap between resolving
-   * a message's token and this call reaching it, so the no-op fallback
-   * matters, not just consistency with markEventsSeen(). */
+   * per-id lookup in this class. An untracked id is NOT hypothetical:
+   * hooks.ts only ever calls this with an id resolveToken() just returned,
+   * and since issue #3166 resolveToken() also resolves the token of a
+   * session this process does NOT track — a survivor of a restart, whose
+   * token was re-registered at boot (`src/services/hook-token-adopt.ts`)
+   * without rebuilding the `Session`. Its hook messages therefore land
+   * here with no `Session` to route them into, and a session can in
+   * principle be killed in the gap between resolving a message's token and
+   * this call reaching it, so the no-op fallback matters, not just
+   * consistency with markEventsSeen(). */
   emitHookEvent(
     id: string,
     message: HookMessage,
@@ -4518,8 +4522,10 @@ export class PtyManager {
 
   /** Issue #178 — see Session.resolveGate's doc comment. A no-op (never
    * throws) if `id` isn't tracked, same "unknown id is quietly ignored"
-   * posture as emitHookEvent above (hooks.ts only ever calls this with an id
-   * resolveToken() itself returned, so in practice it's always tracked).
+   * posture as emitHookEvent above — including the case that matters since
+   * issue #3166: hooks.ts only ever calls this with an id resolveToken()
+   * itself returned, and that id may belong to a session this process does
+   * NOT track (a survivor of a restart, adopted at boot).
    * `gateId` added (issue: correlate concurrent permission gates) — a
    * no-op, same posture, if this specific gate isn't tracked either
    * (already resolved, or unknown). */

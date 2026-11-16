@@ -53,11 +53,12 @@ reject any class-level `exitHandled`-style field.
 
 ## 4. Spawn-failure rollback evicts the in-memory Session and token
 
-**Invariant.** `PtyManager.getOrCreate` inserts the `Session` and its entry in
-`hookTokens` before `spawn()` runs. Any create or spawn rollback that deletes
-the DB row also calls `app.pty.kill(id)` (safe: nothing is attached yet) and
-drops the other per-session maps, via `discardPendingSeed` and
-`untrackSessionGithubAuth`.
+**Invariant.** `PtyManager.getOrCreate` inserts the `Session` into `sessions`
+and its token into the process-wide hook-token registry
+(`src/services/hook-token-registry.ts`) before `spawn()` runs. Any create or
+spawn rollback that deletes the DB row also calls `app.pty.kill(id)` (safe:
+nothing is attached yet) and drops the other per-session maps, via
+`discardPendingSeed` and `untrackSessionGithubAuth`.
 
 **Breaks.** A failed spawn leaks a `Session` with its scrollback and a hook
 token that still matches, until restart.
