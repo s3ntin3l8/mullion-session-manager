@@ -3,11 +3,12 @@
 // OUTPUT. Pure — no Fastify/PtyManager imports — so it is unit-testable with
 // fake deps, like waitForSession.
 import safeRegex from "safe-regex2";
+import { renderScrollback } from "./scrollback-render.js";
 import { stripTerminalEscapes } from "./terminal-text.js";
 
 /** Longest `match` accepted, literal or regex. */
 export const MAX_MATCH_LENGTH = 256;
-/** Matching only ever looks at this much trailing ANSI-stripped text, so the
+/** Matching only ever looks at this much trailing rendered text, so the
  * cost of one test is bounded however much the child prints. Best-effort
  * under a flood: >64 KiB of output inside one debounce can scroll a match out
  * of the raw window, and ANSI-heavy output strips to far fewer chars. */
@@ -98,6 +99,13 @@ export interface OutputWaitDeps {
   /** Whether the child's process is still running. */
   alive(): boolean;
   signal?: AbortSignal;
+  /** The session's current terminal size: the raw window is replayed through a
+   * terminal emulator of this size, so matching and the returned `text`/`line`
+   * see what a person would read rather than the child's repaint escapes. */
+  size: { cols: number; rows: number };
+  /** Called when a render fails and that check falls back to ANSI-stripped
+   * matching. */
+  warn?(message: string, err: unknown): void;
 }
 
 export type OutputWaitResult =
@@ -127,32 +135,70 @@ export function waitForOutput(
       resolve(result);
     };
 
-    const check = (): void => {
-      checkTimer = null;
-      if (settled) return;
-      const text = stripTerminalEscapes(raw.toString("utf8")).slice(-OUTPUT_WINDOW_CHARS);
-      const found = matcher.find(text);
-      if (found === null) return;
-      const at = found.index;
-      const lineStart = text.lastIndexOf("\n", at) + 1;
-      const lineEnd = text.indexOf("\n", at + found.text.length);
-      const line = text.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).replace(/\r/g, "");
-      settle({ matched: true, text: found.text, line });
+    // Bytes received / bytes last rendered: a check renders only when new
+    // output arrived since the previous render.
+    let version = deps.seed && deps.seed.length > 0 ? 1 : 0;
+    let renderedVersion = 0;
+    let current: Promise<void> | null = null;
+
+    const view = async (): Promise<string> => {
+      try {
+        return await renderScrollback(raw, { cols: deps.size.cols, rows: deps.size.rows });
+      } catch (err) {
+        deps.warn?.("wait_for_output: render failed, matching ANSI-stripped output", err);
+        return stripTerminalEscapes(raw.toString("utf8"));
+      }
     };
 
+    const runCheck = async (): Promise<void> => {
+      if (settled || version === renderedVersion) return;
+      renderedVersion = version;
+      const text = (await view()).slice(-OUTPUT_WINDOW_CHARS);
+      if (settled) return;
+      const found = matcher.find(text);
+      if (found !== null) {
+        const at = found.index;
+        const lineStart = text.lastIndexOf("\n", at) + 1;
+        const lineEnd = text.indexOf("\n", at + found.text.length);
+        const line = text.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).replace(/\r/g, "");
+        settle({ matched: true, text: found.text, line });
+      }
+    };
+
+    // One render at a time; output that lands meanwhile schedules the next.
+    const check = (): Promise<void> => {
+      checkTimer = null;
+      if (current) return current;
+      current = runCheck()
+        .catch((err) => deps.warn?.("wait_for_output: check failed", err))
+        .finally(() => {
+          current = null;
+          if (!settled && version !== renderedVersion && !checkTimer) {
+            checkTimer = setTimeout(() => void check(), CHECK_DEBOUNCE_MS);
+          }
+        });
+      return current;
+    };
+
+    let ending = false;
     const onAbort = (): void => settle({ aborted: true });
     const timeout = setTimeout(() => settle({ matched: false, timedOut: true }), timeoutMs);
     const aliveTick = setInterval(() => {
-      if (!deps.alive()) {
+      if (!deps.alive() && !ending) {
+        ending = true;
         // One last look: the final bytes may have landed with the exit.
-        check();
-        settle({ matched: false, gone: true });
+        void (async () => {
+          if (current) await current;
+          await check();
+          settle({ matched: false, gone: true });
+        })();
       }
     }, ALIVE_TICK_MS);
     const unsubscribe = deps.onData((chunk) => {
       raw = Buffer.concat([raw, chunk]);
+      version++;
       if (raw.length > RAW_WINDOW_BYTES) raw = raw.subarray(raw.length - RAW_WINDOW_BYTES);
-      if (!checkTimer) checkTimer = setTimeout(check, CHECK_DEBOUNCE_MS);
+      if (!checkTimer && !current) checkTimer = setTimeout(() => void check(), CHECK_DEBOUNCE_MS);
     });
 
     if (deps.signal?.aborted) {
@@ -161,6 +207,6 @@ export function waitForOutput(
     }
     deps.signal?.addEventListener("abort", onAbort, { once: true });
     // Output that was already there when the wait began.
-    if (raw.length > 0) check();
+    if (raw.length > 0) void check();
   });
 }

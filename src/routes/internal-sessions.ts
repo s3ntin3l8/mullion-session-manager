@@ -577,6 +577,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             ? { seed: session.getOutputSince(request.body.afterOffset) }
             : {}),
           alive: () => session.isAlive,
+          size: session.size,
+          warn: (msg, err) => request.log.warn({ err }, msg),
         });
         // The requester hung up: nobody to answer.
         if ("aborted" in result) return reply.code(499).send();
