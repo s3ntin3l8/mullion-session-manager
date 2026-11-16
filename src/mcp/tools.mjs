@@ -539,7 +539,7 @@ const waitForOutput = {
     "Returns {matched, text, line, outputOffset} on a match, {matched:false, timedOut:true} or " +
     "{matched:false, gone:true} (the child exited). `match` is a literal substring unless " +
     "regex:true (then no backreferences/lookarounds or nested quantifiers; max 256 chars). It " +
-    "matches ANSI-stripped output (last 16 KiB window). To catch output a prompt_session just " +
+    "matches the RENDERED view of the output (the last 64 KiB of raw output replayed through a terminal emulator, so a TUI's in-place repaints resolve to what a person would read; text/line are that rendered text, last 16 KiB window). To catch output a prompt_session just " +
     "provoked, pass that call's outputOffset as afterOffset (taken after the prompt was typed and " +
     "submitted, so the typed echo is excluded; with submit:false the echo is still inside the window) — otherwise only output from now on counts. A TUI " +
     "may redraw the submitted prompt into its transcript, so do not use a marker the prompt " +

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import * as scrollbackRender from "../../src/services/scrollback-render.js";
 import {
   compileOutputMatcher,
   waitForOutput,
@@ -60,7 +61,9 @@ describe("waitForOutput", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  function deps(opts: { seed?: Buffer; alive?: () => boolean; signal?: AbortSignal } = {}) {
+  function deps(
+    opts: { seed?: Buffer; alive?: () => boolean; signal?: AbortSignal; warn?: () => void } = {},
+  ) {
     const listeners = new Set<(chunk: Buffer) => void>();
     return {
       listeners,
@@ -71,6 +74,8 @@ describe("waitForOutput", () => {
           return () => listeners.delete(l);
         },
         alive: opts.alive ?? (() => true),
+        size: { cols: 80, rows: 24 },
+        ...(opts.warn ? { warn: opts.warn } : {}),
         ...(opts.seed ? { seed: opts.seed } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       },
@@ -98,9 +103,9 @@ describe("waitForOutput", () => {
 
   it("matches output that was already printed (the seed)", async () => {
     const d = deps({ seed: Buffer.from("done: OK\n") });
-    await expect(waitForOutput(matcher("OK"), 10_000, d.deps)).resolves.toMatchObject({
-      matched: true,
-    });
+    const p = waitForOutput(matcher("OK"), 10_000, d.deps);
+    await vi.advanceTimersByTimeAsync(300);
+    await expect(p).resolves.toMatchObject({ matched: true });
   });
 
   it("times out", async () => {
@@ -154,5 +159,67 @@ describe("waitForOutput", () => {
     d.emit("NEEDLE" + "x".repeat(100_000)); // pushes NEEDLE out of the raw window
     await vi.advanceTimersByTimeAsync(1_200);
     await expect(p).resolves.toEqual({ matched: false, timedOut: true });
+  });
+
+  describe("rendered view", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("resolves a partially repainted line to its full clean text and line", async () => {
+      const d = deps();
+      const p = waitForOutput(matcher("Re-print ONLY items 1-4 as a single"), 10_000, d.deps);
+      // A TUI wrote the line, then repainted only the changed cells, skipping
+      // the unchanged ones with cursor-forward escapes.
+      d.emit("Re-print ONLY items 1-4 as a singlx");
+      d.emit("\r\u001b[34Ce\r\n");
+      await vi.advanceTimersByTimeAsync(300);
+      const r = await p;
+      expect(r).toMatchObject({ matched: true });
+      expect((r as { line: string }).line).toBe("Re-print ONLY items 1-4 as a single");
+    });
+
+    it("a line repainted five times yields one clean match, and the wait settles once", async () => {
+      const d = deps();
+      const p = waitForOutput(matcher("DONE", false), 10_000, d.deps);
+      for (let i = 0; i < 5; i++) d.emit("\u001b[2K\rbuild DONE ok");
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(p).resolves.toEqual({ matched: true, text: "DONE", line: "build DONE ok" });
+      expect(d.listeners.size).toBe(0);
+    });
+
+    it("matches a marker printed on the alternate screen", async () => {
+      const d = deps();
+      const p = waitForOutput(matcher("ALT-MARKER"), 10_000, d.deps);
+      d.emit("shell$ vim\r\n\u001b[?1049h\u001b[2J\u001b[HALT-MARKER here");
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(p).resolves.toMatchObject({ matched: true, line: "ALT-MARKER here" });
+    });
+
+    it("falls back to ANSI-stripped matching, with a warning, when rendering fails", async () => {
+      vi.spyOn(scrollbackRender, "renderScrollback").mockRejectedValue(new Error("boom"));
+      const warn = vi.fn();
+      const d = deps({ warn });
+      const p = waitForOutput(matcher("passed"), 10_000, d.deps);
+      d.emit("\u001b[32m5 passed\u001b[0m\r\n");
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(p).resolves.toEqual({ matched: true, text: "passed", line: "5 passed" });
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders at most once per debounce window and only when new bytes arrived", async () => {
+      const spy = vi.spyOn(scrollbackRender, "renderScrollback");
+      const d = deps();
+      const p = waitForOutput(matcher("never"), 5_000, d.deps);
+      for (let i = 0; i < 20; i++) d.emit(`chunk ${i}\r\n`);
+      await vi.advanceTimersByTimeAsync(150);
+      expect(spy).toHaveBeenCalledTimes(1);
+      // No new bytes: no further render however long we wait.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(spy).toHaveBeenCalledTimes(1);
+      d.emit("more\r\n");
+      await vi.advanceTimersByTimeAsync(150);
+      expect(spy).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await p;
+    });
   });
 });

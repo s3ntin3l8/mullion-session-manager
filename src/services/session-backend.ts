@@ -621,6 +621,8 @@ class LocalBackend implements SessionBackend {
       // that as "no gap output" rather than an error (like afterSeq).
       ...(req.afterOffset !== undefined ? { seed: session.getOutputSince(req.afterOffset) } : {}),
       alive: () => session.isAlive && req.alive(),
+      size: session.size,
+      warn: (msg, err) => this.app.log.warn({ err }, msg),
     });
     if ("aborted" in result) return { aborted: true };
     return { ...result, outputOffset: session.outputOffset };
