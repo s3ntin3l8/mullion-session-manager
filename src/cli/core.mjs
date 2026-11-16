@@ -1944,6 +1944,9 @@ export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
   session list|get|children|wait|prompt|message|message-status|create|spawn-child|kill|rename|logs|transcript|exec
+  session logs <id> [--text]   terminal output only: for a full-screen agent CLI (Claude Code,
+                               Codex) it keeps no history, so use "session transcript <id>"
+                               to read what the agent did or said
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download|unbind
