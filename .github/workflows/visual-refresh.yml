@@ -5,11 +5,16 @@ name: Visual refresh
 # job does the same for the committed visual baselines (`make visual-baseline`, PR from `bot/refresh-baselines`):
 # the safety net for a UI PR that moved a baseline scene and forgot `/update-baselines`. The mechanics, the
 # tolerance and the self-approval of the PR's held checks live in the shared workflow in s3ntin3l8/.github
-# (visual-refresh.yml); `workflow_dispatch` runs both on demand.
+# (visual-refresh.yml); `workflow_dispatch` runs both on demand, and so does a `/refresh-screenshots` comment on a
+# pull request from a repository writer (OWNER, MEMBER or COLLABORATOR), the way `/update-baselines` works. Every
+# other comment skips both jobs; `issue_comment` runs from the default branch, so a change here only takes effect once
+# it is merged.
 on:
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -18,7 +23,7 @@ permissions:
 
 jobs:
   refresh:
-    if: ${{ !github.event.repository.fork }}
+    if: ${{ !github.event.repository.fork && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/refresh-screenshots') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) }}
     uses: s3ntin3l8/.github/.github/workflows/visual-refresh.yml@main
     with:
       node-version: "26"
@@ -31,7 +36,7 @@ jobs:
   # not PNG or JSON, so a non-constant stamp in visual/baselines/.visual-kit would fail this job.
   baselines:
     needs: refresh
-    if: ${{ !cancelled() && !github.event.repository.fork }}
+    if: ${{ !cancelled() && !github.event.repository.fork && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/refresh-screenshots') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) }}
     uses: s3ntin3l8/.github/.github/workflows/visual-refresh.yml@main
     with:
       node-version: "26"

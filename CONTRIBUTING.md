@@ -124,6 +124,10 @@ These scheduled and on-demand workflows keep the images current without a local 
   `chore(uiux): refresh visual baselines` PR from `bot/refresh-baselines`. Review the images like any baseline change.
   The right place to move a baseline is still the PR that moves the page: the visual-check comment says so (it lists
   the baseline shots the PR changed and points at `/update-baselines`), and this PR only catches what was forgotten.
+- **`/refresh-screenshots`**: comment it on a pull request (write access: OWNER, MEMBER or COLLABORATOR) and the
+  screenshots and baselines refresh jobs above run now instead of waiting for Monday; any other comment is ignored. It
+  needs no reply; watch the "Visual refresh" run in Actions. A dispatch landing while another refresh holds the
+  workflow's group can drop the queued baselines job: comment again.
 - **`/update-baselines`**: comment it on a pull request (write access, branch in this repository) and CI regenerates
   `visual/baselines/` and pushes one commit of the images that really changed to that branch, then replies with the list.
   Forks, closed PRs and commenters without write access are refused with a reply. Two ordinary outcomes also
