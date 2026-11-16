@@ -220,10 +220,11 @@ describe("taskmaster-issues skill — the documented Platform:/Host: rules hold 
     expect(parsePlacementRequirement("run on Platform: darwin please")).toBeNull();
   });
 
-  it("is not hidden by a fenced code block, like every other directive", async () => {
+  it("is ignored inside a fenced code block, like every other directive", async () => {
     const { parsePlacementRequirement } =
       await import("../../../src/services/task-placement-resolve.js");
-    expect(parsePlacementRequirement("```\nPlatform: darwin\n```")).toEqual({
+    expect(parsePlacementRequirement("```\nPlatform: darwin\n```")).toBeNull();
+    expect(parsePlacementRequirement("```\nx\n```\nPlatform: darwin")).toEqual({
       platform: "darwin",
     });
   });
@@ -276,13 +277,13 @@ describe("taskmaster-issues skill — documented matching rules hold against the
     expect(command).toBe("anthropic/claude-sonnet-4-5");
   });
 
-  it("a directive inside a fenced code block still fires", () => {
+  it("a directive inside a fenced code block is ignored", () => {
     const body = "Some context.\n\n```\nAgent: codex\n```\n";
     const command = resolveAgentCommand(mockApp(), {
       issueBody: body,
       projectDefaultAgent: "opencode",
     });
-    expect(command).toBe("codex");
+    expect(command).toBe("opencode");
   });
 
   it("the first Agent: line wins when the body has two", () => {
