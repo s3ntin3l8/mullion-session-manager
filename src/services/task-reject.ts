@@ -23,6 +23,7 @@ import type { projects, tasks } from "../db/schema.js";
 import { deriveTaskBranchName } from "./git-worktree.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "./session-backend.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { resolveWorkerDelegation } from "./task-delegation.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
   buildRejectFollowUpPrompt,
@@ -103,6 +104,7 @@ export async function deliverRejectFeedback(
     budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,
     feedback,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     commitTitlePath,
   });
   return reseedTaskIfSessionExited(app, task, project, prompt, "task reject", {

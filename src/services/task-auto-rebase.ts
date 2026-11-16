@@ -18,6 +18,7 @@ import { resolveBackend, resolveSessionsDirWithFallback } from "./session-backen
 import { getStoredSettings } from "./settings.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { resolveWorkerDelegation } from "./task-delegation.js";
 import { CLEARED_REVIEW_RUN, hasReviewHandle } from "./task-review-handle.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.js";
@@ -529,6 +530,7 @@ export async function attemptAutoRebase(
     commitTitlePath,
     baseRef,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
   });
   const result = await createSessionRecord(app, {
     projectId: project.id,

@@ -105,6 +105,12 @@ import {
   type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
+import { resolveWorkerDelegation } from "./task-delegation.js";
+import {
+  openRefsOfRenderedRound,
+  hasCurrentApproval,
+  rereviewRequestKey,
+} from "./task-review-signals.js";
 import { priorRoundFor } from "./task-prior-round.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
@@ -177,17 +183,6 @@ export { REBASE_ATTEMPT_STALE_MS };
 
 export type ReviewStallReason = "no-progress" | "finding-persisted";
 
-/** `- **ref** — still-open: …` lines of a rendered "### Earlier findings"
- * section, as `renderReviewFindingsMarkdown` writes them. */
-function openRefsOfRenderedRound(block: string | undefined): Set<string> {
-  const refs = new Set<string>();
-  if (!block) return refs;
-  for (const m of block.matchAll(/^- \*\*(.+?)\*\* — (?:still-open|re-broken)/gm)) {
-    refs.add(m[1]);
-  }
-  return refs;
-}
-
 /**
  * Is a review loop with no human watching it going nowhere? Two signals, both
  * about a task the reviewer just sent back AGAIN:
@@ -248,15 +243,6 @@ async function detectReviewStall(
     }
   }
   return null;
-}
-
-/** Does the task's approval still stand for the head under review? True when
- * an approving verdict was ingested for the CURRENT review session — the same
- * pair of facts the auto-approve gate reads — so a later head-moving return
- * (a CI fix, a reviewer's inline suggestions) can carry it instead of
- * re-reviewing. */
-function hasCurrentApproval(task: typeof tasks.$inferSelect): boolean {
-  return isApprovingVerdict(task.lastReviewVerdict) && hasIngestedCurrentReview(task);
 }
 
 /**
@@ -2654,6 +2640,7 @@ async function attemptReturnRedCiToWorker(
     failingChecks: redChecks.map((c) => ({ name: c.name, detail: c.detail, url: c.url })),
     commitTitlePath,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     rereviewRequestPath:
       carryApproval && sessionsDir !== null && task.lastReviewVerdictAt
         ? taskRereviewRequestPath(
@@ -2982,6 +2969,7 @@ async function attemptReturnPrCommentsToWorker(
         budgetMinutes: resolvedTaskMaster.budgetMinutes,
         commitTitlePath,
         agentCommand: task.agentCommand,
+        delegation: resolveWorkerDelegation(app, task.agentCommand, task),
         suggestions: newComments
           .map(
             (c) =>
@@ -3016,6 +3004,7 @@ async function attemptReturnPrCommentsToWorker(
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     commitTitlePath,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     comments: newComments.map((c): PrReviewCommentInfo => ({
       author: c.author,
       path: c.path,
@@ -3551,14 +3540,6 @@ const AUTO_RETURN_VIA: Record<AutoReturnReason, string> = {
   "pr-comment": "pr-comment-feedback",
   suggestions: "suggestions-feedback",
 };
-
-/** Epoch seconds of an ingested verdict — the key `taskRereviewRequestPath`
- * hangs a suggestions-round worker's "review this" request on. Seconds, not
- * ms, because `lastReviewVerdictAt` round-trips through a `timestamp` column
- * that stores whole seconds; the writer and the reader must agree. */
-function rereviewRequestKey(verdictAt: Date): number {
-  return Math.floor(verdictAt.getTime() / 1000);
-}
 
 // The round cap lives in its own module: the review spawner needs it too, and
 // it used to import THIS module for the sake of one helper — an import cycle
@@ -4474,6 +4455,7 @@ async function ingestReviewOutcome(
       worktreePath: task.worktreePath!,
       budgetMinutes: resolvedTaskMaster.budgetMinutes,
       agentCommand: task.agentCommand,
+      delegation: resolveWorkerDelegation(app, task.agentCommand, task),
       suggestions: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
       rereviewRequestPath: taskRereviewRequestPath(
         sessionsDir,
@@ -4507,6 +4489,7 @@ async function ingestReviewOutcome(
     worktreePath: task.worktreePath!,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     // Rendered, not the raw findings-file content — `shouldAutoReturn`
     // guarantees `parsed !== null` here, but `parsed` may be JSON; the
     // worker should read prose, not the wire format Mullion parses.

@@ -265,8 +265,8 @@ export interface WorkerPreambleOptions {
    * CLI (task-delegation.ts's resolveWorkerDelegation). With no delegate
    * model — or one that is not cheaper than the worker's own — no delegation
    * clause is emitted: telling a Sonnet worker to delegate to Sonnet only
-   * adds a second context's cost. Only the claim and retry spawns pass it:
-   * the follow-up rounds are small fix-ups and omit the clause.
+   * adds a second context's cost. Claim, retry, and follow-up worker
+   * rounds all pass it so fresh sessions receive the same guidance.
    */
   delegation?: DelegationContext | null;
 }
