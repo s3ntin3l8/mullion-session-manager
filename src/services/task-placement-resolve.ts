@@ -16,13 +16,14 @@
 // phrase in prose does not count. The first occurrence wins.
 
 import type { PlacementTarget } from "./placement.js";
+import { stripFencedCode } from "./issue-body-directives.js";
 
 const PLATFORM_LINE_RE = /^\s*Platform:\s*(\S+)\s*$/im;
 const HOST_LINE_RE = /^\s*Host:\s*(\S+)\s*$/im;
 
 function directive(body: string | null, re: RegExp): string | null {
   if (body === null) return null;
-  const match = re.exec(body);
+  const match = re.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 

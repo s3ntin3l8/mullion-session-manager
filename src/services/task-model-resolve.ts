@@ -7,6 +7,7 @@ import {
   validateCliModel,
   validateOpenCodeModel,
 } from "./hook-adapters/shared.js";
+import { stripFencedCode } from "./issue-body-directives.js";
 
 export type OpenCodeModelRole = "implementer" | "reviewer";
 
@@ -53,19 +54,19 @@ export function validateModel(value: string): boolean {
 
 function parseModelDirective(body: string | null): string | null {
   if (body === null) return null;
-  const match = MODEL_LINE_RE.exec(body);
+  const match = MODEL_LINE_RE.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 
 function parseReviewerModelDirective(body: string | null): string | null {
   if (body === null) return null;
-  const match = REVIEWER_MODEL_LINE_RE.exec(body);
+  const match = REVIEWER_MODEL_LINE_RE.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 
 function parseSmallModelDirective(body: string | null): string | null {
   if (body === null) return null;
-  const match = SMALL_MODEL_LINE_RE.exec(body);
+  const match = SMALL_MODEL_LINE_RE.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 

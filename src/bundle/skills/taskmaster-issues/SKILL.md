@@ -222,9 +222,10 @@ Matching rules, all eight:
   `Agent: claude # default` doesn't match.
 - It must be alone on the line: a `- ` bullet or `> ` quote prefix breaks
   the match.
-- **A fenced code block doesn't hide a directive** — the parsers are
-  plain regexes over the raw issue body with no markdown awareness. A
-  directive still fires even if you paste it inside a fenced block.
+- **A fenced code block hides a directive** — lines inside a ``` or ~~~
+  fenced block are ignored, so a snippet that quotes `host: x` or
+  `Agent: claude` does not fire. An unterminated fence hides everything to
+  the end of the body. To make a directive fire, write it outside any fence.
 - First match wins if a directive line appears more than once.
 - `Manual: true`/`Manual: True`/`Manual: TRUE` all match — only the word
   `true` counts, in any casing; `Manual: yes` is inert.
@@ -249,11 +250,11 @@ Matching rules, all eight:
   platform is matched case-insensitively; a value no host reports (`mac`
   instead of `darwin`) matches nothing and is refused naming it. Leave both
   out and placement is the usual load-based choice. **Beware `Host:`** — it is
-  an everyday word: a `Host: localhost` line in a pasted HTTP request or config
-  snippet is parsed as the directive (fenced blocks do not hide it) and fails
-  the task. Put such a line behind a `- ` or `> ` prefix, or reword it
-  (indentation does not help — leading whitespace is ignored); the refusal
-  names the line it came from.
+  an everyday word: a bare `Host: localhost` line in prose is parsed as the
+  directive and fails the task. Inside a fenced code block it is ignored, so
+  put pasted HTTP requests or config snippets in a fence, or put such a line
+  behind a `- ` or `> ` prefix, or reword it (indentation does not help —
+  leading whitespace is ignored); the refusal names the line it came from.
 - An unrecognized or malformed value at any tier is logged and falls
   through — never blocks pickup. If a directive doesn't seem to be taking
   effect, check it's really alone on its own line first.
