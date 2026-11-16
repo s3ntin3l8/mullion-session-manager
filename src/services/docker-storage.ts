@@ -226,7 +226,7 @@ export function parseDockerVolumes(verboseJson: string): DockerVolumesSummary {
     }
     const links = Number(volume.Links);
     if (
-      volume.Links === undefined ||
+      (typeof volume.Links !== "number" && typeof volume.Links !== "string") ||
       volume.Links === "" ||
       !Number.isInteger(links) ||
       links < 0

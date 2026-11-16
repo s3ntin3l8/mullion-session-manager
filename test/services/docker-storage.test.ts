@@ -326,6 +326,8 @@ describe("Docker storage", () => {
         { Name: "a".repeat(63), Links: "0", Size: "1MB" },
         { Name: anon("e"), Links: "N/A", Size: "5MB" },
         { Name: anon("f"), Size: "5MB" },
+        { Name: anon("1"), Links: null, Size: "5MB" },
+        { Name: anon("2"), Links: false, Size: "5MB" },
         { Size: "5MB", Links: "0" },
         "junk",
         null,
