@@ -118,6 +118,12 @@ function HostProtocolLine({ host }: { host: Host }) {
   );
 }
 
+// Issue #3091 — a host that connects out needs no stored address, so it may be
+// cleared; one without a live machine identity is reached only by it.
+function canClearAddress(host: Host): boolean {
+  return host.hasMachineIdentity === true && host.machineIdentityRevoked !== true;
+}
+
 export function HostsSection() {
   const {
     hosts,
@@ -748,11 +754,17 @@ export function HostsSection() {
           initialName={editing.name}
           initialBaseUrl={editing.baseUrl ?? ""}
           hasToken={editing.hasToken}
+          canClearBaseUrl={canClearAddress(editing)}
           onClose={() => setEditing(null)}
           onSave={(name, baseUrl, token) =>
             updateHost(editing.id, {
               name,
-              ...(baseUrl ? { baseUrl } : {}),
+              // An emptied address on a host with an identity is a clear (#3091).
+              ...(baseUrl
+                ? { baseUrl }
+                : editing.baseUrl && canClearAddress(editing)
+                  ? { baseUrl: null }
+                  : {}),
               ...(token ? { token } : {}),
             })
           }

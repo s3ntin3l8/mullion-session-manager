@@ -131,6 +131,41 @@ describe("HostsSection token rotation", () => {
     expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
   });
 
+  it("sends a cleared address as null for a host with a machine identity, and not at all otherwise (issue #3091)", async () => {
+    const patches: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "PATCH") {
+          patches.push(JSON.parse(String(init.body)));
+          return Promise.resolve(jsonResponse(200, useDashboardStore.getState().hosts[0]));
+        }
+        if (url === "/api/hosts") {
+          return Promise.resolve(jsonResponse(200, useDashboardStore.getState().hosts));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      }),
+    );
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "mac",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          hasMachineIdentity: true,
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    await user.click(screen.getByText("Edit"));
+    await user.clear(screen.getByLabelText(/^Base URL/));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => expect(patches).toEqual([{ name: "macbook", baseUrl: null }]));
+  });
+
   it("flags a possible duplicate and offers Remove stale host on the older row only (issue #2582)", async () => {
     stubFetch({});
     useDashboardStore.setState({

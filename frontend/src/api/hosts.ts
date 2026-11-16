@@ -44,7 +44,8 @@ export const hostsApi = {
     id: string,
     patch: Partial<{
       name: string;
-      baseUrl: string;
+      // Issue #3091 — `null` clears the address (a host with a machine identity only).
+      baseUrl: string | null;
       token: string;
       drained: boolean;
       role: HostEditableRole;

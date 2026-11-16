@@ -622,7 +622,7 @@ export interface HostsSlice {
     // terminated.
     patch: Partial<{
       name: string;
-      baseUrl: string;
+      baseUrl: string | null;
       token: string;
       drained: boolean;
       role: HostEditableRole;

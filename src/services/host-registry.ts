@@ -93,7 +93,12 @@ export interface CreateHostInput {
 
 export interface UpdateHostInput {
   name?: string;
-  baseUrl?: string;
+  /**
+   * Issue #3091 — a string replaces the address; `null` clears it (an
+   * outbound-only host needs none); omit to leave it alone. The route refuses
+   * the clear for a host that has no machine identity.
+   */
+  baseUrl?: string | null;
   /** Omit to leave the stored token untouched; pass a new value to rotate it. */
   token?: string;
   /**
