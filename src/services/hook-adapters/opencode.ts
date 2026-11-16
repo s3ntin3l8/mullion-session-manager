@@ -578,19 +578,18 @@ export const openCodeAdapter: HookAgentAdapter = {
   // that rule refers to — the tool's note tells the model not to set
   // `model` unasked, and a worker that took that literally would skip the
   // one argument the whole row depends on.
-  delegationHint:
-    "If this task has parts that could be done independently, delegate them: " +
-    "opencode's subagent tool takes `agent` (the subagent type — 1.x calls " +
-    "it `subagent_type`) and, on 2.x, an optional per-call `model` for that " +
-    "call, written as `providerID/modelID` or `providerID/modelID#variant` — " +
-    "so route the mechanical parts to a cheaper model where the tool offers " +
-    "one, and keep the parts that need your own judgement for yourself. The " +
-    "tool's own note says to set that model only when the caller asks for a " +
-    "particular one; this task is that ask. Look the model up with the " +
-    "`models` tool, filtered to your own provider, rather than guessing the " +
-    "id. A delegated part may run in its own workspace or fork, so whatever " +
-    "you delegate has to land on this branch — you remain responsible for " +
-    "the final commit here.",
+  delegationHint: (delegateModel) =>
+    "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
+    "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
+    "opencode's subagent tool takes `agent` (the subagent type — 1.x calls it `subagent_type`) and, on " +
+    "2.x, an optional per-call `model`, written as `providerID/modelID` or `providerID/modelID#variant`: " +
+    `pass \`model: "${delegateModel}"\` for the parts you delegate, where the tool offers it. The tool's ` +
+    "own note says to set that model only when the caller asks for a particular one; this task is that " +
+    "ask. " +
+    "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
+    "parts that need your own judgement for yourself. A delegated part may run in its own workspace or " +
+    "fork, so whatever you delegate has to land on this branch — you remain responsible for the final " +
+    "commit here.",
   // `--prompt <text>` is a top-level option on the DEFAULT `opencode
   // [directory]` command (the TUI, which is what Mullion always spawns — there
   // is no `run`/`exec` subcommand involved), and in v2 it SUBMITS that text

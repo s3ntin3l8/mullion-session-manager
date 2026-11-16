@@ -20,9 +20,14 @@ import { getAdapterDelegationHint } from "../../../src/services/hook-adapters/in
 // `spawn_agent` to a Claude Code worker, or telling a Codex worker to pass
 // a `model` field its schema may not expose, would both be actively
 // misleading.
+// A worker whose own model is unknown (the CLI's default) is always shown the
+// clause for a configured delegate, so these tests exercise the wording; the
+// tier comparison itself is in delegation.test.ts.
+const ctx = (delegateModel: string) => ({ workerModel: null, delegateModel });
+
 describe("getAdapterDelegationHint", () => {
   it("names Claude Code's Task tool and its per-call model override", () => {
-    const hint = getAdapterDelegationHint("claude");
+    const hint = getAdapterDelegationHint("claude", ctx("sonnet"));
     expect(hint).toBeTruthy();
     expect(hint).toContain("Task tool");
     expect(hint).toContain("subagent");
@@ -31,7 +36,8 @@ describe("getAdapterDelegationHint", () => {
     // precedence over the subagent definition's own `model:` frontmatter.
     // Verified against the installed claude-code's Task-tool input schema.
     expect(hint).toContain("model");
-    expect(hint).toContain("haiku");
+    // The configured Delegate model is named, not "a cheaper model".
+    expect(hint).toContain('`model: "sonnet"`');
     expect(hint).toMatch(/precedence over/i);
     // The one load-bearing fact with no assertion behind it until now: the
     // override is IGNORED for `subagent_type: "fork"` — a fork always
@@ -49,7 +55,7 @@ describe("getAdapterDelegationHint", () => {
   });
 
   it("names Codex's spawn_agent without assuming the model override is exposed", () => {
-    const hint = getAdapterDelegationHint("codex");
+    const hint = getAdapterDelegationHint("codex", ctx("gpt-6-luna"));
     expect(hint).toBeTruthy();
     expect(hint).toContain("spawn_agent");
     // Codex's per-child model override sits behind
@@ -61,7 +67,7 @@ describe("getAdapterDelegationHint", () => {
   });
 
   it("names opencode's subagent tool and its per-call model", () => {
-    const hint = getAdapterDelegationHint("opencode");
+    const hint = getAdapterDelegationHint("opencode", ctx("anthropic/claude-sonnet-5-5"));
     expect(hint).toBeTruthy();
     // Verified against the installed opencode v2.1.3's subagent-tool input
     // schema: `agent` (the subagent type), `description`, `prompt`, `model`
@@ -77,8 +83,7 @@ describe("getAdapterDelegationHint", () => {
     // to look it up with the `models` tool, filtered to the worker's own
     // provider. A row that told the worker to pass a cheaper model without
     // saying where to find one would be advice it cannot follow.
-    expect(hint).toContain("`models` tool");
-    expect(hint).toMatch(/rather than guessing/i);
+    expect(hint).toContain('`model: "anthropic/claude-sonnet-5-5"`');
     // And the built-in subagents are NOT the cheap option. `general` and
     // `explore` ship with opencode, but their v2 definitions set only
     // name/description/mode/permissions and carry no model of their own — so
@@ -94,7 +99,7 @@ describe("getAdapterDelegationHint", () => {
     // install rather than refusing it — so the row has to be true on both
     // versions, and the hint must not claim the parameter is always there.
     expect(hint).toMatch(/on 2\.x/);
-    expect(hint).toMatch(/where the tool offers one/i);
+    expect(hint).toMatch(/where the tool offers it/i);
     // The tool's own note tells the model not to set `model` unasked. The
     // row has to resolve that, or a worker that reads the tool's schema
     // will skip the one argument the whole row depends on.
@@ -102,16 +107,54 @@ describe("getAdapterDelegationHint", () => {
   });
 
   it("names agy's invoke_subagent and its model/modelTier", () => {
-    const hint = getAdapterDelegationHint("agy");
+    const hint = getAdapterDelegationHint("agy", ctx("gemini-flash"));
     expect(hint).toBeTruthy();
     expect(hint).toContain("invoke_subagent");
     expect(hint).toContain("modelTier");
+    expect(hint).toContain('`model: "gemini-flash"`');
+  });
+
+  it("names Codex's delegate model and a reasoning effort", () => {
+    expect(getAdapterDelegationHint("codex", ctx("gpt-6-luna"))).toContain('`model: "gpt-6-luna"`');
+  });
+
+  it("returns null when no Delegate model is configured", () => {
+    for (const command of ["claude", "codex", "opencode", "agy"]) {
+      expect(getAdapterDelegationHint(command, { workerModel: null, delegateModel: null })).toBe(
+        null,
+      );
+    }
+  });
+
+  it("returns null when the delegate is not cheaper than the worker's model", () => {
+    // opusplan is Opus only while planning; a Task Master worker is never in
+    // plan mode, so it already runs Sonnet.
+    for (const workerModel of ["opusplan", "sonnet", "sonnet[1m]", "claude-sonnet-5-5", "haiku"]) {
+      expect(
+        getAdapterDelegationHint("claude", { workerModel, delegateModel: "sonnet" }),
+      ).toBeNull();
+    }
+    expect(
+      getAdapterDelegationHint("claude", { workerModel: "opus", delegateModel: "sonnet" }),
+    ).toContain('`model: "sonnet"`');
+    expect(
+      getAdapterDelegationHint("claude", { workerModel: "fable[1m]", delegateModel: "sonnet" }),
+    ).toBeTruthy();
+    expect(
+      getAdapterDelegationHint("codex", {
+        workerModel: "gpt-6.1-sol",
+        delegateModel: "gpt-6-luna",
+      }),
+    ).toBeTruthy();
+    expect(
+      getAdapterDelegationHint("codex", { workerModel: "gpt-6-luna", delegateModel: "gpt-6-luna" }),
+    ).toBeNull();
   });
 
   it("returns null for a command no adapter matches", () => {
-    expect(getAdapterDelegationHint("bash")).toBeNull();
-    expect(getAdapterDelegationHint("zsh -lc 'ls'")).toBeNull();
-    expect(getAdapterDelegationHint("")).toBeNull();
+    expect(getAdapterDelegationHint("bash", ctx("sonnet"))).toBeNull();
+    expect(getAdapterDelegationHint("zsh -lc 'ls'", ctx("sonnet"))).toBeNull();
+    expect(getAdapterDelegationHint("", ctx("sonnet"))).toBeNull();
   });
 
   it("keeps the worker responsible for the final commit in every CLI's clause", () => {
@@ -119,7 +162,7 @@ describe("getAdapterDelegationHint", () => {
     // able to satisfy Task Master's "commits past base" gate on its own,
     // or the reviewer would judge a diff the worker never read.
     for (const command of ["claude", "codex", "opencode", "agy"]) {
-      const hint = getAdapterDelegationHint(command)!;
+      const hint = getAdapterDelegationHint(command, ctx("some-model"))!;
       expect(hint).toContain("responsible for the final commit");
     }
   });
@@ -132,7 +175,7 @@ describe("getAdapterDelegationHint", () => {
     // clause has to name the landing requirement, not just restate the
     // worker's general responsibility for committing.
     for (const command of ["claude", "codex", "opencode", "agy"]) {
-      const hint = getAdapterDelegationHint(command)!;
+      const hint = getAdapterDelegationHint(command, ctx("some-model"))!;
       expect(hint).toContain("land on this branch");
       expect(hint).toContain("workspace or fork");
     }
@@ -140,7 +183,7 @@ describe("getAdapterDelegationHint", () => {
 
   it("tells the worker to keep the judgement-heavy parts itself", () => {
     for (const command of ["claude", "codex", "opencode", "agy"]) {
-      const hint = getAdapterDelegationHint(command)!;
+      const hint = getAdapterDelegationHint(command, ctx("some-model"))!;
       expect(hint).toContain("judgement");
     }
   });

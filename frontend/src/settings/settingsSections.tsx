@@ -300,7 +300,10 @@ export const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "launchers", text: "default shell" },
   { section: "launchers", text: "default agent" },
   { section: "launchers", text: "global launchers manage actions" },
-  { section: "models", text: "default model claude code opus sonnet haiku fable opusplan" },
+  {
+    section: "models",
+    text: "default model delegate model subagent claude code opus sonnet haiku fable opusplan",
+  },
   { section: "models", text: "codex model gpt" },
   { section: "models", text: "agy antigravity gemini model" },
   { section: "models", text: "opencode models implementer reviewer small model" },

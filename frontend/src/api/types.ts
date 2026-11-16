@@ -2355,6 +2355,13 @@ export interface Task {
 export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
+interface ModelSlots {
+  defaultModel: string | null;
+  reviewerModel: string | null;
+  // Optional: a settings blob from before this field existed lacks it.
+  delegateModel?: string | null;
+}
+
 export interface AppSettings {
   theme: Theme;
   terminal: {
@@ -2664,21 +2671,19 @@ export interface AppSettings {
   };
   // Install-wide default `--model` per non-opencode CLI; `null` means no
   // flag (the CLI picks). Mirrors src/services/settings.ts.
-  claudeCode: {
-    defaultModel: string | null;
-    reviewerModel: string | null;
-    smallModel: string | null;
-  };
-  codex: { defaultModel: string | null; reviewerModel: string | null };
-  agy: { defaultModel: string | null; reviewerModel: string | null };
+  // `delegateModel` (every CLI): a Task Master worker's delegation target.
+  claudeCode: ModelSlots & { smallModel: string | null };
+  codex: ModelSlots;
+  agy: ModelSlots;
   // Issue: mcode support — mcode takes `-m <provider/model>`.
-  mcode: { defaultModel: string | null; reviewerModel: string | null };
+  mcode: ModelSlots;
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;
     // Issue #958 — opencode's `small_model` config key, used for
     // lightweight tasks (title generation, summarization).
     defaultSmallModel: string | null;
+    delegateModel?: string | null;
   };
   taskMaster: {
     autoClaimPaused: boolean;

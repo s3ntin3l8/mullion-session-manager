@@ -1059,8 +1059,14 @@ export const mcodeAdapter = {
    * `<dataDir>/agents/<name>/`. Named here so Task Master's worker prompt
    * tells the agent the right word for "run a cheaper sub-agent".
    */
-  delegationHint:
-    "You may decompose this task and delegate the mechanical parts to a cheaper sub-agent via mcode's own sub-agent mechanism (an agent defined under the mcode data directory's agents/), naming the sub-agent and the model it should use.",
+  delegationHint: (delegateModel: string): string =>
+    "A sub-agent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
+    "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
+    "mcode delegates through its own sub-agent mechanism (an agent defined under the mcode data " +
+    `directory's agents/): name the sub-agent and have it use \`${delegateModel}\`. ` +
+    "Brief a sub-agent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
+    "parts that need your own judgement for yourself. Whatever you delegate has to land on this branch — " +
+    "you remain responsible for the final commit here.",
 } as const;
 
 export default mcodeAdapter;

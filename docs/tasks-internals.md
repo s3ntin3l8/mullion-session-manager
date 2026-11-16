@@ -534,38 +534,72 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
   branchdam-mobile tasks #66/#67 are the concrete case this closed: an
   opencode worker invoked the superpowers `brainstorming` skill, asked a
   clarifying question nobody answered, and failed with no commits.
-- **You may decompose the task and delegate the mechanical parts.** A
-  CLI-specific clause, rendered only when the worker's command resolves to
-  an agent that has a subagent primitive (`getAdapterDelegationHint` in
-  `hook-adapters/index.ts`; a plain shell gets nothing). It names that
-  CLI's own delegation primitive and that CLI's own way of choosing the
-  child's model — Claude Code's `Task` tool takes a `subagent_type` and an
-  optional per-call `model` that takes precedence over that subagent's own
-  definition's `model:` frontmatter (ignored for `subagent_type: "fork"`,
-  which always inherits the parent model, and ignored outright when the
-  tool reports that the model parameter is ignored on this session), Codex's
-  `spawn_agent` takes a per-child model and reasoning effort where the
-  install exposes them, opencode's subagent tool takes an `agent` (the
-  subagent type; 1.x calls it `subagent_type`) and, on 2.x, an optional
-  per-call `model` written as `providerID/modelID` or
-  `providerID/modelID#variant` — Mullion only WARNS below 2.0.29 rather than
-  refusing the agent, so a 1.x install still launches and the row hedges
-  with "where the tool offers one" — agy's `invoke_subagent` takes a spec
-  with a model and a `modelTier`. One generic sentence would be wrong for
-  three of the four.
+- **Delegate sizeable, independent parts to a cheaper model — when one is
+  configured.** A CLI-specific clause, rendered only when (1) the worker's
+  command resolves to an agent that has a subagent primitive, (2) the install
+  set a **Delegate model** for that CLI (Settings → Models, the `delegateModel`
+  field next to each CLI's default and reviewer model; empty means no
+  delegation guidance at all), and (3) that model is cheaper than the one the
+  worker actually runs (`getAdapterDelegationHint` in
+  `hook-adapters/index.ts`; a plain shell gets nothing). Only the claim and
+  retry prompts — the initial implementation — carry it; the follow-up rounds
+  (reject, red CI, review feedback, rebase, PR comments) are small fix-ups for
+  a worker that already has it and do not repeat it. The clause names the
+  configured model, tells the worker a subagent adds its own cost so only
+  independent, sizeable parts are worth handing off, and tells it to brief the
+  subagent fully because it sees nothing else.
 
-  This is **advisory**, not an obligation to delegate: the clause says the
-  task _may_ be split, and the agent decides whether it is worth splitting.
-  It exists so the worker can hand the mechanical 95% to a cheaper model
-  and keep the part that actually needs judgement — splitting an issue by
-  hand in the planner cannot do that, because the planner hasn't seen the
-  code and cannot know which part is which.
+  "Cheaper" is decided by each adapter's `modelTier` (`hook-adapters/
+delegation.ts`): Claude `haiku < sonnet < opus < fable`, Codex `luna <
+terra < sol`. **`opusplan` ranks as Sonnet** — it is Opus only while
+  planning, and a Task Master worker is never in plan mode, so it effectively
+  runs Sonnet and is not told to delegate to Sonnet. A model an adapter cannot
+  rank (the CLI's own default, `astra`, a custom id) shows the clause unless
+  the two names are identical: the operator chose the delegate on purpose. The
+  worker's model is resolved exactly as the spawn resolves `--model`
+  (`task-delegation.ts`), so a task's `Model:` line is honoured.
+
+  The clause names each CLI's own delegation primitive and its own way of
+  choosing the child's model — Claude Code's `Task` tool takes a
+  `subagent_type` and an optional per-call `model` that takes precedence over
+  that subagent's own definition's `model:` frontmatter (ignored for
+  `subagent_type: "fork"`, which always inherits the parent model, and
+  ignored outright when the tool reports that the model parameter is ignored
+  on this session), Codex's `spawn_agent` takes a per-child model and
+  reasoning effort where the install exposes them, opencode's subagent tool
+  takes an `agent` (the subagent type; 1.x calls it `subagent_type`) and, on
+  2.x, an optional per-call `model` written as `providerID/modelID` or
+  `providerID/modelID#variant` — Mullion only WARNS below 2.0.29 rather than
+  refusing the agent, so a 1.x install still launches and the row hedges with
+  "where the tool offers it" — agy's `invoke_subagent` takes a spec with a
+  model and a `modelTier`.
+
+  This is **advisory**, not an obligation to delegate: the agent decides
+  whether a split is worth it. Why it is opt-in now: before the setting
+  existed the hint was unconditional ("route the mechanical parts to a cheaper
+  model") and named no model, and across ~930 Claude Code worker transcripts
+  none made a subagent call, while Codex workers (which were given a concrete
+  cheap model by the catalog) delegated in more than half of their sessions.
 
   Every variant of the clause ends by keeping the worker responsible for the
   final commit on the branch. That is load-bearing, not boilerplate: a
   delegated implementation must not be able to satisfy the "no commits
   ahead of base" gate on its own, or the reviewer would judge a diff the
   worker never read.
+
+- **Don't end your turn with work still owed; stay inside the Scope; run a
+  real check.** Three lines drawn from Anthropic's model prompting guides for
+  unattended agents. Ending a turn is final here, so the worker is told not to
+  end it with a summary that announces the next step instead of taking it, an
+  offer to continue, or a list of non-blocking decisions, and to work through
+  ordinary obstacles (errors, timeouts, failing tools) while leaving a
+  deliberate blocker alone and recording it on a `Decision:` line. Scope: do
+  only what the issue's Scope (or the follow-up round's own instructions)
+  asks, put extras on a `Decision:` line instead. Verification: a fresh
+  worktree has no dependencies, so install them with the repo's own package
+  manager and lockfile (never sudo), a syntax-only check or a command that
+  failed to start is not a check, and a check that cannot run goes on a
+  `Not run locally:` line.
 
 The review agent gets its own shorter preamble instead — it keeps the
 advisory "you are not expected to make changes" framing and adds the hazard

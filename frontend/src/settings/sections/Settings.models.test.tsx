@@ -122,6 +122,56 @@ describe("Settings -> Models", () => {
     await expectPatch({ claudeCode: { defaultModel: "opusplan" } });
   });
 
+  it("saves a Claude Code delegate model and clears it back to no delegation", async () => {
+    const user = userEvent.setup();
+    render(<ModelsSection />);
+
+    const select = screen.getByRole("combobox", { name: "Claude Code delegate model" });
+    expect(select).toHaveValue("");
+    await user.selectOptions(select, "sonnet");
+    expect(useDashboardStore.getState().settings.claudeCode.delegateModel).toBe("sonnet");
+    await expectPatch({ claudeCode: { delegateModel: "sonnet" } });
+
+    await user.selectOptions(select, "");
+    expect(useDashboardStore.getState().settings.claudeCode.delegateModel).toBeNull();
+  });
+
+  it("saves a delegate model for every CLI", async () => {
+    const user = userEvent.setup();
+    render(<ModelsSection />);
+
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Codex delegate model" }),
+      "gpt-5.6-sol",
+    );
+    expect(useDashboardStore.getState().settings.codex.delegateModel).toBe("gpt-5.6-sol");
+
+    const opencodeSelect = screen.getByRole("combobox", { name: "opencode delegate model" });
+    await waitFor(() =>
+      expect(opencodeSelect.querySelectorAll("option").length).toBeGreaterThan(1),
+    );
+    await user.selectOptions(opencodeSelect, "openrouter/minimax-m3");
+    expect(useDashboardStore.getState().settings.opencode.delegateModel).toBe(
+      "openrouter/minimax-m3",
+    );
+
+    await user.selectOptions(
+      await screen.findByRole("combobox", {
+        name: /agy delegate model|Antigravity delegate model/i,
+      }),
+      "claude-sonnet-4-6",
+    );
+    expect(useDashboardStore.getState().settings.agy.delegateModel).toBe("claude-sonnet-4-6");
+
+    await user.selectOptions(
+      await screen.findByRole("combobox", {
+        name: /mcode delegate model|MiniMax Code delegate model/i,
+      }),
+      "minimax/MiniMax-M3",
+    );
+    expect(useDashboardStore.getState().settings.mcode.delegateModel).toBe("minimax/MiniMax-M3");
+  });
+
   it("saves a Claude Code small model (a full id)", async () => {
     const user = userEvent.setup();
     render(<ModelsSection />);

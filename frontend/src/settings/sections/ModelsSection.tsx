@@ -19,7 +19,8 @@ import {
 } from "../../modelRoles.js";
 import { AGENT_OPTIONS } from "../agentOptions.js";
 
-// Issue #2073 — one row per CLI, columns for the three roles. Order and
+// Issue #2073 — one row per CLI, columns for the roles (a fourth, Delegate, tells a
+// Task Master worker which cheaper model to hand sizeable parts to). Order and
 // visible names come from AGENT_OPTIONS so this list cannot drift from the
 // Agents page (Antigravity, not "agy"). A CLI with no entry here is not a
 // model-capable agent and is not rendered.
@@ -56,9 +57,15 @@ const ROLE_COPY = {
     desc: "Review sessions. Empty follows the implementer, except opencode.",
   },
   small: { label: "Small", desc: "Background work. Only Claude Code and opencode." },
+  delegate: {
+    label: "Delegate",
+    desc: "Task Master workers hand sizeable parts to this cheaper model. Empty: no delegation.",
+  },
 } as const;
 
-function cardDesc(cli: string, role: "implementer" | "reviewer" | "small"): string | null {
+type ModelRole = keyof typeof ROLE_COPY;
+
+function cardDesc(cli: string, role: ModelRole): string | null {
   if (role === "reviewer") {
     // opencode's empty reviewer is its own default, not the implementer, so
     // the shared "except opencode" clause would be talking about this row.
@@ -67,6 +74,7 @@ function cardDesc(cli: string, role: "implementer" | "reviewer" | "small"): stri
       : "Empty follows the implementer.";
   }
   if (role === "small") return "Background work.";
+  if (role === "delegate") return "Task Master workers hand parts to it. Empty: no delegation.";
   return null;
 }
 
@@ -117,19 +125,33 @@ function hasStoredModel(settings: AppSettings, key: string): boolean {
       return (
         present(settings.claudeCode.defaultModel) ||
         present(settings.claudeCode.reviewerModel) ||
-        present(settings.claudeCode.smallModel)
+        present(settings.claudeCode.smallModel) ||
+        present(settings.claudeCode.delegateModel)
       );
     case "codex":
-      return present(settings.codex.defaultModel) || present(settings.codex.reviewerModel);
+      return (
+        present(settings.codex.defaultModel) ||
+        present(settings.codex.reviewerModel) ||
+        present(settings.codex.delegateModel)
+      );
     case "agy":
-      return present(settings.agy.defaultModel) || present(settings.agy.reviewerModel);
+      return (
+        present(settings.agy.defaultModel) ||
+        present(settings.agy.reviewerModel) ||
+        present(settings.agy.delegateModel)
+      );
     case "mcode":
-      return present(settings.mcode.defaultModel) || present(settings.mcode.reviewerModel);
+      return (
+        present(settings.mcode.defaultModel) ||
+        present(settings.mcode.reviewerModel) ||
+        present(settings.mcode.delegateModel)
+      );
     case "opencode":
       return (
         present(settings.opencode.implementerModel) ||
         present(settings.opencode.reviewerModel) ||
-        present(settings.opencode.defaultSmallModel)
+        present(settings.opencode.defaultSmallModel) ||
+        present(settings.opencode.delegateModel)
       );
     default:
       return false;
@@ -208,7 +230,7 @@ function smallModelAliasWarning(value: string | null): ReactNode {
   );
 }
 
-function ariaName(label: string, role: "implementer" | "reviewer" | "small"): string {
+function ariaName(label: string, role: ModelRole): string {
   return `${label} ${role} model`;
 }
 
@@ -224,7 +246,7 @@ export function ModelsSection() {
   const [showRest, setShowRest] = useState(false);
 
   const setOpencode = (
-    key: "implementerModel" | "reviewerModel" | "defaultSmallModel",
+    key: "implementerModel" | "reviewerModel" | "defaultSmallModel" | "delegateModel",
     value: string | null,
   ) => updateSettings({ opencode: { [key]: value } });
 
@@ -294,7 +316,7 @@ export function ModelsSection() {
 
   const roleBinding = (
     key: string,
-    role: "implementer" | "reviewer" | "small",
+    role: ModelRole,
     label: string,
   ): {
     value: string | null;
@@ -308,6 +330,15 @@ export function ModelsSection() {
     if (role === "small" && !layout.hasSmall) return null;
     const allowCustom = layout.allowCustom;
     if (key === "claude") {
+      if (role === "delegate") {
+        return {
+          value: settings.claudeCode.delegateModel ?? null,
+          options: CLAUDE_MODELS,
+          defaultLabel: "No delegation",
+          allowCustom,
+          onChange: (v) => updateSettings({ claudeCode: { delegateModel: v } }),
+        };
+      }
       if (role === "small") {
         return {
           value: settings.claudeCode.smallModel,
@@ -334,6 +365,15 @@ export function ModelsSection() {
           };
     }
     if (key === "codex") {
+      if (role === "delegate") {
+        return {
+          value: settings.codex.delegateModel ?? null,
+          options: codexOptions,
+          defaultLabel: "No delegation",
+          allowCustom,
+          onChange: (v) => updateSettings({ codex: { delegateModel: v } }),
+        };
+      }
       return {
         value: role === "implementer" ? settings.codex.defaultModel : settings.codex.reviewerModel,
         options: codexOptions,
@@ -348,6 +388,15 @@ export function ModelsSection() {
       };
     }
     if (key === "agy") {
+      if (role === "delegate") {
+        return {
+          value: settings.agy.delegateModel ?? null,
+          options: agyOptions,
+          defaultLabel: "No delegation",
+          allowCustom,
+          onChange: (v) => updateSettings({ agy: { delegateModel: v } }),
+        };
+      }
       return {
         value: role === "implementer" ? settings.agy.defaultModel : settings.agy.reviewerModel,
         options: agyOptions,
@@ -360,6 +409,15 @@ export function ModelsSection() {
       };
     }
     if (key === "mcode") {
+      if (role === "delegate") {
+        return {
+          value: settings.mcode.delegateModel ?? null,
+          options: mcodeOptions,
+          defaultLabel: "No delegation",
+          allowCustom,
+          onChange: (v) => updateSettings({ mcode: { delegateModel: v } }),
+        };
+      }
       return {
         value: role === "implementer" ? settings.mcode.defaultModel : settings.mcode.reviewerModel,
         options: mcodeOptions,
@@ -379,11 +437,13 @@ export function ModelsSection() {
           ? "implementerModel"
           : role === "reviewer"
             ? "reviewerModel"
-            : "defaultSmallModel";
+            : role === "small"
+              ? "defaultSmallModel"
+              : "delegateModel";
       return {
-        value: settings.opencode[field],
+        value: settings.opencode[field] ?? null,
         options: opencodeOptions,
-        defaultLabel: "opencode default",
+        defaultLabel: role === "delegate" ? "No delegation" : "opencode default",
         allowCustom,
         onChange: (v) => setOpencode(field, v),
       };
@@ -403,7 +463,7 @@ export function ModelsSection() {
       <div className="settings-models-grid">
         <div className="settings-models-head">
           <span />
-          {(["implementer", "reviewer", "small"] as const).map((role) => (
+          {(["implementer", "reviewer", "small", "delegate"] as const).map((role) => (
             <span key={role}>
               <span className="settings-models-col">{ROLE_COPY[role].label}</span>
               <span className="settings-models-col-desc">{ROLE_COPY[role].desc}</span>
@@ -418,6 +478,7 @@ export function ModelsSection() {
           const implementer = roleBinding(cli.value, "implementer", cli.label);
           const reviewer = roleBinding(cli.value, "reviewer", cli.label);
           const small = roleBinding(cli.value, "small", cli.label);
+          const delegate = roleBinding(cli.value, "delegate", cli.label);
           return (
             <div
               key={cli.value}
@@ -461,6 +522,14 @@ export function ModelsSection() {
                     <span className="visually-hidden">{cli.label} has no small-model setting</span>
                   </span>
                 </div>
+              )}
+              {delegate && (
+                <RoleCell
+                  label={ROLE_COPY.delegate.label}
+                  desc={cardDesc(cli.value, "delegate")}
+                  ariaLabel={ariaName(cli.label, "delegate")}
+                  {...delegate}
+                />
               )}
               <div className="settings-models-wide">
                 {note && <p className="settings-models-note">{note}</p>}

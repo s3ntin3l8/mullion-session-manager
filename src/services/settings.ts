@@ -197,11 +197,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     implementerModel: null,
     reviewerModel: null,
     defaultSmallModel: null,
+    delegateModel: null,
   },
-  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
-  codex: { defaultModel: null, reviewerModel: null },
-  agy: { defaultModel: null, reviewerModel: null },
-  mcode: { defaultModel: null, reviewerModel: null },
+  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null, delegateModel: null },
+  codex: { defaultModel: null, reviewerModel: null, delegateModel: null },
+  agy: { defaultModel: null, reviewerModel: null, delegateModel: null },
+  mcode: { defaultModel: null, reviewerModel: null, delegateModel: null },
   notifications: {
     channels: {
       browser: true,

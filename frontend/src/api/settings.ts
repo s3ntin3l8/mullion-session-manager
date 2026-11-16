@@ -288,15 +288,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   server: {
     logLevel: "inherit",
   },
-  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
-  codex: { defaultModel: null, reviewerModel: null },
-  agy: { defaultModel: null, reviewerModel: null },
+  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null, delegateModel: null },
+  codex: { defaultModel: null, reviewerModel: null, delegateModel: null },
+  agy: { defaultModel: null, reviewerModel: null, delegateModel: null },
   // Issue: mcode support — mcode takes `-m <provider/model>`.
-  mcode: { defaultModel: null, reviewerModel: null },
+  mcode: { defaultModel: null, reviewerModel: null, delegateModel: null },
   opencode: {
     implementerModel: null,
     reviewerModel: null,
     defaultSmallModel: null,
+    delegateModel: null,
   },
   taskMaster: {
     autoClaimPaused: false,

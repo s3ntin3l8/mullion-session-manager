@@ -257,7 +257,7 @@
 .settings-models-head,
 .settings-models-row {
   display: grid;
-  grid-template-columns: minmax(7.5rem, 9.25rem) repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(7.5rem, 9.25rem) repeat(4, minmax(0, 1fr));
   column-gap: 12px;
   row-gap: 0;
   align-items: start;
@@ -360,7 +360,7 @@
   line-height: 1.45;
 }
 
-@container models (max-width: 680px) {
+@container models (max-width: 880px) {
   .settings-models-head {
     display: none;
   }

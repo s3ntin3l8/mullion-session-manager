@@ -524,13 +524,14 @@ export const agyAdapter: HookAgentAdapter = {
   matches: (command) => AGY_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: AGY_EMITS,
-  delegationHint:
-    "If this task has parts that could be done independently, delegate them: " +
-    "`invoke_subagent` takes a subagent spec carrying its own `model` and " +
-    "`modelTier` — so route the mechanical parts to a cheaper tier, and " +
-    "keep the parts that need your own judgement for yourself. A delegated " +
-    "part may run in its own workspace or fork, so whatever you delegate " +
-    "has to land on this branch — you remain responsible for the final " +
+  delegationHint: (delegateModel) =>
+    "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
+    "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
+    "`invoke_subagent` takes a subagent spec carrying its own `model` and `modelTier`: use " +
+    `\`model: "${delegateModel}"\` for the parts you delegate. ` +
+    "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
+    "parts that need your own judgement for yourself. A delegated part may run in its own workspace or " +
+    "fork, so whatever you delegate has to land on this branch — you remain responsible for the final " +
     "commit here.",
   // `-i <prompt>`/`--prompt-interactive` — "Run an initial prompt
   // interactively and continue the session." Unlike Claude Code/Codex this
