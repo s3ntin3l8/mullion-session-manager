@@ -512,7 +512,9 @@ PR).
     detection/auto-enable sweep — see
     [`tasks-internals.md`](tasks-internals.md#autorelease-after-tasks-land-744)).
   - **Bundle & agent context**: `hook-protocol` (hook message validation),
-    `hook-adapters/` (per-agent hook auto-injection at spawn — Claude Code,
+    `hook-deliveries` (the at-most-once ledger behind a retried `Stop`
+    delivery — issue #3174), `hook-adapters/` (per-agent hook auto-injection
+    at spawn — Claude Code,
     OpenCode, Codex, and agy; Codex's and agy's are both managed merges into
     the user's real `~/.codex/hooks.json` / `~/.gemini/config/hooks.json`,
     not ephemeral like Claude Code/OpenCode — Codex's own hook-trust model
@@ -594,7 +596,16 @@ export`/`import --standalone`, re-keying the imported session to the
   an agent's own hook runner or plugin loader, not imported by the server
   process: `forwarder.mjs` bridges a shell-command-hook agent's stdin JSON
   to the hook socket (`forwarder-core.mjs` holds its pure, unit-tested
-  per-agent mapping logic); `opencode-plugin.js` is OpenCode's own bridge,
+  per-agent mapping logic; `forwarder-delivery.mjs` holds the delivery
+  protocol below, importable in-process so it can be tested directly).
+  Most hooks are fire-and-forget (connect, write,
+  exit); a `Stop` is the one exception — it is delivered with an explicit
+  acknowledgement and retried with a bounded backoff when the socket
+  refuses it, so a `Stop` that lands in a restart window (Mullion or an
+  agent host restarting, the session's token not registered again yet) is
+  not lost, and a retried one never reaches the session twice (issue #3174 —
+  see [`agent-hooks.md`](agent-hooks.md#delivery-handshakes-a-retried-stop));
+  `opencode-plugin.js` is OpenCode's own bridge,
   auto-injected as a per-session plugin directory referenced from
   `OPENCODE_CONFIG_CONTENT`, with the TUI launched `--standalone` (OpenCode
   v2 has no shell-command hooks, only a JS plugin API — see

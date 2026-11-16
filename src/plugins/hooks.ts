@@ -43,6 +43,7 @@ import { commandIsMcode } from "../services/hook-adapters/index.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
 import { buildGithubTokenReply, getSessionGithubAuth } from "../services/session-github-token.js";
 import { recoverLocalSessionGithubAuth } from "../services/session-github-auth.js";
+import { HookDeliveryRegistry } from "../services/hook-deliveries.js";
 
 // The promote decision's type lives in src/shared/promote-decision.ts: two
 // SERVICES resolve the pending promote (session-backend.ts,
@@ -279,6 +280,7 @@ function handleConnection(
   socket: net.Socket,
   pendingGates: Map<string, Map<string, PendingGate>>,
   pendingPromotes: Map<string, PendingPromote>,
+  deliveries: HookDeliveryRegistry,
 ): void {
   let buffer = "";
   // null until the handshake line resolves to a real session id — every
@@ -286,6 +288,32 @@ function handleConnection(
   // that never completes a valid handshake never gets to send anything else
   // (see the `continue`/`return` shape below).
   let sessionId: string | null = null;
+  // Issue #3174 — the delivery id this connection carries, or null for an
+  // ordinary fire-and-forget connection. A delivery connection is one whose
+  // handshake names a delivery id: the forwarder only does that for a `Stop`
+  // (see forwarder.mjs's deliverStop), the one hook whose loss is visible
+  // (a headless Task Master worker that has finished looks unfinished until
+  // its budget expires).
+  //
+  // A delivery connection gets an explicit outcome on the wire, so the
+  // forwarder can tell "refused, nothing landed" (retry) from "delivered"
+  // (stop) — a plain fire-and-forget connection cannot: the socket closes
+  // the same way whether the handshake was refused or the message landed.
+  //
+  //   {"ack":"accepted"}  — the handshake resolved; the messages follow
+  //   {"ack":"delivered"} — one message was dispatched (written once per
+  //                        dispatched message, so the client can count them)
+  //   {"ack":"refused"}   — the handshake was refused; NOTHING was dispatched
+  //
+  // A connection WITHOUT a delivery id never sees any of those lines: its
+  // behaviour is exactly what it was before this issue (see the refusal
+  // branch below).
+  let deliveryId: string | null = null;
+  // The index of the message currently being handled on this connection —
+  // the second half of the at-most-once key (see HookDeliveryRegistry). A
+  // retry re-sends the SAME messages in the SAME order, so the index of a
+  // given message is stable across attempts.
+  let deliveryIndex = 0;
   // Issue: correlate concurrent permission gates — set the moment THIS
   // connection registers a gate (at most one per connection: a single
   // forwarder process sends at most one `review_gate` message). Captured
@@ -339,6 +367,18 @@ function handleConnection(
             typeof (handshake as { token?: unknown }).token === "string"
               ? (handshake as { token: string }).token
               : null;
+          // Issue #3174 — a delivery connection names the delivery it is
+          // making, so the socket can acknowledge it and refuse it
+          // explicitly (see this function's own comment). A handshake
+          // without one is an ordinary fire-and-forget connection and keeps
+          // exactly the behaviour it had before this issue.
+          const claimedDelivery =
+            typeof handshake === "object" &&
+            handshake !== null &&
+            typeof (handshake as { deliveryId?: unknown }).deliveryId === "string" &&
+            (handshake as { deliveryId: string }).deliveryId.length > 0
+              ? (handshake as { deliveryId: string }).deliveryId
+              : null;
           const resolved = token !== null ? app.pty.resolveToken(token) : undefined;
           if (resolved === undefined) {
             // Log only a short, non-secret prefix — enough to correlate
@@ -356,12 +396,39 @@ function handleConnection(
             app.log.warn(
               `hook connection presented an unknown or invalid token, closing (${hint})`,
             );
-            socket.destroy();
+            if (claimedDelivery !== null) {
+              // Issue #3174 — a delivery connection is told the handshake was
+              // refused, so it can retry the delivery instead of dropping it
+              // (nothing was dispatched — the refusal happens before any
+              // message on this connection is looked at). `end()` rather than
+              // `destroy()` so the reply is actually flushed to the client
+              // before the socket goes away.
+              if (socket.writable) {
+                socket.write(`${JSON.stringify({ ack: "refused" })}\n`);
+              }
+              socket.end();
+            } else {
+              socket.destroy();
+            }
             return;
           }
           sessionId = resolved;
+          if (claimedDelivery !== null) {
+            deliveryId = claimedDelivery;
+            // The handshake resolved: say so, so the client knows this server
+            // speaks the delivery protocol and that a later retry of this
+            // delivery is safe (see forwarder.mjs's own comment on why a
+            // delivery that got no answer at all is NOT retried).
+            if (socket.writable) socket.write(`${JSON.stringify({ ack: "accepted" })}\n`);
+          }
           continue;
         }
+
+        // Issue #3174 — the at-most-once key for this message: the delivery
+        // id plus the message's index on this connection. A retry re-sends the
+        // same messages in the same order, so the index is stable across
+        // attempts and the pair identifies ONE message of ONE delivery.
+        const deliveryKey = deliveryId !== null ? `${deliveryId}#${deliveryIndex++}` : null;
 
         const result = parseHookMessage(line);
         if (!result.ok) {
@@ -778,7 +845,26 @@ function handleConnection(
           continue;
         }
 
+        // Issue #3174 — the at-most-once gate. A delivery that already landed
+        // on an earlier attempt (its acknowledgement was simply lost on the
+        // way back) must NOT reach the session a second time — a duplicate
+        // `progress`/`done` would re-latch the session's "turn ended" state
+        // over whatever the agent has started since. The claim is the ledger
+        // check; a false return means "already delivered", so the dispatch is
+        // skipped — but the delivery is still acknowledged, so the client
+        // stops retrying.
+        if (deliveryKey !== null && !deliveries.claim(sessionId, deliveryKey)) {
+          if (socket.writable) socket.write(`${JSON.stringify({ ack: "delivered" })}\n`);
+          continue;
+        }
+
         app.pty.emitHookEvent(sessionId, result.message);
+
+        // One acknowledgement per dispatched message: the client counts them
+        // to know that every message of its delivery landed.
+        if (deliveryKey !== null && socket.writable) {
+          socket.write(`${JSON.stringify({ ack: "delivered" })}\n`);
+        }
 
         // Issue: mcode support — skip-permissions auto-approve, applied now
         // that the session has registered the gate (emitHookEvent above is
@@ -870,12 +956,17 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // by app.resolveHookGate below.
   const pendingGates = new Map<string, Map<string, PendingGate>>();
   const pendingPromotes = new Map<string, PendingPromote>();
+  // Issue #3174 — the at-most-once ledger for retried deliveries. One per app
+  // instance (not module-level), like the maps above: it belongs to this
+  // server's lifetime, and a fresh server has no delivery to deduplicate
+  // against anyway.
+  const deliveries = new HookDeliveryRegistry();
 
   const openSockets = new Set<net.Socket>();
   const server = net.createServer((socket) => {
     openSockets.add(socket);
     socket.once("close", () => openSockets.delete(socket));
-    handleConnection(app, socket, pendingGates, pendingPromotes);
+    handleConnection(app, socket, pendingGates, pendingPromotes, deliveries);
   });
 
   await new Promise<void>((resolve, reject) => {

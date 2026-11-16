@@ -167,6 +167,15 @@ function hookGroup(
 // reasoning as Claude Code's PERMISSION_REQUEST_TIMEOUT_SECONDS.
 const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 
+// Issue #3174 — a `Stop` is the one hook the forwarder retries (a refused
+// Stop is dropped otherwise, and the finished headless worker it belongs to
+// then looks unfinished until its budget expires). The forwarder's own
+// retry sequence takes at most ~75s (STOP_RETRY_DELAYS_MS in
+// src/hooks/forwarder.mjs), so the hook timeout has to sit above that
+// bound — an agent that killed the hook at its own 10s timeout would cut
+// the retry sequence short and lose the Stop exactly as before.
+const STOP_HOOK_TIMEOUT_SECONDS = 120;
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -283,7 +292,7 @@ function mergeCodexHooks(): void {
   // codex-trust.ts must keep using isCurrentMullionGroup instead.
   hooks.Stop = [
     ...(hooks.Stop ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "Stop")),
-    hookGroup("Stop"),
+    hookGroup("Stop", undefined, { timeoutSeconds: STOP_HOOK_TIMEOUT_SECONDS }),
   ];
   hooks.SessionStart = [
     ...(hooks.SessionStart ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SessionStart")),

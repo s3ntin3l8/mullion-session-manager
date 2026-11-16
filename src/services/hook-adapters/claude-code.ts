@@ -97,6 +97,20 @@ const CLAUDE_COMMAND_RE = /^(?:\S*\/)?claude(?:\s|$)/;
 const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 const SESSION_END_HOOK_TIMEOUT_SECONDS = 2;
 
+// Issue #3174 — a `Stop` is the one hook the forwarder retries: a Stop the
+// socket refuses (Mullion or an agent host restarting, the session's token
+// not registered again yet) is otherwise dropped on the floor, and the
+// session it belongs to — a headless Task Master worker that has finished —
+// then looks unfinished until its budget expires.
+//
+// The forwarder's own retry sequence takes at most ~75s (see
+// STOP_RETRY_DELAYS_MS in src/hooks/forwarder.mjs), so the agent's hook
+// timeout has to sit ABOVE that bound: an agent that killed the hook at its
+// own 10s timeout would cut the retry sequence short and the Stop would be
+// lost exactly as before. 120s leaves room for the retry bound plus a slow
+// machine, and stays far below Claude Code's own 600s default for hooks.
+const STOP_HOOK_TIMEOUT_SECONDS = 120;
+
 function hookEntry(
   execPath: string,
   forwarderPath: string,
@@ -161,7 +175,7 @@ export function buildClaudeHookSettings(
           }
         : {}),
       Notification: [hookEntry(execPath, forwarderPath, "Notification")],
-      Stop: [hookEntry(execPath, forwarderPath, "Stop")],
+      Stop: [hookEntry(execPath, forwarderPath, "Stop", STOP_HOOK_TIMEOUT_SECONDS)],
       // Issue #271 — no `matcher`, so this fires on every source
       // (startup/resume/clear/fork): the forwarder's own round trip
       // (runSessionStart) always resolves to a completely ordinary empty

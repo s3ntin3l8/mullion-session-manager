@@ -281,7 +281,12 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(written.hooks.PermissionRequest[0].hooks[0].statusMessage).toBe(
       "Mullion is holding this approval — open Mullion and Approve/Deny it there (see docs/agent-hooks.md)",
     );
-    expect(written.hooks.Stop[0].hooks[0].timeout).toBe(10);
+    // Issue #3174 — `Stop` is the one hook the forwarder retries (a refused
+    // Stop is dropped otherwise), and the forwarder's retry sequence takes
+    // at most ~75s — so the timeout has to sit ABOVE that bound: an agent
+    // that killed the hook at the fire-and-forget 10s default would cut the
+    // retry sequence short and lose the Stop exactly as before.
+    expect(written.hooks.Stop[0].hooks[0].timeout).toBe(120);
     expect(written.hooks.Stop[0].hooks[0].statusMessage).toBe(
       "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
     );

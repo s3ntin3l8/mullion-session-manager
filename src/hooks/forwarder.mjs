@@ -18,8 +18,13 @@
 // compiled twin kept in sync by hand for dev, which is exactly the
 // dev/prod path mismatch this design avoids.
 //
-// Most hooks (Notification/Stop/PostToolUse) are pure fire-and-forget:
+// Most hooks (Notification/PostToolUse) are pure fire-and-forget:
 // connect, write, exit — no reply is ever awaited (see forward() below).
+// `Stop` is the one exception on the delivery side (issue #3174): it is
+// delivered with an explicit acknowledgement and retried with a bounded
+// backoff when the socket refuses it (see forwarder-delivery.mjs's
+// deliverStop), because a lost Stop leaves a finished headless worker
+// looking unfinished.
 // The blocking permission-approval path (PermissionRequest, issue #264 —
 // originally a PreToolUse/Bash gate, issue #178, replaced because it fired
 // on EVERY Bash call including already-allowlisted ones) is the one
@@ -50,6 +55,13 @@ import {
   siblingsFor,
   worktreeNudge,
 } from "./forwarder-core.mjs";
+// Issue #3174 — the delivery half of this file's job: a `Stop` that the hook
+// socket refuses is retried with a bounded backoff instead of being dropped.
+// It lives in its own module so the test tree can drive it in-process (the
+// same split forwarder-core.mjs has) — this file is spawned by an agent's
+// own hook runner, so nothing here is ever instrumented by the coverage
+// run.
+import { deliverStop } from "./forwarder-delivery.mjs";
 
 // Bounded below claude-code.ts's own PermissionRequest hook `timeout`
 // (PERMISSION_REQUEST_TIMEOUT_SECONDS, 300s) so THIS process controls the
@@ -240,6 +252,16 @@ async function forward() {
     } catch {
       return { type: "sessionStart", additionalContext: "" };
     }
+  }
+
+  // Issue #3174 — a `Stop` is delivered with an explicit acknowledgement and
+  // a bounded retry, because losing one is visible: the session it belongs
+  // to (a headless Task Master worker that has finished) looks unfinished
+  // until its budget expires. Every other hook keeps the fire-and-forget
+  // behaviour below — connect, write, exit.
+  if (kind === "Stop") {
+    await deliverStop(socketPath, token, messages);
+    return nudge ? { type: "postToolUse", additionalContext: nudge } : null;
   }
 
   await new Promise((resolve) => {
