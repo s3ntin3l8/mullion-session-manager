@@ -19,6 +19,7 @@ class FakeSession {
   private bytes = Buffer.alloc(0);
   private listeners = new Set<(c: Buffer) => void>();
   eventSeqHead = 5;
+  size = { cols: 80, rows: 24 };
   get outputOffset() {
     return this.bytes.length;
   }
