@@ -320,10 +320,10 @@ describe("MobileSessionSwitcher", () => {
     const pin = screen
       .getByRole("heading", { name: /Needs you/ })
       .closest("section") as HTMLElement;
-    expect(within(pin).getByText("runway")).toHaveClass("mobile-session-project");
-    expect(within(pin).getByText("hermes")).toHaveClass("mobile-session-project");
-    expect(within(pin).getByRole("button", { name: /claude.*runway/ })).toBeInTheDocument();
-    expect(within(pin).getByRole("button", { name: /claude.*hermes/ })).toBeInTheDocument();
+    expect(within(pin).getByTitle("runway")).toHaveClass("mobile-session-project");
+    expect(within(pin).getByTitle("hermes")).toHaveClass("mobile-session-project");
+    expect(within(pin).getByRole("button", { name: "claude in runway" })).toBeInTheDocument();
+    expect(within(pin).getByRole("button", { name: "claude in hermes" })).toBeInTheDocument();
     // No project: no secondary line, so no empty gap under the title.
     const orphan = within(pin).getByRole("button", { name: "orphan" });
     expect(orphan.querySelector(".mobile-session-project")).toBeNull();

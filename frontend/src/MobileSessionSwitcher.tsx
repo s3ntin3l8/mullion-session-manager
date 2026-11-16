@@ -346,8 +346,14 @@ export function MobileSessionSwitcher({
                             // the project goes under the title. Inside the
                             // button, so it is part of the accessible name.
                             <span className="mobile-session-text">
-                              <span className="mobile-session-title">{row.title}</span>
-                              <span className="mobile-session-project">{row.projectName}</span>
+                              <span className="mobile-session-title">{row.title}</span>{" "}
+                              <span className="mobile-session-project" title={row.projectName}>
+                                {/* Reads "claude in runway", like the
+                                    workspace chip's hidden prefix. The
+                                    {" "} nodes keep the words apart: the
+                                    accessible name trims each span. */}
+                                <span className="visually-hidden">in</span> {row.projectName}
+                              </span>
                             </span>
                           ) : (
                             <span className="mobile-session-title">{row.title}</span>
