@@ -7,6 +7,7 @@ import { useDashboardStore } from "../store/index.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 import { RightSidebar } from "./RightSidebar.js";
 import { TaskDetailView } from "./TaskDetailView.js";
+import kitCss from "../styles/sidebar-kit.css?raw";
 
 vi.mock("../SessionTimeline.js", () => ({ SessionTimeline: () => <div data-testid="timeline" /> }));
 
@@ -534,5 +535,13 @@ describe("TaskDetailView workflow-change approval", () => {
     setTasks([t]);
     renderDetail(t.id);
     expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+  });
+});
+
+describe("TaskDetailView workflow-change inset", () => {
+  it("insets the shared panel like the sibling blocks (it is edge-to-edge in the docked view)", () => {
+    expect(kitCss).toMatch(
+      /\.sb-detail \.task-detail-workflow-change\s*\{[^}]*margin:\s*0 var\(--sb-inset\)/,
+    );
   });
 });
