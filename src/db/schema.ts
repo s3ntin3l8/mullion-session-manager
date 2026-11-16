@@ -1403,6 +1403,12 @@ export const tasks = sqliteTable(
     // resets it to 0; a merge/rebase-clearing path must not. See `attemptAutoRebase`
     // (task-reconciler.ts) for the cap.
     rebaseAttempts: integer("rebase_attempts").notNull().default(0),
+    // Continuation nudges typed into a worker whose turn ended with no commits,
+    // and when the last one was typed (task-nudge.ts). Only meaningful while
+    // `lastNudgedAt >= claimedAt` — every re-entry into in_progress restamps
+    // `claimedAt`, which retires an older spell's count without a reset write.
+    nudgeCount: integer("nudge_count").notNull().default(0),
+    lastNudgedAt: integer("last_nudged_at", { mode: "timestamp" }),
     // #758 — set when an auto-rebase worker is spawned, read back on the
     // next merge-sweep tick to decide "is an attempt already in flight" —
     // NOT session-exited detection, because a Task Master worker is told to

@@ -2,13 +2,22 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { afterAll, beforeEach } from "vitest";
+import { afterAll, beforeEach, vi } from "vitest";
 import { resetLateFindingsCaches } from "../src/services/task-late-findings-cache.js";
 import { resetHostWarnThrottle } from "../src/services/host-warn-throttle.js";
 import { schema } from "../src/plugins/env.js";
 import { reapDtachMasters } from "./helpers/reap-dtach.js";
 import { SESSION_RUNTIME_ENV_KEYS } from "./helpers/session-runtime-env.js";
 import { scrubGitHookEnv } from "./helpers/git-hook-env.js";
+
+// Task Master's continuation nudge (task-nudge.ts) types a message into a live
+// worker before a no-commits gate failure. The reconciler suites exercise those
+// failure paths and expect the task to fail, so the nudge is off by default;
+// task-nudge.test.ts opts back in with vi.unmock.
+vi.mock("../src/services/task-nudge.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  nudgeInsteadOfFailing: async () => false,
+}));
 
 // Give every test file an isolated SQLite database so parallel workers never
 // contend on the default ./data/app.db file. Tests that need specific values
