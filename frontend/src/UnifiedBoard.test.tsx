@@ -474,6 +474,25 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
     expect(refreshTasks).toHaveBeenCalledTimes(1);
   });
 
+  it("disables Retry while the task fetch is pending", async () => {
+    tasks = [];
+    tasksError = "Failed to fetch";
+    let release!: () => void;
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    refreshTasks.mockClear();
+    refreshTasks.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    const pending = screen.getByRole("button", { name: "Retrying…" });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+    expect(refreshTasks).toHaveBeenCalledTimes(1);
+
+    await act(async () => release());
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+  });
+
   it("still shows the ordinary empty state when the task list loaded fine", () => {
     tasks = [];
     tasksError = null;

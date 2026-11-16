@@ -1,3 +1,4 @@
+import { useBusyAction } from "./hooks/useBusyAction.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useOpenTask } from "./hooks/useOpenTask.js";
 import { useDashboardStore } from "./store/index.js";
@@ -107,6 +108,9 @@ export function UnifiedBoard({
   // right sidebar shows in detail, #2842); the board holds no selection of its own.
   selectedTaskId?: number | null;
 }) {
+  const { run: retryTasks, busy: retryingTasks } = useBusyAction(() =>
+    useDashboardStore.getState().refreshTasks(),
+  );
   const storeSelectedTaskId = useDashboardStore((s) => s.selectedTaskId);
   const selectedTaskId =
     selectedTaskIdProp === undefined ? storeSelectedTaskId : selectedTaskIdProp;
@@ -449,9 +453,11 @@ export function UnifiedBoard({
               <button
                 type="button"
                 className="git-panel-fetch-btn"
-                onClick={() => void useDashboardStore.getState().refreshTasks()}
+                disabled={retryingTasks}
+                aria-busy={retryingTasks || undefined}
+                onClick={retryTasks}
               >
-                Retry
+                {retryingTasks ? "Retrying…" : "Retry"}
               </button>
             </EmptyStateNote>
           )}

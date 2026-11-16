@@ -1,3 +1,4 @@
+import { useBusyAction } from "./hooks/useBusyAction.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { AgentRuleTarget } from "./api/index.js";
@@ -87,6 +88,7 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
       cancelledRef.current = true;
     };
   }, [fetchTargets]);
+  const { run: retryLoad, busy: retrying } = useBusyAction(() => fetchTargets());
 
   const grouped = useMemo(() => {
     if (!targets) return [];
@@ -186,8 +188,13 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
       return (
         <EmptyStateNote>
           <div>Couldn't load agent rules.</div>
-          <button className="git-panel-fetch-btn" onClick={() => void fetchTargets()}>
-            Retry
+          <button
+            className="git-panel-fetch-btn"
+            disabled={retrying}
+            aria-busy={retrying || undefined}
+            onClick={retryLoad}
+          >
+            {retrying ? "Retrying…" : "Retry"}
           </button>
         </EmptyStateNote>
       );

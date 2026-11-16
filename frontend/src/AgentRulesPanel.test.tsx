@@ -114,6 +114,37 @@ describe("AgentRulesPanel", () => {
     expect(attempt).toBe(2);
   });
 
+  it("disables Retry and shows progress while the retry request is pending", async () => {
+    let attempt = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        list: async () => {
+          attempt++;
+          if (attempt === 1) throw new Error("network error");
+          await gate;
+          return jsonResponse(200, [CODEX_OVERRIDE]);
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<AgentRulesPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+    const pending = await screen.findByRole("button", { name: "Retrying…" });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+    await user.click(pending);
+    expect(attempt).toBe(2);
+
+    release();
+    expect(await screen.findByText("AGENTS.override.md")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retrying…" })).toBeNull();
+  });
+
   it("groups targets by agent and marks a shadowed file distinctly from an active one", async () => {
     vi.stubGlobal(
       "fetch",

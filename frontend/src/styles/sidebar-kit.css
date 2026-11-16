@@ -34,6 +34,19 @@
   opacity: 0.45;
   cursor: default;
 }
+/* A control with a request in flight (IconButton `busy`). The universal
+   reduced-motion reset already stops the spin; the dim is the cue that remains. */
+.sb-ibtn.is-busy {
+  cursor: progress;
+}
+.sb-ibtn.is-busy svg {
+  animation: cmuxSpin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sb-ibtn.is-busy svg {
+    opacity: 0.5;
+  }
+}
 /* open-on-GitHub: always the right-most icon, at full strength */
 .sb-ibtn--ext {
   color: var(--fg);

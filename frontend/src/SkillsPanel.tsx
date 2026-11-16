@@ -1,3 +1,4 @@
+import { useBusyAction } from "./hooks/useBusyAction.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { SkillAgent, SkillInfo, SkillKind, SkillScope } from "./api/index.js";
@@ -92,6 +93,7 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
       cancelledRef.current = true;
     };
   }, [fetchSkills]);
+  const { run: retryLoad, busy: retrying } = useBusyAction(() => fetchSkills());
 
   // Non-optimistic by design — same posture as AgentRulesPanel's
   // handleSave/handleDelete: a full refetch after every write rather than
@@ -140,8 +142,13 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
       return (
         <EmptyStateNote>
           <div>Couldn't load skills.</div>
-          <button className="git-panel-fetch-btn" onClick={() => void fetchSkills()}>
-            Retry
+          <button
+            className="git-panel-fetch-btn"
+            disabled={retrying}
+            aria-busy={retrying || undefined}
+            onClick={retryLoad}
+          >
+            {retrying ? "Retrying…" : "Retry"}
           </button>
         </EmptyStateNote>
       );
