@@ -29,6 +29,18 @@ const SENTINEL = "__MULLION_USER_ENV_8f3a1c__";
 const SUPPORTED_SHELLS = new Set(["bash", "zsh"]);
 const RESOLVE_SCRIPT = `printf '%s%s%s' '${SENTINEL}' "$PATH" '${SENTINEL}'`;
 
+/** Why a host's sessions got only the service PATH (the session-env probe). */
+export type SessionEnvFallbackReason =
+  "disabled" | "unsupported-shell" | "timeout" | "spawn-failed" | "unparseable" | "pending";
+
+export interface UserShellEnvStatus {
+  /** The `$SHELL` the resolver used (null when unset or not applicable). */
+  shell: string | null;
+  interactiveResolve: "ok" | "fallback";
+  /** A short reason when `interactiveResolve` is `fallback`, else null. */
+  reason: SessionEnvFallbackReason | null;
+}
+
 export interface UserShellEnvLogger {
   debug: (obj: object, msg: string) => void;
   warn: (obj: object, msg: string) => void;
@@ -41,6 +53,8 @@ export function setUserShellEnvLogger(logger: UserShellEnvLogger | undefined): v
 }
 
 let resolved: { path: string } | null = null;
+// Why the last resolve fell back, for the session-env probe (null: it did not).
+let lastFailure: SessionEnvFallbackReason | null = null;
 let settled = false;
 let inflight: Promise<void> | null = null;
 
@@ -96,12 +110,14 @@ function runInteractiveShell(shell: string): Promise<string | null> {
     // grace period.
     unrefEscalationTimer: true,
     onTimeout: () => {
+      lastFailure = "timeout";
       log?.warn(
         { shell, timeoutMs: RESOLVE_TIMEOUT_MS },
         `user-shell-env: interactive shell timed out; ${fallbackNote()}`,
       );
     },
     onError: (err, spawned) => {
+      lastFailure = "spawn-failed";
       // Not every 'error' is a spawn failure: the child's 'error' event also
       // fires when a KILL fails (the deadline's SIGTERM, say, against a shell
       // that refuses it). `spawned` tells the two apart, so the message says
@@ -132,6 +148,7 @@ export function resolveUserShellEnv(): Promise<void> {
   const shell = process.platform === "win32" ? "" : process.env.SHELL || "";
   if (!SUPPORTED_SHELLS.has(shell.split("/").pop() ?? "")) {
     log?.debug({ shell }, "user-shell-env: unsupported shell, not resolving the interactive PATH");
+    lastFailure = "unsupported-shell";
     settled = true;
     return Promise.resolve();
   }
@@ -140,14 +157,19 @@ export function resolveUserShellEnv(): Promise<void> {
       const path = stdout === null ? null : parseUserShellPath(stdout);
       // Only overwrite on success: a failed rescan (rc hiccup, timeout) must
       // not discard the PATH an earlier resolve already found.
-      if (path) resolved = { path };
+      if (path) {
+        resolved = { path };
+        lastFailure = null;
+      }
       // stdout === null already logged its own reason (timeout / spawn error);
       // here the shell ran but printed no PATH between the markers.
-      else if (stdout !== null)
+      else if (stdout !== null) {
+        lastFailure = "unparseable";
         log?.warn(
           { shell },
           `user-shell-env: no PATH from the interactive shell (unparseable output); ${fallbackNote()}`,
         );
+      }
     })
     .finally(() => {
       settled = true;
@@ -161,6 +183,39 @@ export function getUserShellPath(): string | null {
   return isDisabled() ? null : (resolved?.path ?? null);
 }
 
+/**
+ * What the resolver did, from the state it already holds (never re-runs the
+ * shell). `ok` means a recovered PATH is in effect; a rescan that failed after
+ * an earlier success still reads `ok` because the previous PATH is kept.
+ */
+export function getUserShellEnvStatus(): UserShellEnvStatus {
+  const shell = process.env.SHELL || null;
+  if (isDisabled()) return { shell, interactiveResolve: "fallback", reason: "disabled" };
+  if (resolved) return { shell, interactiveResolve: "ok", reason: null };
+  return { shell, interactiveResolve: "fallback", reason: lastFailure ?? "pending" };
+}
+
+/** The PATH entries a new session on this host starts with (no values of any other variable). */
+export function getSessionPathEntries(): string[] {
+  const merged = mergePaths(process.env.PATH, getUserShellPath() ?? "");
+  return merged.split(":").filter(Boolean);
+}
+
+/** What `GET /internal/session-env` answers; also the primary's per-host reading. */
+export interface SessionEnvInfo {
+  shell: string | null;
+  interactiveResolve: "ok" | "fallback";
+  reason: SessionEnvFallbackReason | null;
+  path: string[];
+  /** Names (never values) of variables recovered from the user's shell. */
+  recoveredKeys: string[];
+}
+
+/** This process's own session environment summary (recovery config #3152 not present: no keys). */
+export function getSessionEnvInfo(): SessionEnvInfo {
+  return { ...getUserShellEnvStatus(), path: getSessionPathEntries(), recoveredKeys: [] };
+}
+
 /** Marks the cached result stale so the next resolveUserShellEnv() re-runs the
  * shell (an explicit agent rescan, after the user edited their rc file). The
  * old PATH stays in effect until the new one lands, so a session launched
@@ -172,6 +227,7 @@ export function invalidateUserShellEnv(): void {
 /** Exported for tests only — production never needs to clear this. */
 export function resetUserShellEnvForTests(): void {
   resolved = null;
+  lastFailure = null;
   settled = false;
   inflight = null;
 }

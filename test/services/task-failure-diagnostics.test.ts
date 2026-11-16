@@ -39,6 +39,33 @@ describe("task failure diagnostics", () => {
     expect(text).toContain("Terminal tail: unavailable");
   });
 
+  it("includes the host's session env when known, skips it when not (#3156)", () => {
+    const parts = { scrollback: "", events: [], gitStatus: null, salvage: null };
+    const withEnv = formatFailureDiagnostics(
+      task,
+      {
+        ...parts,
+        sessionEnv: {
+          shell: "/bin/zsh",
+          interactiveResolve: "fallback",
+          reason: "timeout",
+          path: ["/usr/bin", "/bin"],
+          recoveredKeys: ["ANDROID_HOME"],
+        },
+      },
+      new Date(60_000),
+    );
+    expect(withEnv).toContain(
+      "Host session env: interactive resolve fallback (timeout); shell /bin/zsh; PATH /usr/bin:/bin; recovered: ANDROID_HOME",
+    );
+    expect(formatFailureDiagnostics(task, parts, new Date(60_000))).not.toContain(
+      "Host session env",
+    );
+    expect(
+      formatFailureDiagnostics(task, { ...parts, sessionEnv: null }, new Date(60_000)),
+    ).not.toContain("Host session env");
+  });
+
   it("caps the stored text", () => {
     const text = formatFailureDiagnostics(
       task,

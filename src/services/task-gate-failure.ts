@@ -12,6 +12,7 @@ import type { SessionBackend } from "./session-backend.js";
 import type { SessionInfo } from "./pty-manager.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+import { LOCAL_HOST_ID } from "../shared/constants.js";
 import {
   collectRecentEvents,
   collectScrollbackTail,
@@ -100,6 +101,11 @@ export async function failReviewingGate(
   // guarded again so it can never change the failure transition below.
   const parts: DiagnosticParts = { scrollback: null, events: null, gitStatus: null, salvage: null };
   const workerHostId = resolveTaskWorkerHost(app, task);
+  // Issue #3156 — the tracker's last reading of the worker host's environment
+  // (a remote host only; the primary's own is not what an agent host ran).
+  if (workerHostId !== LOCAL_HOST_ID) {
+    parts.sessionEnv = app.hostAgentTracker?.get(workerHostId)?.sessionEnv ?? null;
+  }
   try {
     parts.scrollback = await collectScrollbackTail(app, backend, session.id);
     parts.events = collectRecentEvents(app, session.id);

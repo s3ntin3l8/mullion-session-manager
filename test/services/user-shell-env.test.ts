@@ -44,6 +44,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import {
+  getSessionEnvInfo,
   getUserShellPath,
   invalidateUserShellEnv,
   mergePaths,
@@ -245,5 +246,50 @@ describe("resolveUserShellEnv", () => {
     await resolveUserShellEnv();
     expect(spawned).toHaveLength(0);
     expect(getUserShellPath()).toBeNull();
+  });
+
+  it("reports the resolver's status and why it fell back (#3156)", async () => {
+    expect(getSessionEnvInfo()).toMatchObject({
+      interactiveResolve: "fallback",
+      reason: "pending",
+    });
+    await resolveUserShellEnv();
+    expect(getSessionEnvInfo()).toMatchObject({
+      shell: "/usr/bin/zsh",
+      interactiveResolve: "ok",
+      reason: null,
+      recoveredKeys: [],
+    });
+    expect(getSessionEnvInfo().path).toContain("/home/u/.minimax-code/bin");
+
+    resetUserShellEnvForTests();
+    stdoutToEmit = "garbage";
+    await resolveUserShellEnv();
+    expect(getSessionEnvInfo()).toMatchObject({
+      interactiveResolve: "fallback",
+      reason: "unparseable",
+    });
+
+    resetUserShellEnvForTests();
+    stdoutToEmit = null;
+    spawnError = new Error("ENOENT");
+    await resolveUserShellEnv();
+    expect(getSessionEnvInfo()).toMatchObject({ reason: "spawn-failed" });
+  });
+
+  it("reports a timeout as the fallback reason (#3156)", async () => {
+    vi.useFakeTimers();
+    try {
+      stdoutToEmit = null;
+      const p = resolveUserShellEnv();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await p;
+      expect(getSessionEnvInfo()).toMatchObject({
+        interactiveResolve: "fallback",
+        reason: "timeout",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

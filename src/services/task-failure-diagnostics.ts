@@ -1,4 +1,5 @@
 import { desc, eq } from "drizzle-orm";
+import type { SessionEnvInfo } from "./user-shell-env.js";
 import type { FastifyInstance } from "fastify";
 import { sessionEvents, type tasks } from "../db/schema.js";
 import type { SessionBackend } from "./session-backend.js";
@@ -57,6 +58,8 @@ export interface DiagnosticParts {
   gitStatus: DiagnosticGitStatus | null;
   /** What the salvage commit did; null if it was not attempted. */
   salvage: string | null;
+  /** The worker host's session environment (issue #3156); absent/null when unknown. */
+  sessionEnv?: SessionEnvInfo | null;
 }
 
 export async function collectScrollbackTail(
@@ -118,6 +121,13 @@ export function formatFailureDiagnostics(
     lines.push(`Runtime: ${formatRuntime(endedAt.getTime() - task.claimedAt.getTime())}`);
   } else {
     lines.push("Runtime: unavailable (task has no claim time)");
+  }
+
+  if (parts.sessionEnv) {
+    const env = parts.sessionEnv;
+    lines.push(
+      `Host session env: interactive resolve ${env.interactiveResolve}${env.reason ? ` (${env.reason})` : ""}; shell ${env.shell ?? "none"}; PATH ${env.path.join(":") || "empty"}${env.recoveredKeys.length > 0 ? `; recovered: ${env.recoveredKeys.join(", ")}` : ""}`,
+    );
   }
 
   if (parts.gitStatus === null) {
