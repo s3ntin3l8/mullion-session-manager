@@ -53,10 +53,23 @@ export interface IssueComment {
   htmlUrl: string;
 }
 
+/** A sub-issue or parent, as the detail view's relationship card lists it. */
+export interface IssueRef {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+}
+
 export interface IssueDetail extends IssueListItem {
   state: "open" | "closed";
   bodyHtml: string;
   comments: IssueComment[];
+  /** Direct children (first 100); empty when the issue has none. */
+  subIssues: IssueRef[];
+  /** GitHub's cumulative `sub_issues_summary` (total children, completed ones). */
+  subIssuesSummary: { total: number; completed: number } | null;
+  /** The parent issue when this one is a sub-issue. */
+  parent: IssueRef | null;
 }
 
 export type IssueSort = "updated" | "created" | "comments";
@@ -91,6 +104,8 @@ interface RawIssue {
   state?: string;
   body_html?: string | null;
   pull_request?: unknown;
+  parent_issue_url?: string | null;
+  sub_issues_summary?: { total?: number; completed?: number } | null;
 }
 
 interface RawComment {
@@ -133,6 +148,40 @@ async function getJson<T>(path: string, token: string, accept?: string): Promise
     throw new GitHubApiError(`GitHub API error for ${path} (HTTP ${res.status})`, res.status);
   }
   return (await res.json()) as T;
+}
+
+function toRef(raw: Pick<RawIssue, "number" | "title" | "state">): IssueRef {
+  return {
+    number: raw.number,
+    title: raw.title,
+    state: raw.state === "closed" ? "closed" : "open",
+  };
+}
+
+/** The issue's children and parent. Best effort: a failed lookup only hides the card. */
+async function getRelations(
+  token: string,
+  base: string,
+  issue: RawIssue,
+): Promise<Pick<IssueDetail, "subIssues" | "subIssuesSummary" | "parent">> {
+  const total = issue.sub_issues_summary?.total ?? 0;
+  const parentNumber = Number(/\/issues\/(\d+)$/.exec(issue.parent_issue_url ?? "")?.[1]);
+  const repoBase = base.replace(/\/\d+$/, "");
+  const [children, parent] = await Promise.all([
+    total > 0
+      ? getJson<RawIssue[]>(`${base}/sub_issues?per_page=100`, token).catch(() => [])
+      : Promise.resolve([] as RawIssue[]),
+    Number.isInteger(parentNumber) && parentNumber > 0
+      ? getJson<RawIssue>(`${repoBase}/${parentNumber}`, token).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  return {
+    subIssues: children.map(toRef),
+    subIssuesSummary: issue.sub_issues_summary
+      ? { total, completed: issue.sub_issues_summary.completed ?? 0 }
+      : null,
+    parent: parent ? toRef(parent) : null,
+  };
 }
 
 /** One issue by number, or null when it is missing, closed or a pull request. */
@@ -279,8 +328,10 @@ export async function getIssueDetail(
   if (issue.pull_request) {
     throw new GitHubApiError(`#${number} is a pull request, not an issue`, 404);
   }
+  const relations = await getRelations(token, base, issue);
   return {
     ...toItem(issue),
+    ...relations,
     state: issue.state === "closed" ? "closed" : "open",
     bodyHtml: issue.body_html ?? "",
     comments: comments.map((c) => ({

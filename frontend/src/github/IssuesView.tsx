@@ -4,7 +4,12 @@ import { useIssue, useIssues } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useOpenTask } from "../hooks/useOpenTask.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
-import type { GitHubIssueLabel, GitHubIssueListItem, GitHubIssueSort } from "../api/types.js";
+import type {
+  GitHubIssueLabel,
+  GitHubIssueRef,
+  GitHubIssueListItem,
+  GitHubIssueSort,
+} from "../api/types.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
@@ -59,6 +64,41 @@ const SORT_OPTIONS = (Object.keys(SORT_LABELS) as GitHubIssueSort[]).map((value)
   value,
   label: SORT_LABELS[value],
 }));
+
+/** Opens another issue in the sidebar; Back returns to the one on screen. */
+function IssueRefRow({
+  issueRef,
+  projectId,
+  from,
+}: {
+  issueRef: GitHubIssueRef;
+  projectId: number;
+  from: number;
+}) {
+  return (
+    <button
+      type="button"
+      className="gh-ref-row"
+      onClick={() =>
+        useDashboardStore.getState().openRightSidebarIssue(projectId, issueRef.number, {
+          kind: "issue",
+          projectId,
+          number: from,
+        })
+      }
+    >
+      <span
+        className={`gh-ref-state ${issueRef.state}`}
+        role="img"
+        aria-label={issueRef.state === "closed" ? "Closed" : "Open"}
+      >
+        {issueRef.state === "closed" ? "✓" : "○"}
+      </span>
+      <span className="gh-ref-num">#{issueRef.number}</span>
+      <span className="gh-ref-title">{issueRef.title}</span>
+    </button>
+  );
+}
 
 function LabelChip({ label, active, onClick }: LabelChipProps) {
   const style = { "--label-c": `#${label.color}` } as CSSProperties;
@@ -581,6 +621,12 @@ export function IssueDetailView({
               ? `${issue.milestone ? " · " : ""}assigned to ${issue.assignees.join(", ")}`
               : ""}
           </div>
+          {issue.parent && (
+            <div className="gh-detail-parent">
+              <span aria-hidden="true">↑</span> Parent:{" "}
+              <IssueRefRow issueRef={issue.parent} projectId={projectId} from={number} />
+            </div>
+          )}
           {issue.labels.length > 0 && (
             <SidebarSection title="Labels" persistKey="github-issue-labels" variant="card">
               <div className="gh-issue-card">
@@ -662,6 +708,19 @@ export function IssueDetailView({
               <div className="github-panel-empty-row">No description provided</div>
             )}
           </SidebarSection>
+          {issue.subIssues.length > 0 && (
+            <SidebarSection
+              title={`Sub-issues ${issue.subIssuesSummary?.completed ?? issue.subIssues.filter((c) => c.state === "closed").length}/${issue.subIssuesSummary?.total ?? issue.subIssues.length}`}
+              persistKey="github-issue-subissues"
+              variant="card"
+            >
+              <div className="gh-ref-list">
+                {issue.subIssues.map((c) => (
+                  <IssueRefRow key={c.number} issueRef={c} projectId={projectId} from={number} />
+                ))}
+              </div>
+            </SidebarSection>
+          )}
           {issue.comments.length > 0 && (
             <SidebarSection
               title={`Comments (${issue.comments.length}${issue.commentCount > issue.comments.length ? ` of ${issue.commentCount}` : ""})`}

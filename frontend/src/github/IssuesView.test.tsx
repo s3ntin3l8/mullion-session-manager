@@ -41,6 +41,9 @@ const DETAIL = {
   writeIdentity: { kind: "user", login: "octocat" },
   state: "open",
   bodyHtml: '<p>It <b>crashes</b></p><img src=x onerror="boom()">',
+  subIssues: [],
+  subIssuesSummary: null,
+  parent: null,
   comments: [
     {
       id: 1,
@@ -527,6 +530,51 @@ describe("IssueDetailView", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, { message: "gone" })));
     render(<IssueDetailView projectId={1} number={9} onBack={vi.fn()} />);
     expect(await screen.findByRole("alert")).toBeInTheDocument();
+  });
+});
+
+describe("IssueDetailView relations", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const serve = (detail: object) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, detail))),
+    );
+
+  it("lists sub-issues on their own card and opens one in the sidebar", async () => {
+    serve({
+      ...DETAIL,
+      subIssuesSummary: { total: 2, completed: 1 },
+      subIssues: [
+        { number: 11, title: "Open child", state: "open" },
+        { number: 12, title: "Done child", state: "closed" },
+      ],
+    });
+    const openIssue = vi.fn();
+    useDashboardStore.setState({ openRightSidebarIssue: openIssue });
+    render(<IssueDetailView projectId={1} number={7} onBack={() => {}} />);
+
+    expect(await screen.findByText("Sub-issues 1/2")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Closed" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /#11\s*Open child/ }));
+    expect(openIssue).toHaveBeenCalledWith(1, 11, { kind: "issue", projectId: 1, number: 7 });
+  });
+
+  it("links a child issue to its parent, and shows nothing for an unrelated issue", async () => {
+    serve({ ...DETAIL, parent: { number: 3, title: "The epic", state: "open" } });
+    const openIssue = vi.fn();
+    useDashboardStore.setState({ openRightSidebarIssue: openIssue });
+    const first = render(<IssueDetailView projectId={1} number={7} onBack={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /#3\s*The epic/ }));
+    expect(openIssue).toHaveBeenCalledWith(1, 3, { kind: "issue", projectId: 1, number: 7 });
+    first.unmount();
+
+    serve(DETAIL);
+    render(<IssueDetailView projectId={1} number={8} onBack={() => {}} />);
+    await screen.findByText("crashes");
+    expect(screen.queryByText(/Sub-issues/)).toBeNull();
+    expect(screen.queryByText(/Parent:/)).toBeNull();
   });
 });
 

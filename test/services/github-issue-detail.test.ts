@@ -88,3 +88,60 @@ describe("getIssueDetail's comments", () => {
     expect(mockFetch.mock.calls.filter(([p]) => String(p).includes("/comments"))).toHaveLength(2);
   });
 });
+
+describe("getIssueDetail's relations", () => {
+  beforeEach(() => mockFetch.mockReset());
+
+  const route = (raw: object, extra: Record<string, unknown>) =>
+    mockFetch.mockImplementation(async (path: string) => {
+      const hit = Object.entries(extra).find(([k]) => String(path).includes(k));
+      const body = hit ? hit[1] : /comments\?/.test(String(path)) ? [] : raw;
+      if (body instanceof Error) return { ok: false, status: 500, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => body };
+    });
+
+  it("returns the children and the parent", async () => {
+    route(
+      {
+        ...issue(0),
+        parent_issue_url: "https://api.github.com/repos/o/r/issues/3",
+        sub_issues_summary: { total: 2, completed: 1 },
+      },
+      {
+        "/issues/7/sub_issues": [
+          { number: 11, title: "a", state: "open" },
+          { number: 12, title: "b", state: "closed" },
+        ],
+        "/issues/3": { number: 3, title: "epic", state: "open" },
+      },
+    );
+    const d = await getIssueDetail("tok", "o", "r", 7);
+    expect(d.subIssues).toEqual([
+      { number: 11, title: "a", state: "open" },
+      { number: 12, title: "b", state: "closed" },
+    ]);
+    expect(d.subIssuesSummary).toEqual({ total: 2, completed: 1 });
+    expect(d.parent).toEqual({ number: 3, title: "epic", state: "open" });
+  });
+
+  it("makes no relation requests for an unrelated issue", async () => {
+    route(issue(0), {});
+    const d = await getIssueDetail("tok", "o", "r", 7);
+    expect(d).toMatchObject({ subIssues: [], subIssuesSummary: null, parent: null });
+    expect(mockFetch.mock.calls.some(([p]) => String(p).includes("sub_issues"))).toBe(false);
+  });
+
+  it("hides the relations rather than failing the detail when GitHub errors", async () => {
+    route(
+      {
+        ...issue(0),
+        parent_issue_url: "https://api.github.com/repos/o/r/issues/3",
+        sub_issues_summary: { total: 1, completed: 0 },
+      },
+      { "/sub_issues": new Error("x"), "/issues/3": new Error("x") },
+    );
+    const d = await getIssueDetail("tok", "o", "r", 7);
+    expect(d.subIssues).toEqual([]);
+    expect(d.parent).toBeNull();
+  });
+});

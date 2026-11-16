@@ -270,6 +270,9 @@ describe("GitHubPanel", () => {
                 state: "open",
                 bodyHtml: "",
                 comments: [],
+                subIssues: [],
+                subIssuesSummary: null,
+                parent: null,
               }),
             )
           : base(url),
