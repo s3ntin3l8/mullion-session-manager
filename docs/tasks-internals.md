@@ -505,10 +505,12 @@ done, so `failReviewingGate` (`task-gate-failure.ts`) first asks
   `tasks.nudgeCount` / `tasks.lastNudgedAt` record it; a count from before the
   latest `claimedAt` belongs to an earlier spell and is ignored, so no reset
   write is needed on retry or reject.
-- After a nudge the session's finished latch still reads the OLD turn until the
-  next turn starts, so a finish that does not postdate `lastNudgedAt` (plus the
-  clock-skew tolerance) is that same turn: the reconciler waits, for at most
-  `NUDGE_TURN_GRACE_MS` (10 minutes), instead of spending the next nudge.
+- After a nudge, `agentTurnInFlight` tells the reconciler whether the nudged
+  turn is still running. It waits while true, for at most `NUDGE_TURN_GRACE_MS`
+  (10 minutes) from `lastNudgedAt`; when false, even an immediate finish can
+  earn the next nudge. Older agent builds that omit the signal fall back to
+  comparing `workFinishedAt` with `lastNudgedAt` plus a 5-second clock-skew
+  tolerance.
 - A worker that cannot be typed into (blocked on a dialog, gone, host
   unreachable) fails as before and does not count a nudge. The per-task budget
   stays the backstop for a nudged turn that never ends.

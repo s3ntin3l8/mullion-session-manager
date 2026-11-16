@@ -22,8 +22,8 @@ export const MAX_WORKER_NUDGES = 2;
 /** How long to wait for a nudged turn to start AND finish before failing anyway. */
 export const NUDGE_TURN_GRACE_MS = 10 * 60_000;
 
-// Same tolerance as task-reconciler's turnFinishedSinceClaim: clocks of a
-// remote-hosted worker's own host may differ slightly from this process's.
+// Older agent builds omit agentTurnInFlight. Keep their timestamp fallback
+// tolerant of clock skew between a remote worker and this process.
 const CLOCK_SKEW_TOLERANCE_MS = 5_000;
 
 export function buildContinuationNudge(branchName: string | null): string {
@@ -62,9 +62,9 @@ export function nudgesThisSpell(
  *
  * - Never on a rate-limit/api error: those have their own grace and park paths.
  * - Never without a finished turn to react to.
- * - After a nudge the worker's latch still reads "finished" until its next turn
- *   starts, so a finish that does not postdate the last nudge is the SAME turn:
- *   wait (bounded by NUDGE_TURN_GRACE_MS) instead of burning the next nudge.
+ * - After a nudge, wait while agentTurnInFlight is true (bounded by
+ *   NUDGE_TURN_GRACE_MS), instead of spending the next nudge on a stale finish.
+ *   Older agents without that signal fall back to the finish timestamp.
  * - If the live worker cannot be typed into, fail without counting a nudge.
  */
 export async function nudgeInsteadOfFailing(
@@ -82,7 +82,9 @@ export async function nudgeInsteadOfFailing(
   const sent = nudgesThisSpell(task);
   if (sent > 0 && task.lastNudgedAt !== null) {
     const nudgedAt = task.lastNudgedAt.getTime();
-    if (info.workFinishedAt <= nudgedAt + CLOCK_SKEW_TOLERANCE_MS) {
+    const turnInFlight =
+      info.agentTurnInFlight ?? info.workFinishedAt <= nudgedAt + CLOCK_SKEW_TOLERANCE_MS;
+    if (turnInFlight) {
       return now.getTime() - nudgedAt < NUDGE_TURN_GRACE_MS;
     }
   }

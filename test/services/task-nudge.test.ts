@@ -124,6 +124,45 @@ describe("task nudge", () => {
     await app.close();
   });
 
+  it.each([
+    { signal: false, finishOffset: 1000, expectedCount: 2 },
+    { signal: false, finishOffset: -1000, expectedCount: 2 },
+    { signal: true, finishOffset: 1000, expectedCount: 1 },
+    { signal: true, finishOffset: 6000, expectedCount: 1 },
+    { signal: undefined, finishOffset: 1000, expectedCount: 1 },
+    { signal: undefined, finishOffset: 5000, expectedCount: 1 },
+    { signal: undefined, finishOffset: 6000, expectedCount: 2 },
+  ])(
+    "uses agentTurnInFlight=$signal with finish offset $finishOffset ms (count=$expectedCount)",
+    async ({ signal, finishOffset, expectedCount }) => {
+      const nudgedAt = new Date(NOW.getTime() - 10_000);
+      const { app, task, load, cleanup } = await setup({ nudgeCount: 1, lastNudgedAt: nudgedAt });
+      const live = info({
+        workFinishedAt: nudgedAt.getTime() + finishOffset,
+        ...(signal === undefined ? {} : { agentTurnInFlight: signal }),
+      });
+      expect(await nudgeInsteadOfFailing(app, task, live, NOW)).toBe(true);
+      expect(mockPromptLiveTaskWorker).toHaveBeenCalledTimes(expectedCount - 1);
+      expect(load().nudgeCount).toBe(expectedCount);
+      cleanup();
+      await app.close();
+    },
+  );
+
+  it.each([1, MAX_WORKER_NUDGES])(
+    "bounds an in-flight turn by the grace period after %i nudges",
+    async (nudgeCount) => {
+      const nudgedAt = new Date(NOW.getTime() - NUDGE_TURN_GRACE_MS);
+      const { app, task, load, cleanup } = await setup({ nudgeCount, lastNudgedAt: nudgedAt });
+      const live = info({ agentTurnInFlight: true });
+      expect(await nudgeInsteadOfFailing(app, task, live, NOW)).toBe(false);
+      expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+      expect(load().nudgeCount).toBe(nudgeCount);
+      cleanup();
+      await app.close();
+    },
+  );
+
   it("waits while a nudged turn has not finished, without spending the next nudge", async () => {
     const nudgedAt = new Date(NOW.getTime() - 30_000);
     const { app, task, load, cleanup } = await setup({ nudgeCount: 1, lastNudgedAt: nudgedAt });
