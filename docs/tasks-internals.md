@@ -472,7 +472,9 @@ ended since the claim and the ONLY thing keeping the session from deriving
 agent/subagent/MCP background work still blocks the hand-off regardless
 (issue #428). This backstop feeds two places: the `in_progress → reviewing`
 handoff above (once the grace has elapsed, the reconciler stops waiting and
-runs the normal commits-past-base gate), and the per-task time budget
+runs the normal commits-past-base gate; a worker with no commits yet keeps
+waiting instead, since the gate could only fail it, and the budget is its
+backstop), and the per-task time budget
 (`tasks.md`'s Safety envelope) — a task that hits its budget while its
 worker has finished (cleanly, or behind such a shell tail) **with commits on
 the branch** is handed to `reviewing` instead of force-failed, since failing

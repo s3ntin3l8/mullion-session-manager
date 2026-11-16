@@ -316,6 +316,26 @@ describe("#2416 — the states that used to be swallowed", () => {
       expect(row.failureReason).toBeNull();
     });
 
+    it("fails open to the gate, so reviewing, when the worktree cannot be read", async () => {
+      mockResolveHostGitStatus.mockResolvedValue(unreachable());
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(
+        app,
+        "in_progress",
+        new Date(Date.now() - 30 * MIN),
+      );
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now() - 10 * MIN,
+            outstandingBackgroundTasks: [shellTask],
+          }),
+      } as never);
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
     it("still hands a committed worker off to review", async () => {
       expect((await run("abcdef1")).status).toBe("reviewing");
     });
