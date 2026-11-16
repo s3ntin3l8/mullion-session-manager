@@ -956,6 +956,9 @@ export function App() {
     (sessionId: number, path: string, line?: number) => {
       if (!dockviewApi) return;
       if (!openTerminalPath(dockviewApi, sessionId, layout, path, line)) return;
+      // The halves router (showPaneOnItsHalf) already focuses the left half
+      // for a tiled editor; a floating one is left to the ordinary path and
+      // would keep focus on the right half without this.
       useDashboardStore.getState().setFocusedHalf("left");
     },
     [dockviewApi, layout],

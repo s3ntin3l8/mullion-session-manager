@@ -17,7 +17,7 @@ export interface RightHalfPaneProps extends Pick<
   /** A press or focus inside the half: it now has focus and was used last. */
   onUse: () => void;
   /** Ctrl/Cmd-click (a tap on touch) on a path the terminal printed (#3034). */
-  onOpenFile?: (path: string, line?: number) => void;
+  onOpenFile: (path: string, line?: number) => void;
 }
 
 // The right half's session between 800 and 1099px (#3010): its terminal on
