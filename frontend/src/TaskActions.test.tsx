@@ -110,6 +110,16 @@ describe("TaskActions' Archive", () => {
     expect(screen.getByRole("button", { name: "Archive" })).toBeInTheDocument();
   });
 
+  it("closes the overflow menu once an archive succeeds", async () => {
+    const user = userEvent.setup();
+    archiveTask.mockResolvedValue(undefined);
+    render(<TaskActions task={makeTask({ id: 10, status: "failed" })} overflow />);
+    await user.click(screen.getByRole("button", { name: "More task actions" }));
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+    expect(archiveTask).toHaveBeenCalledWith(10);
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+  });
+
   it("keeps the overflow menu open so a failed archive shows its error", async () => {
     const user = userEvent.setup();
     archiveTask.mockRejectedValue(new Error("boom"));

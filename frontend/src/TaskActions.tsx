@@ -86,15 +86,19 @@ export function TaskActions({
 
   // The non-primary actions: inline by default, behind the `⋯` menu when
   // `overflow` is set. Picking an item closes the menu.
-  const secondary = (items: ReactNode) =>
+  // `items` may be a function of the menu's `close`, for an item that must
+  // outlive the click and close the menu itself once its request settles.
+  const secondary = (items: ReactNode | ((close: () => void) => ReactNode)) =>
     overflow ? (
       <IconPopover label="More task actions" icon={<OverflowIcon size={14} />}>
         {(close) => (
           <div className="sb-menu-list" onClick={close}>
-            {items}
+            {typeof items === "function" ? items(close) : items}
           </div>
         )}
       </IconPopover>
+    ) : typeof items === "function" ? (
+      items(() => {})
     ) : (
       items
     );
@@ -206,7 +210,9 @@ export function TaskActions({
   // (same done/failed restriction as the server).
   const archive =
     task.status === "done" || task.status === "failed"
-      ? secondary(<ArchiveTaskAction taskId={task.id} archivedAt={task.archivedAt} />)
+      ? secondary((close) => (
+          <ArchiveTaskAction taskId={task.id} archivedAt={task.archivedAt} onDone={close} />
+        ))
       : null;
 
   // #483 — resumes on the preserved mullion/task-<id> branch rather than
@@ -487,6 +493,9 @@ function TrackingEpicApprovalConfirm({
 // or outstanding with a recorded error (unstable/blocked/dirty — needs a
 // human to actually go fix something, "Retry merge" just re-arms the
 // sweep's backoff, it doesn't retry the SAME failed state any faster).
+// `trailing` is the only seam for adding a button to this block: render it
+// inside the single `.task-detail-actions` below, never as a sibling block
+// (the GitHub strip gives every actions block `flex: 1`).
 function TaskMergeStatus({ task, trailing }: { task: Task; trailing?: ReactNode }) {
   const { taskMasterEnabled, mergeTask } = useDashboardStore();
   const mergeOnApprove = useDashboardStore(

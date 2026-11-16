@@ -10,9 +10,12 @@ import { useDashboardStore } from "./store/index.js";
 export function ArchiveTaskAction({
   taskId,
   archivedAt,
+  onDone,
 }: {
   taskId: number;
   archivedAt: string | null;
+  /** Called once the request succeeds (the overflow menu closes itself here). */
+  onDone?: () => void;
 }) {
   const archiveTask = useDashboardStore((s) => s.archiveTask);
   const unarchiveTask = useDashboardStore((s) => s.unarchiveTask);
@@ -25,6 +28,7 @@ export function ArchiveTaskAction({
     try {
       if (archivedAt !== null) await unarchiveTask(taskId);
       else await archiveTask(taskId);
+      onDone?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to update archive state");
     } finally {
