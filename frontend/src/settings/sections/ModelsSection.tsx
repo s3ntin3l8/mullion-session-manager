@@ -6,6 +6,7 @@ import type { AppSettings } from "../../api/index.js";
 import { ModelSelect } from "../ModelPicker.js";
 import type { ModelOption } from "../ModelPicker.js";
 import {
+  CLAUDE_DELEGATE_MODELS,
   CLAUDE_MODELS,
   CLAUDE_SMALL_MODELS,
   CODEX_FALLBACK_MODELS,
@@ -59,7 +60,7 @@ const ROLE_COPY = {
   small: { label: "Small", desc: "Background work. Only Claude Code and opencode." },
   delegate: {
     label: "Delegate",
-    desc: "Task Master workers hand sizeable parts to this cheaper model. Empty: no delegation.",
+    desc: "Cheaper model Task Master workers hand parts to. Empty: none.",
   },
 } as const;
 
@@ -333,9 +334,9 @@ export function ModelsSection() {
       if (role === "delegate") {
         return {
           value: settings.claudeCode.delegateModel ?? null,
-          options: CLAUDE_MODELS,
+          options: CLAUDE_DELEGATE_MODELS,
           defaultLabel: "No delegation",
-          allowCustom,
+          allowCustom: false,
           onChange: (v) => updateSettings({ claudeCode: { delegateModel: v } }),
         };
       }

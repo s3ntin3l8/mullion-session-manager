@@ -40,17 +40,30 @@ export function claudeModelTier(model: string): number | null {
 }
 
 /**
- * Codex model names → cost tier. The ranking is inferred from the catalog's
- * names (`luna` is the small tier, `sol` the large one) and from which model
- * workers actually picked for their subagents; a name this does not know
- * (`astra`, a future tier) is `null` and falls back to "the operator chose
- * the delegate on purpose".
+ * The alias Claude Code's Task tool accepts as its per-call `model`. The tool's
+ * parameter is an enum of exactly `sonnet | opus | haiku | fable` — a full id
+ * or a `[1m]` variant is rejected — so the stored Delegate model is mapped to
+ * its family alias. `opusplan` maps to `sonnet` (see claudeModelTier). `null`
+ * for a name outside those four families.
+ */
+export function claudeTaskModelAlias(model: string): "haiku" | "sonnet" | "opus" | "fable" | null {
+  const tier = claudeModelTier(model);
+  return tier === null ? null : (["haiku", "sonnet", "opus", "fable"] as const)[tier];
+}
+
+/**
+ * Codex model names → cost tier, from the descriptions in `codex debug
+ * models`: `luna` is "fast and affordable", `terra` "balanced", `sol` the
+ * "workhorse" and `astra` the "frontier" model. The generation (`gpt-6.1-sol`
+ * vs `gpt-5.6-sol`) is not ranked; a name this does not know is `null` and
+ * falls back to "the operator chose the delegate on purpose".
  */
 export function codexModelTier(model: string): number | null {
   const m = norm(model);
   if (m.includes("luna")) return 0;
   if (m.includes("terra")) return 1;
   if (m.includes("sol")) return 2;
+  if (m.includes("astra")) return 3;
   return null;
 }
 

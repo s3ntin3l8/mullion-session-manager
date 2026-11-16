@@ -551,10 +551,10 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
 
   "Cheaper" is decided by each adapter's `modelTier` (`hook-adapters/
 delegation.ts`): Claude `haiku < sonnet < opus < fable`, Codex `luna <
-terra < sol`. **`opusplan` ranks as Sonnet** — it is Opus only while
+terra < sol < astra` (from the descriptions `codex debug models` prints). **`opusplan` ranks as Sonnet** — it is Opus only while
   planning, and a Task Master worker is never in plan mode, so it effectively
   runs Sonnet and is not told to delegate to Sonnet. A model an adapter cannot
-  rank (the CLI's own default, `astra`, a custom id) shows the clause unless
+  rank (the CLI's own default, a custom id) shows the clause unless
   the two names are identical: the operator chose the delegate on purpose. The
   worker's model is resolved exactly as the spawn resolves `--model`
   (`task-delegation.ts`), so a task's `Model:` line is honoured.
@@ -578,8 +578,10 @@ terra < sol`. **`opusplan` ranks as Sonnet** — it is Opus only while
   whether a split is worth it. Why it is opt-in now: before the setting
   existed the hint was unconditional ("route the mechanical parts to a cheaper
   model") and named no model, and across ~930 Claude Code worker transcripts
-  none made a subagent call, while Codex workers (which were given a concrete
-  cheap model by the catalog) delegated in more than half of their sessions.
+  none made a subagent call. Claude Code's `Task` tool accepts only the four
+  aliases `sonnet | opus | haiku | fable` for its `model`, so the clause maps
+  whatever is stored (a full id, a `[1m]` variant) to one of those, and the
+  Claude Delegate picker offers only them.
 
   Every variant of the clause ends by keeping the worker responsible for the
   final commit on the branch. That is load-bearing, not boilerplate: a

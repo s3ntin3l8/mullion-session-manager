@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { claudeModelTier } from "./delegation.js";
+import { claudeModelTier, claudeTaskModelAlias } from "./delegation.js";
 import {
   resolveMcpServerPath,
   resolveWorktreeHookPath,
@@ -563,7 +563,8 @@ export const claudeCodeAdapter: HookAgentAdapter = {
     "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
     "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
     "The Task tool spawns a subagent and takes an optional `model` for that call, which takes " +
-    `precedence over that subagent's own definition: pass \`model: "${delegateModel}"\` for the ` +
+    "precedence over that subagent's own definition and is one of `sonnet`, `opus`, `haiku` or " +
+    `\`fable\`: pass \`model: "${claudeTaskModelAlias(delegateModel) ?? delegateModel}"\` for the ` +
     "parts you delegate, unless the child is a fork (a fork always inherits your model) or the tool " +
     "reports that the model parameter is ignored on this session. " +
     "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +

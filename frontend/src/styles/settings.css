@@ -360,7 +360,7 @@
   line-height: 1.45;
 }
 
-@container models (max-width: 880px) {
+@container models (max-width: 740px) {
   .settings-models-head {
     display: none;
   }

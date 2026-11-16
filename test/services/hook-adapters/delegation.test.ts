@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   claudeModelTier,
+  claudeTaskModelAlias,
   codexModelTier,
   delegationApplies,
 } from "../../../src/services/hook-adapters/delegation.js";
@@ -29,11 +30,24 @@ describe("claudeModelTier", () => {
   });
 });
 
+describe("claudeTaskModelAlias", () => {
+  it("maps any stored name to the four aliases the Task tool's model enum accepts", () => {
+    expect(claudeTaskModelAlias("sonnet")).toBe("sonnet");
+    expect(claudeTaskModelAlias("sonnet[1m]")).toBe("sonnet");
+    expect(claudeTaskModelAlias("claude-haiku-5-5")).toBe("haiku");
+    expect(claudeTaskModelAlias("claude-opus-5-5")).toBe("opus");
+    expect(claudeTaskModelAlias("fable")).toBe("fable");
+    expect(claudeTaskModelAlias("opusplan")).toBe("sonnet");
+    expect(claudeTaskModelAlias("my-custom-model")).toBeNull();
+  });
+});
+
 describe("codexModelTier", () => {
-  it("ranks luna < terra < sol and leaves other names unranked", () => {
+  it("ranks luna < terra < sol < astra and leaves other names unranked", () => {
     expect(codexModelTier("gpt-6-luna")).toBeLessThan(codexModelTier("gpt-6.1-terra")!);
     expect(codexModelTier("gpt-6.1-terra")).toBeLessThan(codexModelTier("gpt-6.1-sol")!);
-    expect(codexModelTier("gpt-6-astra")).toBeNull();
+    expect(codexModelTier("gpt-6.1-sol")).toBeLessThan(codexModelTier("gpt-6-astra")!);
+    expect(codexModelTier("codex-auto-review")).toBeNull();
   });
 });
 

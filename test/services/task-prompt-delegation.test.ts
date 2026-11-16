@@ -153,7 +153,7 @@ describe("worker prompt wiring", () => {
     expect(out).toContain("Task tool");
   });
 
-  it("carries the clause through buildRejectPrompt when a command is given", () => {
+  it("renders a supplied delegation context through buildRejectPrompt too", () => {
     const out = buildRejectPrompt({
       ...BASE,
       feedback: "not this way",
@@ -188,7 +188,7 @@ describe("buildTaskMasterPreamble — unattended-worker guidance", () => {
   it("keeps the worker inside the issue's Scope", () => {
     const out = flatten(buildTaskMasterPreamble(BASE));
     expect(out).toContain("Do only what the issue's Scope");
-    expect(out).toContain("tests the change needs to pass the repo's own gate");
+    expect(out).toContain("(tests, a generated migration, a docs update) is part of the change");
   });
 
   it("asks for a real check, installing dependencies with the repo's own package manager", () => {

@@ -114,6 +114,20 @@ describe("getAdapterDelegationHint", () => {
     expect(hint).toContain('`model: "gemini-flash"`');
   });
 
+  it("passes the Task tool one of its four model aliases, whatever was stored", () => {
+    for (const [stored, alias] of [
+      ["sonnet[1m]", "sonnet"],
+      ["claude-haiku-5-5", "haiku"],
+      ["opusplan", "sonnet"],
+    ]) {
+      const hint = getAdapterDelegationHint("claude", {
+        workerModel: "fable",
+        delegateModel: stored,
+      });
+      expect(hint).toContain(`\`model: "${alias}"\``);
+    }
+  });
+
   it("names Codex's delegate model and a reasoning effort", () => {
     expect(getAdapterDelegationHint("codex", ctx("gpt-6-luna"))).toContain('`model: "gpt-6-luna"`');
   });
