@@ -201,6 +201,22 @@ export class ScrollbackBuffer {
   }
 
   /**
+   * Whether `chunk`'s exact bytes already occur contiguously inside one
+   * buffered slab. Used by Session's redraw-nudge dedupe (#3154) to avoid
+   * storing a synthesized repaint identical to what is already stored. A
+   * chunk spanning a slab boundary is reported as absent (a miss only costs a
+   * duplicate, never lost output).
+   */
+  contains(chunk: Buffer): boolean {
+    if (chunk.length === 0) return true;
+    const views = this.views();
+    for (let i = views.length - 1; i >= 0; i--) {
+      if (views[i].includes(chunk)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Issue #1228 — how much is buffered in total, so a caller of tail() can
    * tell "cut short" apart from "happened to return exactly maxBytes
    * because that's all there ever was." tail(maxBytes).length alone can't
