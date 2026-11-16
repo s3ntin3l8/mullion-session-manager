@@ -74,7 +74,7 @@ function setup(caches: CacheStorageStatus) {
 const pip = { id: "pip", label: "pip", bytes: GIB, exists: true };
 const trash = {
   id: "trash",
-  label: "Trash (emptied permanently)",
+  label: "Trash",
   bytes: GIB,
   exists: true,
   permanent: true,

@@ -612,7 +612,7 @@ export function StorageSection() {
                 <strong>
                   {visibleCaches
                     .filter((c) => c.permanent)
-                    .map((c) => c.label.replace(/ \(.*\)$/, ""))
+                    .map((c) => c.label)
                     .join(", ")}{" "}
                   {visibleCaches.filter((c) => c.permanent).length === 1 ? "is" : "are"} the
                   exception: emptied for good, with no way to get it back.

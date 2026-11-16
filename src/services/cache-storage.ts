@@ -38,7 +38,7 @@ const CACHE_DIRS = [
   // even for a tool that doesn't create them.
   {
     id: "trash",
-    label: "Trash (emptied permanently)",
+    label: "Trash",
     dir: ".local/share/Trash",
     base: "home",
     recreate: ["files", "info"],

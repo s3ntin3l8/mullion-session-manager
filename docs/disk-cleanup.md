@@ -157,9 +157,9 @@ Four more were added because they grow unnoticed (#2188):
   anything refers to it). If `/proc` can't be read, nothing is removed.
 - **`trash`** (`~/.local/share/Trash`): emptied permanently, with `files/` and
   `info/` put back empty. Anything in it is unrecoverable afterwards, which is why
-  it is opt-in. Settings → Storage labels it "(emptied permanently)" and
-  says so under the toggles, where every other cache is described as rebuilt on
-  next use.
+  it is opt-in. The status carries `permanent: true` for it, and Settings →
+  Storage says under the toggles that it is the exception to "rebuilt or
+  re-downloaded on next use".
 
 ## opencode's database
 
