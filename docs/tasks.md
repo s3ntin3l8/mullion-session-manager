@@ -320,8 +320,8 @@ waiting for a free concurrency slot. It never holds a session; see the
   continuation nudges — one short message typed into its session saying
   nothing is committed yet and to carry on or state the blocker
   ([`tasks-internals.md`](tasks-internals.md#continuation-nudge)); only a
-  worker that cannot be typed into, or that ends its turn empty after both
-  nudges, fails. That failure first attempts a machine-made salvage commit
+  worker that cannot be typed into, that ends its turn empty after both
+  nudges, or whose nudged turn never starts, fails. That failure first attempts a machine-made salvage commit
   (`commitWipChanges`/`commitHostWipChanges`, `git-worktree.ts`/
   `host-git.ts` — both local and remote-hosted hosts, since `#1100`) so the
   branch isn't left truly empty and Retry (below) can actually resume the

@@ -88,9 +88,18 @@ export async function nudgeInsteadOfFailing(
   }
   if (sent >= MAX_WORKER_NUDGES) return false;
 
+  // `task` is the tick's start-of-tick snapshot and typing cannot be undone:
+  // re-read the row so a Reject/Retry that landed meanwhile gets no continuation.
+  const [fresh] = app.db
+    .select({ status: tasks.status, sessionId: tasks.sessionId })
+    .from(tasks)
+    .where(eq(tasks.id, task.id))
+    .all();
+  if (!fresh || fresh.status !== "in_progress" || fresh.sessionId !== task.sessionId) return true;
+
   const outcome = await promptLiveTaskWorker(
     app,
-    task as Parameters<typeof promptLiveTaskWorker>[1],
+    task,
     buildContinuationNudge(task.branchName),
     "task nudge",
   );

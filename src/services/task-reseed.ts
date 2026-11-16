@@ -117,7 +117,7 @@ export async function readLiveWorkerState(
  */
 export async function promptLiveTaskWorker(
   app: FastifyInstance,
-  task: TaskRow,
+  task: Pick<TaskRow, "id" | "sessionId">,
   prompt: string,
   logContext: string,
   // The caller's own read of the worker, when it just made one (the reject

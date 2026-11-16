@@ -180,6 +180,16 @@ describe("task nudge", () => {
     }
   });
 
+  it("types nothing when the task left in_progress since the tick's snapshot", async () => {
+    const { app, task, load, cleanup } = await setup();
+    app.db.update(tasks).set({ status: "ready" }).where(eq(tasks.id, task.id)).run();
+    expect(await nudgeInsteadOfFailing(app, task, info(), NOW)).toBe(true);
+    expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+    expect(load()).toMatchObject({ status: "ready", nudgeCount: 0 });
+    cleanup();
+    await app.close();
+  });
+
   it("leaves a rate-limited or errored worker to its own grace path", async () => {
     const { app, task, cleanup } = await setup({ lastRateLimitAt: new Date() });
     // Within the (default 30 min) grace window of a recorded rate limit.
