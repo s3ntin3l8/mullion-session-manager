@@ -297,12 +297,17 @@ describe("POST /api/hosts/:id/update/apply Task Master guard (issue #3180)", () 
           .run();
       }
 
+      const warnSpy = vi.spyOn(app.log, "warn");
       const res = await app.inject({
         method: "POST",
         url: `/api/hosts/${hostId}/update/apply`,
       });
       expect(res.statusCode).toBe(202);
       expect(agent.calls).toContain("/internal/updates/apply");
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        "force-updating a host with running Task Master tasks",
+      );
     } finally {
       await app.close();
       await agent.close();
