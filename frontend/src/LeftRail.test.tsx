@@ -6,6 +6,7 @@ import { LeftRail } from "./LeftRail.js";
 import type { LeftRailProps } from "./LeftRail.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeTask } from "./test/fixtures.js";
+import { expectNameHasVisibleText } from "./test/a11y.js";
 import railCss from "./styles/left-rail.css?raw";
 
 // The bell has its own suite; here it only has to show where it was mounted
@@ -46,8 +47,11 @@ afterEach(() => useDashboardStore.setState({ viewMode: "list", tasks: [] }));
 describe("LeftRail in Workspace mode", () => {
   it("marks Workspace pressed and shows the sidebar toggle, the middle region and the bottom cluster", () => {
     const { container } = renderRail({ middle: <span>CHIP</span> });
-    expect(modeButton(/^Workspace$/)).toHaveAttribute("aria-pressed", "true");
+    expect(modeButton(/^Work$/)).toHaveAttribute("aria-pressed", "true");
     expect(modeButton(/^Tasks/)).toHaveAttribute("aria-pressed", "false");
+    // Each mode is named by what it shows ("Work", not "Workspace", #2886).
+    expectNameHasVisibleText(modeButton(/^Work$/));
+    expectNameHasVisibleText(modeButton(/^Tasks/));
     expect(screen.getByRole("button", { name: "Sidebar" })).toBeInTheDocument();
     const middle = container.querySelector('[data-rail-region="middle"]');
     expect(middle).not.toBeNull();
@@ -114,7 +118,7 @@ describe("LeftRail in Tasks mode", () => {
   it("holds the mode switch, the statuses region and the bottom cluster", () => {
     const { container } = renderRail({ middle: <span>CHIP</span> });
     expect(modeButton(/^Tasks/)).toHaveAttribute("aria-pressed", "true");
-    expect(modeButton(/^Workspace$/)).toHaveAttribute("aria-pressed", "false");
+    expect(modeButton(/^Work$/)).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("button", { name: "Sidebar" })).toBeNull();
     // The middle region is the board's statuses; Workspace mode's entries stay out.
     expect(screen.queryByText("CHIP")).toBeNull();
@@ -141,27 +145,28 @@ describe("LeftRail in Tasks mode", () => {
       renderRail();
       const list = screen.getByRole("group", { name: "Task statuses" });
       expect(
-        within(list).getByRole("button", { name: "Reviewing, 2 tasks, 1 needs you" }),
+        within(list).getByRole("button", { name: "2 Review (Reviewing), 1 needs you" }),
       ).toBeInTheDocument();
-      expect(within(list).getByRole("button", { name: "Ready, 1 task" })).toBeInTheDocument();
-      expect(within(list).getByRole("button", { name: "Done, 0 tasks" })).toBeInTheDocument();
-      expect(within(list).getByRole("button", { name: /^In progress/ })).toHaveTextContent(
-        /^3Active$/,
+      expect(within(list).getByRole("button", { name: "1 Ready" })).toBeInTheDocument();
+      expect(within(list).getByRole("button", { name: "0 Done" })).toBeInTheDocument();
+      expect(within(list).getByRole("button", { name: /In progress/ })).toHaveTextContent(
+        /^3 Active$/,
       );
       expect(list.querySelectorAll(".rail-status-dot")).toHaveLength(1);
-      // The long titles get a shorter visible word; the name stays whole.
-      expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent(
-        /^2Review$/,
+      // The long titles get a shorter visible word; the name starts with it and
+      // carries the whole title after it.
+      expect(within(list).getByRole("button", { name: /Reviewing/ })).toHaveTextContent(
+        /^2 Review$/,
       );
-      expect(within(list).getByRole("button", { name: /^Reviewing/ })).toHaveTextContent("2");
+      for (const button of within(list).getAllByRole("button")) expectNameHasVisibleText(button);
     });
 
     it("a tap raises a jump request, again for the same status", async () => {
       const user = userEvent.setup();
       renderRail();
-      await user.click(screen.getByRole("button", { name: /^Ready/ }));
+      await user.click(screen.getByRole("button", { name: /Ready/ }));
       expect(useDashboardStore.getState().statusJumpRequest).toEqual({ status: "ready", nonce: 1 });
-      await user.click(screen.getByRole("button", { name: /^Ready/ }));
+      await user.click(screen.getByRole("button", { name: /Ready/ }));
       expect(useDashboardStore.getState().statusJumpRequest?.nonce).toBe(2);
     });
 
@@ -189,7 +194,7 @@ describe("LeftRail in Tasks mode", () => {
   it("switches back to Workspace mode", async () => {
     const user = userEvent.setup();
     renderRail();
-    await user.click(modeButton(/^Workspace$/));
+    await user.click(modeButton(/^Work$/));
     expect(useDashboardStore.getState().viewMode).toBe("list");
   });
 });
@@ -212,24 +217,25 @@ describe("LeftRail needs-you count", () => {
     });
     const { container } = renderRail();
     const tasks = modeButton(/^Tasks/);
-    expect(tasks).toHaveAccessibleName("Tasks");
-    expect(tasks).toHaveAccessibleDescription("2 need you");
+    // The name starts with the visible "Tasks" and its badge, then says
+    // what the count means (#2886).
+    expect(tasks).toHaveAccessibleName("Tasks, 2 need you");
     expect(tasks).toHaveAttribute("title", expect.stringContaining("2 need you"));
     expect(container.querySelector(".left-rail-badge")).toHaveTextContent("2");
+    expectNameHasVisibleText(tasks);
   });
 
   it("shows no count when nothing needs the owner, and follows the store", () => {
     useDashboardStore.setState({ tasks: [makeTask({ id: 3, status: "in_progress" })] });
     const { container } = renderRail();
     expect(modeButton(/^Tasks/)).toHaveAccessibleName("Tasks");
-    expect(modeButton(/^Tasks/)).not.toHaveAttribute("aria-describedby");
     expect(container.querySelector(".left-rail-badge")).toBeNull();
     act(() =>
       useDashboardStore.setState({
         tasks: [makeTask({ id: 3, status: "failed", failureReason: "boom" })],
       }),
     );
-    expect(modeButton(/^Tasks/)).toHaveAccessibleDescription("1 needs you");
+    expect(modeButton(/^Tasks/)).toHaveAccessibleName("Tasks, 1 needs you");
     expect(modeButton(/^Tasks/)).toHaveAttribute("title", expect.stringContaining("1 needs you"));
   });
 

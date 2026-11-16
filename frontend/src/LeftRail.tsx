@@ -62,23 +62,23 @@ export function LeftRail({
           type="button"
           className={`left-rail-btn left-rail-mode${tasksMode ? "" : " active"}`}
           aria-pressed={!tasksMode}
-          aria-label="Workspace"
+          // Named by its visible label, "Work" (WCAG 2.5.3, #2886); the title
+          // spells out the mode as the description.
           title="Workspace (Ctrl/⌘ + Alt + O)"
           onClick={() => setViewMode("list")}
         >
           <GridIcon size={17} />
-          <span className="left-rail-label" aria-hidden="true">
-            Work
-          </span>
+          <span className="left-rail-label">Work</span>
         </button>
         <button
           type="button"
           className={`left-rail-btn left-rail-mode${tasksMode ? " active" : ""}`}
           aria-pressed={tasksMode}
-          // A stable name, so voice control and screen readers find "Tasks"
-          // whatever the count; the count is the button's description.
-          aria-label="Tasks"
-          aria-describedby={needsYou > 0 ? "left-rail-needs-you" : undefined}
+          // The name starts with the visible text, "Tasks" and its count
+          // badge (WCAG 2.5.3, axe's label-content-name-mismatch, #2886), the
+          // phone mode bar's form; it still starts with "Tasks" for voice
+          // control whatever the count.
+          aria-label={needsYou > 0 ? `Tasks, ${needsYouText}` : "Tasks"}
           title={
             needsYou > 0 ? `Tasks: ${needsYouText} (Ctrl/⌘ + Alt + O)` : "Tasks (Ctrl/⌘ + Alt + O)"
           }
@@ -87,15 +87,10 @@ export function LeftRail({
           <LayersIcon size={17} />
           <span className="left-rail-label" aria-hidden="true">
             Tasks
-          </span>
+          </span>{" "}
           {needsYou > 0 && (
             <span className="left-rail-badge" aria-hidden="true">
               {needsYou > 99 ? "99+" : needsYou}
-            </span>
-          )}
-          {needsYou > 0 && (
-            <span id="left-rail-needs-you" className="visually-hidden">
-              {needsYouText}
             </span>
           )}
         </button>

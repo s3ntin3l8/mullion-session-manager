@@ -9,6 +9,7 @@ import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import { makeSession, makeWorkspace } from "../test/fixtures.js";
 import railCss from "../styles/left-rail.css?raw";
+import { expectNameHasVisibleText } from "../test/a11y.js";
 
 const group = (over: Partial<Group>): Group => ({
   id: 1,
@@ -57,16 +58,21 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
-const chip = () => screen.getByRole("button", { name: /^Switch workspace/ });
+const chip = () => screen.getByRole("button", { name: /switch workspace$/ });
 
 describe("WorkspaceChip", () => {
   it("names the current workspace with its initial in its group's colour", () => {
     render(<WorkspaceChip onSelectWorkspace={vi.fn()} sheet={false} />);
-    expect(chip()).toHaveAccessibleName("Switch workspace, current: Mullion, group AI Usage");
+    // The name starts with the visible text, the workspace name; the initial
+    // is drawn by CSS from data-initial, so it is not text in the chip (#2886).
+    expect(chip()).toHaveAccessibleName("Mullion, group AI Usage, switch workspace");
     expect(chip()).toHaveAttribute("aria-haspopup", "dialog");
-    expect(chip()).toHaveTextContent("M");
-    expect(chip()).toHaveTextContent("Mullion");
+    expect(chip()).toHaveTextContent(/^Mullion$/);
+    expectNameHasVisibleText(chip());
     const initial = chip().querySelector(".rail-ws-initial") as HTMLElement;
+    expect(initial).toHaveAttribute("data-initial", "M");
+    // The initial's glyph comes from the stylesheet.
+    expect(railCss).toMatch(/\.rail-ws-initial::before\s*\{\s*content:\s*attr\(data-initial\);/);
     expect(initial.style.borderColor).toBe("var(--b)");
     // Groups are already loaded: no second fetch.
     expect(refreshGroups).not.toHaveBeenCalled();
@@ -96,7 +102,7 @@ describe("WorkspaceChip", () => {
     unmount();
     seed({ active: 4 });
     render(<WorkspaceChip onSelectWorkspace={vi.fn()} sheet={false} />);
-    expect(chip()).toHaveAccessibleName("Switch workspace, current: Personal");
+    expect(chip()).toHaveAccessibleName("Personal, switch workspace");
     expect(chip().querySelector('[data-square="ungrouped"]')).toHaveClass("current");
     const initial = chip().querySelector(".rail-ws-initial") as HTMLElement;
     expect(initial.style.borderColor).toBe("var(--dim)");
@@ -217,7 +223,8 @@ describe("WorkspaceChip", () => {
     seed({ active: 0 });
     useDashboardStore.setState({ activeWorkspaceId: null });
     render(<WorkspaceChip onSelectWorkspace={vi.fn()} sheet={false} />);
-    expect(chip()).toHaveAccessibleName("Switch workspace, current: No workspace");
+    expect(chip()).toHaveAccessibleName("No workspace, switch workspace");
+    expectNameHasVisibleText(chip());
     expect(chip().querySelectorAll(".rail-ws-square.current")).toHaveLength(0);
   });
 });

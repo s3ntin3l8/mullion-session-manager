@@ -409,7 +409,8 @@ describe("MobileSessionSwitcher", () => {
     });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /task-0/ }));
-    expect(screen.getByRole("heading", { name: /Needs you/ })).toBeInTheDocument();
+    // h2 under the app's h1: no skipped level (axe heading-order, #2886).
+    expect(screen.getByRole("heading", { name: /Needs you/, level: 2 })).toBeInTheDocument();
     await user.type(screen.getByLabelText("Search sessions"), "task-7");
     expect(screen.queryByRole("heading", { name: /Needs you/ })).toBeNull();
     expect(screen.getAllByText("task-7")).toHaveLength(1);

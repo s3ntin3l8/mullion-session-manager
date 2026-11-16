@@ -92,7 +92,9 @@ describe("styles/motion.css", () => {
     }
     for (const [selector] of press) {
       const guard = selector.match(
-        /:where\(\s*:has\(\s*:is\(([\s\S]*?)\):active:not\(\.ws-row-btn\)\s*\)\s*\)/,
+        // A workspace row's .ws-row-btn and a banner's .update-banner-open
+        // (#2886) do not count: the row or banner presses for them.
+        /:where\(\s*:has\(\s*:is\(([\s\S]*?)\):active:not\(\.ws-row-btn, \.update-banner-open\)\s*\)\s*\)/,
       );
       expect(guard, selector).not.toBeNull();
       const inner = new Set(controls(guard![1]!));

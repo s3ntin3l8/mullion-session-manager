@@ -163,7 +163,10 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
         ref={btnRef}
         type="button"
         className="rail-ws-chip"
-        aria-label={`Switch workspace, current: ${name}${groupTitle}`}
+        // The name starts with the chip's visible text, the workspace name
+        // (WCAG 2.5.3, axe's label-content-name-mismatch, #2886); the initial
+        // is drawn by CSS from data-initial, so it is not part of that text.
+        aria-label={`${name}${groupTitle}, switch workspace`}
         title={`${name}${currentGroup ? ` (${currentGroup.name})` : ""}: switch workspace`}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -179,10 +182,9 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
               ? { borderColor: groupColor(currentGroup), color: groupColor(currentGroup) }
               : undefined
           }
+          data-initial={initial}
           aria-hidden="true"
-        >
-          {initial}
-        </span>
+        />
         <span className="left-rail-label rail-ws-name" aria-hidden="true">
           {name}
         </span>

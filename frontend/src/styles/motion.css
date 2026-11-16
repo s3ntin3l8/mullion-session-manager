@@ -38,8 +38,8 @@
    0.96 of it pulled the "x" at its far end ~30px out from under the pointer
    before release, so no `click` reached it. A control with a pressed control
    inside it (the last, `:where()`-wrapped entry of both `:not()` lists below)
-   stays still; a workspace row's own `.ws-row-btn` does not count, since the
-   row presses for it. `:where()` keeps both rules' specificity unchanged. */
+   stays still; a workspace row's own `.ws-row-btn` and a banner's
+   `.update-banner-open` do not count, since the row or banner presses for it. `:where()` keeps both rules' specificity unchanged. */
 :where(
   button,
   [role="button"],
@@ -63,6 +63,7 @@
     .device-toolbar button,
     .terminal-voice-btn,
     .ws-row-btn,
+    .update-banner-open,
     :has(.ws-drag-handle:active),
     :where(
       :has(
@@ -84,7 +85,7 @@
             .dock-monitor,
             .sidebar-device-row,
             .update-banner
-          ):active:not(.ws-row-btn)
+          ):active:not(.ws-row-btn, .update-banner-open)
       )
     )
   ) {
@@ -118,6 +119,7 @@
     .device-toolbar button,
     .terminal-voice-btn,
     .ws-row-btn,
+    .update-banner-open,
     :has(.ws-drag-handle:active),
     :where(
       :has(
@@ -139,7 +141,7 @@
             .dock-monitor,
             .sidebar-device-row,
             .update-banner
-          ):active:not(.ws-row-btn)
+          ):active:not(.ws-row-btn, .update-banner-open)
       )
     )
   ) {

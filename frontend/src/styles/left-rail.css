@@ -205,6 +205,11 @@
   font-weight: 700;
   line-height: 1;
 }
+/* The initial is drawn here, not as text in the chip: the chip's visible text
+   is then the workspace name its accessible name starts with (#2886). */
+.rail-ws-initial::before {
+  content: attr(data-initial);
+}
 .rail-ws-name {
   /* overflow clips at the line box: room for descenders (g, y, p). */
   line-height: 1.3;

@@ -14,6 +14,7 @@ import {
   flushRaf,
   uninstallFakeVisualViewport,
 } from "./test/fakeVisualViewport.js";
+import { expectNameHasVisibleText } from "./test/a11y.js";
 
 // The app shell mounts the keyboard detector once; the bar only reads it.
 function Harness({ onOpenSettings = vi.fn() }: { onOpenSettings?: () => void }) {
@@ -76,6 +77,8 @@ describe("PhoneModeBar", () => {
     render(<Harness />);
     const tasks = screen.getByRole("button", { name: "Tasks, 2 need you" });
     expect(tasks.querySelector(".phone-mode-badge")).toHaveTextContent("2");
+    // "Tasks" and the badge read as two words, both in the name (#2886).
+    expectNameHasVisibleText(tasks);
   });
 
   it("shows no count when nothing needs you", () => {

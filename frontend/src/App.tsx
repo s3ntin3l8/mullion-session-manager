@@ -1,4 +1,5 @@
 import { ProjectPreviewPicker } from "./ProjectPreviewMenu.js";
+import { ActionBanner } from "./ActionBanner.js";
 import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
@@ -1394,39 +1395,14 @@ export function App() {
           )}
           <ResourceAlertBanner onOpenStorage={() => openSettings("storage")} />
           {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
-            <div
-              className="update-banner"
-              onClick={() => openSettings("server")}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") openSettings("server");
-              }}
-            >
-              <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="update-banner-title">
-                v{currentVersion} → v{updateCheck.latestVersion} available
-              </span>
-              <span className="update-banner-subtext">Click for details</span>
-              <span
-                className="update-banner-dismiss"
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useDashboardStore.getState().dismissUpdate();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.stopPropagation();
-                    useDashboardStore.getState().dismissUpdate();
-                  }
-                }}
-                title="Dismiss until next version"
-              >
-                ×
-              </span>
-            </div>
+            <ActionBanner
+              icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
+              title={`v${currentVersion} → v${updateCheck.latestVersion} available`}
+              subtext="Click for details"
+              onOpen={() => openSettings("server")}
+              onDismiss={() => useDashboardStore.getState().dismissUpdate()}
+              dismissTitle="Dismiss until next version"
+            />
           )}
           {/* Codex `/hooks` trust pending (issue #259) — same dismissible,
               click-through-to-Settings shape as the update banner above.
@@ -1439,39 +1415,14 @@ export function App() {
             dismissedCodexHookTrustVersion,
             currentVersion,
           }) && (
-            <div
-              className="update-banner"
-              onClick={() => openSettings("launchers")}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") openSettings("launchers");
-              }}
-            >
-              <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="update-banner-title">Codex hooks not yet trusted</span>
-              <span className="update-banner-subtext">
-                Run /hooks in a Codex session to enable status updates · Click for details
-              </span>
-              <span
-                className="update-banner-dismiss"
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useDashboardStore.getState().dismissCodexHookTrust();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.stopPropagation();
-                    useDashboardStore.getState().dismissCodexHookTrust();
-                  }
-                }}
-                title="Dismiss until next version"
-              >
-                ×
-              </span>
-            </div>
+            <ActionBanner
+              icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
+              title="Codex hooks not yet trusted"
+              subtext="Run /hooks in a Codex session to enable status updates · Click for details"
+              onOpen={() => openSettings("launchers")}
+              onDismiss={() => useDashboardStore.getState().dismissCodexHookTrust()}
+              dismissTitle="Dismiss until next version"
+            />
           )}
           <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
             {foldHalves && leftHalfPane && (

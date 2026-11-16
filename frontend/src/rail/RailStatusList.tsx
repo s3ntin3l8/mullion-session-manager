@@ -13,6 +13,25 @@ const SHORT_LABEL: Partial<Record<TaskStatus, string>> = {
   in_progress: "Active",
 };
 
+// The name starts with what the entry shows, the count over the short label
+// ("2 Review"), so it contains the visible text (WCAG 2.5.3, axe's
+// label-content-name-mismatch, #2886); the full title follows when the label
+// is a shortened one.
+function statusName(s: {
+  id: TaskStatus;
+  title: string;
+  count: number;
+  needsYouCount: number;
+}): string {
+  const short = SHORT_LABEL[s.id] ?? s.title;
+  const full = short === s.title ? "" : ` (${s.title})`;
+  const needs =
+    s.needsYouCount > 0
+      ? `, ${s.needsYouCount} ${s.needsYouCount === 1 ? "needs" : "need"} you`
+      : "";
+  return `${s.count} ${short}${full}${needs}`;
+}
+
 export function RailStatusList() {
   const statuses = useDashboardStore((s) => s.boardStatuses);
   if (statuses.length === 0) return null;
@@ -24,17 +43,13 @@ export function RailStatusList() {
           type="button"
           className="left-rail-btn rail-status-entry"
           data-status={s.id}
-          aria-label={`${s.title}, ${s.count} ${s.count === 1 ? "task" : "tasks"}${
-            s.needsYouCount > 0
-              ? `, ${s.needsYouCount} ${s.needsYouCount === 1 ? "needs" : "need"} you`
-              : ""
-          }`}
+          aria-label={statusName(s)}
           title={s.title}
           onClick={() => useDashboardStore.getState().requestStatusJump(s.id)}
         >
           <span className="rail-status-count" aria-hidden="true">
             {s.count}
-          </span>
+          </span>{" "}
           <span className="rail-status-label" aria-hidden="true">
             {SHORT_LABEL[s.id] ?? s.title}
           </span>
