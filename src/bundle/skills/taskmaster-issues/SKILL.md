@@ -1,6 +1,6 @@
 ---
 name: taskmaster-issues
-description: "Read this before filing ANY GitHub issue from a Mullion-hosted session — a deferred follow-up, a bug you found, a spike, or a Task Master task. Covers the Conventional Commits title and the repo's scope vocabulary, attaching the issue to an existing epic as a sub-issue, and sequencing with blocked_by; and, where Task Master is enabled, the mullion-task label, the eight body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree."
+description: "Read this before filing ANY GitHub issue from a Mullion-hosted session — a deferred follow-up, a bug you found, a spike, or a Task Master task. Covers the Conventional Commits title and the repo's scope vocabulary, attaching the issue to an existing epic as a sub-issue, and sequencing with blocked_by; and, where Task Master is enabled, the mullion-task label, the nine body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree."
 ---
 
 # Filing an issue from a Mullion session
@@ -194,23 +194,24 @@ and implements on its own.
 
 ## Body directives
 
-Eight directives, each matched **case-insensitively on its own line** — a
+Nine directives, each matched **case-insensitively on its own line** — a
 directive that merely appears in prose (e.g. "remember to set `Agent:
 claude`") is deliberately not picked up, only a line matching exactly
 (whitespace aside):
 
-| Directive                 | Effect                                                                                                                                                                                                                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Manual: true`            | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. Closed by a merged PR → task `done`; closed otherwise → `failed`. |
-| `Agent: <name>`           | Which worker agent claims this task.                                                                                                                                                                                                                                               |
-| `ReviewAgent: <name>`     | Which agent reviews the diff. `hermes` runs it on the Hermes server (offered once Settings → Review relay → "Task Master reviews" is on). `none`/`false` disables review.                                                                                                          |
-| `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.                                                                                                                                                                                                             |
-| `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                                                                                     |
-| `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                                                                                       |
-| `Platform: <os>`          | The task must run on a host of that platform (`darwin`, `linux`, `win32`).                                                                                                                                                                                                         |
-| `Host: <host id>`         | The task must run on exactly that host. With `Platform:`, both must hold.                                                                                                                                                                                                          |
+| Directive                     | Effect                                                                                                                                                                                                                                                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Manual: true`                | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. Closed by a merged PR → task `done`; closed otherwise → `failed`. |
+| `Agent: <name>`               | Which worker agent claims this task.                                                                                                                                                                                                                                               |
+| `ReviewAgent: <name>`         | Which agent reviews the diff. `hermes` runs it on the Hermes server (offered once Settings → Review relay → "Task Master reviews" is on). `none`/`false` disables review.                                                                                                          |
+| `Model: <model>`              | Implementer model override — every claimable agent, not just opencode.                                                                                                                                                                                                             |
+| `Reviewer-Model: <model>`     | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                                                                                     |
+| `SmallModel: <model>`         | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                                                                                       |
+| `Platform: <os>`              | The task must run on a host of that platform (`darwin`, `linux`, `win32`).                                                                                                                                                                                                         |
+| `Host: <host id>`             | The task must run on exactly that host. With `Platform:`, both must hold.                                                                                                                                                                                                          |
+| `Capability: <name>[,<name>]` | The host must report these capabilities (`xcode`, `android-emulator`), on top of the project's own requirement. A host that hasn't reported yet isn't excluded; an unknown name is refused.                                                                                        |
 
-Matching rules, all eight:
+Matching rules, all nine:
 
 - **The key is always case-insensitive. For `Agent:`/`ReviewAgent:`/the
   `Model:` family, the value is not.** `Agent: Claude` matches the line,
