@@ -32,6 +32,9 @@ export interface Host {
   // Issue #2568 — the agent has a persistent machine identity / an operator
   // revoked it. Never the credential. Absent from an older primary.
   hasMachineIdentity?: boolean;
+  // Issue #3091 — that identity is also unrevoked and unexpired, so the agent connects
+  // out and the host's address may be cleared. Absent from an older primary.
+  hasLiveMachineIdentity?: boolean;
   machineIdentityRevoked?: boolean;
   // Issue #2969 — an address-dialled agent with no machine identity: it cannot
   // open the outbound channel, so it is unreachable off the primary's network.

@@ -22,6 +22,10 @@ interface CreateHostModalProps {
   // placeholder hint since the real token is never sent back from the API
   // (see api.ts's Host interface).
   hasToken?: boolean;
+  // Issue #3091 — edit mode only: the host has a live machine identity, so it
+  // connects out and its address may be cleared (an empty Base URL is then
+  // sent as a clear). Without one the address is how the host is reached.
+  canClearBaseUrl?: boolean;
 }
 
 // Sibling to CreateProjectModal, same create-modal-* shell/CSS (issue #26's
@@ -34,6 +38,7 @@ export function CreateHostModal({
   initialName = "",
   initialBaseUrl = "",
   hasToken = false,
+  canClearBaseUrl = false,
 }: CreateHostModalProps) {
   const [name, setName] = useState(initialName);
   const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
@@ -68,10 +73,13 @@ export function CreateHostModal({
       nameInputRef.current?.focus();
       return;
     }
-    // Edit mode drops an empty Base URL from the PATCH, which would silently
-    // keep the old one; a host still waiting for its agent has none to clear.
-    if (isEdit && !trimmedBaseUrl && initialBaseUrl.trim()) {
-      setError("Base URL can't be cleared once set.");
+    // An empty Base URL in edit mode is either a clear (the caller sends it as
+    // one, #3091) or, for a host that is reached by that address, a mistake.
+    if (isEdit && !trimmedBaseUrl && initialBaseUrl.trim() && !canClearBaseUrl) {
+      setError(
+        "Base URL can't be cleared: this agent has no live machine identity, so the primary reaches it " +
+          "only by this address. Upgrade the agent first.",
+      );
       return;
     }
     if (!isEdit && ownToken && !token.trim()) {
@@ -167,8 +175,12 @@ export function CreateHostModal({
           />
         </span>
         <span className="create-modal-field-hint">
-          Where the primary reaches this agent (MULLION_ROLE=agent). Leave empty to let the agent
-          report it when it registers.
+          {isEdit && canClearBaseUrl
+            ? "Clear it to make this host outbound-only: the agent connects out and needs no address. " +
+              "Also stop the agent advertising one (unset MULLION_AGENT_ADVERTISE_URL, bind HOST to " +
+              "loopback), or its next registration puts it back."
+            : "Where the primary reaches this agent (MULLION_ROLE=agent). Leave empty to let the agent " +
+              "report it when it registers."}
         </span>
       </label>
 

@@ -11,6 +11,7 @@ import {
   createHost,
   deleteHost,
   getHostRow,
+  hasLiveMachineIdentity,
   listHosts,
   findPossibleDuplicates,
   mintHostToken,
@@ -49,7 +50,8 @@ interface CreateHostBody {
 
 interface UpdateHostBody {
   name?: string;
-  baseUrl?: string;
+  // `null` clears the address (issue #3091).
+  baseUrl?: string | null;
   token?: string;
   // Issue #1725 / roadmap 8.11 — park this host: it takes no new work.
   // A flag, not an action — nothing is terminated.
@@ -78,7 +80,9 @@ const updateHostSchema = {
     minProperties: 1,
     properties: {
       name: { type: "string", minLength: 1 },
-      baseUrl: { type: "string", minLength: 1 },
+      // Issue #3091 — `null` clears the address of a host that has a machine
+      // identity; an empty string is still invalid.
+      baseUrl: { type: ["string", "null"], minLength: 1 },
       token: { type: "string", minLength: 1 },
       // Issue #1725 — the drain flag (park the host / un-park it). A new
       // host is never parked: parking is a decision about a host that is
@@ -331,10 +335,25 @@ export async function hostsRoute(app: FastifyInstance) {
         }
       }
       if (
-        request.body.baseUrl !== undefined &&
+        typeof request.body.baseUrl === "string" &&
         !isValidHttpUrl(request.body.baseUrl, app.config.MULLION_ALLOW_TAILNET_HOSTS)
       ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
+      }
+      // Issue #3091 — an address is how a host WITHOUT a live machine identity
+      // is reached at all, so clearing it would strand one. Live means what
+      // renewal means by it (renewMachineCredential): present, not revoked,
+      // not expired. The agent then connects out and the address is only the
+      // in-app browser's.
+      if (request.body.baseUrl === null) {
+        const row = getHostRow(app, id);
+        if (!row) return reply.notFound();
+        if (!hasLiveMachineIdentity(row)) {
+          return reply.badRequest(
+            "the address can only be cleared for a host with a live machine identity: without " +
+              "one nothing else can reach it",
+          );
+        }
       }
       const updated = updateHost(app, id, request.body);
       if (!updated) return reply.notFound();
