@@ -95,6 +95,18 @@ export async function resolveCommitsPastBase(
 }
 
 /**
+ * True only when the worktree resolved and holds no commits past base.
+ * `unknown` is false: an unreadable worktree must not stall a task.
+ */
+export async function hasNoCommitsPastBase(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  hostId: string,
+): Promise<boolean> {
+  return (await resolveCommitsPastBase(app, task, hostId)).state === "none";
+}
+
+/**
  * The "we could not find out" verdict, logged so it is never silent.
  *
  * The log carries what an operator needs to act on it: which task, in which

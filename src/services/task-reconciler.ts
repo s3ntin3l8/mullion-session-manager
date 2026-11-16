@@ -29,7 +29,7 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 // #2416 — the three-state "did the worker commit past the base" verdict.
 // "unknown" (the worktree could not be read) is a state of its own here, not
 // a synonym for "no commits"; see the module's header.
-import { resolveCommitsPastBase } from "./commits-past-base.js";
+import { hasNoCommitsPastBase, resolveCommitsPastBase } from "./commits-past-base.js";
 // #2416 — one throttle policy for the reconciler's "this state is stuck"
 // warnings, instead of a copy per lookup.
 import { failReviewingGate, removeFailedTaskWorktree } from "./task-gate-failure.js";
@@ -1110,6 +1110,8 @@ function turnFinishedSinceClaim(
 // TTL, default 2h, PLUS a PTY-silence requirement any later redraw breaks)
 // can't beat the claim-anchored budget. Only shell tasks are excused —
 // outstanding agent/MCP work still blocks the handoff (issue #428).
+// A worker with no commits past base is never handed off on this path: it is
+// mid-work behind a long job, and the budget deadline is its backstop.
 const SHELL_TAIL_GRACE_MS = 5 * 60_000;
 const SHELL_TAIL_STATUSES: ReadonlySet<SessionStatus> = new Set([
   "background",
@@ -5202,6 +5204,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 }
               }
             }
+
+            // A shell tail with no commits is a worker mid-work behind a long
+            // job (pocket #1264): keep waiting; the budget deadline backstops it.
+            if (shellTail && (await hasNoCommitsPastBase(app, task, hostId))) continue;
 
             // See the matching gate/comment on the claimed -> reviewing
             // branch above — same "don't strand it in reviewing" reasoning.
