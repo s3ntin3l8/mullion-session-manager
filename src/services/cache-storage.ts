@@ -22,7 +22,38 @@ const CACHE_DIRS = [
   { id: "go-mod", label: "Go module cache", dir: "go/pkg/mod", base: "home" },
   { id: "gradle", label: "Gradle caches", dir: ".gradle/caches", base: "home" },
   { id: "cargo-registry", label: "Cargo registry", dir: ".cargo/registry", base: "home" },
-] as const;
+  { id: "gh", label: "GitHub CLI", dir: "gh", base: "cache" },
+  {
+    id: "claude-cli-nodejs",
+    label: "Claude Code CLI cache",
+    dir: "claude-cli-nodejs",
+    base: "cache",
+  },
+  // `npx` unpacks packages here and runs them from here, e.g. an MCP server
+  // an agent session launched: an entry some process still references is kept
+  // (see `entriesInUse`).
+  { id: "npm-npx", label: "npx packages", dir: ".npm/_npx", base: "home", skipInUse: true },
+  // Emptied for good, not moved anywhere, which is why it is opt-in like the
+  // rest. `files` and `info` are put back so the next trash operation works
+  // even for a tool that doesn't create them.
+  {
+    id: "trash",
+    label: "Trash",
+    dir: ".local/share/Trash",
+    base: "home",
+    recreate: ["files", "info"],
+    permanent: true,
+  },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  label: string;
+  dir: string;
+  base: "cache" | "home";
+  skipInUse?: boolean;
+  recreate?: readonly string[];
+  /** Not rebuilt or re-downloaded afterwards: the UI must say so. */
+  permanent?: boolean;
+}>;
 
 export type CacheDirId = (typeof CACHE_DIRS)[number]["id"];
 export const CACHE_DIR_IDS: readonly CacheDirId[] = CACHE_DIRS.map((c) => c.id);
@@ -32,13 +63,24 @@ export interface CacheStorageOptions {
   cacheRoot?: string;
   /** Defaults to the user's home directory. */
   homeDir?: string;
+  /** Test seam: the /proc scanned for processes using a `skipInUse` cache. */
+  procDir?: string;
+  /** Test seam for the `skipInUse` grace window; defaults to the real clock. */
+  now?: number;
 }
+
+// An entry created or touched this recently is kept: `npx` makes `<hash>/`
+// before any process references it by path, so a cleanup landing mid-install
+// would otherwise delete the tree under it.
+const IN_USE_GRACE_MS = 10 * 60 * 1000;
 
 export interface CacheDirStatus {
   id: CacheDirId;
   label: string;
   bytes: number;
   exists: boolean;
+  /** Emptying is irreversible: the contents are not rebuilt or re-downloaded. */
+  permanent: boolean;
 }
 
 export interface CacheStorageStatus {
@@ -82,6 +124,67 @@ async function removeEntry(target: string, readOnlyByDesign: boolean): Promise<v
   }
 }
 
+/**
+ * Which of `candidates` (absolute paths) appear in a running process's command
+ * line or working directory. Unreadable processes are skipped, so this can miss
+ * one owned by another user; every cache using it lives in the user's own home,
+ * where only their own processes run.
+ */
+async function entriesInUse(
+  candidates: readonly string[],
+  procDir = "/proc",
+  now = Date.now(),
+): Promise<Set<string>> {
+  const used = new Set<string>();
+  // The kernel reports a process's cwd with symlinks resolved, and tools that
+  // resolve themselves (npm's `.bin` shims use `readlink -f`) put the real path
+  // in argv, so each candidate is matched in both spellings.
+  const spellings = await Promise.all(
+    candidates.map(async (candidate) => {
+      const real = await fs.realpath(candidate).catch(() => candidate);
+      return { candidate, forms: real === candidate ? [candidate] : [candidate, real] };
+    }),
+  );
+  // Recently modified entries are in use whether or not anything names them yet.
+  for (const { candidate } of spellings) {
+    const mtimeMs = await fs
+      .lstat(candidate)
+      .then((st) => st.mtimeMs)
+      .catch(() => now);
+    if (now - mtimeMs < IN_USE_GRACE_MS) used.add(candidate);
+  }
+  let pids: string[];
+  try {
+    pids = (await fs.readdir(procDir)).filter((n) => /^\d+$/.test(n));
+  } catch {
+    // Can't tell what runs: the caller treats every entry as in use.
+    return new Set(candidates);
+  }
+  for (const pid of pids) {
+    let cmdline = "";
+    let cwd = "";
+    try {
+      cmdline = (await fs.readFile(path.join(procDir, pid, "cmdline"), "utf8")).replaceAll(
+        "\0",
+        " ",
+      );
+    } catch {
+      // exited, or not ours
+    }
+    try {
+      cwd = await fs.readlink(path.join(procDir, pid, "cwd"));
+    } catch {
+      // exited, or not ours
+    }
+    for (const { candidate, forms } of spellings) {
+      if (forms.some((f) => cmdline.includes(f) || cwd === f || cwd.startsWith(f + path.sep))) {
+        used.add(candidate);
+      }
+    }
+  }
+  return used;
+}
+
 /** Where each allowlisted cache lives, for callers that need to recognise the paths. */
 export function cacheDirPaths(
   options: CacheStorageOptions = {},
@@ -118,7 +221,13 @@ export async function inspectCacheStorage(
     const { id, label } = entry;
     const full = cachePath(entry, options);
     const exists = await realDirectory(full);
-    caches.push({ id, label, exists, bytes: exists ? await dirSize(full) : 0 });
+    caches.push({
+      id,
+      label,
+      exists,
+      bytes: exists ? await dirSize(full) : 0,
+      permanent: "permanent" in entry && entry.permanent === true,
+    });
   }
   return { available: true, root, caches };
 }
@@ -158,7 +267,16 @@ export async function pruneCacheStorage(
         }
         continue;
       }
+      const keep =
+        "skipInUse" in entry && entry.skipInUse
+          ? await entriesInUse(
+              names.map((n) => path.join(full, n)),
+              options.procDir,
+              options.now,
+            )
+          : new Set<string>();
       for (const name of names) {
+        if (keep.has(path.join(full, name))) continue;
         try {
           await removeEntry(path.join(full, name), id === "go-mod");
         } catch (error) {
@@ -168,6 +286,9 @@ export async function pruneCacheStorage(
             );
           }
         }
+      }
+      for (const sub of "recreate" in entry ? entry.recreate : []) {
+        await fs.mkdir(path.join(full, sub), { recursive: true, mode: 0o700 }).catch(() => {});
       }
       reclaimedBytes += Math.max(0, before - (await dirSize(full)));
       cleaned.push(id);

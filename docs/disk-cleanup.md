@@ -161,6 +161,22 @@ fails with `EACCES`; symlinks are never followed or changed. The server only emp
 are both ticked in the stored settings and requested, so neither side can
 widen the other.
 
+Four more were added because they grow unnoticed (#2188):
+
+- **`gh`** (`~/.cache/gh`) and **`claude-cli-nodejs`** (`~/.cache/claude-cli-nodejs`):
+  plain re-creatable caches.
+- **`npm-npx`** (`~/.npm/_npx`): `npx` runs packages from here, so an entry is
+  kept if any running process's command line or working directory is inside it
+  (matched both as configured and with symlinks resolved, since the kernel
+  reports a resolved cwd and npm's shims put a resolved path in argv), or if it
+  was modified in the last 10 minutes (`npx` creates the directory before
+  anything refers to it). If `/proc` can't be read, nothing is removed.
+- **`trash`** (`~/.local/share/Trash`): emptied permanently, with `files/` and
+  `info/` put back empty. Anything in it is unrecoverable afterwards, which is why
+  it is opt-in. The status carries `permanent: true` for it, and Settings →
+  Storage says under the toggles that it is the exception to "rebuilt or
+  re-downloaded on next use".
+
 ## opencode's database
 
 `services/opencode-storage.ts`. opencode keeps every session in one SQLite

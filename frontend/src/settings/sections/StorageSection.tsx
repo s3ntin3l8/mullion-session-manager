@@ -597,14 +597,28 @@ export function StorageSection() {
             ))}
           </div>
           <div className="settings-footer-note">
-            Ticked caches under <code>{caches.root}</code> are emptied by aggressive cleanup only (
+            Ticked caches (from <code>{caches.root}</code> and elsewhere in your home directory) are
+            emptied by aggressive cleanup only (
             {formatBytes(
               caches.caches
                 .filter((c) => selectedCaches.includes(c.id))
                 .reduce((sum, c) => sum + c.bytes, 0),
             )}
-            ). They are rebuilt or re-downloaded on next use, e.g. Playwright browsers and Hugging
+            ). Most are rebuilt or re-downloaded on next use, e.g. Playwright browsers and Hugging
             Face models. Close anything using them first, such as a running Playwright browser.
+            {visibleCaches.some((c) => c.permanent) && (
+              <>
+                {" "}
+                <strong>
+                  {visibleCaches
+                    .filter((c) => c.permanent)
+                    .map((c) => c.label)
+                    .join(", ")}{" "}
+                  {visibleCaches.filter((c) => c.permanent).length === 1 ? "is" : "are"} the
+                  exception: emptied for good, with no way to get it back.
+                </strong>
+              </>
+            )}
           </div>
         </>
       )}
