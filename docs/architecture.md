@@ -682,9 +682,10 @@ delete). The usual autosave then persists the pane. The hook uses the same
 gates as `useAutoOpenChildPanels`: the restore has finished, `restoringRef` is
 down, and saves are not suspended. A session already open, or one that has
 ended, is acknowledged without adding anything. A session the client has not
-listed yet is left for a later poll. An open older than a day is dropped when
-the list is read, so a long stretch on the phone does not land at the desk as
-a burst of panes. The backend never reads the layout for any of this.
+listed yet is left for a later poll. An open older than a day is left out of
+the list and deleted on the next record or acknowledge (the polled GET stays a
+plain read), so a long stretch on the phone does not land at the desk as a
+burst of panes. The backend never reads the layout for any of this.
 
 Closing a pane on the fold or the phone stays local: the desk's pane stays,
 and a pending open not yet applied is withdrawn (`DELETE

@@ -179,8 +179,9 @@ export async function workspacesRoute(app: FastifyInstance) {
           result.reason === "workspace" ? "Workspace not found" : "Session not found",
         );
       }
-      // 201 for a new open, 200 for one re-recorded (its reference updated).
-      reply.code(result.created ? 201 : 200);
+      // One code for a new open and a re-record (an upsert): telling them
+      // apart would cost a racy extra read for a status code nobody uses.
+      reply.code(201);
       return serializePendingOpen(result.row);
     },
   );

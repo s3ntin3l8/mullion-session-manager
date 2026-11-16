@@ -1,4 +1,4 @@
-import { and, asc, eq, lt } from "drizzle-orm";
+import { and, asc, eq, gte, lt } from "drizzle-orm";
 import type { getDb } from "../db/client.js";
 import { sessions, workspacePendingOpens, workspaces } from "../db/schema.js";
 
@@ -16,8 +16,7 @@ export type PendingOpenRow = typeof workspacePendingOpens.$inferSelect;
 export const PENDING_OPEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export type RecordPendingOpenResult =
-  | { ok: true; row: PendingOpenRow; created: boolean }
-  | { ok: false; reason: "workspace" | "session" | "killed" };
+  { ok: true; row: PendingOpenRow } | { ok: false; reason: "workspace" | "session" | "killed" };
 
 function sessionStatus(db: Db, id: number): string | undefined {
   return db.select({ status: sessions.status }).from(sessions).where(eq(sessions.id, id)).get()
@@ -59,17 +58,6 @@ export function recordPendingOpen(
     sessionExists(db, referenceSessionId)
       ? referenceSessionId
       : null;
-  const existed =
-    db
-      .select({ id: workspacePendingOpens.id })
-      .from(workspacePendingOpens)
-      .where(
-        and(
-          eq(workspacePendingOpens.workspaceId, workspaceId),
-          eq(workspacePendingOpens.sessionId, sessionId),
-        ),
-      )
-      .get() !== undefined;
   // A re-record also renews the open's age.
   const row = db
     .insert(workspacePendingOpens)
@@ -80,14 +68,17 @@ export function recordPendingOpen(
     })
     .returning()
     .get();
-  return { ok: true, row, created: !existed };
+  sweepStalePendingOpens(db, workspaceId);
+  return { ok: true, row };
 }
 
-export function listPendingOpens(
-  db: Db,
-  workspaceId: number,
-  now: number = Date.now(),
-): PendingOpenRow[] {
+/**
+ * Drops a workspace's opens older than PENDING_OPEN_MAX_AGE_MS. Run on the
+ * write paths (record, acknowledge, withdraw), never on the GET the desk
+ * polls every few seconds, so a poll never takes the write lock; the GET
+ * leaves out stale rows on its own.
+ */
+function sweepStalePendingOpens(db: Db, workspaceId: number, now: number = Date.now()): void {
   db.delete(workspacePendingOpens)
     .where(
       and(
@@ -96,10 +87,24 @@ export function listPendingOpens(
       ),
     )
     .run();
+}
+
+/** The workspace's pending opens, oldest first, leaving out stale ones. A
+ * plain read: stale rows are deleted on the write paths. */
+export function listPendingOpens(
+  db: Db,
+  workspaceId: number,
+  now: number = Date.now(),
+): PendingOpenRow[] {
   return db
     .select()
     .from(workspacePendingOpens)
-    .where(eq(workspacePendingOpens.workspaceId, workspaceId))
+    .where(
+      and(
+        eq(workspacePendingOpens.workspaceId, workspaceId),
+        gte(workspacePendingOpens.createdAt, new Date(now - PENDING_OPEN_MAX_AGE_MS)),
+      ),
+    )
     .orderBy(asc(workspacePendingOpens.id))
     .all();
 }
@@ -121,6 +126,7 @@ export function removePendingOpen(db: Db, workspaceId: number, sessionId: number
     )
     .returning({ id: workspacePendingOpens.id })
     .all();
+  sweepStalePendingOpens(db, workspaceId);
   return removed.length > 0;
 }
 

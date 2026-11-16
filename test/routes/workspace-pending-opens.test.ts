@@ -77,7 +77,7 @@ describe("workspace pending opens", () => {
       url,
       payload: { sessionId: b, referenceSessionId: null },
     });
-    expect(again.statusCode).toBe(200);
+    expect(again.statusCode).toBe(201);
     const listed = await app.inject({ method: "GET", url });
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual([
@@ -200,7 +200,7 @@ describe("workspace pending opens", () => {
     await app.close();
   });
 
-  it("drops an open older than a day instead of listing it", async () => {
+  it("leaves an open older than a day out of the list, and sweeps it on a write", async () => {
     const app = await buildApp();
     const { workspaceId, a, b } = await setup(app);
     const url = `/api/workspaces/${workspaceId}/pending-opens`;
@@ -211,11 +211,33 @@ describe("workspace pending opens", () => {
       .set({ createdAt: new Date(Date.now() - PENDING_OPEN_MAX_AGE_MS - 60_000) })
       .where(eq(workspacePendingOpens.sessionId, a))
       .run();
+    const rows = () =>
+      app.db
+        .select()
+        .from(workspacePendingOpens)
+        .where(eq(workspacePendingOpens.workspaceId, workspaceId))
+        .all()
+        .map((r) => r.sessionId);
+
     expect((await app.inject({ method: "GET", url })).json()).toEqual([
       expect.objectContaining({ sessionId: b }),
     ]);
-    const left = app.db.select().from(workspacePendingOpens).all();
-    expect(left.map((r) => r.sessionId)).not.toContain(a);
+    // The read does not write: the stale row is still there.
+    expect(rows()).toContain(a);
+
+    // An acknowledge sweeps it.
+    await app.inject({ method: "POST", url: `${url}/${b}/ack` });
+    expect(rows()).toEqual([]);
+
+    // So does a record.
+    await app.inject({ method: "POST", url, payload: { sessionId: b } });
+    app.db
+      .update(workspacePendingOpens)
+      .set({ createdAt: new Date(Date.now() - PENDING_OPEN_MAX_AGE_MS - 60_000) })
+      .where(eq(workspacePendingOpens.sessionId, b))
+      .run();
+    await app.inject({ method: "POST", url, payload: { sessionId: a } });
+    expect(rows()).toEqual([a]);
     await app.close();
   });
 });
