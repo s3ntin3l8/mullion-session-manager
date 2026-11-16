@@ -14,6 +14,7 @@ import {
 } from "./unified-board/awaitingMerge.js";
 import { taskReReviewEligible } from "./github/prNextStep.js";
 import { parseWorkflowChange } from "./workflowChange.js";
+import { ArchiveTaskAction } from "./ArchiveTaskAction.js";
 
 // What each review action does, said once for the buttons' tooltips and the
 // confirm step's hint — the three of them are easy to confuse.
@@ -203,6 +204,13 @@ export function TaskActions({
 
   // #483 — resumes on the preserved mullion/task-<id> branch rather than
   // starting over. Gated like Claim, since it also spawns a session.
+  // #1015 — Archive/Unarchive for a finished task, beside its primary action
+  // (same done/failed restriction as the server).
+  const archive =
+    task.status === "done" || task.status === "failed"
+      ? secondary(<ArchiveTaskAction taskId={task.id} archivedAt={task.archivedAt} />)
+      : null;
+
   if (task.status === "failed") {
     return (
       <div className="task-detail-actions">
@@ -223,6 +231,7 @@ export function TaskActions({
         >
           Retry
         </button>
+        {archive}
         {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
         {error && <span className="task-detail-error">{error}</span>}
       </div>
@@ -238,9 +247,15 @@ export function TaskActions({
   // this comment wrongly claimed the Reject/Give-up "ungated escape hatch"
   // posture applied here; it doesn't, that route has no such carve-out).
   if (task.status === "done" && task.prNumber !== null) {
-    return <TaskMergeStatus task={task} />;
+    return (
+      <>
+        <TaskMergeStatus task={task} />
+        <div className="task-detail-actions">{archive}</div>
+      </>
+    );
   }
 
+  if (task.status === "done") return <div className="task-detail-actions">{archive}</div>;
   if (task.status !== "reviewing") return null;
 
   if (pendingAction !== null) {

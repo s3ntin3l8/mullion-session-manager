@@ -545,3 +545,36 @@ describe("TaskDetailView workflow-change inset", () => {
     );
   });
 });
+
+describe("TaskDetailView archive action", () => {
+  it("shows Archive beside Retry on a failed task and archives it", async () => {
+    const user = userEvent.setup();
+    const archiveTask = vi.fn().mockResolvedValue(undefined);
+    const t = task({ status: "failed", archivedAt: null } as Partial<Task>);
+    setTasks([t], { archiveTask });
+    renderDetail(t.id);
+    const view = screen.getByTestId("task-detail-view");
+    expect(within(view).getByRole("button", { name: "Retry" })).toBeTruthy();
+    await user.click(within(view).getByRole("button", { name: "Archive" }));
+    expect(archiveTask).toHaveBeenCalledWith(t.id);
+  });
+
+  it("offers Unarchive for an archived task and hides Archive while it is still running", async () => {
+    const user = userEvent.setup();
+    const unarchiveTask = vi.fn().mockResolvedValue(undefined);
+    const done = task({
+      status: "failed",
+      archivedAt: "2026-11-16T10:00:00.000Z",
+    } as Partial<Task>);
+    setTasks([done], { unarchiveTask });
+    const first = renderDetail(done.id);
+    await user.click(screen.getByRole("button", { name: "Unarchive" }));
+    expect(unarchiveTask).toHaveBeenCalledWith(done.id);
+    first.unmount();
+
+    const running = task({ status: "reviewing", archivedAt: null } as Partial<Task>);
+    setTasks([running]);
+    renderDetail(running.id);
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+  });
+});
