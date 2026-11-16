@@ -86,7 +86,12 @@
 
 /* ───────── Cards ───────── */
 /* The epic is the card's left edge; a card with no epic keeps the plain border. */
+/* Positioned so the card is the containing block of its `.visually-hidden.task-card-open`
+   button. Without it that absolute button resolves against `.kanban-board-overlay` and, sitting
+   at its card's real position in a tall column, stretches the overlay's scroll area: a second
+   vertical scrollbar beside the board's own. */
 .task-card {
+  position: relative;
   border-left: 3px solid var(--task-epic-colour, var(--border-soft));
 }
 /* empty-states.css sets `border-color` (a shorthand) on :hover and the selected ring does
