@@ -35,6 +35,10 @@ afterEach(async () => {
   await fs.rm(base, { recursive: true, force: true });
 });
 
+// The npx guard keeps anything touched in the last 10 minutes; tests that
+// exercise the process check run an hour ahead of the files they just wrote.
+const PAST_GRACE = () => Date.now() + 60 * 60 * 1000;
+
 describe("cache-storage", () => {
   it("sanitizes ids to the allowlist, once each", () => {
     expect(sanitizeCacheDirIds(["pip", "../etc", "pip", "huggingface", 7])).toEqual([
@@ -228,11 +232,66 @@ describe("cache-storage", () => {
         cacheRoot: root,
         homeDir: base,
         procDir: proc,
+        now: PAST_GRACE(),
       });
 
       expect(await exists(path.join(npx, "inuse"))).toBe(true);
       expect(await exists(path.join(npx, "idle"))).toBe(false);
       expect(result.reclaimedBytes).toBeGreaterThan(0);
+    });
+
+    it("keeps an entry a process runs inside (cwd), including through a symlinked home", async () => {
+      // The real home, and a symlink to it that the server is configured with.
+      const realHome = path.join(base, "real-home");
+      const linkHome = path.join(base, "link-home");
+      await fs.mkdir(path.join(realHome, ".npm", "_npx", "cwdkeep", "node_modules"), {
+        recursive: true,
+      });
+      await fs.mkdir(path.join(realHome, ".npm", "_npx", "argvkeep"), { recursive: true });
+      await fs.mkdir(path.join(realHome, ".npm", "_npx", "idle"), { recursive: true });
+      await fs.symlink(realHome, linkHome);
+      const proc = path.join(base, "proc2");
+      // The kernel reports a cwd with symlinks resolved...
+      await fs.mkdir(path.join(proc, "200"), { recursive: true });
+      await fs.symlink(
+        path.join(realHome, ".npm", "_npx", "cwdkeep", "node_modules"),
+        path.join(proc, "200", "cwd"),
+      );
+      // ...and a self-resolving shim puts the real path in argv.
+      await fs.mkdir(path.join(proc, "201"), { recursive: true });
+      await fs.writeFile(
+        path.join(proc, "201", "cmdline"),
+        `node\0${path.join(realHome, ".npm", "_npx", "argvkeep", "bin.js")}\0`,
+      );
+
+      await pruneCacheStorage(["npm-npx"], {
+        cacheRoot: path.join(linkHome, ".cache"),
+        homeDir: linkHome,
+        procDir: proc,
+        now: PAST_GRACE(),
+      });
+
+      const npx = path.join(realHome, ".npm", "_npx");
+      expect(await exists(path.join(npx, "cwdkeep"))).toBe(true);
+      expect(await exists(path.join(npx, "argvkeep"))).toBe(true);
+      expect(await exists(path.join(npx, "idle"))).toBe(false);
+    });
+
+    it("keeps a freshly created npx entry even though no process names it yet", async () => {
+      const npx = path.join(base, ".npm", "_npx");
+      const fresh = path.join(npx, "fresh");
+      const old = path.join(npx, "old");
+      await fs.mkdir(fresh, { recursive: true });
+      await fs.mkdir(old, { recursive: true });
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+      await fs.utimes(old, longAgo, longAgo);
+      const proc = path.join(base, "proc3");
+      await fs.mkdir(proc);
+
+      await pruneCacheStorage(["npm-npx"], { cacheRoot: root, homeDir: base, procDir: proc });
+
+      expect(await exists(fresh)).toBe(true);
+      expect(await exists(old)).toBe(false);
     });
 
     it("keeps everything when /proc can't be read", async () => {
@@ -242,6 +301,7 @@ describe("cache-storage", () => {
         cacheRoot: root,
         homeDir: base,
         procDir: path.join(base, "no-such-proc"),
+        now: PAST_GRACE(),
       });
       expect(await exists(entry)).toBe(true);
     });
@@ -260,6 +320,11 @@ describe("cache-storage", () => {
       expect(await fs.readdir(path.join(trash, "info"))).toEqual([]);
       expect(await exists(path.join(trash, "directorysizes"))).toBe(false);
       expect(result.reclaimedBytes).toBeGreaterThan(0);
+    });
+
+    it("flags only the Trash as permanent in the status", async () => {
+      const status = await inspectCacheStorage({ cacheRoot: root, homeDir: base });
+      expect(status.caches.filter((c) => c.permanent).map((c) => c.id)).toEqual(["trash"]);
     });
 
     it("offers the new ids on the allowlist", () => {

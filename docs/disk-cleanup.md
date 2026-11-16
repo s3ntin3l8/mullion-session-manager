@@ -149,13 +149,17 @@ Four more were added because they grow unnoticed (#2188):
 
 - **`gh`** (`~/.cache/gh`) and **`claude-cli-nodejs`** (`~/.cache/claude-cli-nodejs`):
   plain re-creatable caches.
-- **`npm-npx`** (`~/.npm/_npx`): `npx` runs packages from here, so an entry whose
-  path appears in any running process's command line or working directory is
-  kept (an agent's MCP server is the usual one). If `/proc` can't be read, nothing
-  is removed.
+- **`npm-npx`** (`~/.npm/_npx`): `npx` runs packages from here, so an entry is
+  kept if any running process's command line or working directory is inside it
+  (matched both as configured and with symlinks resolved, since the kernel
+  reports a resolved cwd and npm's shims put a resolved path in argv), or if it
+  was modified in the last 10 minutes (`npx` creates the directory before
+  anything refers to it). If `/proc` can't be read, nothing is removed.
 - **`trash`** (`~/.local/share/Trash`): emptied permanently, with `files/` and
   `info/` put back empty. Anything in it is unrecoverable afterwards, which is why
-  it is opt-in.
+  it is opt-in. Settings → Storage labels it "(emptied permanently)" and
+  says so under the toggles, where every other cache is described as rebuilt on
+  next use.
 
 ## opencode's database
 

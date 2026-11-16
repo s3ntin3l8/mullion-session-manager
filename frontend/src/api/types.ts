@@ -171,6 +171,8 @@ export interface CacheDirStatus {
   label: string;
   bytes: number;
   exists: boolean;
+  /** Emptying is irreversible: not rebuilt or re-downloaded afterwards. */
+  permanent?: boolean;
 }
 
 export interface CacheStorageStatus {
