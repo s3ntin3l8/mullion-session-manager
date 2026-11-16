@@ -1489,7 +1489,13 @@ export class RemoteHostClient {
    */
   resolveWaitOutput(
     id: string,
-    body: { match: string; regex: boolean; timeoutMs: number; afterOffset?: number },
+    body: {
+      match: string;
+      regex: boolean;
+      timeoutMs: number;
+      afterOffset?: number;
+      afterSeq?: number;
+    },
   ): Promise<RemoteWaitOutputResult> {
     return this.request(
       `/internal/sessions/${encodeURIComponent(id)}/wait-output`,

@@ -173,6 +173,16 @@ describe("RemoteBackend.waitOutput", () => {
     });
   });
 
+  it("sends afterSeq with every chunk so the host resolves the window (#3159)", async () => {
+    clientMock.resolveWaitOutput
+      .mockResolvedValueOnce({ matched: false, timedOut: true, outputOffset: 100 })
+      .mockResolvedValueOnce({ matched: true, text: "x", line: "x", outputOffset: 120 });
+    await backend().waitOutput("5", waitReq({ afterOffset: 4, afterSeq: 9 }));
+    const calls = clientMock.resolveWaitOutput.mock.calls.map((c) => c[1]);
+    expect(calls[0]).toMatchObject({ afterOffset: 4, afterSeq: 9 });
+    expect(calls[1]).toMatchObject({ afterOffset: 100, afterSeq: 9 });
+  });
+
   it("loops in bounded chunks, resuming each from the previous chunk's offset", async () => {
     clientMock.resolveWaitOutput
       .mockResolvedValueOnce({ matched: false, timedOut: true, outputOffset: 100 })

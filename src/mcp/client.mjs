@@ -614,11 +614,12 @@ export class MullionClient {
 
   /** Server-side wait for a child to print `match` (sessions.wait_for_output).
    * The socket timeout outlasts the wait, as in waitForSession. */
-  async waitForOutput({ sessionId, match, regex, timeoutMs, afterOffset }) {
+  async waitForOutput({ sessionId, match, regex, timeoutMs, afterOffset, afterSeq }) {
     const body = { sessionId, match };
     if (regex !== undefined) body.regex = regex;
     if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
     if (afterOffset !== undefined) body.afterOffset = afterOffset;
+    if (afterSeq !== undefined) body.afterSeq = afterSeq;
     return this.controlRequest(
       "sessions.wait_for_output",
       body,

@@ -357,6 +357,7 @@ export interface WaitOutputBody {
   regex: boolean;
   timeoutMs: number;
   afterOffset?: number;
+  afterSeq?: number;
 }
 export const waitOutputSchema = {
   params: SESSION_ID_PARAMS_SCHEMA,
@@ -369,6 +370,7 @@ export const waitOutputSchema = {
       regex: { type: "boolean" },
       timeoutMs: { type: "integer", minimum: 1 },
       afterOffset: { type: "integer", minimum: 0 },
+      afterSeq: { type: "integer", minimum: 0 },
     },
   },
 } as const;

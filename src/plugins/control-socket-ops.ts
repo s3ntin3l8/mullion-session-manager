@@ -164,6 +164,14 @@ async function waitOutputFor({ app, conn, body, reply }: OpContext, id: string):
     reply(bad(400, "'afterOffset' must be a non-negative integer"));
     return;
   }
+  const afterSeq = body?.afterSeq;
+  if (
+    afterSeq !== undefined &&
+    (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0)
+  ) {
+    reply(bad(400, "'afterSeq' must be a non-negative integer"));
+    return;
+  }
   if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
     reply(bad(429, "too many pending waits on this connection"));
     return;
@@ -187,6 +195,7 @@ async function waitOutputFor({ app, conn, body, reply }: OpContext, id: string):
       regex: body?.regex === true,
       timeoutMs: timeout.timeoutMs,
       ...(afterOffset !== undefined ? { afterOffset } : {}),
+      ...(afterSeq !== undefined ? { afterSeq } : {}),
       signal: controller.signal,
       // The caller must stay active for the whole wait, same as sessions.wait.
       alive: callerActive,
@@ -677,7 +686,14 @@ export const OPS: Record<string, OpSpec> = {
         ({ afterSeq, outputOffset } = delivery);
       }
 
-      const delivered = { delivered: true, submitted: shouldSubmit, outputOffset };
+      // `afterSeq` is also handed back so wait_for_output can start its window
+      // where the child begins answering (#3159); absent from an old agent.
+      const delivered = {
+        delivered: true,
+        submitted: shouldSubmit,
+        outputOffset,
+        ...(afterSeq !== undefined ? { afterSeq } : {}),
+      };
       if (waitOpts === null) {
         reply({ ok: true, status: 200, result: delivered });
         return;

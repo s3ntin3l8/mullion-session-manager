@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { getAdapterPromptFraming } from "./hook-adapters/index.js";
+import { answerStartOffsetAfter } from "./answer-start-offsets.js";
 import type { OutputWaitResult } from "./output-wait.js";
 
 // Types the text of a prompt into a running agent's PTY and submits it — the
@@ -51,6 +52,9 @@ export interface WaitOutputRequest {
   timeoutMs: number;
   /** A previous reply's `outputOffset`: output printed since then still counts. */
   afterOffset?: number;
+  /** A previous `prompt_session` reply's `afterSeq` (#3159): the window starts
+   * where the child's first turn_start/progress hook after it fired. */
+  afterSeq?: number;
   signal: AbortSignal;
   /** False once the CALLER is gone (a session-scoped waiter must stay active). */
   alive: () => boolean;
@@ -67,6 +71,25 @@ export type WaitOutputOutcome =
 
 /** Which of the two moments a caller-supplied check is being asked at. */
 export type PromptCheckStage = "before" | "before-submit";
+
+/**
+ * Where an output wait's match window starts, on the host that owns the
+ * session (#3159). `afterOffset` is the caller's post-submit cursor; with an
+ * `afterSeq` and a turn_start/progress hook already seen after it, the window
+ * starts there instead (the prompt's redrawn echo is behind it), never earlier
+ * than `afterOffset`. No hook yet, or a CLI without hooks: `afterOffset`
+ * unchanged. undefined = "only output from now on".
+ */
+export function resolveWaitStartOffset(
+  session: object,
+  afterOffset: number | undefined,
+  afterSeq: number | undefined,
+): number | undefined {
+  if (afterSeq === undefined) return afterOffset;
+  const answerStart = answerStartOffsetAfter(session, afterSeq);
+  if (answerStart === undefined) return afterOffset;
+  return afterOffset === undefined ? answerStart : Math.max(afterOffset, answerStart);
+}
 
 const promptLocks = new WeakMap<object, Promise<void>>();
 

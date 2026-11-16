@@ -718,7 +718,12 @@ const SESSION_SPAWN_CHILD_SPEC = {
 const SESSION_KILL_SPEC = { cascade: "string" };
 const SESSION_CHILDREN_SPEC = { status: "string" };
 const SESSION_WAIT_SPEC = { until: "string", timeout: "string", "after-seq": "string" };
-const SESSION_WAIT_OUTPUT_SPEC = { regex: "boolean", timeout: "string", "after-offset": "string" };
+const SESSION_WAIT_OUTPUT_SPEC = {
+  regex: "boolean",
+  timeout: "string",
+  "after-offset": "string",
+  "after-seq": "string",
+};
 // Issue #2270 — `session message <id> <text...> [--wait] [--ttl <seconds>]`.
 const SESSION_MESSAGE_SPEC = { wait: "boolean", ttl: "number" };
 
@@ -891,6 +896,13 @@ const sessionCommands = {
         throw new CliUsageError("--after-offset must be a non-negative integer");
       }
       body.afterOffset = offset;
+    }
+    if (flags["after-seq"] !== undefined) {
+      const seq = Number(flags["after-seq"]);
+      if (!Number.isInteger(seq) || seq < 0) {
+        throw new CliUsageError("--after-seq must be a non-negative integer");
+      }
+      body.afterSeq = seq;
     }
     const result = await client.request("sessions.wait_for_output", body, {
       timeoutMs: (body.timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,

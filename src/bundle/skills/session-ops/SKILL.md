@@ -90,10 +90,13 @@ printed from now on — so to catch what a prompt just provoked, pass the
 `outputOffset` that `session prompt` / `prompt_session` returned as
 `--after-offset` / `afterOffset` (it is taken after the prompt was typed and
 submitted, so the typed echo is excluded; a prompt sent with `submit: false` is
-not yet submitted, so its echo is still inside the window). A TUI child may
-still redraw the submitted prompt into its transcript, so never wait on text
-the prompt itself contains: ask for a derived marker (e.g. "print DONE
-reversed") and match that. `--regex` / `regex: true` is available but
+not yet submitted, so its echo is still inside the window). Also pass the
+reply's `afterSeq` (`--after-seq` / `afterSeq`): for a CLI that emits hook
+events (Claude Code) the window then starts where the child began answering, so
+a TUI redrawing the submitted prompt cannot satisfy a marker the prompt contains.
+Without `afterSeq`, for a CLI with no hook events, or before its first hook
+arrived, a TUI may still redraw the prompt into its transcript: ask for a
+derived marker (e.g. "print DONE reversed") and match that. `--regex` / `regex: true` is available but
 guarded (no backreferences, lookarounds or nested quantifiers).
 
 To give a running child a follow-up, use `mullion session prompt <childId>

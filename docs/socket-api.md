@@ -380,8 +380,13 @@ checked one last time first).
   produced since then (as much as the scrollback ring still holds) is checked
   first, so a fast reply is not missed. The offset is taken after the prompt was
   typed and submitted, so the typed echo is excluded — but a TUI may redraw the
-  submitted prompt into its transcript, so do not wait on text the prompt itself
-  contains. An `afterOffset` from before a
+  submitted prompt into its transcript. Also pass the `afterSeq` that
+  `sessions.prompt` returned (#3159): for a CLI that emits hook events (Claude
+  Code) the window then starts at the PTY offset where the child's first
+  `turn_start`/`progress` hook after that seq fired (never earlier than
+  `afterOffset`), so a marker the prompt itself contains cannot match its
+  redrawn echo. With no hook yet, or a CLI without hooks, `afterOffset` applies
+  unchanged and the marker must not be text the prompt contains. An `afterOffset` from before a
   server restart is ahead of the counter and simply contributes nothing.
 - **Regex is opt-in and guarded**: Node regexes have no timeout, so with
   `regex: true` the pattern must be <= 256 chars, contain no backreferences or
