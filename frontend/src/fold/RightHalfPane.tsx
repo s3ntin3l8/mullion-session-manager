@@ -16,6 +16,8 @@ export interface RightHalfPaneProps extends Pick<
   onClose: () => void;
   /** A press or focus inside the half: it now has focus and was used last. */
   onUse: () => void;
+  /** Ctrl/Cmd-click (a tap on touch) on a path the terminal printed (#3034). */
+  onOpenFile: (path: string, line?: number) => void;
 }
 
 // The right half's session between 800 and 1099px (#3010): its terminal on
@@ -30,6 +32,7 @@ export function RightHalfPane({
   onMoveLeft,
   onClose,
   onUse,
+  onOpenFile,
   renderActions,
   onRenameCommit,
 }: RightHalfPaneProps) {
@@ -52,7 +55,12 @@ export function RightHalfPane({
       />
       <div className="fold-half-body">
         <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-          <TerminalPane key={`${sessionId}-${resetKey}`} params={{ sessionId }} active={focused} />
+          <TerminalPane
+            key={`${sessionId}-${resetKey}`}
+            params={{ sessionId }}
+            active={focused}
+            onOpenFile={onOpenFile}
+          />
         </ErrorBoundary>
       </div>
     </div>

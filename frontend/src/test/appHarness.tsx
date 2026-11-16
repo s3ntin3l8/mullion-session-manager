@@ -142,7 +142,12 @@ vi.mock("../MobileKeyBar.js", () => ({
 }));
 // #3010 — the right half's pane and the launcher, as App wires them.
 const foldHarness = vi.hoisted(() => ({
-  rightHalf: null as null | { sessionId: number; focused: boolean; onUse: () => void },
+  rightHalf: null as null | {
+    sessionId: number;
+    focused: boolean;
+    onUse: () => void;
+    onOpenFile?: (path: string, line?: number) => void;
+  },
   launcher: null as null | {
     onLaunched: (session: unknown, target: LauncherTarget | null) => void;
     onOpenSession: (session: unknown, target: LauncherTarget | null) => void;

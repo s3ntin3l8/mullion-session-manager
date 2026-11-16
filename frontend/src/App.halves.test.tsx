@@ -177,6 +177,45 @@ describe("App two halves", () => {
     expect(container.querySelector(".half-header[data-half='left']")).toHaveClass("focused");
   });
 
+  // #3034 — a path clicked in the right half's terminal opens the project's
+  // editor in the grid, which on the halves is the left half, and the left
+  // half takes focus.
+  it("opens a path clicked in the right half's terminal in the editor on the left half", async () => {
+    const projects = useDashboardStore.getState().projects;
+    useDashboardStore.setState({
+      projects: [{ id: 7, name: "demo", cwd: "/proj" } as (typeof projects)[number]],
+      sessions: [session(10), { ...session(11), cwd: "/proj" }],
+    });
+    try {
+      const api = makeApi();
+      await renderHalves(true, api);
+      act(() =>
+        useDashboardStore
+          .getState()
+          .moveToHalf("session-11", "right", ["session-10", "session-11"]),
+      );
+      act(() => foldHarness.rightHalf!.onUse());
+      expect(useDashboardStore.getState().focusedHalf).toBe("right");
+      // A path outside the session's root opens nothing and keeps focus.
+      act(() => foldHarness.rightHalf!.onOpenFile!("../elsewhere.ts"));
+      expect(api.addPanel).not.toHaveBeenCalledWith(
+        expect.objectContaining({ component: "file-editor" }),
+      );
+      expect(useDashboardStore.getState().focusedHalf).toBe("right");
+      act(() => foldHarness.rightHalf!.onOpenFile!("./src/a.ts", 12));
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "file-editor-7",
+          component: "file-editor",
+          params: expect.objectContaining({ projectId: 7, path: "src/a.ts", line: 12 }),
+        }),
+      );
+      expect(useDashboardStore.getState().focusedHalf).toBe("left");
+    } finally {
+      useDashboardStore.setState({ projects });
+    }
+  });
+
   // #3053 — a stale stored assignment can put every open pane on the right
   // half; on load the right half's shown one comes to the left, which has
   // the header, the "x" and the menu.
