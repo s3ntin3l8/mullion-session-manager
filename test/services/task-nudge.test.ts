@@ -9,6 +9,8 @@ import { EventEmitter } from "node:events";
 
 const { mockPromptLiveTaskWorker } = vi.hoisted(() => ({ mockPromptLiveTaskWorker: vi.fn() }));
 
+// test/setup.ts turns the nudge off for every suite; this one tests it.
+vi.unmock("../../src/services/task-nudge.js");
 vi.mock("../../src/services/task-reseed.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   promptLiveTaskWorker: mockPromptLiveTaskWorker,
