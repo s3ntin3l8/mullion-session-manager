@@ -36,6 +36,9 @@ export interface MobileSessionRow {
   // Where this row's session's panel lives — the workspace holding it — or
   // null when it is in no workspace (issue #1882).
   workspace: PickerWorkspace | null;
+  // The session's project, shown on "Needs you" rows only — that section has
+  // no project heading (issue #2996). Null for a pane or a project-less row.
+  projectName: string | null;
   searchFields: string[];
 }
 
@@ -337,7 +340,24 @@ export function MobileSessionSwitcher({
                               className="mobile-session-logo"
                             />
                           )}
-                          <span className="mobile-session-title">{row.title}</span>
+                          {pinned && row.projectName ? (
+                            // The pin has no project heading, and titles are
+                            // often just the agent's command (`claude`), so
+                            // the project goes under the title. Inside the
+                            // button, so it is part of the accessible name.
+                            <span className="mobile-session-text">
+                              <span className="mobile-session-title">{row.title}</span>{" "}
+                              <span className="mobile-session-project" title={row.projectName}>
+                                {/* Reads "claude in runway", like the
+                                    workspace chip's hidden prefix. The
+                                    {" "} nodes keep the words apart: the
+                                    accessible name trims each span. */}
+                                <span className="visually-hidden">in</span> {row.projectName}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="mobile-session-title">{row.title}</span>
+                          )}
                           {row.unreadCount > 0 && (
                             <span className="mobile-session-unread">{row.unreadCount}</span>
                           )}

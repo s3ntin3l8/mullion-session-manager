@@ -115,6 +115,37 @@ describe("buildPickerSections", () => {
     expect(sections[2].rows.map((r) => r.session?.id)).toEqual([2]);
   });
 
+  // #2996 — the Needs you pin has no project heading, so its rows carry
+  // their project's name to tell same-titled sessions apart.
+  it("gives every session row its project's name, and null when it has none", () => {
+    const sections = buildPickerSections(
+      input({
+        sessions: [
+          makeSession({ id: 1, projectId: 1, attention: true }),
+          makeSession({ id: 2, projectId: 2, attention: true }),
+          makeSession({ id: 3, projectId: 999, attention: true }),
+        ],
+        panels: [
+          { id: "git-1", title: "Git" },
+          { id: "session-3", title: "orphan", sessionId: 3 },
+        ],
+      }),
+    );
+    const pin = sections.find((s) => s.kind === "needs-you");
+    expect(pin?.rows.map((r) => [r.session?.id, r.projectName])).toEqual([
+      [1, "runway"],
+      [2, "hermes"],
+      [3, null],
+    ]);
+    const panes = sections.find((s) => s.kind === "panes");
+    expect(panes?.rows.map((r) => [r.panelId, r.projectName])).toEqual([
+      ["git-1", null],
+      ["session-3", null],
+    ]);
+    const runway = sections.find((s) => s.key === "project-1");
+    expect(runway?.rows[0].projectName).toBe("runway");
+  });
+
   it("derives needs-you and unread from events, and mute suppresses both", () => {
     const base = input({
       sessions: [makeSession({ id: 1, projectId: 1, attention: false })],
