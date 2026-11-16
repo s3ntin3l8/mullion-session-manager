@@ -242,8 +242,9 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // (lib/openTerminalPath.ts, shared with the fold's right half).
   const { containerApi } = props;
   const onOpenFile = useCallback(
-    (rawPath: string, line?: number) =>
-      openTerminalPath(containerApi, sessionId, layout, rawPath, line),
+    (rawPath: string, line?: number) => {
+      openTerminalPath(containerApi, sessionId, layout, rawPath, line);
+    },
     [sessionId, containerApi, layout],
   );
   const [isActive, setIsActive] = useState(props.api.isActive);

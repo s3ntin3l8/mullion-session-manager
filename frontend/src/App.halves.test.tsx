@@ -196,6 +196,12 @@ describe("App two halves", () => {
       );
       act(() => foldHarness.rightHalf!.onUse());
       expect(useDashboardStore.getState().focusedHalf).toBe("right");
+      // A path outside the session's root opens nothing and keeps focus.
+      act(() => foldHarness.rightHalf!.onOpenFile!("../elsewhere.ts"));
+      expect(api.addPanel).not.toHaveBeenCalledWith(
+        expect.objectContaining({ component: "file-editor" }),
+      );
+      expect(useDashboardStore.getState().focusedHalf).toBe("right");
       act(() => foldHarness.rightHalf!.onOpenFile!("./src/a.ts", 12));
       expect(api.addPanel).toHaveBeenCalledWith(
         expect.objectContaining({

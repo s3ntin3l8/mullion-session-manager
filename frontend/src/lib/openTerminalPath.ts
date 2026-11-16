@@ -11,7 +11,9 @@ import type { LayoutContext } from "./layoutTier.js";
  * fold's right half (fold/RightHalfPane.tsx, #3034), which sits outside the
  * grid and so opens the editor in it: on the halves, that is the left half.
  * Reads the store at call time, so a caller's callback need not re-create on
- * every session change.
+ * every session change. Returns whether it opened anything: a path outside
+ * the session's root, or a session or project not in the store, opens
+ * nothing.
  */
 export function openTerminalPath(
   api: DockviewApi,
@@ -19,11 +21,11 @@ export function openTerminalPath(
   layout: LayoutContext,
   rawPath: string,
   line?: number,
-): void {
+): boolean {
   const { sessions, projects } = useDashboardStore.getState();
   const session = sessions.find((s) => s.id === sessionId);
   const project = session && projects.find((p) => p.id === session.projectId);
-  if (!session || !project) return;
+  if (!session || !project) return false;
   const root = (session.cwd ?? project.cwd).replace(/\/+$/, "");
   let rel = rawPath;
   // `~/x`, or an absolute path outside this session's root: not a project
@@ -31,14 +33,15 @@ export function openTerminalPath(
   // (Settings -> Readable paths) decides whether it's actually openable.
   if (rel.startsWith("~/") || (rel.startsWith("/") && !rel.startsWith(`${root}/`))) {
     openExternalFilePanel(api, project.id, projects, layout, { path: rel, line });
-    return;
+    return true;
   }
   if (rel.startsWith("/")) rel = rel.slice(root.length + 1);
   rel = rel.replace(/^(\.\/)+/, "");
-  if (rel === "" || rel.startsWith("../")) return;
+  if (rel === "" || rel.startsWith("../")) return false;
   openFileEditorPanel(api, project.id, projects, layout, {
     path: rel,
     sessionId: session.cwd && session.cwd !== project.cwd ? session.id : undefined,
     line,
   });
+  return true;
 }

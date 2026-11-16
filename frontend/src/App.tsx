@@ -951,11 +951,11 @@ export function App() {
     useHalfActions(dockviewApi, layoutTier, tiledLeftCount);
   // #3034 — a path clicked in the right half's terminal opens the editor in
   // the grid, which on the halves is the left half; the left half now has
-  // the user's attention.
+  // the user's attention. A path that opens nothing leaves focus where it is.
   const openRightHalfPath = useCallback(
     (sessionId: number, path: string, line?: number) => {
       if (!dockviewApi) return;
-      openTerminalPath(dockviewApi, sessionId, layout, path, line);
+      if (!openTerminalPath(dockviewApi, sessionId, layout, path, line)) return;
       useDashboardStore.getState().setFocusedHalf("left");
     },
     [dockviewApi, layout],
