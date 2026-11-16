@@ -5,6 +5,7 @@ import "./process-title.js";
 // `promisify(execFile)` elsewhere in the graph captures the original.
 import "./services/windows-hide-install.js";
 import { buildApp } from "./app.js";
+import { listenWithAgentFallback } from "./listen.js";
 import { getCachedAgents } from "./services/agent-detect.js";
 import { setUserShellEnvLogger } from "./services/user-shell-env.js";
 
@@ -26,10 +27,7 @@ async function start() {
   }
 
   try {
-    const address = await app.listen({
-      port: app.config.PORT,
-      host: app.config.HOST,
-    });
+    const address = await listenWithAgentFallback(app);
     app.log.info(`Server listening at ${address}`);
     setUserShellEnvLogger(app.log);
     // Warm the launcher/agent probe cache (login-shell `command -v` per
