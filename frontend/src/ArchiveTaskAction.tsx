@@ -34,7 +34,16 @@ export function ArchiveTaskAction({
 
   return (
     <>
-      <button className="notif-gate-btn" disabled={submitting} onClick={run}>
+      <button
+        className="notif-gate-btn"
+        disabled={submitting}
+        onClick={(e) => {
+          // Inside the overflow menu a click would close the popover and
+          // unmount this mid-request, hiding a failure; keep it open.
+          e.stopPropagation();
+          void run();
+        }}
+      >
         {archivedAt !== null ? "Unarchive" : "Archive"}
       </button>
       {error && <span className="task-detail-error">{error}</span>}

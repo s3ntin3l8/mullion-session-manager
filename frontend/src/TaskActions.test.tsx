@@ -81,3 +81,42 @@ describe("TaskActions' Re-review on a reviewing task", () => {
     expect(screen.queryByRole("button", { name: "Re-review" })).not.toBeInTheDocument();
   });
 });
+
+describe("TaskActions' Archive", () => {
+  const archiveTask = vi.fn();
+  beforeEach(() => useDashboardStore.setState({ archiveTask }));
+
+  it("sits in the single action block of a done task without a PR", async () => {
+    const user = userEvent.setup();
+    archiveTask.mockResolvedValue(undefined);
+    const { container } = render(<TaskActions task={makeTask({ id: 7, status: "done" })} />);
+    expect(container.querySelectorAll(".task-detail-actions")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+    expect(archiveTask).toHaveBeenCalledWith(7);
+  });
+
+  it("shares the merge block of a done task with a linked PR (one actions block)", () => {
+    const { container } = render(
+      <TaskActions
+        task={makeTask({
+          id: 8,
+          status: "done",
+          prNumber: 5,
+          mergedAt: "2026-11-16T10:00:00.000Z",
+        })}
+      />,
+    );
+    expect(container.querySelectorAll(".task-detail-actions")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Archive" })).toBeInTheDocument();
+  });
+
+  it("keeps the overflow menu open so a failed archive shows its error", async () => {
+    const user = userEvent.setup();
+    archiveTask.mockRejectedValue(new Error("boom"));
+    render(<TaskActions task={makeTask({ id: 9, status: "failed" })} overflow />);
+    await user.click(screen.getByRole("button", { name: "More task actions" }));
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+    expect(archiveTask).toHaveBeenCalledWith(9);
+    expect(await screen.findByText(/Failed to update archive state/)).toBeInTheDocument();
+  });
+});
