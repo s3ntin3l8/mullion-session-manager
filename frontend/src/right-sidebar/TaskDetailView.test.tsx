@@ -578,3 +578,51 @@ describe("TaskDetailView archive action", () => {
     expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
   });
 });
+
+describe("TaskDetailView delete / abandon", () => {
+  const local = (o: Partial<Task> = {}) =>
+    task({ issueNumber: null, htmlUrl: null, status: "backlog", ...o });
+
+  it("offers Delete task for a local backlog task and closes the detail once deleted", async () => {
+    const t = local();
+    const deleteTask = vi.fn().mockResolvedValue(undefined);
+    setTasks([t], { deleteTask });
+    const onBack = vi.fn();
+    renderDetail(t.id, onBack);
+    await userEvent.click(screen.getByRole("button", { name: "Delete task" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(deleteTask).toHaveBeenCalledWith(t.id);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-prompts with Abandon on a 409 and force-deletes", async () => {
+    const { ApiError } = await import("../api/index.js");
+    const t = local({ status: "failed", branchName: "mullion/task-x" });
+    const deleteTask = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError("nope", 409))
+      .mockResolvedValueOnce(undefined);
+    setTasks([t], { deleteTask });
+    const onBack = vi.fn();
+    renderDetail(t.id, onBack);
+    await userEvent.click(screen.getByRole("button", { name: "Delete task" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByText(/mullion\/task-x/)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Abandon task" }));
+    expect(deleteTask).toHaveBeenLastCalledWith(t.id, { force: true });
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer delete for a GitHub-linked ready task or an in-progress one", () => {
+    const linked = task({ status: "ready" });
+    setTasks([linked]);
+    const { unmount } = renderDetail(linked.id);
+    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
+    unmount();
+    const running = local({ status: "in_progress" });
+    setTasks([running]);
+    renderDetail(running.id);
+    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
+  });
+});
