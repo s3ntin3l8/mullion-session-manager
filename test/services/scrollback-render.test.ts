@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { renderScrollback, ALTERNATE_SCREEN_HINT } from "../../src/services/scrollback-render.js";
+import {
+  renderScrollback,
+  ALTERNATE_SCREEN_HINT,
+  ALTERNATE_SCREEN_MARKER,
+} from "../../src/services/scrollback-render.js";
 
 const ESC = "\x1b";
 const enc = (s: string) => Buffer.from(s, "utf8");
@@ -36,7 +40,7 @@ describe("renderScrollback (issue #2112)", () => {
 
   it("returns the normal buffer, then the alternate screen, when the program ends on it", async () => {
     const out = await renderScrollback(enc(`before\r\n${ESC}[?1049h${ESC}[HTUI screen\r\n`), size);
-    expect(out).toBe(`before\n--- alternate screen ---\n${ALTERNATE_SCREEN_HINT}\nTUI screen`);
+    expect(out).toBe(`before\n${ALTERNATE_SCREEN_MARKER}\n${ALTERNATE_SCREEN_HINT}\nTUI screen`);
   });
 
   it("returns only the normal buffer after the alternate screen was left", async () => {
@@ -69,7 +73,7 @@ describe("renderScrollback (issue #2112)", () => {
     );
     expect(out.split("\n")).toEqual([
       "n19",
-      "--- alternate screen ---",
+      ALTERNATE_SCREEN_MARKER,
       ALTERNATE_SCREEN_HINT,
       "alt1",
       "alt2",
