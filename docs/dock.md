@@ -656,7 +656,14 @@ into a monitor, open it as a session.
 Both surfaces run the same data and actions: `frontend/src/dock/useDockProject.ts`
 holds a project's controls, grouping, polling and every action, and the
 bottom Dock's `DockProjectGroup` and the view's `DockSidebarView` are two
-layouts over it.
+layouts over it. **The poll is shared per project**
+(`frontend/src/dock/dockProjectShared.ts`, #3036): every mounted
+`useDockProject` for a project reads one `GET .../dock` poll, so the bottom
+Dock and the view together still make one request every 15 s and show the
+same container state after each fetch. The first surface to mount starts the
+poll, the last one to unmount stops it, and a dock config save re-fetches
+once for all of them. What is per surface stays per surface: held rows, a
+stack action's rows, the selection and an armed kill.
 
 ## Troubleshooting
 
@@ -667,7 +674,8 @@ layouts over it.
   [Editing from the UI](#editing-from-the-ui) above) takes effect
   immediately — no wait. A **hand** edit to either `.crs/dock.json` or the
   global `<configDir>/dock.json` doesn't go through that same immediate
-  path, so it shows up once every tiled/pinned project's own poll catches up:
+  path, so it shows up once every tiled/pinned project's poll catches up (one per
+  project, shared by the bottom Dock and the Dock view):
   `GET .../dock` every ~15s (issue #73's own Docker-discovery poll, which
   re-fetches the FULL merged list — configured controls included, not just
   discovered ones). Re-navigating to the project still works too, for an

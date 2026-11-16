@@ -10,7 +10,6 @@ import { useDashboardStore } from "../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "../dockerServiceStatus.js";
-import { usePolling } from "../hooks/usePolling.js";
 import type { CustomSelectOption } from "../ui/CustomSelect.js";
 import {
   composeProjectForControl,
@@ -26,6 +25,7 @@ import type { DockerStackGroup } from "./dockHelpers.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
+import { DOCKER_POLL_INTERVAL_MS, useSharedDockControls } from "./dockProjectShared.js";
 
 // One project's Dock data and actions (#3012): its controls (dock.json and
 // the Docker Compose discovery), how they group, which are running, and every
@@ -41,15 +41,6 @@ import { useTransientStatus } from "./useTransientStatus.js";
 // Dock runs it: the view and the Dock can both be mounted for one project (a
 // fine pointer between 700 and 1099px), and two copies of the effect would
 // each start a log session for the same container.
-
-// Issue #73 — how often a group with at least one discovered Docker control
-// re-fetches GET .../dock while the dock is expanded, so a container's
-// state/image reflects `docker ps` reality without the user having to
-// toggle anything. The backend's own getComposeServices() cache
-// (docker-service-detect.ts) TTLs at 10s specifically so this 15s interval
-// only pays for a fresh `docker ps` roughly once per poll, not once per
-// group.
-const DOCKER_POLL_INTERVAL_MS = 15_000;
 
 // Discovery is `docker ps -a`-driven (docker-service-detect.ts's
 // probeComposeServices), not compose-config-driven — a `compose up -d`
@@ -147,10 +138,17 @@ export function useDockProject(
   );
   // U8 — Settings -> Session management's "Confirm before kill" toggle.
   const confirmBeforeKill = settings.sessions.confirmBeforeKill;
-  const [controls, setControls] = useState<DockControl[]>([]);
+  // The project's controls come from ONE poll shared by every mounted copy
+  // of this hook for the project (#3036, dockProjectShared.ts): the bottom
+  // Dock and the Dock view see the same list and make one request per
+  // interval between them.
+  const { controls, refreshNow: refreshControlsNow } = useSharedDockControls(
+    projectId,
+    dockConfigRefreshTrigger,
+  );
   // Issue #73 — a "Pull & restart stack" session's synthesized control
   // (POST .../docker/update's response), never returned by GET .../dock.
-  // Kept separately from `controls` so the 15s poll below can freely
+  // Kept separately from `controls` so the shared 15s poll can freely
   // overwrite `controls` without wiping an in-flight update's own row.
   const [ephemeralControls, setEphemeralControls] = useState<DockControl[]>([]);
   const addEphemeralControl = (control: DockControl) =>
@@ -190,24 +188,6 @@ export function useDockProject(
   // Per-monitor selected worktree path (by monitor config id) — not
   // persisted, same reasoning as before this extraction.
   const [worktreePaths, setWorktreePaths] = useState<Record<string, string>>({});
-
-  // Polls so a discovered Docker service's container state/image tag stays
-  // live without the user toggling anything — this component only renders
-  // while the dock itself is expanded.
-  usePolling(
-    (isCancelled) => {
-      api
-        .listProjectDock(projectId)
-        .then((next) => {
-          if (!isCancelled()) setControls(next);
-        })
-        .catch(() => {
-          if (!isCancelled()) setControls([]);
-        });
-    },
-    DOCKER_POLL_INTERVAL_MS,
-    { deps: [projectId, dockConfigRefreshTrigger] },
-  );
 
   // PR2b — holds a docker-sourced control's row across the brief discovery
   // gap a compose recreate opens up (RECREATE_GRACE_MS's own comment has the
@@ -444,15 +424,6 @@ export function useDockProject(
     } catch {
       console.warn("[dock] docker rebuild & restart failed", control.id);
       showCheckStatus(statusKey, "Failed to start rebuild", true);
-    }
-  };
-
-  const refreshControlsNow = async () => {
-    try {
-      setControls(await api.listProjectDock(projectId));
-    } catch {
-      // The next scheduled poll will retry — this is a "sooner," not a
-      // "must succeed," refresh.
     }
   };
 
