@@ -1471,7 +1471,7 @@ describe("sessions route", () => {
       const { text } = res.json() as { text: string };
       expect(text).toContain("shell line 0");
       expect(text).toContain("shell line 59");
-      expect(text).toContain("--- alternate screen ---");
+      expect(text).toContain("--- alternate screen ---\n(a full-screen program keeps no history;");
       expect(text.endsWith("TUI screen")).toBe(true);
 
       await app.close();

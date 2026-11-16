@@ -59,8 +59,12 @@ child actually said — the ordered conversation, user turns, replies and a line
 call — from the agent's own transcript, and `--after <cursor>` (the cursor the previous
 page printed) returns only what came since your last look, so after `prompt` + `wait` you
 read the child's reply and anything earlier you missed. Prefer it over scrollback for
-Claude Code and Codex children. `mullion session logs <childId> --text` / `get_scrollback`
-(with `sessionId`) reads the terminal output as plain text — the terminal replayed through an emulator, so a
+Claude Code and Codex children: a full-screen agent CLI runs on the alternate screen, which
+keeps no history, so scrollback only shows its last screen and earlier output (tool results
+included) is not recoverable from the terminal. The transcript needs the child still tracked
+on its host and the hook-reported `transcript_path` (`409` until its first hook, `404` if
+untracked, `501` for any CLI but Claude Code and Codex). `mullion session logs <childId> --text` / `get_scrollback`
+(with `sessionId`) is for plain shells and "what is on screen now": it reads the terminal output as plain text — the terminal replayed through an emulator, so a
 full-screen agent CLI reads as its final screen rather than as cursor-movement
 escapes (`mode: "raw"` / no `--text` gives the raw byte stream); `mullion session kill <childId>` / `kill_child_session` stops it.
 

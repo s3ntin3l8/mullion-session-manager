@@ -748,7 +748,12 @@ const getScrollback = {
     'mode "raw" for the undecoded byte stream (escape sequences included). Omit sessionId to ' +
     "get the calling session's own scrollback; a child session the caller spawned (see " +
     "list_child_sessions) can be named too, from inside a normal agent session. Any other " +
-    "session's id requires full scope (MULLION_AUTH_TOKEN).",
+    "session's id requires full scope (MULLION_AUTH_TOKEN). Caveat: a full-screen agent CLI " +
+    "that runs on the alternate screen keeps no history there, so you get its last screen " +
+    "(plus what the shell printed before it started), and raw mode shows partial repaints as " +
+    "dropped or merged characters. To read what an agent CLI did or said, including tool " +
+    "results, use get_session_transcript; keep get_scrollback for plain shells and for what " +
+    "is on screen now.",
   inputSchema: {
     type: "object",
     properties: {
