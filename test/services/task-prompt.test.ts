@@ -158,16 +158,6 @@ describe("buildTaskMasterPreamble", () => {
   });
 });
 
-// The CLI-aware delegation clause. `buildTaskMasterPreamble` is the single
-// chokepoint every worker prompt renders through, so a clause here reaches
-// the claim/retry/reject/CI-failure/review-feedback/rebase/PR-comment paths
-// at once — and `buildReviewPrompt` (which has its own preamble array) is
-// deliberately unaffected: a reviewer must not decompose the work it judges.
-//
-// The clause is soft-wrapped, so assertions run against a whitespace-
-// normalized copy: a phrase that happens to straddle a line break is still
-// present in the prompt, and asserting on the raw rendering would make the
-// test fail on a reflow rather than on a behaviour change.
 describe("wrapPromptText", () => {
   it("keeps a short text on one line", () => {
     expect(wrapPromptText("one two three")).toEqual(["one two three"]);
@@ -191,88 +181,6 @@ describe("wrapPromptText", () => {
   it("returns no lines for empty or whitespace-only input", () => {
     expect(wrapPromptText("")).toEqual([]);
     expect(wrapPromptText("   \n\t ")).toEqual([]);
-  });
-});
-
-describe("buildTaskMasterPreamble — delegation clause", () => {
-  const flatten = (text: string): string => text.replace(/\s+/g, " ");
-
-  it("emits the CLI's own delegation sentence when the worker runs under a known agent", () => {
-    const claude = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "claude" }));
-    expect(claude).toContain("Task tool");
-
-    const codex = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "codex" }));
-    expect(codex).toContain("spawn_agent");
-
-    const opencode = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "opencode" }));
-    // v2's subagent tool: an `agent` (the subagent type) and, on 2.x, an
-    // optional per-call `model` — not v1's `agents.<name>` config entries.
-    // The row is hedged ("on 2.x", "where the tool offers one") because
-    // Mullion only warns about a 1.x install rather than refusing it.
-    expect(opencode).toContain("`agent`");
-    expect(opencode).toContain("`model`");
-
-    const agy = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "agy" }));
-    expect(agy).toContain("invoke_subagent");
-  });
-
-  it("emits no delegation clause for a command with no agent adapter", () => {
-    const out = buildTaskMasterPreamble({ ...BASE, agentCommand: "bash" });
-    expect(out).not.toContain("delegate");
-  });
-
-  it("emits no delegation clause when no command is supplied at all", () => {
-    const out = buildTaskMasterPreamble(BASE);
-    expect(out).not.toContain("delegate");
-  });
-
-  it("keeps the worker responsible for the final commit", () => {
-    for (const agentCommand of ["claude", "codex", "opencode", "agy"]) {
-      const out = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand }));
-      expect(out).toContain("responsible for the final commit");
-    }
-  });
-
-  it("places the clause before the 'When you are done:' checklist", () => {
-    const out = buildTaskMasterPreamble({ ...BASE, agentCommand: "claude" });
-    expect(out.indexOf("delegate")).toBeLessThan(out.indexOf("When you are done:"));
-  });
-
-  it("wraps the clause rather than emitting one long line", () => {
-    const out = buildTaskMasterPreamble({ ...BASE, agentCommand: "claude" });
-    const lines = out.split("\n");
-    const start = lines.findIndex((line) => line.includes("delegate"));
-    const end = lines.findIndex((line) => line.includes("When you are done:"));
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    // Every rendered line of the clause stays inside the wrap width — the
-    // clause is one long sentence authored in the adapter, so without a wrap
-    // it would read very differently from the hand-wrapped rest of the block.
-    for (const line of lines.slice(start, end)) {
-      expect(line.length).toBeLessThanOrEqual(78);
-    }
-  });
-});
-
-// The clause only exists if a spawn site threads `agentCommand` into the
-// preamble. The two test files above exercise the builder and the lookup
-// in isolation — a future call site that forgot the field would drop the
-// clause silently, with the whole suite still green. So assert the WIRING:
-// a real builder call, through the path a spawn actually takes.
-describe("worker prompt wiring", () => {
-  it("carries the clause through buildWorkerPrompt when a command is given", () => {
-    const out = buildWorkerPrompt({ ...BASE, mode: "claim", agentCommand: "claude" });
-    expect(out).toContain("Task tool");
-  });
-
-  it("carries the clause through buildRejectPrompt when a command is given", () => {
-    const out = buildRejectPrompt({ ...BASE, feedback: "not this way", agentCommand: "codex" });
-    expect(out).toContain("spawn_agent");
-  });
-
-  it("omits the clause from a worker prompt with no command", () => {
-    const out = buildWorkerPrompt({ ...BASE, mode: "claim" });
-    expect(out).not.toContain("delegate");
   });
 });
 

@@ -39,6 +39,7 @@
 import path from "node:path";
 
 import { getAdapterDelegationHint } from "./hook-adapters/index.js";
+import type { DelegationContext } from "./hook-adapters/delegation.js";
 import {
   FOCUS_NOTE_PREFIX,
   focusNotes,
@@ -259,6 +260,15 @@ export interface WorkerPreambleOptions {
    * delegate to) and for any agent with no subagent primitive.
    */
   agentCommand?: string | null;
+  /**
+   * The worker's model and the install's configured Delegate model for its
+   * CLI (task-delegation.ts's resolveWorkerDelegation). With no delegate
+   * model — or one that is not cheaper than the worker's own — no delegation
+   * clause is emitted: telling a Sonnet worker to delegate to Sonnet only
+   * adds a second context's cost. Only the claim and retry spawns pass it:
+   * the follow-up rounds are small fix-ups and omit the clause.
+   */
+  delegation?: DelegationContext | null;
 }
 
 /**
@@ -296,7 +306,15 @@ export interface WorkerPreambleOptions {
  * false` was flatly wrong on this point. The bullet is unconditional now.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
-  const { task, branchName, worktreePath, budgetMinutes, commitTitlePath, agentCommand } = opts;
+  const {
+    task,
+    branchName,
+    worktreePath,
+    budgetMinutes,
+    commitTitlePath,
+    agentCommand,
+    delegation,
+  } = opts;
 
   const lines = [
     `You are working ${taskLabel(task)} as a Mullion Task Master worker.`,
@@ -307,7 +325,11 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "else is invisible to it.",
   ];
 
-  // The delegation clause — advisory, and CLI-specific: each adapter's own
+  // The delegation clause — advisory, CLI-specific, and now model-aware: it
+  // appears only when the install configured a Delegate model for this CLI
+  // (Settings → Models) AND that model is cheaper than the one this worker
+  // runs (hook-adapters/delegation.ts — an `opusplan` worker is effectively
+  // Sonnet, so it is not told to delegate to Sonnet). Each adapter's own
   // `delegationHint` names that CLI's delegation primitive AND that CLI's own
   // way of choosing the child's model (Claude Code's Task tool takes a
   // `subagent_type` and an optional per-call `model` that overrides the
@@ -333,7 +355,8 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   // lands them. Without that, a delegated implementation could satisfy
   // Task Master's "no commits ahead of base" gate while the work itself
   // silently disappeared, and the reviewer would judge an empty diff.
-  const delegationHint = agentCommand ? getAdapterDelegationHint(agentCommand) : null;
+  const delegationHint =
+    agentCommand && delegation ? getAdapterDelegationHint(agentCommand, delegation) : null;
   if (delegationHint) {
     lines.push("", ...wrapPromptText(delegationHint));
   }
@@ -346,7 +369,19 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  CLAUDE.md / AGENTS.md / README document (lint, typecheck, tests, formatting),",
     "  not just the test suite. Mullion opens the pull request AFTER your turn ends,",
     "  so you never see CI's result: do not claim CI is green. Report only what you",
-    "  actually ran, and say so plainly if you skipped something.",
+    "  actually ran, and say so plainly if you skipped something. A fresh worktree",
+    "  has no installed dependencies: if the checks need them, install them with the",
+    "  repo's own package manager and lockfile (for example `npm ci`), never with",
+    "  sudo or the system package manager. A syntax-only check, or a check command",
+    "  that failed to start, does not count as a check. If a check truly cannot run",
+    "  here, record it on a `Not run locally:` line instead of reporting the work",
+    "  as verified.",
+    "- Do only what the issue's Scope (and, in a follow-up round, the instructions",
+    "  given for that round) asks for. Do not add features, files, docs or refactors",
+    "  it does not mention; whatever the repo's own rules and gate require for this",
+    "  change (tests, a generated migration, a docs update) is part of the change.",
+    "  If you think an extra would help, record it on a `Decision:` line (or file a",
+    "  follow-up issue) instead of doing it.",
     "- Look over your own diff with fresh eyes before committing. A separate",
     "  reviewer sees this diff afterwards but cannot edit anything in it — so a",
     "  defect you catch now is free, and the same defect caught downstream costs",
@@ -366,6 +401,18 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  permission prompt — a question you ask instead of answering yourself ends",
     "  your turn with no commits, which fails the task outright. Decide, and record",
     "  the decision and why in your commit message.",
+    "- Ending your turn is final, so do not end it while work you were asked for is",
+    "  still owed: no summary that announces the next",
+    "  step instead of taking it, no offer to continue, no list of open decisions",
+    "  when none of them blocks the rest of the work, and no stopping because a",
+    "  milestone feels like a good place to report. If you notice yourself inviting",
+    "  the user to redirect you or offering to wait, take the next step instead.",
+    "  Ordinary obstacles — an error, a timeout, an empty result, a failing tool —",
+    "  are yours to diagnose and work through (retry, fix the request, use another",
+    "  route). Stop only when nothing can move without a human, or when what blocks",
+    "  you was deliberately put there (a protected file, access that was withheld):",
+    "  leave it alone and finish what you can. Record the blocker on a `Decision:`",
+    "  line, or in your final message if you have nothing to commit.",
     "- Record each departure from the issue, each item you skipped and each check",
     "  you could not run as its own line in a commit body, starting `Decision:`,",
     "  `Skipped:`, `Deferred:` or `Not run locally:`. Mullion shows those lines to",

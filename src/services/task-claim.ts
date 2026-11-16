@@ -64,6 +64,7 @@ import { commandAgentBin, commandIsOpencode, commandModelCli } from "./hook-adap
 import { syncTaskTransition } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
+import { resolveWorkerDelegation } from "./task-delegation.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import { claimTargets, quarantinedTarget } from "./runway-quarantine.js";
 
@@ -934,6 +935,7 @@ export async function dispatchClaimedTask(
       budgetMinutes: taskMasterConfig.budgetMinutes,
       mode: "claim",
       agentCommand: command,
+      delegation: resolveWorkerDelegation(app, command, task),
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles
@@ -1478,6 +1480,7 @@ export async function dispatchQueuedRetry(
       mode: "retry",
       reusedWorktree: worktree.reused === true,
       agentCommand: command,
+      delegation: resolveWorkerDelegation(app, command, task),
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles

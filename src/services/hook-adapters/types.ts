@@ -364,14 +364,17 @@ export interface HookAgentAdapter {
    * through hook-adapters/index.ts's getAdapterTranscriptFormat. */
   transcriptFormat?: "claude-code" | "codex";
   /**
-   * The CLI-specific sentence telling a Task Master worker that it may
-   * decompose this task and delegate the mechanical parts to a cheaper
-   * subagent — see hook-adapters/index.ts's getAdapterDelegationHint, the
-   * only sanctioned reader of this field.
+   * The CLI-specific paragraph telling a Task Master worker when and how to
+   * delegate part of its task to a cheaper subagent running `delegateModel` —
+   * see hook-adapters/index.ts's getAdapterDelegationHint, the only
+   * sanctioned reader of this field. `delegateModel` is the install's
+   * deliberately configured "Delegate model" for this CLI (Settings → Models),
+   * already validated by the caller; the paragraph names it so the worker does
+   * not have to guess what "cheaper" means.
    *
-   * Pure string, no I/O. Absent for an agent whose CLI exposes no
+   * Pure function, no I/O. Absent for an agent whose CLI exposes no
    * subagent primitive at all; the caller then emits nothing rather than
-   * naming a tool the CLI lacks. Every sentence must end by keeping the
+   * naming a tool the CLI lacks. Every paragraph must end by keeping the
    * worker responsible for the final commit ON THIS BRANCH — that is
    * load-bearing, not boilerplate: a delegated implementation must not be
    * able to satisfy Task Master's "commits ahead of base" gate on its own,
@@ -381,5 +384,14 @@ export interface HookAgentAdapter {
    * `isolation: "worktree"`; codex's `spawn_agent` forks the workspace) —
    * edits made there never reach this branch unless the worker lands them.
    */
-  delegationHint?: string;
+  delegationHint?: (delegateModel: string) => string | null;
+  /**
+   * Cost tier of a model name for this CLI — a bigger number is a stronger,
+   * more expensive model — or `null` when the name is not one this adapter
+   * can rank (a full id it does not know, a custom alias). Lets
+   * getAdapterDelegationHint show the delegation paragraph only when the
+   * configured delegate model is strictly cheaper than the model the worker
+   * actually runs. Pure, no I/O. Absent ⇒ every model is unranked.
+   */
+  modelTier?: (model: string) => number | null;
 }

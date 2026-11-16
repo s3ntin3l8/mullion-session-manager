@@ -28,6 +28,16 @@ export const CLAUDE_MODELS: ModelOption[] = [
   { value: "opusplan[1m]" },
 ];
 
+// Claude Code's Task tool takes a per-call `model` that is an enum of exactly
+// these four aliases (a full id or a `[1m]` variant is rejected), so the Delegate
+// model picker offers only them, with no Custom….
+export const CLAUDE_DELEGATE_MODELS: ModelOption[] = [
+  { value: "fable" },
+  { value: "opus" },
+  { value: "sonnet" },
+  { value: "haiku" },
+];
+
 // Full model ids only (anything else goes through Custom…). Empty = Claude
 // Code's own default, which is the safe choice when unsure.
 export const CLAUDE_SMALL_MODELS: ModelOption[] = [

@@ -617,6 +617,10 @@ export interface AppSettings {
     // need the full model. Single setting, not per-role — it's a
     // property of the model itself, not the task.
     defaultSmallModel: string | null;
+    // The model a Task Master worker is told to delegate sizeable,
+    // independent parts to (hook-adapters/delegation.ts). `null` = no
+    // delegation guidance at all.
+    delegateModel: string | null;
   };
   // Install-wide default `--model` per non-opencode CLI (the lowest tier of
   // resolveCliModel's precedence chain). Free-form because each CLI names
@@ -626,12 +630,24 @@ export interface AppSettings {
     defaultModel: string | null;
     reviewerModel: string | null;
     smallModel: string | null;
+    // See `opencode.delegateModel`. A full model id or alias; compared against
+    // the worker's own model so a Sonnet (or `opusplan`) worker is not told
+    // to delegate to Sonnet.
+    delegateModel: string | null;
   };
-  codex: { defaultModel: string | null; reviewerModel: string | null };
-  agy: { defaultModel: string | null; reviewerModel: string | null };
+  codex: {
+    defaultModel: string | null;
+    reviewerModel: string | null;
+    delegateModel: string | null;
+  };
+  agy: { defaultModel: string | null; reviewerModel: string | null; delegateModel: string | null };
   // Issue: mcode support — mcode takes `-m <provider/model>`, the same shape
   // the other CLI-model agents take.
-  mcode: { defaultModel: string | null; reviewerModel: string | null };
+  mcode: {
+    defaultModel: string | null;
+    reviewerModel: string | null;
+    delegateModel: string | null;
+  };
   taskMaster: {
     autoClaimPaused: boolean;
     // GitHub logins trusted in addition to OWNER/MEMBER/COLLABORATOR
