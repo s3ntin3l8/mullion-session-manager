@@ -2341,6 +2341,9 @@ export interface Task {
   // When the CURRENT worker spell started (dispatch, not enqueue) — null
   // while a task sits queued with no session yet.
   claimedAt: string | null;
+  nudgeCount: number; // #3179 — this spell only
+  nudgeLimit: number;
+  lastNudgedAt: string | null;
   startedAt: string | null;
   reviewingAt: string | null;
   completedAt: string | null;
@@ -2672,9 +2675,7 @@ export interface AppSettings {
     // null inherits DEVICE_EMULATOR_GPU.
     emulatorGpu: string | null;
   };
-  server: {
-    logLevel: "inherit" | LogLevel;
-  };
+  server: { logLevel: "inherit" | LogLevel };
   // Install-wide default `--model` per non-opencode CLI; `null` means no
   // flag (the CLI picks). Mirrors src/services/settings.ts.
   // `delegateModel` (every CLI): a Task Master worker's delegation target.
@@ -2750,10 +2751,7 @@ export interface WorkflowConventionQuestion {
 export interface PushSubscriptionPayload {
   endpoint: string;
   expirationTime?: number | null;
-  keys: {
-    p256dh: string;
-    auth: string;
-  };
+  keys: { p256dh: string; auth: string };
 }
 
 export interface CreateProjectDirOptions {

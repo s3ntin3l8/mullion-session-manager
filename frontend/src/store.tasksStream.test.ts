@@ -123,6 +123,16 @@ describe("store /ws/tasks integration (#488)", () => {
     stop();
   });
 
+  it("refetches the task list on a nudge frame (#3179)", async () => {
+    vi.useFakeTimers();
+    const stop = useDashboardStore.getState().startTasksStream();
+    instances[0].__open();
+    instances[0].__message(JSON.stringify({ taskId: 1, projectId: 1, kind: "nudge", ts: 1 }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(tasksCalls).toBe(1);
+    stop();
+  });
+
   it("refetches the sessions list on a setup-recipe frame (#2245)", async () => {
     const refreshSessions = vi.fn(async () => {});
     useDashboardStore.setState({ refreshSessions });

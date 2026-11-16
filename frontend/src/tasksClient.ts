@@ -41,6 +41,7 @@ const TASK_EVENT_KINDS: Record<TaskEvent["kind"], true> = {
   hierarchy: true,
   dispatch: true,
   "workflow-hold": true,
+  nudge: true,
   setup: true,
 };
 

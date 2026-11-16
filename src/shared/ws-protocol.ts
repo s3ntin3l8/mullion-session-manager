@@ -201,6 +201,11 @@ export type TaskEvent =
   // so the board shows the "needs approval" chip without waiting for some
   // unrelated event to trigger a refetch.
   | { taskId: number; projectId: number; kind: "workflow-hold"; ts: number }
+  // #3179 — a continuation nudge was just typed into a worker whose turn ended
+  // with no commits (task-nudge.ts's nudgeInsteadOfFailing): same doorbell
+  // shape, so the card's "Nudged the worker" note shows without waiting for
+  // some unrelated event to trigger a refetch.
+  | { taskId: number; projectId: number; kind: "nudge"; ts: number }
   // #2245 — a session's setup recipe started or finished (setup-recipe.ts).
   // Doorbell shape: the frontend refetches its sessions. `taskId` is 0 — the
   // frame is about a session, which may not belong to any task.

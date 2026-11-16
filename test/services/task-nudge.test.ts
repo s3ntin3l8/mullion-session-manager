@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
+import * as taskEvents from "../../src/services/task-events.js";
 
 const { mockPromptLiveTaskWorker } = vi.hoisted(() => ({ mockPromptLiveTaskWorker: vi.fn() }));
 
@@ -111,6 +112,34 @@ describe("task nudge", () => {
     // A nudge from before the latest claim belongs to an earlier spell.
     expect(nudgesThisSpell({ ...base, lastNudgedAt: new Date(CLAIMED.getTime() - 1000) })).toBe(0);
     expect(nudgesThisSpell({ ...base, claimedAt: null, lastNudgedAt: CLAIMED })).toBe(0);
+  });
+
+  it("rings the board's doorbell once, after the row is written (#3179)", async () => {
+    const { app, task, load, cleanup } = await setup();
+    let countAtEmit: number | undefined;
+    const spy = vi.spyOn(taskEvents, "broadcastTaskEvent").mockImplementation(() => {
+      countAtEmit = load().nudgeCount;
+    });
+    expect(await nudgeInsteadOfFailing(app, task, info(), NOW)).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, projectId: task.projectId, kind: "nudge" }),
+    );
+    expect(countAtEmit).toBe(1);
+    spy.mockRestore();
+    cleanup();
+    await app.close();
+  });
+
+  it("emits nothing when no continuation was typed (#3179)", async () => {
+    const { app, task, cleanup } = await setup();
+    mockPromptLiveTaskWorker.mockResolvedValue("failed");
+    const spy = vi.spyOn(taskEvents, "broadcastTaskEvent").mockImplementation(() => {});
+    expect(await nudgeInsteadOfFailing(app, task, info(), NOW)).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+    cleanup();
+    await app.close();
   });
 
   it("types a continuation into the idle worker and records it", async () => {

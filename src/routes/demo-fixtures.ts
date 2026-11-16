@@ -23,6 +23,7 @@ const TIMESTAMP_COLUMNS = [
   "mergedAt",
   "archivedAt",
   "lastReviewVerdictAt",
+  "lastNudgedAt",
 ] as const;
 
 const TEXT_COLUMNS = [
@@ -51,7 +52,13 @@ const TEXT_COLUMNS = [
   "reviewRunIngestedId",
 ] as const;
 
-const INTEGER_COLUMNS = ["issueNumber", "prNumber", "autoReturnRounds", "boardOrder"] as const;
+const INTEGER_COLUMNS = [
+  "issueNumber",
+  "prNumber",
+  "autoReturnRounds",
+  "boardOrder",
+  "nudgeCount",
+] as const;
 
 const taskFixtureProps = {
   title: { type: "string", minLength: 1 },
