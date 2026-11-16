@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   LOCAL_HOST_ID,
   PLACEMENT_CAPABILITIES,
+  type PlacementCapability,
   PLACEMENT_PLATFORMS,
   type HostRole,
   type PlacementMode,
@@ -1102,7 +1103,21 @@ export function resolvePlacement(
 export type PlacementTarget =
   // `platform` on a host target is an additional requirement ("this host, and
   // it must be a Mac") — a Task Master issue can carry both directives (#1954).
-  { hostId: string; platform?: string } | { platform: string };
+  (
+    | { hostId: string; platform?: string }
+    | { platform: string; hostId?: undefined }
+    // A `Capability:` directive on its own: any host that has the capability.
+    | { platform?: undefined; hostId?: undefined }
+  ) & {
+    /**
+     * Host capabilities (`PLACEMENT_CAPABILITIES`) this target needs, ON TOP OF
+     * the project's own `placementConstraints.capabilities` (the union applies).
+     */
+    capabilities?: PlacementCapability[];
+    /** Names a `Capability:` line asked for that are not a known capability:
+     * the target is refused naming them, never silently narrowed. */
+    unknownCapabilities?: string[];
+  };
 
 export type TargetPlacementResult =
   | { ok: true; decision: PlacementDecision }
@@ -1127,10 +1142,21 @@ export type TargetPlacementResult =
 /** `host <id>`, `platform <p>`, or `host <id> (platform <p>)` for a target that
  * names both. Used in refusals and the recorded placement reason. */
 export function describeTarget(target: PlacementTarget): string {
-  if (!("hostId" in target)) return `platform ${target.platform}`;
-  return target.platform === undefined
-    ? `host ${target.hostId}`
-    : `host ${target.hostId} (platform ${target.platform})`;
+  const caps = [...(target.capabilities ?? []), ...(target.unknownCapabilities ?? [])];
+  const withCaps = (base: string) =>
+    caps.length === 0
+      ? base
+      : base === ""
+        ? `capability ${caps.join(", ")}`
+        : `${base} with capability ${caps.join(", ")}`;
+  if (target.hostId === undefined) {
+    return withCaps(target.platform === undefined ? "" : `platform ${target.platform}`);
+  }
+  return withCaps(
+    target.platform === undefined
+      ? `host ${target.hostId}`
+      : `host ${target.hostId} (platform ${target.platform})`,
+  );
 }
 
 /**
@@ -1236,7 +1262,19 @@ export function resolveTargetHost(
   // Issue #2306 — a capability is a requirement: always applied, even to a
   // Task Master directive (which overrides only the platform flag).
   const constraints = parsePlacementConstraints(opts.project.placementConstraints);
-  const requiredCapabilities = constraints.capabilities;
+  // The target's own `Capability:` names add to the project's (union).
+  const requiredCapabilities = [
+    ...new Set([...constraints.capabilities, ...(opts.target.capabilities ?? [])]),
+  ];
+
+  // A capability name nothing knows is refused outright (like a `Platform:`
+  // typo that matches no host): waiting never helps.
+  const unknown = opts.target.unknownCapabilities ?? [];
+  if (unknown.length > 0) {
+    return refusal(false, false, [
+      `unknown capability ${unknown.join(", ")} (known: ${PLACEMENT_CAPABILITIES.join(", ")})`,
+    ]);
+  }
 
   let collected: CollectedCandidates;
   try {
@@ -1252,7 +1290,7 @@ export function resolveTargetHost(
   }
 
   const wantedPlatform = opts.target.platform?.toLowerCase();
-  const wantedHost = "hostId" in opts.target ? opts.target.hostId : null;
+  const wantedHost = opts.target.hostId ?? null;
   const flagPlatforms = opts.checkProjectFlags ? constraints.platform : [];
   const targeted = collected.candidates.filter(
     (candidate) =>

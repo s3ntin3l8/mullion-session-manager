@@ -959,7 +959,7 @@ The reason is not hidden:
   point, since no worktree was ever cut, so it does exactly that: it resets
   the task to `ready`.
 
-## Where a task runs: `Platform:` and `Host:`
+## Where a task runs: `Platform:`, `Host:` and `Capability:`
 
 By default Task Master places each task's worker by load (see
 [multi-host](multi-host.md#automatic-placement)): a `pinned` project runs on
@@ -978,12 +978,20 @@ Host: 3f2a9c1e-…
 - `Platform: <os>` — any eligible host of that platform (`darwin`, `linux`,
   `win32`; matched case-insensitively). `Host: <host id>` — exactly that host.
   Give both and both must hold ("this host, and it must be a Mac").
+- `Capability: <name>[,<name>…]` — the host must report every named capability
+  (`xcode`, `android-emulator`; lower-cased, no spaces after the comma). It adds
+  to the project's own capability requirement (**Edit project → Placement**), so
+  one iOS task in a mixed project can say "needs Xcode ready" without
+  constraining the whole project. It combines with `Platform:`/`Host:` or stands
+  alone (any host with the capability). A host that has not reported its
+  capabilities yet is not excluded; a host known to lack one is. A name that is
+  not a known capability is refused at claim time naming it.
 - Matched like the other directives: key case-insensitive, alone on its line,
   one-word value, first match wins (so a `Host: localhost` line in plain prose
   _is_ read as the directive; the refusal names the line it came from,
   and a line behind a `- ` bullet or `> ` quote prefix is not matched). Lines
   inside a fenced code block (``` or ~~~) are ignored by every directive
-  (`Host:`, `Platform:`, `Agent:`, `Model:`, `Manual:`, ...), so a quoted
+  (`Host:`, `Platform:`, `Capability:`, `Agent:`, `Model:`, `Manual:`, ...), so a quoted
   snippet or HTTP example is safe; an unterminated fence ignores the rest of
   the body. A value no host reports (`mac` instead of
   `darwin`) matches nothing and is refused naming it.
@@ -1014,7 +1022,8 @@ Host: 3f2a9c1e-…
 - The target host needs an agent build new enough to serve the task routes
   (see [Known limitations](#known-limitations)).
 - `Platform: darwin` only guarantees a darwin host, not a working iOS or
-  Android toolchain on it; see
+  Android toolchain on it — add `Capability: xcode` to require a host that
+  reports Xcode ready; see
   [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 
 ## Configuring Task Master

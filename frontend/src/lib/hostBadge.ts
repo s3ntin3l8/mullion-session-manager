@@ -167,9 +167,10 @@ export function describeTaskHost(
     const parts: string[] = [];
     if (req.platform) parts.push(req.platform);
     if (req.hostId) parts.push(nameOf(req.hostId));
+    if (req.capabilities) parts.push(...req.capabilities);
     return {
       label: `needs ${parts.join(" · ")}`,
-      title: "This task's issue requires this placement (Platform:/Host: line)",
+      title: "This task's issue requires this placement (Platform:/Host:/Capability: line)",
     };
   }
 
@@ -182,17 +183,23 @@ export function describeTaskHost(
   return { label: "auto", title: "Placed automatically when the task is claimed" };
 }
 
-function parseRequirement(raw: string | null): { platform?: string; hostId?: string } | null {
+function parseRequirement(
+  raw: string | null,
+): { platform?: string; hostId?: string; capabilities?: string[] } | null {
   if (!raw) return null;
   try {
     const v: unknown = JSON.parse(raw);
     if (typeof v !== "object" || v === null) return null;
-    const { platform, hostId } = v as Record<string, unknown>;
+    const { platform, hostId, capabilities } = v as Record<string, unknown>;
+    const caps = Array.isArray(capabilities)
+      ? capabilities.filter((c): c is string => typeof c === "string")
+      : [];
     const out = {
       ...(typeof platform === "string" && { platform }),
       ...(typeof hostId === "string" && { hostId }),
+      ...(caps.length > 0 && { capabilities: caps }),
     };
-    return out.platform || out.hostId ? out : null;
+    return out.platform || out.hostId || out.capabilities ? out : null;
   } catch {
     return null;
   }

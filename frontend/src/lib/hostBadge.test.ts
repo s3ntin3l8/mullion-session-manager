@@ -148,6 +148,13 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
     expect(chip?.label).toBe("needs linux · gone");
   });
 
+  it("shows required capabilities, alone or with a platform", () => {
+    const label = (raw: string) =>
+      describeTaskHost({ placementRequirement: raw }, null, "local", [local, mini])?.label;
+    expect(label('{"capabilities":["xcode"]}')).toBe("needs xcode");
+    expect(label('{"platform":"darwin","capabilities":["xcode"]}')).toBe("needs darwin · xcode");
+  });
+
   it("ignores a corrupt or empty requirement", () => {
     for (const raw of ["{nope", "[]", '"x"', "{}", "null"]) {
       expect(
