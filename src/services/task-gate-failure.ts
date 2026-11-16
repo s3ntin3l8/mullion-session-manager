@@ -11,6 +11,7 @@ import { resolveTaskWorkerHost } from "./session-live-info.js";
 import type { SessionBackend } from "./session-backend.js";
 import type { SessionInfo } from "./pty-manager.js";
 import { syncTaskTransition } from "./task-github-sync.js";
+import { nudgeInsteadOfFailing } from "./task-nudge.js";
 import { recordTaskTransition } from "./task-state.js";
 import {
   collectRecentEvents,
@@ -94,6 +95,9 @@ export async function failReviewingGate(
   now: Date,
   info: SessionInfo | null = null,
 ): Promise<void> {
+  // A worker that ended its turn with nothing committed gets a continuation
+  // before the task fails (task-nudge.ts); only an unattended in_progress spell.
+  if (fromStatus === "in_progress" && (await nudgeInsteadOfFailing(app, task, info, now))) return;
   // Diagnostic snapshot — gathered BEFORE the salvage commit (which would
   // empty `git status`) and before the session/worktree are cleaned up.
   // Best-effort: every piece swallows its own error, and the whole thing is

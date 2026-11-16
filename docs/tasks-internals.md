@@ -484,6 +484,32 @@ with no commits, still fails on budget expiry — except a worker whose
 rate-limit grace window is still open (#2930), which is held instead of
 force-failed. The budget applies again once that window has elapsed.
 
+### Continuation nudge
+
+A worker that ends its turn with nothing committed — a summary that announces
+the next step instead of taking it, an offer to continue, a question nobody
+will answer — used to fail the task on the spot. Anthropic's Opus 5.5 guide
+says to treat a text-only end of turn as a report, not as proof the task is
+done, so `failReviewingGate` (`task-gate-failure.ts`) first asks
+`nudgeInsteadOfFailing` (`task-nudge.ts`):
+
+- It applies only to an `in_progress` spell whose worker has a finished turn
+  and no rate-limit or `api_error` signal (those keep their own grace and park
+  paths).
+- It types one short continuation through `promptLiveTaskWorker` (nothing is
+  committed yet; nobody can answer; carry on and commit, or state the blocker in
+  one line and end the turn), up to `MAX_WORKER_NUDGES` (2) times per spell.
+  `tasks.nudgeCount` / `tasks.lastNudgedAt` record it; a count from before the
+  latest `claimedAt` belongs to an earlier spell and is ignored, so no reset
+  write is needed on retry or reject.
+- After a nudge the session's finished latch still reads the OLD turn until the
+  next turn starts, so a finish that does not postdate `lastNudgedAt` (plus the
+  clock-skew tolerance) is that same turn: the reconciler waits, for at most
+  `NUDGE_TURN_GRACE_MS` (10 minutes), instead of spending the next nudge.
+- A worker that cannot be typed into (blocked on a dialog, gone, host
+  unreachable) fails as before and does not count a nudge. The per-task budget
+  stays the backstop for a nudged turn that never ends.
+
 ## The agent's contract
 
 Every Task Master spawn is prompted with a standing preamble ahead of the

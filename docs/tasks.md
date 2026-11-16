@@ -316,7 +316,12 @@ waiting for a free concurrency slot. It never holds a session; see the
   dead session forever), on exceeding the per-task time budget (see Safety
   envelope below), or on the no-commits case the `* → reviewing` bullet
   above describes — `failureReason: "agent ended its turn with no commits on
-<branch>"`. That last one first attempts a machine-made salvage commit
+<branch>"`. Before that failure, a live, idle worker gets up to two
+  continuation nudges — one short message typed into its session saying
+  nothing is committed yet and to carry on or state the blocker
+  ([`tasks-internals.md`](tasks-internals.md#continuation-nudge)); only a
+  worker that cannot be typed into, or that ends its turn empty after both
+  nudges, fails. That failure first attempts a machine-made salvage commit
   (`commitWipChanges`/`commitHostWipChanges`, `git-worktree.ts`/
   `host-git.ts` — both local and remote-hosted hosts, since `#1100`) so the
   branch isn't left truly empty and Retry (below) can actually resume the
