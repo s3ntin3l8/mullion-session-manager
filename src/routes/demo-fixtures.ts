@@ -41,6 +41,9 @@ const TEXT_COLUMNS = [
   "reviewFindings",
   "lastReviewVerdict",
   "needsHumanReason",
+  // The held workflow change: JSON `{ sha, files }`, as task-workflow-gate.ts
+  // writes it. Lets a scene show the sidebar's approval panel (#3108).
+  "workflowChange",
   // A run id and the id its findings were ingested from: equal means "the
   // current review has landed", which is what makes an approving verdict
   // read as awaiting approval (task-approval-state.ts) without a session.
