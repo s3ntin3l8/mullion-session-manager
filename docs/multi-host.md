@@ -155,7 +155,7 @@ in `machine_credential`.
   agent is terminal in memory, so nothing short of a restart re-reads either
   file; `install.sh` restarts a unit that was running when it rewrote the
   `.env`). The recipe is tested through the real boot path
-  (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not at rotation time: rotating to retire a leaked token does not need it. A credential unused for 90 days is rejected the same way as a
+  (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not at rotation time: rotating to retire a leaked token (rotate and discard) does not need it, but it leaves the `.env` token dead, so a later re-pairing needs a second, fresh rotation. A credential unused for 90 days is rejected the same way as a
   revoked one, so the agent log's "revoked or unknown" can also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
@@ -347,12 +347,18 @@ specific address.
     dialog shows both.
   - **Live machine identity** (the agent registered itself): the running agent is
     unaffected. It renews with its `{hostId, machineCredential}` and never
-    presents the bootstrap token again, so the new token is only needed if it has
-    to register again (state file lost, identity revoked, or expired after 90
-    days unused). The menu then also offers **Rotate token and discard it**,
-    which kills the old token without ever displaying the new one; the recovery
-    recipe (rotate, put the token in `.env`, delete `agent-identity.json`,
-    restart) is done at repair time, by rotating again, not at rotation time.
+    presents the bootstrap token again. Two cases:
+    - **Leak:** a per-host token is never cleared after first registration, and
+      `claimHost` does not check for a live identity, so anyone holding it can
+      take the row over. Rotate it now with **Rotate token and discard it**: the
+      old value dies, the running agent is untouched, the new token is never
+      shown. The token left in the agent's `.env` is now dead.
+    - **Repair** (state file lost, identity revoked, or expired after 90 days
+      unused): rotate again (the leak rotation's token was discarded), paste the
+      new value into `.env`, delete `agent-identity.json`, restart. Do this at
+      repair time, not at rotation time.
+      An agent without an identity whose bootstrap token was rotated logs a one-time
+      warning and picks up the new `.env` value without a restart.
 - Tick **Use my own token** to supply a token yourself instead (the manual
   flow below).
 

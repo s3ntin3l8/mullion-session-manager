@@ -98,11 +98,13 @@ export function AgentInstallInstructions({
         <>
           {agentUnaffected && (
             <span className="create-modal-field-hint" data-testid="rotate-unaffected">
-              The running agent is unaffected: it holds a machine identity and keeps renewing on it,
-              so there is nothing to do now. You only need this token if the agent has to register
-              again (its state file is lost, or its identity is revoked or expired after 90 days
-              unused): then put it in the .env below, delete agent-identity.json and restart the
-              agent.
+              The running agent keeps working: it holds a machine identity and renews on it. If this
+              token leaked or was exposed, rotating it now was the right call (use “Rotate token and
+              discard it”): the old value can no longer be used to take over this host. To re-pair
+              the agent later (state file lost, identity revoked or expired after 90 days unused)
+              you need another rotation and a paste into the .env below, because the token the agent
+              still holds will no longer be accepted; then delete agent-identity.json and restart
+              it.
             </span>
           )}
           <CopyBlock

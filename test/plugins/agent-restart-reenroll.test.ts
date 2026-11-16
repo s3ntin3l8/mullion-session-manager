@@ -319,5 +319,83 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
       expect(loadAgentIdentity(statePath)).toBeNull();
       fs.rmSync(home, { recursive: true, force: true });
     });
+
+    // Issue #3143 — a rotated bootstrap token with no stored identity: the
+    // generic retry warn fires on every attempt, the specific hint once. The
+    // fetch stub holds the FIRST register call until the log spy is installed
+    // (the registration loop starts fire-and-forget from onReady).
+    function gatedPrimaryFetch() {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const presented: unknown[] = [];
+      vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+        const target = new URL(String(url));
+        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+        if (target.pathname === "/api/internal/register") {
+          presented.push(body.token);
+          await gate;
+        }
+        const res = await primary.inject({
+          method: (init?.method ?? "GET") as "GET" | "POST",
+          url: target.pathname,
+          payload: init?.body ? body : undefined,
+        });
+        return new Response(res.body, {
+          status: res.statusCode,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      return { release, presented };
+    }
+
+    const warnMessages = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map((c) => c.filter((a) => typeof a === "string").join(" "));
+
+    it("logs the rotated-bootstrap-token hint once, while the generic retry warn fires every attempt", async () => {
+      newSessionsDir();
+      home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hint-home-"));
+      const staleToken = "stale-bootstrap-token-9f3a"; // pragma: allowlist secret
+      writeEnvFile(staleToken);
+      const { release, presented } = gatedPrimaryFetch();
+
+      const agent = await startAgentUnit(staleToken);
+      const warn = vi.spyOn(agent.log, "warn");
+      release();
+      // Backoff is 1 s after the first failure, so the second 401 lands soon.
+      await waitUntil(() => (agent.agentEnrollment?.failedAttempts ?? 0) >= 2, 8000);
+
+      expect(presented.length).toBeGreaterThanOrEqual(2);
+      const messages = warnMessages(warn);
+      const hints = messages.filter((m) => m.includes("bootstrap token"));
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toContain("MULLION_ENROLLMENT_TOKEN");
+      expect(hints[0]).not.toContain(staleToken);
+      expect(messages.filter((m) => m.includes("registration failed, retrying")).length).toBe(
+        agent.agentEnrollment?.failedAttempts,
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(staleToken);
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it("does not log the hint when the .env token changed and the retry succeeds", async () => {
+      newSessionsDir();
+      home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hint-fresh-home-"));
+      const created = (
+        await primary.inject({ method: "POST", url: "/api/hosts", payload: { name: "hint-fresh" } })
+      ).json() as { id: string; token: string };
+      writeEnvFile("stale-bootstrap-token-9f3a"); // pragma: allowlist secret
+      const { release, presented } = gatedPrimaryFetch();
+
+      const agent = await startAgentUnit("stale-bootstrap-token-9f3a"); // pragma: allowlist secret
+      const warn = vi.spyOn(agent.log, "warn");
+      // The operator pastes the freshly rotated token before the agent's 401.
+      writeEnvFile(created.token);
+      release();
+      await waitUntil(() => agent.agentEnrollment?.state === "registered");
+
+      expect(presented).toEqual(["stale-bootstrap-token-9f3a", created.token]);
+      expect(warnMessages(warn).filter((m) => m.includes("bootstrap token"))).toHaveLength(0);
+      fs.rmSync(home, { recursive: true, force: true });
+    });
   });
 });
