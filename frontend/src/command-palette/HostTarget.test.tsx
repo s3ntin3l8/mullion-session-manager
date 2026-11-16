@@ -224,6 +224,14 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
 });
 
 describe("hostTarget helpers", () => {
+  it("drops a hostCwds id whose host was removed from the options and the remembered choice", () => {
+    const project = { hostId: "local", hostCwds: { mac: "/p", ghost: "/g" } };
+    const values = buildHostTargetOptions(project, [MAC]).map((o) => o.value);
+    expect(values).not.toContain("ghost");
+    expect(values).toContain("mac");
+    expect(resolveHostChoice("ghost", project, [MAC])).toBeNull();
+  });
+
   it("resolveHostChoice falls back to the default for a host no longer on the project", () => {
     const project = { hostId: "local", hostCwds: { mac: "/p" } };
     expect(resolveHostChoice("mac", project)).toBe("mac");
