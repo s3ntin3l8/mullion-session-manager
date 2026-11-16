@@ -107,7 +107,7 @@ screen reader) until you first show it at that desk: click its tab, reach it
 from the keyboard, or focus the split pane. The dot only tells you the
 workspace gained a pane; it is not an attention state and does not notify. It
 lives in that browser tab only, so a reload (or switching to another
-workspace and back) drops it. Closing a pane on the fold or the phone only closes it
-there. If the desk has not added it yet, the open is withdrawn. Killing a
+workspace and back) drops it. Closing a pane on the fold or the phone only
+closes it there. If the desk has not added it yet, the open is withdrawn. Killing a
 session there closes its pane at the desk too. See
 [`architecture.md`](architecture.md), "Two halves", for the placement rule.
