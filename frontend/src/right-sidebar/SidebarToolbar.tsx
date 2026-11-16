@@ -9,6 +9,8 @@ export interface SidebarToolbarAction {
   icon: ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
   onClick: () => void;
   disabled?: boolean;
+  /** A request is in flight: the button is disabled, `aria-busy`, and its icon spins. */
+  busy?: boolean;
   /** Small status dot on the corner (e.g. clone health). */
   dot?: "success" | "warn" | "danger";
 }
@@ -26,14 +28,15 @@ export function SidebarToolbar({
   const slot = useContext(SidebarToolbarSlotContext);
   const toolbar = (
     <div className="right-sidebar-toolbar" role="toolbar">
-      {actions.map(({ key, label, icon: Icon, onClick, disabled, dot }) => (
+      {actions.map(({ key, label, icon: Icon, onClick, disabled, busy, dot }) => (
         <button
           key={key}
           type="button"
-          className="right-sidebar-icon-btn"
+          className={`right-sidebar-icon-btn${busy ? " is-busy" : ""}`}
           aria-label={label}
+          aria-busy={busy || undefined}
           title={label}
-          disabled={disabled}
+          disabled={disabled || busy}
           onClick={onClick}
         >
           <Icon size={14} />

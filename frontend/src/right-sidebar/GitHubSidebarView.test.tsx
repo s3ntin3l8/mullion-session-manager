@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { useDashboardStore } from "../store/index.js";
@@ -245,5 +245,65 @@ describe("GitHubSidebarView", () => {
     const row = (title: string) => rows.find((r) => r.textContent?.includes(title));
     expect(row("PR title 1")?.className).toContain("sb-row--attn");
     expect(row("PR title 2")?.className).toContain("sb-row--tm");
+  });
+});
+
+describe("GitHubSidebarView Refresh feedback", () => {
+  const STALE = { "4:prs": { data: null, fetchedAt: 0, error: null } };
+  const markStale = () => useDashboardStore.setState({ githubCache: STALE });
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const button = () => screen.getByRole("button", { name: "Refresh" });
+
+  it("spins and disables Refresh until the project's entries revalidate, then settles", async () => {
+    useDashboardStore.setState({ refreshGithubProject: markStale, githubCache: {} });
+    renderView(4);
+    await act(async () => {});
+    expect(button()).not.toHaveAttribute("aria-busy");
+
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    expect(button()).toBeDisabled();
+
+    // Still stale: stays busy past the minimum.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(button()).toHaveAttribute("aria-busy", "true");
+
+    // Revalidated: clears (after the minimum visible time has already passed).
+    await act(async () => {
+      useDashboardStore.setState({
+        githubCache: { "4:prs": { data: null, fetchedAt: Date.now(), error: null } },
+      });
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
+    expect(button()).toBeEnabled();
+  });
+
+  it("never sticks: clears after the cap when nothing revalidates", async () => {
+    useDashboardStore.setState({ refreshGithubProject: markStale, githubCache: {} });
+    renderView(4);
+    await act(async () => {});
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    await act(async () => {
+      vi.advanceTimersByTime(5100);
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
+  });
+
+  it("shows busy for a minimum moment even when nothing was stale", async () => {
+    useDashboardStore.setState({ refreshGithubProject: vi.fn(), githubCache: {} });
+    renderView(4);
+    await act(async () => {});
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
   });
 });
