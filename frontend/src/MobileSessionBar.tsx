@@ -141,6 +141,7 @@ export function MobileSessionBar({
       unreadCount: row.unreadCount,
       needsYou: row.needsYou,
       workspace: row.workspace,
+      projectName: row.projectName,
       searchFields: row.searchFields,
     })),
   }));

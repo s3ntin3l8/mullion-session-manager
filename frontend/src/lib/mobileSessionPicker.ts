@@ -39,6 +39,11 @@ export interface PickerRow {
   // it — or null when it is in no workspace's layout. See workspaceHomes for
   // why the answer is sometimes absent.
   workspace: PickerWorkspace | null;
+  // The session's project name, or null for a non-session pane or a session
+  // whose project isn't in `projects`. The "Needs you" pin has no project
+  // heading, so its rows show this to tell same-titled sessions apart
+  // (issue #2996).
+  projectName: string | null;
   // Text the switcher's search box matches (title, raw command, project name)
   // — the same fields sessionMatchesSearch uses for the sidebar filter.
   searchFields: string[];
@@ -154,6 +159,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
         unreadCount: 0,
         needsYou: false,
         workspace: null,
+        projectName: null,
         searchFields: [panel.title],
       });
     }
@@ -181,6 +187,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
       panelId: panel?.id ?? null,
       session,
       title,
+      projectName: project?.name ?? null,
       searchFields,
       unreadCount: sessionUnreadCount(session.id, events, seen, input.dismissedEventKeys, isMuted),
       needsYou: sessionNeedsYou(session, events, seen, input.dismissedEventKeys, isMuted),
