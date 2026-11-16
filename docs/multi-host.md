@@ -1938,8 +1938,8 @@ Master task in `claimed`, `in_progress`, or `reviewing` is currently running
 on that host (`resolveTaskWorkerHost`), because restarting the agent in the
 middle of a worker's turn interrupts hook delivery and heartbeat tracking.
 Plain interactive sessions do not block the update. Pass `?force=true` (or
-confirm "Update anyway" in Settings → Hosts) to override the guard and restart
-the agent immediately.
+confirm "Update anyway" in Settings → Hosts & SSH bridges) to override the guard
+and restart the agent immediately.
 
 **Bootstrapping:** an agent host running a build older than #647 has no
 `/internal/updates/*` routes at all, so the first update attempt against it

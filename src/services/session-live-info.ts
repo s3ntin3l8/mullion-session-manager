@@ -13,6 +13,7 @@ import { HostRequestError } from "./remote-host-client.js";
 import { isHostBusyError } from "./remote-host-errors.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
 import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
+import { ACTIVE_TASK_STATUSES } from "./task-state.js";
 
 // Throttled per (host, message) — see host-warn-throttle.ts.
 const LIVE_INFO_BUSY_MESSAGE = "host busy, reporting default live status";
@@ -296,9 +297,12 @@ export function listActiveTasksOnHost(
     })
     .from(tasks)
     .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(inArray(tasks.status, ["claimed", "in_progress", "reviewing"]))
+    .where(inArray(tasks.status, [...ACTIVE_TASK_STATUSES]))
     .all();
 
+  // `resolveTaskWorkerHost` checks `tasks.sessionId` (the worker), which also
+  // covers the reviewer today because `task-review-spawn.ts` places the
+  // reviewer on `resolveTaskWorkerHost(task)`.
   return activeTasks
     .filter((row) => resolveTaskWorkerHost(app, row, { hostId: row.projectHostId }) === hostId)
     .map((row) => ({

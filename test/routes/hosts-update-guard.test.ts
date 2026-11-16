@@ -199,8 +199,8 @@ describe("POST /api/hosts/:id/update/apply Task Master guard (issue #3180)", () 
         app.db.delete(tasks).where(eq(tasks.id, insertedTask.id)).run();
       }
 
-      // Re-insert one blocking task and verify ?force=true overrides it.
-      app.db
+      // Re-insert one blocking task and verify ?force=true overrides it and logs a warning.
+      const insertedForced = app.db
         .insert(tasks)
         .values({
           projectId: targetProject.id,
@@ -208,14 +208,24 @@ describe("POST /api/hosts/:id/update/apply Task Master guard (issue #3180)", () 
           title: "forced-task",
           status: "in_progress",
         })
-        .run();
+        .returning({ id: tasks.id })
+        .get();
 
+      const warnSpy = vi.spyOn(app.log, "warn");
       const forced = await app.inject({
         method: "POST",
         url: `/api/hosts/${hostId}/update/apply?force=true`,
       });
       expect(forced.statusCode).toBe(202);
       expect(agent.calls).toContain("/internal/updates/apply");
+      expect(warnSpy).toHaveBeenCalledWith(
+        {
+          hostId,
+          taskIds: [insertedForced.id],
+          statuses: ["in_progress"],
+        },
+        "force-updating a host with running Task Master tasks",
+      );
     } finally {
       await app.close();
       await agent.close();

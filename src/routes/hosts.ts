@@ -672,17 +672,25 @@ export async function hostsRoute(app: FastifyInstance) {
       if (pending) return pending;
 
       // Issue #3180 — refuse restarting an agent while Task Master workers
-      // or reviewers are running on it unless explicitly forced.
+      // or reviewers are running on it unless explicitly forced. Always run the
+      // lookup so a forced bypass over active tasks is logged and diagnosable.
       const force = request.query.force === "true";
-      if (!force) {
-        const blockingTasks = listActiveTasksOnHost(app, id);
-
-        if (blockingTasks.length > 0) {
-          return reply.code(409).send({
-            error: `Cannot update host while ${blockingTasks.length} Task Master ${blockingTasks.length === 1 ? "task is" : "tasks are"} running on it`,
-            tasks: blockingTasks,
-          });
-        }
+      const blockingTasks = listActiveTasksOnHost(app, id);
+      if (!force && blockingTasks.length > 0) {
+        return reply.code(409).send({
+          error: `Cannot update host while ${blockingTasks.length} Task Master ${blockingTasks.length === 1 ? "task is" : "tasks are"} running on it`,
+          tasks: blockingTasks,
+        });
+      }
+      if (force && blockingTasks.length > 0) {
+        app.log.warn(
+          {
+            hostId: id,
+            taskIds: blockingTasks.map((t) => t.id),
+            statuses: blockingTasks.map((t) => t.status),
+          },
+          "force-updating a host with running Task Master tasks",
+        );
       }
 
       const client = getRemoteHostClient(app, id);
