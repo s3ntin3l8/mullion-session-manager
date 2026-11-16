@@ -239,6 +239,17 @@ export function HostsSection() {
   const [updateInfo, setUpdateInfo] = useState<Record<string, HostUpdateStatus>>({});
   const [applyingUpdate, setApplyingUpdate] = useState<Record<string, boolean>>({});
   const [applyError, setApplyError] = useState<Record<string, string>>({});
+  const [updateForcePrompt, setUpdateForcePrompt] = useState<{
+    hostId: string;
+    hostName: string;
+    message: string;
+    tasks: Array<{
+      id: number;
+      issueNumber: number | null;
+      projectName: string;
+      status: string;
+    }>;
+  } | null>(null);
 
   // The local host is a row in the `hosts` table too (migration 0008 seeds
   // it), so it is filtered out of the REMOTE list below — but its row is
@@ -321,16 +332,17 @@ export function HostsSection() {
     { enabled: applyingHostIds.length > 0, immediate: false },
   );
 
-  const applyHostUpdate = (hostId: string) => {
+  const applyHostUpdate = (hostId: string, force = false) => {
     setApplyError((prev) => {
       if (!(hostId in prev)) return prev;
       const next = { ...prev };
       delete next[hostId];
       return next;
     });
+    setUpdateForcePrompt((prev) => (prev?.hostId === hostId ? null : prev));
     setApplyingUpdate((prev) => ({ ...prev, [hostId]: true }));
     api
-      .applyHostUpdate(hostId)
+      .applyHostUpdate(hostId, force ? { force: true } : undefined)
       .then((status) => {
         setUpdateInfo((prev) =>
           prev[hostId] ? { ...prev, [hostId]: { ...prev[hostId], status } } : prev,
@@ -338,6 +350,39 @@ export function HostsSection() {
       })
       .catch((err: unknown) => {
         setApplyingUpdate((prev) => ({ ...prev, [hostId]: false }));
+        if (
+          !force &&
+          err instanceof ApiError &&
+          err.statusCode === 409 &&
+          Array.isArray(err.body?.tasks)
+        ) {
+          const blockedTasks = err.body.tasks.filter(
+            (
+              t,
+            ): t is {
+              id: number;
+              issueNumber: number | null;
+              projectName: string;
+              status: string;
+            } =>
+              typeof t === "object" &&
+              t !== null &&
+              typeof (t as Record<string, unknown>).id === "number" &&
+              typeof (t as Record<string, unknown>).projectName === "string" &&
+              typeof (t as Record<string, unknown>).status === "string",
+          );
+          if (blockedTasks.length > 0) {
+            const hostName = hosts.find((h) => h.id === hostId)?.name ?? hostId;
+            const message = typeof err.body.error === "string" ? err.body.error : err.message;
+            setUpdateForcePrompt({
+              hostId,
+              hostName,
+              message,
+              tasks: blockedTasks,
+            });
+            return;
+          }
+        }
         setApplyError((prev) => ({
           ...prev,
           [hostId]: err instanceof ApiError ? err.message : "Could not start the update",
@@ -795,6 +840,27 @@ export function HostsSection() {
               Delete host and its projects
             </SecondaryButton>
             <SecondaryButton onClick={() => setCascadePrompt(null)}>Cancel</SecondaryButton>
+          </div>
+        </div>
+      )}
+      {updateForcePrompt && (
+        <div className="settings-cascade-warning" data-testid="update-force-prompt">
+          <span>
+            {updateForcePrompt.hostName}: {updateForcePrompt.message}
+          </span>
+          <ul style={{ margin: "4px 0", paddingLeft: 18 }}>
+            {updateForcePrompt.tasks.map((t) => (
+              <li key={t.id}>
+                {t.issueNumber !== null ? `#${t.issueNumber}` : `Task ${t.id}`} · {t.projectName} (
+                {t.status})
+              </li>
+            ))}
+          </ul>
+          <div style={{ display: "flex", gap: 8 }}>
+            <SecondaryButton onClick={() => applyHostUpdate(updateForcePrompt.hostId, true)}>
+              Update anyway
+            </SecondaryButton>
+            <SecondaryButton onClick={() => setUpdateForcePrompt(null)}>Cancel</SecondaryButton>
           </div>
         </div>
       )}

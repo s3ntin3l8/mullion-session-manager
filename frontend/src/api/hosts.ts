@@ -91,8 +91,11 @@ export const hostsApi = {
   getHostUpdateStatus: (id: string) =>
     request<HostUpdateStatus>(`/api/hosts/${encodeURIComponent(id)}/update`),
 
-  applyHostUpdate: (id: string) =>
-    request<UpdateStatus>(`/api/hosts/${encodeURIComponent(id)}/update/apply`, {
-      method: "POST",
-    }),
+  applyHostUpdate: (id: string, opts?: { force?: boolean }) =>
+    request<UpdateStatus>(
+      `/api/hosts/${encodeURIComponent(id)}/update/apply${opts?.force ? "?force=true" : ""}`,
+      {
+        method: "POST",
+      },
+    ),
 };

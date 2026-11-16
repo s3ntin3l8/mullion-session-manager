@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { projects, sessions, tasks } from "../db/schema.js";
 import { bindingBrowserTarget } from "./browser-binding-target.js";
 import { listSessionBrowserBindings } from "./session-browsers.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -269,6 +269,44 @@ export function resolveTaskWorkerHost(
     if (row !== undefined) return resolveSessionHostId(app, row);
   }
   return project?.hostId ?? resolveProjectHostId(app, task.projectId);
+}
+
+/**
+ * Lists active Task Master tasks (`claimed`, `in_progress`, `reviewing`)
+ * whose worker or reviewer session runs on `hostId`.
+ */
+export function listActiveTasksOnHost(
+  app: FastifyInstance,
+  hostId: string,
+): Array<{
+  id: number;
+  issueNumber: number | null;
+  projectName: string;
+  status: string;
+}> {
+  const activeTasks = app.db
+    .select({
+      id: tasks.id,
+      issueNumber: tasks.issueNumber,
+      status: tasks.status,
+      sessionId: tasks.sessionId,
+      projectId: tasks.projectId,
+      projectName: projects.name,
+      projectHostId: projects.hostId,
+    })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(inArray(tasks.status, ["claimed", "in_progress", "reviewing"]))
+    .all();
+
+  return activeTasks
+    .filter((row) => resolveTaskWorkerHost(app, row, { hostId: row.projectHostId }) === hostId)
+    .map((row) => ({
+      id: row.id,
+      issueNumber: row.issueNumber,
+      projectName: row.projectName,
+      status: row.status,
+    }));
 }
 
 // Batch size for the inArray lookup below — same value and same reasoning as

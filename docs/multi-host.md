@@ -1933,6 +1933,14 @@ error, and the dot recovers on its own once the process comes back up.
 restart flips, so the final phase (`done`/`failed`) is still readable
 immediately after the restart completes.
 
+The primary refuses `POST /api/hosts/:id/update/apply` with `409` if any Task
+Master task in `claimed`, `in_progress`, or `reviewing` is currently running
+on that host (`resolveTaskWorkerHost`), because restarting the agent in the
+middle of a worker's turn interrupts hook delivery and heartbeat tracking.
+Plain interactive sessions do not block the update. Pass `?force=true` (or
+confirm "Update anyway" in Settings → Hosts) to override the guard and restart
+the agent immediately.
+
 **Bootstrapping:** an agent host running a build older than #647 has no
 `/internal/updates/*` routes at all, so the first update attempt against it
 404s. That one update has to happen by hand (re-run `deploy/install.sh
