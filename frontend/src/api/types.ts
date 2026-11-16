@@ -133,6 +133,8 @@ export interface SpaceEntry {
   isDirectory: boolean;
   /** The cleanup source that owns this path, e.g. "uv" or "npm cache". */
   coveredBy?: string;
+  /** Why Mullion does not clean this; only set when `coveredBy` is not. */
+  notCovered?: string;
   children?: SpaceEntry[];
 }
 

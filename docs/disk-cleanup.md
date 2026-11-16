@@ -274,7 +274,13 @@ directory (and in unreadable folders) as its own line. It exists to answer
 "what is using my disk?" for the space no cleanup tier handles: nothing in it
 can be deleted. Entries a cleanup source owns carry a `coveredBy` label (the
 opt-in caches, `~/.npm/_cacache`, opencode's data directory, developer
-worktree roots), which the page shows as "cleanable: …". The walk stays on the
+worktree roots, and the per-session files under `$SESSIONS_DIR`, as "session
+cleanup"), which the page shows as "cleanable: …". An entry no source owns may
+carry a `notCovered` hint instead, from the ordered `NOT_COVERED_HINTS` table in
+`space-report.ts` (a toolchain, agent session history, application data under
+`~/.config`, the Android SDK, your checkouts); the page shows it as muted text.
+Entries matching no rule say nothing. A cleanup source added later registers its
+own path in `spaceCovered()`. The walk stays on the
 home directory's filesystem, never follows symlinks, shares the temp walks'
 syscall limiter, and stops at 3 million entries (`truncated`, every figure then
 a lower bound). It takes tens of seconds on a large home directory.

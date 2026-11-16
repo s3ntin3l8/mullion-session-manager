@@ -1645,6 +1645,11 @@ summary.space-row {
   font-size: 0.6875rem;
   color: var(--dim);
 }
+.space-not-covered {
+  margin-left: 8px;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
 .space-outside .space-row-name {
   color: var(--muted);
 }
