@@ -23,7 +23,14 @@ permissions:
 
 jobs:
   refresh:
-    if: ${{ !github.event.repository.fork && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/refresh-screenshots') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) }}
+    # Schedule and dispatch always run. A comment runs it only for `/refresh-screenshots` on a pull request from a
+    # likely writer (a noise filter: the shared workflow checks the commenter's write access itself).
+    if: >-
+      ${{ !github.event.repository.fork &&
+      (github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/refresh-screenshots') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) }}
     uses: s3ntin3l8/.github/.github/workflows/visual-refresh.yml@main
     with:
       node-version: "26"
@@ -37,7 +44,9 @@ jobs:
   # not PNG or JSON, so a non-constant stamp in visual/baselines/.visual-kit would fail this job.
   baselines:
     needs: refresh
-    if: ${{ !cancelled() && !github.event.repository.fork && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/refresh-screenshots') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) }}
+    # `!cancelled()` so a failed screenshots refresh does not skip this one; a refresh skipped by the gate above (a
+    # non-matching comment) skips this too, so there is one copy of the gate.
+    if: ${{ !cancelled() && needs.refresh.result != 'skipped' }}
     uses: s3ntin3l8/.github/.github/workflows/visual-refresh.yml@main
     with:
       node-version: "26"
