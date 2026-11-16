@@ -58,6 +58,8 @@ export interface IssueRef {
   number: number;
   title: string;
   state: "open" | "closed";
+  /** `owner/repo`, set only when the issue lives in another repository than the one on screen. */
+  repo?: string;
 }
 
 export interface IssueDetail extends IssueListItem {
@@ -104,6 +106,7 @@ interface RawIssue {
   state?: string;
   body_html?: string | null;
   pull_request?: unknown;
+  repository_url?: string | null;
   parent_issue_url?: string | null;
   sub_issues_summary?: { total?: number; completed?: number } | null;
 }
@@ -150,11 +153,23 @@ async function getJson<T>(path: string, token: string, accept?: string): Promise
   return (await res.json()) as T;
 }
 
-function toRef(raw: Pick<RawIssue, "number" | "title" | "state">): IssueRef {
+/** `owner/repo` from a GitHub API repository or issue URL. */
+function repoOfUrl(url: string | null | undefined): string | null {
+  const m = /\/repos\/([^/]+\/[^/]+)/.exec(url ?? "");
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function toRef(
+  raw: Pick<RawIssue, "number" | "title" | "state" | "repository_url">,
+  currentRepo: string,
+  repo = repoOfUrl(raw.repository_url),
+): IssueRef {
   return {
     number: raw.number,
     title: raw.title,
     state: raw.state === "closed" ? "closed" : "open",
+    // A sibling repo's issue must not be opened as this project's issue of the same number.
+    ...(repo && repo.toLowerCase() !== currentRepo.toLowerCase() ? { repo } : {}),
   };
 }
 
@@ -165,22 +180,32 @@ async function getRelations(
   issue: RawIssue,
 ): Promise<Pick<IssueDetail, "subIssues" | "subIssuesSummary" | "parent">> {
   const total = issue.sub_issues_summary?.total ?? 0;
-  const parentNumber = Number(/\/issues\/(\d+)$/.exec(issue.parent_issue_url ?? "")?.[1]);
-  const repoBase = base.replace(/\/\d+$/, "");
+  const currentRepo = repoOfUrl(base) ?? "";
+  // The parent may live in another repo of the same owner: fetch it from the
+  // repo its URL names, not from this one.
+  const parentMatch = /\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)$/.exec(
+    issue.parent_issue_url ?? "",
+  );
   const [children, parent] = await Promise.all([
     total > 0
       ? getJson<RawIssue[]>(`${base}/sub_issues?per_page=100`, token).catch(() => [])
       : Promise.resolve([] as RawIssue[]),
-    Number.isInteger(parentNumber) && parentNumber > 0
-      ? getJson<RawIssue>(`${repoBase}/${parentNumber}`, token).catch(() => null)
+    parentMatch
+      ? getJson<RawIssue>(
+          `/repos/${parentMatch[1]}/${parentMatch[2]}/issues/${parentMatch[3]}`,
+          token,
+        ).catch(() => null)
       : Promise.resolve(null),
   ]);
   return {
-    subIssues: children.map(toRef),
+    subIssues: children.map((c) => toRef(c, currentRepo)),
     subIssuesSummary: issue.sub_issues_summary
       ? { total, completed: issue.sub_issues_summary.completed ?? 0 }
       : null,
-    parent: parent ? toRef(parent) : null,
+    parent:
+      parent && parentMatch
+        ? toRef(parent, currentRepo, decodeURIComponent(`${parentMatch[1]}/${parentMatch[2]}`))
+        : null,
   };
 }
 

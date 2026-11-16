@@ -561,6 +561,22 @@ describe("IssueDetailView relations", () => {
     expect(openIssue).toHaveBeenCalledWith(1, 11, { kind: "issue", projectId: 1, number: 7 });
   });
 
+  it("lists an issue from another repo without making it openable here", async () => {
+    serve({
+      ...DETAIL,
+      subIssuesSummary: { total: 1, completed: 0 },
+      subIssues: [{ number: 5, title: "Sibling work", state: "open", repo: "a/other" }],
+    });
+    const openIssue = vi.fn();
+    useDashboardStore.setState({ openRightSidebarIssue: openIssue });
+    render(<IssueDetailView projectId={1} number={7} onBack={() => {}} />);
+
+    expect(await screen.findByText("a/other#5")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Sibling work/ })).toBeNull();
+    await userEvent.click(screen.getByText("Sibling work"));
+    expect(openIssue).not.toHaveBeenCalled();
+  });
+
   it("links a child issue to its parent, and shows nothing for an unrelated issue", async () => {
     serve({ ...DETAIL, parent: { number: 3, title: "The epic", state: "open" } });
     const openIssue = vi.fn();

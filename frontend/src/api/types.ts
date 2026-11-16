@@ -1552,6 +1552,8 @@ export interface GitHubIssueRef {
   number: number;
   title: string;
   state: "open" | "closed";
+  /** `owner/repo`, set only for an issue in another repository (listed, not openable here). */
+  repo?: string;
 }
 
 export type GitHubIssueSort = "updated" | "created" | "comments";

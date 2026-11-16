@@ -75,6 +75,30 @@ function IssueRefRow({
   projectId: number;
   from: number;
 }) {
+  const label = (
+    <>
+      <span
+        className={`gh-ref-state ${issueRef.state}`}
+        role="img"
+        aria-label={issueRef.state === "closed" ? "Closed" : "Open"}
+      >
+        {issueRef.state === "closed" ? "✓" : "○"}
+      </span>
+      <span className="gh-ref-num">
+        {issueRef.repo ? `${issueRef.repo}#` : "#"}
+        {issueRef.number}
+      </span>
+      <span className="gh-ref-title">{issueRef.title}</span>
+    </>
+  );
+  // Another repo's issue is not one of this project's: show it, don't open it.
+  if (issueRef.repo) {
+    return (
+      <span className="gh-ref-row gh-ref-row--static" title={`In ${issueRef.repo}`}>
+        {label}
+      </span>
+    );
+  }
   return (
     <button
       type="button"
@@ -87,15 +111,7 @@ function IssueRefRow({
         })
       }
     >
-      <span
-        className={`gh-ref-state ${issueRef.state}`}
-        role="img"
-        aria-label={issueRef.state === "closed" ? "Closed" : "Open"}
-      >
-        {issueRef.state === "closed" ? "✓" : "○"}
-      </span>
-      <span className="gh-ref-num">#{issueRef.number}</span>
-      <span className="gh-ref-title">{issueRef.title}</span>
+      {label}
     </button>
   );
 }
@@ -708,9 +724,9 @@ export function IssueDetailView({
               <div className="github-panel-empty-row">No description provided</div>
             )}
           </SidebarSection>
-          {issue.subIssues.length > 0 && (
+          {issue.subIssuesSummary && issue.subIssues.length > 0 && (
             <SidebarSection
-              title={`Sub-issues ${issue.subIssuesSummary?.completed ?? issue.subIssues.filter((c) => c.state === "closed").length}/${issue.subIssuesSummary?.total ?? issue.subIssues.length}`}
+              title={`Sub-issues ${issue.subIssuesSummary.completed}/${issue.subIssuesSummary.total}`}
               persistKey="github-issue-subissues"
               variant="card"
             >

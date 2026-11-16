@@ -144,4 +144,41 @@ describe("getIssueDetail's relations", () => {
     expect(d.subIssues).toEqual([]);
     expect(d.parent).toBeNull();
   });
+
+  it("fetches a cross-repo parent from its own repo and marks it, same for sibling-repo children", async () => {
+    route(
+      {
+        ...issue(0),
+        parent_issue_url: "https://api.github.com/repos/o/other/issues/3",
+        sub_issues_summary: { total: 2, completed: 0 },
+      },
+      {
+        "/issues/7/sub_issues": [
+          {
+            number: 5,
+            title: "same repo",
+            state: "open",
+            repository_url: "https://api.github.com/repos/o/r",
+          },
+          {
+            number: 5,
+            title: "sibling",
+            state: "open",
+            repository_url: "https://api.github.com/repos/o/other",
+          },
+        ],
+        "/repos/o/other/issues/3": { number: 3, title: "epic elsewhere", state: "open" },
+      },
+    );
+    const d = await getIssueDetail("tok", "o", "r", 7);
+    expect(d.parent).toEqual({
+      number: 3,
+      title: "epic elsewhere",
+      state: "open",
+      repo: "o/other",
+    });
+    expect(d.subIssues[0]).not.toHaveProperty("repo");
+    expect(d.subIssues[1]).toMatchObject({ number: 5, repo: "o/other" });
+    expect(mockFetch.mock.calls.some(([p]) => String(p) === "/repos/o/r/issues/3")).toBe(false);
+  });
 });

@@ -782,11 +782,21 @@ button.sb-chip--label[aria-pressed="true"] {
 .gh-ref-row:hover .gh-ref-title {
   text-decoration: underline;
 }
+.gh-ref-row:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.gh-ref-row--static {
+  cursor: default;
+}
+.gh-ref-row--static:hover .gh-ref-title {
+  text-decoration: none;
+}
 .gh-ref-state.closed {
-  color: var(--accent-green, #3fb950);
+  color: var(--status-success-fg);
 }
 .gh-ref-num {
-  color: var(--text-dim, #8b949e);
+  color: var(--dim);
   flex: none;
 }
 .gh-ref-title {
