@@ -1543,6 +1543,19 @@ export interface GitHubIssueDetail extends GitHubIssueListItem {
   /** GitHub-rendered HTML — sanitize before inserting. */
   bodyHtml: string;
   comments: GitHubIssueComment[];
+  /** Direct children (first 100); empty when none. */
+  subIssues: GitHubIssueRef[];
+  subIssuesSummary: { total: number; completed: number } | null;
+  parent: GitHubIssueRef | null;
+}
+
+/** A sub-issue or parent listed on an issue's detail. */
+export interface GitHubIssueRef {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  /** `owner/repo`, set only for an issue in another repository (listed, not openable here). */
+  repo?: string;
 }
 
 export type GitHubIssueSort = "updated" | "created" | "comments";

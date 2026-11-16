@@ -762,6 +762,60 @@ button.sb-chip:focus-visible,
 button.sb-chip--label[aria-pressed="true"] {
   background: color-mix(in srgb, var(--label-c) 30%, var(--sidebar));
 }
+.gh-ref-list {
+  display: flex;
+  flex-direction: column;
+}
+.gh-ref-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gh-ref-row:hover .gh-ref-title {
+  text-decoration: underline;
+}
+.gh-ref-row:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.gh-ref-row--static {
+  cursor: default;
+}
+.gh-ref-row--static:hover .gh-ref-title {
+  text-decoration: none;
+}
+.gh-ref-state.closed {
+  color: var(--status-success-fg);
+}
+.gh-ref-num {
+  color: var(--dim);
+  flex: none;
+}
+.gh-ref-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gh-detail-parent {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 8px;
+  font-size: 0.75rem;
+}
+.gh-detail-parent .gh-ref-row {
+  width: auto;
+  min-width: 0;
+}
 .gh-issue-card {
   display: flex;
   flex-wrap: wrap;
