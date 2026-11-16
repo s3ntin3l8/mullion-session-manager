@@ -73,7 +73,13 @@ export function useApplyPendingOpens({
       http
         .listPendingOpens(workspaceId)
         .then((opens) => {
-          if (!isCancelled()) setPending({ workspaceId, opens });
+          if (isCancelled()) return;
+          // An empty list again changes nothing: no re-render every poll.
+          setPending((prev) =>
+            prev?.workspaceId === workspaceId && prev.opens.length === 0 && opens.length === 0
+              ? prev
+              : { workspaceId, opens },
+          );
         })
         .catch(() => {
           // A failed poll is retried on the next tick.

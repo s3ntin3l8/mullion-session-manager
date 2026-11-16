@@ -80,6 +80,7 @@ function terminalSessionId(panelId: string | null): number | null {
 
 function syncPendingOpens(
   workspaceId: number,
+  presentation: LayoutPresentation,
   opened: readonly string[],
   closed: readonly string[],
   before: ShownPanes,
@@ -88,8 +89,12 @@ function syncPendingOpens(
   for (const panelId of opened) {
     const sessionId = terminalSessionId(panelId);
     if (sessionId === null) continue;
+    // The halves' assignment is not kept up on the phone (no router runs
+    // there), so the phone takes the pane that was on show: the active one.
     const replaced =
-      (halfOf(halves, panelId) === "right" ? before.right : before.left) ?? before.active;
+      presentation === "halves"
+        ? ((halfOf(halves, panelId) === "right" ? before.right : before.left) ?? before.active)
+        : before.active;
     const referenceSessionId = terminalSessionId(replaced);
     void http
       .recordPendingOpen(
@@ -239,7 +244,7 @@ export function useFoldHalves({
       // a grid client saves its own layout.
       if (presentation !== "grid") {
         const opened = ids.filter((id) => !seen.ids!.includes(id));
-        syncPendingOpens(activeWorkspaceId, opened, closed, seen.shown);
+        syncPendingOpens(activeWorkspaceId, presentation, opened, closed, seen.shown);
       }
     }
     lastSeen.current = { workspaceId: activeWorkspaceId, ids, shown: shownPanes(dockviewApi) };

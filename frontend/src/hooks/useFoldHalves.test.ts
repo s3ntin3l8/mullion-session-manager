@@ -488,6 +488,8 @@ describe("useFoldHalves records opens for the desk", () => {
   });
 
   it("records a phone open beside the pane on show before it", () => {
+    // A left pane remembered from the halves, stale on the phone.
+    useDashboardStore.getState().noteLeftPane("session-1", false);
     const { rerender, props, open, api } = setup({ presentation: "phone" });
     (api as unknown as { maximizeGroup: (p: { id: string }) => void }).maximizeGroup({
       id: "session-2",
