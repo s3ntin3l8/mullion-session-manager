@@ -512,3 +512,27 @@ describe("TaskDetailView", () => {
     expect(screen.getByText("IN PROGRESS")).toBeTruthy();
   });
 });
+
+describe("TaskDetailView workflow-change approval", () => {
+  const SHA = "f4f7354f4c66b4cd2da3a3bb02564f909f509da4"; // pragma: allowlist secret
+  const held = JSON.stringify({ sha: SHA, files: [".github/workflows/ci-cd.yml"] });
+
+  it("shows the held files and approves that exact sha", async () => {
+    const user = userEvent.setup();
+    const approveWorkflowChange = vi.fn().mockResolvedValue(undefined);
+    const t = task({ status: "reviewing", workflowChange: held } as Partial<Task>);
+    setTasks([t], { approveWorkflowChange });
+    renderDetail(t.id);
+    const group = screen.getByRole("group", { name: "Workflow change" });
+    expect(within(group).getByText(".github/workflows/ci-cd.yml")).toBeTruthy();
+    await user.click(within(group).getByRole("button", { name: "Approve workflow change" }));
+    expect(approveWorkflowChange).toHaveBeenCalledWith(t.id, SHA);
+  });
+
+  it("renders nothing when no workflow change is held", () => {
+    const t = task({ status: "reviewing", workflowChange: null } as Partial<Task>);
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+  });
+});
