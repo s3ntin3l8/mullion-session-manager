@@ -384,7 +384,7 @@ export interface HookAgentAdapter {
    * `isolation: "worktree"`; codex's `spawn_agent` forks the workspace) —
    * edits made there never reach this branch unless the worker lands them.
    */
-  delegationHint?: (delegateModel: string) => string;
+  delegationHint?: (delegateModel: string) => string | null;
   /**
    * Cost tier of a model name for this CLI — a bigger number is a stronger,
    * more expensive model — or `null` when the name is not one this adapter

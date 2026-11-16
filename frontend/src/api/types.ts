@@ -2355,12 +2355,10 @@ export interface Task {
 export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-interface ModelSlots {
-  defaultModel: string | null;
-  reviewerModel: string | null;
-  // Optional: a settings blob from before this field existed lacks it.
+// `delegateModel` is optional: a settings blob from before it existed lacks it.
+type ModelSlots = Record<"defaultModel" | "reviewerModel", string | null> & {
   delegateModel?: string | null;
-}
+};
 
 export interface AppSettings {
   theme: Theme;

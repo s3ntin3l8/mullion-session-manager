@@ -128,6 +128,15 @@ describe("getAdapterDelegationHint", () => {
     }
   });
 
+  it("names no clause for a Claude delegate outside the Task tool's model enum", () => {
+    expect(
+      getAdapterDelegationHint("claude", {
+        workerModel: "fable",
+        delegateModel: "my-custom-model",
+      }),
+    ).toBeNull();
+  });
+
   it("names Codex's delegate model and a reasoning effort", () => {
     expect(getAdapterDelegationHint("codex", ctx("gpt-6-luna"))).toContain('`model: "gpt-6-luna"`');
   });
@@ -176,7 +185,10 @@ describe("getAdapterDelegationHint", () => {
     // able to satisfy Task Master's "commits past base" gate on its own,
     // or the reviewer would judge a diff the worker never read.
     for (const command of ["claude", "codex", "opencode", "agy"]) {
-      const hint = getAdapterDelegationHint(command, ctx("some-model"))!;
+      const hint = getAdapterDelegationHint(
+        command,
+        ctx(command === "claude" ? "sonnet" : "some-model"),
+      )!;
       expect(hint).toContain("responsible for the final commit");
     }
   });
@@ -189,7 +201,10 @@ describe("getAdapterDelegationHint", () => {
     // clause has to name the landing requirement, not just restate the
     // worker's general responsibility for committing.
     for (const command of ["claude", "codex", "opencode", "agy"]) {
-      const hint = getAdapterDelegationHint(command, ctx("some-model"))!;
+      const hint = getAdapterDelegationHint(
+        command,
+        ctx(command === "claude" ? "sonnet" : "some-model"),
+      )!;
       expect(hint).toContain("land on this branch");
       expect(hint).toContain("workspace or fork");
     }
@@ -197,7 +212,10 @@ describe("getAdapterDelegationHint", () => {
 
   it("tells the worker to keep the judgement-heavy parts itself", () => {
     for (const command of ["claude", "codex", "opencode", "agy"]) {
-      const hint = getAdapterDelegationHint(command, ctx("some-model"))!;
+      const hint = getAdapterDelegationHint(
+        command,
+        ctx(command === "claude" ? "sonnet" : "some-model"),
+      )!;
       expect(hint).toContain("judgement");
     }
   });

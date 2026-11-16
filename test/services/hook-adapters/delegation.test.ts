@@ -40,6 +40,12 @@ describe("claudeTaskModelAlias", () => {
     expect(claudeTaskModelAlias("opusplan")).toBe("sonnet");
     expect(claudeTaskModelAlias("my-custom-model")).toBeNull();
   });
+
+  it("maps each of the four aliases to itself", () => {
+    for (const alias of ["haiku", "sonnet", "opus", "fable"] as const) {
+      expect(claudeTaskModelAlias(alias)).toBe(alias);
+    }
+  });
 });
 
 describe("codexModelTier", () => {

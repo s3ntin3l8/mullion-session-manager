@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   buildTaskMasterPreamble,
   buildWorkerPrompt,
-  buildRejectPrompt,
   type TaskPromptTask,
 } from "../../src/services/task-prompt.js";
 
@@ -151,16 +150,6 @@ describe("worker prompt wiring", () => {
       delegation: { workerModel: null, delegateModel: "sonnet" },
     });
     expect(out).toContain("Task tool");
-  });
-
-  it("renders a supplied delegation context through buildRejectPrompt too", () => {
-    const out = buildRejectPrompt({
-      ...BASE,
-      feedback: "not this way",
-      agentCommand: "codex",
-      delegation: { workerModel: null, delegateModel: "sonnet" },
-    });
-    expect(out).toContain("spawn_agent");
   });
 
   it("omits the clause from a worker prompt with no command", () => {

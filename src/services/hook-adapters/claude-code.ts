@@ -559,18 +559,25 @@ export const claudeCodeAdapter: HookAgentAdapter = {
   },
   prepareLaunch,
   emits: CLAUDE_CODE_EMITS,
-  delegationHint: (delegateModel) =>
-    "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
-    "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
-    "The Task tool spawns a subagent and takes an optional `model` for that call, which takes " +
-    "precedence over that subagent's own definition and is one of `sonnet`, `opus`, `haiku` or " +
-    `\`fable\`: pass \`model: "${claudeTaskModelAlias(delegateModel) ?? delegateModel}"\` for the ` +
-    "parts you delegate, unless the child is a fork (a fork always inherits your model) or the tool " +
-    "reports that the model parameter is ignored on this session. " +
-    "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
-    "parts that need your own judgement for yourself. A delegated part may run in its own workspace or " +
-    "fork, so whatever you delegate has to land on this branch — you remain responsible for the final " +
-    "commit here.",
+  // `null` (no clause) for a delegate outside the Task tool's four-alias enum:
+  // naming it would make the worker's one subagent call fail.
+  delegationHint: (delegateModel) => {
+    const alias = claudeTaskModelAlias(delegateModel);
+    if (alias === null) return null;
+    return (
+      "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
+      "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
+      "The Task tool spawns a subagent and takes an optional `model` for that call, which takes " +
+      "precedence over that subagent's own definition and is one of `sonnet`, `opus`, `haiku` or " +
+      `\`fable\`: pass \`model: "${alias}"\` for the ` +
+      "parts you delegate, unless the child is a fork (a fork always inherits your model) or the tool " +
+      "reports that the model parameter is ignored on this session. " +
+      "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
+      "parts that need your own judgement for yourself. A delegated part may run in its own workspace or " +
+      "fork, so whatever you delegate has to land on this branch — you remain responsible for the final " +
+      "commit here."
+    );
+  },
   modelTier: claudeModelTier,
   // `claude [options] [prompt]` — interactive is the default (only `-p`
   // opts into print/non-interactive mode), and the prompt is a plain
