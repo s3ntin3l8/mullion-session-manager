@@ -167,7 +167,10 @@ export function waitForOutput(
 
     // One render at a time; output that lands meanwhile schedules the next.
     const check = (): Promise<void> => {
-      checkTimer = null;
+      if (checkTimer) {
+        clearTimeout(checkTimer);
+        checkTimer = null;
+      }
       if (current) return current;
       current = runCheck()
         .catch((err) => deps.warn?.("wait_for_output: check failed", err))
