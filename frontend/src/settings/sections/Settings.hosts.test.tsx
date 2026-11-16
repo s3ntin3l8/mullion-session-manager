@@ -30,8 +30,13 @@ describe("Settings -> Hosts", () => {
   // text in the row. Individual #647 tests below override an entry before
   // rendering.
   let updateInfoDb: Record<string, HostUpdateStatus>;
+  let updateBlockedTasksDb: Record<
+    string,
+    Array<{ id: number; issueNumber: number | null; projectName: string; status: string }>
+  >;
 
   beforeEach(() => {
+    updateBlockedTasksDb = {};
     hostsDb = [
       {
         id: "remote-1",
@@ -116,7 +121,13 @@ describe("Settings -> Hosts", () => {
           browserEnabled: false,
         }),
       "GET /api/hosts/:id/update": ({ params }) => jsonResponse(200, updateInfoDb[params.id]),
-      "POST /api/hosts/:id/update/apply": ({ params }) => {
+      "POST /api/hosts/:id/update/apply": ({ params, query }) => {
+        if (updateBlockedTasksDb[params.id]?.length && query.get("force") !== "true") {
+          return jsonResponse(409, {
+            error: "Cannot update host while 1 Task Master task is running on it",
+            tasks: updateBlockedTasksDb[params.id],
+          });
+        }
         updateInfoDb[params.id] = {
           ...updateInfoDb[params.id],
           status: { phase: "downloading", version: "0.2.20" },
@@ -377,6 +388,43 @@ describe("Settings -> Hosts", () => {
       const row = await screen.findByTestId("host-row-remote-1");
       expect(await within(row).findByText("update unavailable")).toBeInTheDocument();
       expect(within(row).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+    });
+
+    it("shows blocking tasks on 409 and retries with ?force=true on 'Update anyway'", async () => {
+      updateInfoDb["remote-1"] = {
+        hostVersion: "0.2.18",
+        primaryVersion: "0.2.20",
+        upToDate: false,
+        updatable: true,
+        unavailableReason: null,
+        assetUrl: "https://github.com/x/y/a.tgz",
+        checksumUrl: "https://github.com/x/y/a.tgz.sha256",
+        status: { phase: "idle" },
+      };
+      updateBlockedTasksDb["remote-1"] = [
+        { id: 1, issueNumber: 274, projectName: "branchdam-mobile", status: "in_progress" },
+      ];
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await user.click(within(row).getByRole("button", { name: "Update" }));
+
+      const prompt = await screen.findByTestId("update-force-prompt");
+      expect(
+        within(prompt).getByText(/#274 · branchdam-mobile \(in_progress\)/),
+      ).toBeInTheDocument();
+
+      await user.click(within(prompt).getByRole("button", { name: "Update anyway" }));
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/hosts/remote-1/update/apply?force=true",
+        expect.objectContaining({ method: "POST" }),
+      );
+      await waitFor(() =>
+        expect(within(row).getByRole("button", { name: /downloading/ })).toBeDisabled(),
+      );
+      expect(screen.queryByTestId("update-force-prompt")).not.toBeInTheDocument();
     });
   });
 });

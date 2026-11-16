@@ -22,6 +22,7 @@ import {
   deleteProjectRows,
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { listActiveTasksOnHost } from "../services/session-live-info.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
@@ -660,61 +661,87 @@ export async function hostsRoute(app: FastifyInstance) {
   // internal channel. Per-host only, deliberately: no "update all hosts" —
   // a fleet-wide concurrent apply is how every host goes down at once, and
   // at a small fleet size the convenience buys nothing.
-  app.post<{ Params: { id: string } }>("/api/hosts/:id/update/apply", async (request, reply) => {
-    const { id } = request.params;
-    if (id === LOCAL_HOST_ID) {
-      return reply.badRequest("the local host updates from Settings → Server, not here");
-    }
-    const pending = pendingHostReply(app, id, reply);
-    if (pending) return pending;
-    const client = getRemoteHostClient(app, id);
-
-    // Independent review — the frontend only renders the Update button when
-    // the GET route above reported `updatable: true`, but this route has no
-    // server-side equivalent check: a stale poll response, a direct API
-    // call, or a race could otherwise trigger a redundant re-install/
-    // restart on an already-current agent.
-    try {
-      const hostVersion = (await client.resolveConfig()).version;
-      if (hostVersion === appVersion) {
-        return reply.badRequest("this host is already on the primary's version");
+  app.post<{ Params: { id: string }; Querystring: { force?: string } }>(
+    "/api/hosts/:id/update/apply",
+    async (request, reply) => {
+      const { id } = request.params;
+      if (id === LOCAL_HOST_ID) {
+        return reply.badRequest("the local host updates from Settings → Server, not here");
       }
-    } catch (err) {
-      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
-      app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
-      return reply.serviceUnavailable(`Host ${id} is unreachable`);
-    }
+      const pending = pendingHostReply(app, id, reply);
+      if (pending) return pending;
 
-    let release;
-    try {
-      release = await resolveReleaseByTag(app.config.MULLION_UPDATE_REPO, appVersion);
-    } catch (err) {
-      if (!(err instanceof UpdateCheckError)) throw err;
-      return reply.badGateway(`could not resolve the primary's own release: ${err.message}`);
-    }
-    if (!release?.assetUrl || !release.checksumUrl) {
-      return reply.badRequest(
-        "the primary's own release has no downloadable asset yet — cannot update this agent to it",
-      );
-    }
+      // Issue #3180 — refuse restarting an agent while Task Master workers
+      // or reviewers are running on it unless explicitly forced. Always run the
+      // lookup so a forced bypass over active tasks is logged and diagnosable.
+      const force = request.query.force === "true";
+      const blockingTasks = listActiveTasksOnHost(app, id);
+      if (!force && blockingTasks.length > 0) {
+        return reply.code(409).send({
+          error: `Cannot update host while ${blockingTasks.length} Task Master ${blockingTasks.length === 1 ? "task is" : "tasks are"} running on it`,
+          tasks: blockingTasks,
+        });
+      }
+      if (force && blockingTasks.length > 0) {
+        app.log.warn(
+          {
+            hostId: id,
+            taskIds: blockingTasks.map((t) => t.id),
+            statuses: blockingTasks.map((t) => t.status),
+          },
+          "force-updating a host with running Task Master tasks",
+        );
+      }
 
-    try {
-      const status = await client.applyUpdate({
-        version: appVersion,
-        assetUrl: release.assetUrl,
-        checksumUrl: release.checksumUrl,
-      });
-      // The agent restarts onto a new build: what it advertised is now stale.
-      refreshHostProtocolSoon(app, id);
-      reply.code(202);
-      return status;
-    } catch (err) {
-      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
-      app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
-      // The call that matters: the update may already be installing.
-      return replyHostUnreachable(reply, id, err, "applying the update");
-    }
-  });
+      const client = getRemoteHostClient(app, id);
+
+      // Independent review — the frontend only renders the Update button when
+      // the GET route above reported `updatable: true`, but this route has no
+      // server-side equivalent check: a stale poll response, a direct API
+      // call, or a race could otherwise trigger a redundant re-install/
+      // restart on an already-current agent.
+      try {
+        const hostVersion = (await client.resolveConfig()).version;
+        if (hostVersion === appVersion) {
+          return reply.badRequest("this host is already on the primary's version");
+        }
+      } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+        app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
+        return reply.serviceUnavailable(`Host ${id} is unreachable`);
+      }
+
+      let release;
+      try {
+        release = await resolveReleaseByTag(app.config.MULLION_UPDATE_REPO, appVersion);
+      } catch (err) {
+        if (!(err instanceof UpdateCheckError)) throw err;
+        return reply.badGateway(`could not resolve the primary's own release: ${err.message}`);
+      }
+      if (!release?.assetUrl || !release.checksumUrl) {
+        return reply.badRequest(
+          "the primary's own release has no downloadable asset yet — cannot update this agent to it",
+        );
+      }
+
+      try {
+        const status = await client.applyUpdate({
+          version: appVersion,
+          assetUrl: release.assetUrl,
+          checksumUrl: release.checksumUrl,
+        });
+        // The agent restarts onto a new build: what it advertised is now stale.
+        refreshHostProtocolSoon(app, id);
+        reply.code(202);
+        return status;
+      } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+        app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
+        // The call that matters: the update may already be installing.
+        return replyHostUnreachable(reply, id, err, "applying the update");
+      }
+    },
+  );
 
   // A remote host with projects 409s by default (client must move/delete
   // them first); `?cascade=true` instead best-effort terminates every live
