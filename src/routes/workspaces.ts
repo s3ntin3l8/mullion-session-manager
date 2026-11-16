@@ -7,6 +7,13 @@ import {
   updateWorkspace,
   type WorkspaceRow,
 } from "../services/workspaces-store.js";
+import {
+  listPendingOpens,
+  recordPendingOpen,
+  removePendingOpen,
+  workspaceExists,
+  type PendingOpenRow,
+} from "../services/workspace-pending-opens.js";
 
 interface CreateWorkspaceBody {
   name: string;
@@ -47,6 +54,26 @@ const updateWorkspaceSchema = {
     },
   },
 };
+
+const recordPendingOpenSchema = {
+  body: {
+    type: "object",
+    required: ["sessionId"],
+    additionalProperties: false,
+    properties: {
+      sessionId: { type: "integer" },
+      referenceSessionId: { type: ["integer", "null"] },
+    },
+  },
+};
+
+function serializePendingOpen(row: PendingOpenRow) {
+  return {
+    sessionId: row.sessionId,
+    referenceSessionId: row.referenceSessionId,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
 
 function serialize(row: WorkspaceRow) {
   return {
@@ -120,4 +147,72 @@ export async function workspacesRoute(app: FastifyInstance) {
     if (!deleteWorkspace(app.db, workspaceId)) return reply.notFound();
     reply.code(204);
   });
+
+  // #3033 — sessions opened in this workspace on the fold or the phone, which
+  // never save the layout. A desktop client lists them, adds each pane with
+  // its own dockview API, then acknowledges it. None of these routes reads or
+  // writes `workspaces.layout`.
+  app.get<{ Params: { id: string } }>(
+    "/api/workspaces/:id/pending-opens",
+    async (request, reply) => {
+      const workspaceId = Number(request.params.id);
+      if (!Number.isInteger(workspaceId)) return reply.badRequest("Invalid workspace id");
+      if (!workspaceExists(app.db, workspaceId)) return reply.notFound();
+      return listPendingOpens(app.db, workspaceId).map(serializePendingOpen);
+    },
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: { sessionId: number; referenceSessionId?: number | null };
+  }>(
+    "/api/workspaces/:id/pending-opens",
+    { schema: recordPendingOpenSchema },
+    async (request, reply) => {
+      const workspaceId = Number(request.params.id);
+      if (!Number.isInteger(workspaceId)) return reply.badRequest("Invalid workspace id");
+      const { sessionId, referenceSessionId = null } = request.body;
+      const result = recordPendingOpen(app.db, workspaceId, sessionId, referenceSessionId);
+      if (!result.ok) {
+        if (result.reason === "killed") return reply.conflict("Session was killed");
+        return reply.notFound(
+          result.reason === "workspace" ? "Workspace not found" : "Session not found",
+        );
+      }
+      reply.code(201);
+      return serializePendingOpen(result.row);
+    },
+  );
+
+  // Acknowledge: the desktop applied the open (or found nothing to add). One
+  // atomic delete, so of two desktop tabs only one reads `acknowledged: true`;
+  // a second acknowledge is a no-op that reads false.
+  app.post<{ Params: { id: string; sessionId: string } }>(
+    "/api/workspaces/:id/pending-opens/:sessionId/ack",
+    async (request, reply) => {
+      const workspaceId = Number(request.params.id);
+      const sessionId = Number(request.params.sessionId);
+      if (!Number.isInteger(workspaceId) || !Number.isInteger(sessionId)) {
+        return reply.badRequest("Invalid id");
+      }
+      if (!workspaceExists(app.db, workspaceId)) return reply.notFound();
+      return { acknowledged: removePendingOpen(app.db, workspaceId, sessionId) };
+    },
+  );
+
+  // Withdraw: the pane was closed on the fold or the phone before the desk
+  // applied it. Idempotent.
+  app.delete<{ Params: { id: string; sessionId: string } }>(
+    "/api/workspaces/:id/pending-opens/:sessionId",
+    async (request, reply) => {
+      const workspaceId = Number(request.params.id);
+      const sessionId = Number(request.params.sessionId);
+      if (!Number.isInteger(workspaceId) || !Number.isInteger(sessionId)) {
+        return reply.badRequest("Invalid id");
+      }
+      if (!workspaceExists(app.db, workspaceId)) return reply.notFound();
+      removePendingOpen(app.db, workspaceId, sessionId);
+      reply.code(204);
+    },
+  );
 }

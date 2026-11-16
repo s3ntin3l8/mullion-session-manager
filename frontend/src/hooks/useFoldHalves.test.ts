@@ -18,6 +18,7 @@ import {
 } from "../panelUtils.js";
 import { useDashboardStore } from "../store/index.js";
 import { EMPTY_FOLD_HALVES } from "../lib/foldHalves.js";
+import { api as http } from "../api/index.js";
 
 type FakePanel = {
   id: string;
@@ -57,7 +58,17 @@ function makeApi(ids: string[], options: { floating?: string[] } = {}) {
 
 const halves = () => useDashboardStore.getState().foldHalves[7] ?? EMPTY_FOLD_HALVES;
 
+let recordPendingOpen: ReturnType<typeof vi.spyOn>;
+let withdrawPendingOpen: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
+  // #3033 — the fold records its opens on the server; no request leaves here.
+  recordPendingOpen = vi.spyOn(http, "recordPendingOpen").mockResolvedValue({
+    sessionId: 0,
+    referenceSessionId: null,
+    createdAt: "",
+  });
+  withdrawPendingOpen = vi.spyOn(http, "withdrawPendingOpen").mockResolvedValue(undefined);
   localStorage.clear();
   useDashboardStore.setState({
     activeWorkspaceId: 7,
@@ -67,7 +78,10 @@ beforeEach(() => {
     rightSidebarOpen: false,
   });
 });
-afterEach(() => setHalvesRouter(null));
+afterEach(() => {
+  setHalvesRouter(null);
+  vi.restoreAllMocks();
+});
 
 describe("fold halves in the store (per device, per workspace)", () => {
   it("keeps the assignment in localStorage, keyed by workspace", () => {
@@ -409,5 +423,99 @@ describe("useFoldHalves", () => {
     setup();
     act(() => useDashboardStore.setState({ rightSidebarOpen: true }));
     expect(halves().lastUsed).toEqual({ kind: "view" });
+  });
+});
+
+// #3033 — a session opened on the fold or the phone reaches the shared
+// workspace: the client records the open (the desk adds the pane), and a
+// close here withdraws it. Nothing else leaves the device.
+describe("useFoldHalves records opens for the desk", () => {
+  function setup(over: Partial<UseFoldHalvesParams> & { ids?: string[] } = {}) {
+    const fake = makeApi(over.ids ?? ["session-1", "session-2"]);
+    const reopenSession = vi.fn((sessionId: number) => {
+      (fake.api as unknown as { addPanel: (o: { id: string }) => void }).addPanel({
+        id: `session-${sessionId}`,
+      });
+      return true;
+    });
+    const props: UseFoldHalvesParams = {
+      dockviewApi: fake.api,
+      presentation: "halves",
+      activeWorkspaceId: 7,
+      panelsVersion: 1,
+      isRestored: () => true,
+      sessionsLoaded: true,
+      reopenSession,
+      ...over,
+    };
+    const hook = renderHook((p: UseFoldHalvesParams) => useFoldHalves(p), { initialProps: props });
+    const open = (id: string) =>
+      (fake.api as unknown as { addPanel: (o: { id: string }) => void }).addPanel({ id });
+    return { ...fake, ...hook, props, open };
+  }
+
+  it("records a session opened on a half beside the one it replaced, and withdraws it on close", () => {
+    useDashboardStore.getState().noteLeftPane("session-1", false);
+    const { panels, rerender, props, open } = setup();
+    expect(recordPendingOpen).not.toHaveBeenCalled();
+
+    // Opening shows it on the left half (the router), replacing session-1.
+    open("session-5");
+    useDashboardStore.getState().noteLeftPane("session-5");
+    rerender({ ...props, panelsVersion: 2 });
+    expect(recordPendingOpen).toHaveBeenCalledTimes(1);
+    expect(recordPendingOpen).toHaveBeenCalledWith(7, 5, 1);
+
+    // The same layout again records nothing more.
+    rerender({ ...props, panelsVersion: 3 });
+    expect(recordPendingOpen).toHaveBeenCalledTimes(1);
+
+    panels.splice(
+      panels.findIndex((p) => p.id === "session-5"),
+      1,
+    );
+    rerender({ ...props, panelsVersion: 4 });
+    expect(withdrawPendingOpen).toHaveBeenCalledWith(7, 5);
+  });
+
+  it("takes the right half's pane as the reference for a session opened there", () => {
+    useDashboardStore.getState().moveToHalf("session-2", "right", ["session-1", "session-2"]);
+    const { rerender, props, open } = setup();
+    open("session-6");
+    useDashboardStore.getState().moveToHalf("session-6", "right", ["session-1", "session-6"]);
+    rerender({ ...props, panelsVersion: 2 });
+    expect(recordPendingOpen).toHaveBeenCalledWith(7, 6, 2);
+  });
+
+  it("records a phone open beside the pane on show before it", () => {
+    const { rerender, props, open, api } = setup({ presentation: "phone" });
+    (api as unknown as { maximizeGroup: (p: { id: string }) => void }).maximizeGroup({
+      id: "session-2",
+    });
+    rerender({ ...props, panelsVersion: 2 });
+    open("session-8");
+    rerender({ ...props, panelsVersion: 3 });
+    expect(recordPendingOpen).toHaveBeenCalledWith(7, 8, 2);
+  });
+
+  it("records nothing for a non-session pane, and nothing on the desk", () => {
+    const { rerender, props, open } = setup();
+    open("timeline-1");
+    rerender({ ...props, panelsVersion: 2 });
+    expect(recordPendingOpen).not.toHaveBeenCalled();
+
+    rerender({ ...props, presentation: "grid", panelsVersion: 3 });
+    open("session-9");
+    rerender({ ...props, presentation: "grid", panelsVersion: 4 });
+    expect(recordPendingOpen).not.toHaveBeenCalled();
+  });
+
+  it("does not record the sessions this device reopens after a restore", () => {
+    useDashboardStore.setState({
+      foldHalves: { 7: { ...EMPTY_FOLD_HALVES, open: ["session-1", "session-3"] } },
+    });
+    const { rerender, props } = setup({ ids: ["session-1"] });
+    rerender({ ...props, panelsVersion: 2 });
+    expect(recordPendingOpen).not.toHaveBeenCalled();
   });
 });

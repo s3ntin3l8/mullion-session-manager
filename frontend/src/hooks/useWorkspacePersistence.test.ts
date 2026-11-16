@@ -1098,6 +1098,46 @@ describe("useWorkspacePersistence — issue #1426 (phone never saves)", () => {
     expect(saveWorkspaceLayout).not.toHaveBeenCalled();
   });
 
+  // #3033 — a session opened and closed on the fold reaches the desk through
+  // the server's pending opens, never through the saved layout.
+  it("opening and closing a session on the fold never calls the workspace save", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange, addPanel } = makeMockApi();
+    layoutMode = "tablet";
+    const { result } = renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "tablet",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+    vi.advanceTimersByTime(0);
+    expect(result.current.isSaveSuspended()).toBe(true);
+    addPanel("session-5", { sessionId: 5 });
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS * 2);
+    // Closing it is another layout change.
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS * 2);
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  it("reports saves as not suspended on the desk", () => {
+    const { api } = makeMockApi();
+    const { result } = renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+    expect(result.current.isSaveSuspended()).toBe(false);
+  });
+
   it("resumes saving once the SAME workspace is restored again at a non-phone tier", () => {
     vi.useFakeTimers();
     const { api, fireLayoutChange } = makeMockApi();

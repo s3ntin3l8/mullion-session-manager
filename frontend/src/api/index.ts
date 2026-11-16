@@ -161,6 +161,7 @@ export type {
   StoredEventRow,
   EventHistoryPage,
   Workspace,
+  PendingOpen,
   Group,
   CodexHookTrust,
   Agent,

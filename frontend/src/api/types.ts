@@ -1160,6 +1160,15 @@ export interface EventHistoryPage {
   nextCursor: number | null;
 }
 
+/** #3033 — a session opened in a workspace on the fold or the phone, waiting
+ * for a desktop client to add its pane (GET /api/workspaces/:id/pending-opens). */
+export interface PendingOpen {
+  sessionId: number;
+  /** The session the new one replaced in its half on the fold; null if none. */
+  referenceSessionId: number | null;
+  createdAt: string;
+}
+
 export interface Workspace {
   id: number;
   name: string;
