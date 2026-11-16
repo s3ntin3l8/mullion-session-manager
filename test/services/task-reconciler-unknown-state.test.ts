@@ -421,8 +421,10 @@ describe("#2416 — the states that used to be swallowed", () => {
     const shellTask = { id: "b1", type: "shell", status: "running", description: "wait" };
     const MIN = 60_000;
 
-    async function overBudget(info: Record<string, unknown>) {
+    async function overBudget(info: Record<string, unknown>, taskMaster = "true") {
+      const priorTaskMaster = process.env.MULLION_TASK_MASTER_ENABLED;
       process.env.MULLION_TASK_BUDGET_MINUTES = "60";
+      process.env.MULLION_TASK_MASTER_ENABLED = taskMaster;
       const app = await buildApp();
       try {
         const { taskId } = await createSessionAndTaskWithBase(
@@ -437,6 +439,8 @@ describe("#2416 — the states that used to be swallowed", () => {
         return await getTask(app, taskId);
       } finally {
         process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+        if (priorTaskMaster === undefined) delete process.env.MULLION_TASK_MASTER_ENABLED;
+        else process.env.MULLION_TASK_MASTER_ENABLED = priorTaskMaster;
         await app.close();
       }
     }
@@ -448,6 +452,15 @@ describe("#2416 — the states that used to be swallowed", () => {
       });
       expect(row.status).toBe("failed");
       expect(row.failureReason).toContain("budget exceeded after 60 minutes");
+      expect(row.failureReason).toContain("no commits and was waiting on a background shell job");
+    });
+
+    it("says so with Task Master disabled too", async () => {
+      const row = await overBudget(
+        { lastTurnEndedAt: Date.now() - 10 * MIN, outstandingBackgroundTasks: [shellTask] },
+        "false",
+      );
+      expect(row.status).toBe("failed");
       expect(row.failureReason).toContain("no commits and was waiting on a background shell job");
     });
 

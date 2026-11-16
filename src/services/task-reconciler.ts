@@ -4869,12 +4869,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // is tracked separately.
                 const tail = isShellTailHandoff(liveDerived.status, liveInfo, task, now.getTime());
                 if (
-                  resolvedTaskMaster.enabled &&
-                  ((liveDerived.status === "finished" && turnFinishedSinceClaim(liveInfo, task)) ||
-                    tail)
+                  tail ||
+                  (resolvedTaskMaster.enabled &&
+                    liveDerived.status === "finished" &&
+                    turnFinishedSinceClaim(liveInfo, task))
                 ) {
                   const verdict = (await resolveCommitsPastBase(app, task, hostId)).state;
-                  salvage = verdict === "ahead";
+                  salvage = resolvedTaskMaster.enabled && verdict === "ahead";
                   // #3111 — say so when the budget ends a worker #3105 kept waiting.
                   heldNoCommits = tail && verdict === "none";
                 }
