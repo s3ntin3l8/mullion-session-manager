@@ -1365,6 +1365,10 @@ button.sb-chip--label[aria-pressed="true"] {
   padding: 8px var(--rs-pad-x, 12px);
   border-bottom: 1px solid var(--border-soft);
 }
+/* Delete/Abandon under the transition buttons: its own row, not a mis-click neighbour. */
+.sb-actions-block .task-detail-actions-delete {
+  margin-top: 6px;
+}
 .sb-body {
   margin-top: 8px;
   font-size: 0.75rem;

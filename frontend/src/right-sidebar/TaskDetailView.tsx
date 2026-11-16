@@ -1,6 +1,8 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
+import { DeleteTaskAction } from "../DeleteTaskAction.js";
+import { canDeleteTask } from "../lib/canDeleteTask.js";
 import { WorkflowChangeApproval } from "../WorkflowChangeApproval.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
@@ -361,6 +363,18 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
 
       <div className="sb-actions-block">
         <TaskActions task={task} />
+        {/* Same server-side restrictions and two-stage confirm as the retired
+            TaskDetail view; a successful delete leaves the (now gone) task. */}
+        {canDeleteTask(task) && (
+          <DeleteTaskAction
+            taskId={task.id}
+            isDone={task.status === "done"}
+            isGithubLinked={task.issueNumber !== null}
+            branchName={task.branchName}
+            worktreePath={task.worktreePath}
+            onDeleted={() => goSidebarBack({ kind: "task", taskId: task.id }, onBack)}
+          />
+        )}
       </div>
 
       <SidebarSection title="Details" persistKey="task-detail-details" variant="card">
