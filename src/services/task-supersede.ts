@@ -11,8 +11,8 @@
 // Why the marker matters: that copy's worker, if it ever ran again, would be
 // a SECOND worker for an issue another task already owns. #2291 closed the
 // claim side (an archived task is never auto-claimed nor claimable), and
-// task-claim.ts's `retryTask` closes the retry side — it resumes a `failed`
-// task's preserved branch and CLEARS `archivedAt` (#1015), so without the
+// task-retry.ts's `enqueueRetry` closes the retry side — it queues a resume of
+// a `failed` task's preserved branch and CLEARS `archivedAt` (#1015), so without the
 // marker a superseded copy that was claimed once and later failed is one
 // deliberate Retry away from spawning that duplicate worker.
 //
@@ -21,7 +21,7 @@
 // signal for rows old enough to predate `html_url`. The refusal a Retry
 // returns for such a copy is task-claim.ts's own (SUPERSEDED_RETRY_DETAIL
 // there) — it belongs to the refusal that produces it, and keeping it here
-// would add a module edge to an already heavily-coupled `retryTask`.
+// would add a module edge to an already heavily-coupled `enqueueRetry`.
 
 /**
  * The `failureReason` a merge writes on the DUPLICATE's copy when the

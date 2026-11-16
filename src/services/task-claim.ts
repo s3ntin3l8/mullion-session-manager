@@ -67,7 +67,7 @@ import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import { claimTargets, quarantinedTarget } from "./runway-quarantine.js";
 
-// Shared by claimTask's and retryTask's identical "cap" branches (Hermes
+// Shared by dispatchClaimedTask's and dispatchQueuedRetry's identical "cap" branches (Hermes
 // review, PR #765) — the limit shown here is always the RESOLVED value
 // (env default, possibly overridden by Settings → Task Master; see
 // task-config.ts), so this deliberately doesn't name either knob: whichever
@@ -298,7 +298,7 @@ export async function enqueueTask(
  *
  * The transition record is what the activity feed and the issue sync hang
  * off — a bare status write reaches neither, so the failure would be
- * invisible in both. `retryTask`'s own release() makes the same
+ * invisible in both. `dispatchQueuedRetry`'s own release() makes the same
  * `claimed -> failed` write and records it the same way.
  *
  * `extra` is written with the failure AND shown to the issue sync, so what it
@@ -1168,8 +1168,8 @@ export async function dispatchClaimedTask(
  * It has to explain WHY, because the row on the board looks like any other
  * `failed` task: without this, "Retry did nothing" reads like a bug.
  *
- * It lives HERE, next to the refusal that produces it, rather than beside the
- * merge's own wording (task-supersede.ts): `retryTask` already fans out to a
+ * It lives HERE, not beside the merge's own wording (task-supersede.ts):
+ * `enqueueRetry` (task-retry.ts), which returns it, already fans out to a
  * long list of modules, and an import added only for one string would widen
  * that coupling for no reason.
  */

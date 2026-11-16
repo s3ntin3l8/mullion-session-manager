@@ -1371,7 +1371,7 @@ extensive design comments.
   before it ever had a branch/worktree (e.g. no host matched its `Platform:`
   line), so there is nothing to resume: Retry resets it to `ready` and a
   normal claim starts it fresh. If the project's auto-claim is paused, claim
-  it by hand. The issue keeps its `failed` label until it is claimed.
+  it by hand.
 - **A task's GitHub label/comment never appeared.** Check
   `tasks.githubSyncError` in the task detail — GitHub sync is best-effort
   and does not retry a missed write; see

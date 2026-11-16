@@ -594,7 +594,7 @@ const TASK_WORKTREE_PREFIX = "mullion-task-";
 // (`mullion/task-<id>`) that rows created before this PR's deploy carry on
 // disk. Both shapes are still within the closed task-claim namespace
 // (neither is user-chosen), so the defense-in-depth argument holds for
-// both — and accepting the legacy form is what lets `retryTask` and
+// both — and accepting the legacy form is what lets `dispatchQueuedRetry` and
 // `attemptAutoRebase` resume in-flight failed tasks stranded at deploy
 // time (the stored `branchName` is whatever was written at claim, no DB
 // migration rewrites it).

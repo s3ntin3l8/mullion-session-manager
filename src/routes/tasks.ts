@@ -1444,7 +1444,7 @@ export async function tasksRoute(app: FastifyInstance) {
         {
           status: "in_progress",
           failureReason: request.body.feedback ?? null,
-          // Same reasoning as retryTask's own reservation (task-claim.ts):
+          // Same reasoning as dispatchQueuedRetry's own reservation (task-claim.ts):
           // this is a bounded continuation of already-approved scope, not a
           // new claim, but it re-enters the reconciler's budget-enforced
           // "claimed"/"in_progress" pool (task-reconciler.ts) all the same.
@@ -1514,8 +1514,8 @@ export async function tasksRoute(app: FastifyInstance) {
           // task-reconciler.ts's failReviewingGate/budget-exceeded paths
           // use. Deliberately NOT calling removeWorktreeIfClean, unlike
           // those two — a human just wrote real reject feedback onto a
-          // branch that may carry committed work worth a retryTask picking
-          // back up, so the worktree is left in place for that.
+          // branch that may carry committed work worth a Retry (enqueueRetry,
+          // then dispatchQueuedRetry) picking back up, so the worktree is left in place for that.
           const failedAt = new Date();
           const failed = updateTask(
             app,
