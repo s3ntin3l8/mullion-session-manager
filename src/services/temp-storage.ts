@@ -46,7 +46,10 @@ const DENYLIST: ReadonlyArray<RegExp> = [
   // Live per-session scratch: tools read it back long after last writing it,
   // so mtime alone can't prove it's stale.
   /^claude-/,
-  /^mullion-/,
+  // Live Mullion state, but not the test suite's leftovers: those are
+  // `mullion-test-suite-*` and stay protected by the age window and by the
+  // live-socket rule like any other tree.
+  /^mullion-(?!test-suite-)/,
   /^dbus-/,
 ];
 
@@ -95,6 +98,43 @@ export interface TempStorageOptions {
   claudeSessionsDirs?: string[];
   /** Test seam: the /proc used to find running `claude` binaries. */
   procDir?: string;
+  /**
+   * Test seam: filesystem paths of unix sockets some process currently has
+   * bound. `null` means "unknown", which keeps every socket protected.
+   * Defaults to a read of `/proc/net/unix` (Linux).
+   */
+  liveSockets?: ReadonlySet<string> | null;
+  /** Test seam: the file read for the default `liveSockets`. */
+  unixSocketTable?: string;
+}
+
+/**
+ * Filesystem paths of unix sockets that currently have a listener, from
+ * `/proc/net/unix`. Returns `null` where the table can't be read (not Linux),
+ * so callers fall back to treating every socket as live.
+ *
+ * Only this network namespace is visible: a socket bound by a process in
+ * another one (e.g. a container with /tmp bind-mounted) would look stale. The
+ * age window is what protects that case, since such a tree is being written to.
+ */
+export async function readLiveUnixSockets(
+  table = "/proc/net/unix",
+): Promise<ReadonlySet<string> | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(table, "utf8");
+  } catch {
+    return null;
+  }
+  const live = new Set<string>();
+  for (const line of text.split("\n").slice(1)) {
+    // Num RefCount Protocol Flags Type St Inode [Path]; abstract sockets start with "@".
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 8) continue;
+    const socketPath = parts.slice(7).join(" ");
+    if (socketPath.startsWith("/")) live.add(socketPath);
+  }
+  return live;
 }
 
 interface Candidate {
@@ -173,7 +213,17 @@ export async function mapLimit<T, R>(
   return results;
 }
 
-async function walk(dir: string, rootDev: number, budget: { left: number }): Promise<WalkResult> {
+const resolveLiveSockets = (options: TempStorageOptions) =>
+  options.liveSockets !== undefined
+    ? Promise.resolve(options.liveSockets)
+    : readLiveUnixSockets(options.unixSocketTable);
+
+async function walk(
+  dir: string,
+  rootDev: number,
+  budget: { left: number },
+  liveSockets: ReadonlySet<string> | null,
+): Promise<WalkResult> {
   let names: string[];
   try {
     names = await limited(() => fs.readdir(dir));
@@ -189,7 +239,12 @@ async function walk(dir: string, rootDev: number, budget: { left: number }): Pro
     } catch {
       return part; // vanished between readdir and lstat
     }
-    if (st.isSocket() || st.dev !== rootDev) {
+    // A socket file with no listener is just an inode a crashed process left
+    // behind, and removing it hurts nothing. One that is bound belongs to a
+    // live process, so the whole tree stays.
+    const staleSocket =
+      st.isSocket() && liveSockets !== null && !liveSockets.has(path.join(dir, name));
+    if ((st.isSocket() && !staleSocket) || st.dev !== rootDev) {
       // This entry is not removable at all, so the rest of its walk is wasted:
       // exhausting the budget makes every sibling still in flight bail out.
       budget.left = -1;
@@ -198,7 +253,7 @@ async function walk(dir: string, rootDev: number, budget: { left: number }): Pro
     part.bytes = diskBytes(st);
     part.newestMtimeMs = st.mtimeMs;
     if (st.isDirectory()) {
-      const child = await walk(path.join(dir, name), rootDev, budget);
+      const child = await walk(path.join(dir, name), rootDev, budget, liveSockets);
       part.bytes += child.bytes;
       part.newestMtimeMs = Math.max(part.newestMtimeMs, child.newestMtimeMs);
       part.unsafe = child.unsafe;
@@ -220,6 +275,7 @@ async function evaluateEntry(
   rootDev: number,
   uid: number,
   name: string,
+  liveSockets: ReadonlySet<string> | null,
 ): Promise<Candidate | null> {
   if (DENYLIST.some((re) => re.test(name))) return null;
   const fullPath = path.join(root, name);
@@ -233,7 +289,7 @@ async function evaluateEntry(
   let bytes = diskBytes(st);
   let newest = st.mtimeMs;
   if (st.isDirectory()) {
-    const tree = await walk(fullPath, rootDev, { left: WALK_ENTRY_CAP });
+    const tree = await walk(fullPath, rootDev, { left: WALK_ENTRY_CAP }, liveSockets);
     if (tree.unsafe) return null;
     bytes += tree.bytes;
     newest = Math.max(newest, tree.newestMtimeMs);
@@ -244,11 +300,12 @@ async function evaluateEntry(
 async function listCandidates(
   root: string,
   uid: number,
+  liveSockets: ReadonlySet<string> | null,
 ): Promise<{ entries: Candidate[]; names: string[]; rootDev: number }> {
   const rootDev = (await limited(() => fs.stat(root))).dev;
   const names = await limited(() => fs.readdir(root));
   const evaluated = await mapLimit(names, TOP_LEVEL_CONCURRENCY, (name) =>
-    evaluateEntry(root, rootDev, uid, name),
+    evaluateEntry(root, rootDev, uid, name, liveSockets),
   );
   const entries = evaluated.filter((entry): entry is Candidate => entry !== null);
   return { entries, names, rootDev };
@@ -287,7 +344,10 @@ async function gatherTargets(
   uid: number,
   options: TempStorageOptions,
 ): Promise<{ targets: Target[]; rootDev: number; claudeScratch: ClaudeScratchStatus }> {
-  const { entries, names, rootDev } = await listCandidates(root, uid);
+  // Read once per scan, before any walk, so every tree is judged against the
+  // same snapshot of who is listening.
+  const liveSockets = await resolveLiveSockets(options);
+  const { entries, names, rootDev } = await listCandidates(root, uid, liveSockets);
   const targets: Target[] = entries.map((entry) => ({
     entry,
     kind: "temp",
@@ -305,6 +365,7 @@ async function gatherTargets(
       rootDev,
       uid,
       path.basename(fullPath),
+      liveSockets,
     );
     if (entry) targets.push({ ...spec, entry });
   };
@@ -475,6 +536,8 @@ export async function pruneTempStorage(
         rootDev,
         uid,
         path.basename(entry.fullPath),
+        // Re-read: a listener may have appeared since the listing.
+        await resolveLiveSockets(options),
       );
       if (!fresh || now - fresh.newestMtimeMs <= windowFor(target, mode)) continue;
       if (target.kind === "session" || target.kind === "bundled") {

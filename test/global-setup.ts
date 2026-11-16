@@ -8,7 +8,6 @@
 // and known limits:
 // test/helpers/checkout-config.ts.
 import path from "node:path";
-import fs from "node:fs";
 import {
   assertConfigUnchanged,
   assertIndexIntact,
@@ -17,7 +16,11 @@ import {
   snapshotIndex,
   type IndexSnapshot,
 } from "./helpers/checkout-config.js";
-import { createSuiteTmpDir } from "./helpers/suite-tmpdir.js";
+import {
+  createSuiteTmpDir,
+  removeSuiteTmpDir,
+  sweepStaleSuiteTmpDirs,
+} from "./helpers/suite-tmpdir.js";
 import {
   describeScopeLeaks,
   findLeakedDtachMasters,
@@ -55,6 +58,8 @@ export function setup(): void {
   // the entire run's temporary files are cleaned up in teardown().
   // Kept short (see helpers/suite-tmpdir.ts): a hosted session's long TMPDIR
   // would otherwise push every socket the suite binds past sun_path.
+  // Reclaim dirs from earlier runs that died before their teardown.
+  sweepStaleSuiteTmpDirs();
   suiteTmpDir = createSuiteTmpDir();
   process.env.TMPDIR = suiteTmpDir;
   process.env.TEMP = suiteTmpDir;
@@ -108,11 +113,7 @@ export function teardown(): void {
     else delete process.env.TMP;
 
     if (suiteTmpDir) {
-      try {
-        fs.rmSync(suiteTmpDir, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup
-      }
+      removeSuiteTmpDir(suiteTmpDir);
     }
   }
 }

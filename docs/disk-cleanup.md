@@ -78,11 +78,20 @@ what the prune frees, so the rows alone understate it.
 ## Temp files
 
 `services/temp-storage.ts`, over the top level of `os.tmpdir()`. It only
-considers entries owned by the server's user, skips sockets and anything on
-another filesystem, and has a denylist of live tool caches (`tmux-*`, `ssh-*`,
-`systemd-private-*`, `dbus-*`, `mullion-*`, ...). An entry is judged by the
-newest mtime anywhere in its tree: safe takes those untouched for 7 days,
-aggressive for 24 hours, and aggressive also runs `npm cache clean`.
+considers entries owned by the server's user, skips anything on another
+filesystem, and has a denylist of live tool caches (`tmux-*`, `ssh-*`,
+`systemd-private-*`, `dbus-*`, `mullion-*` except `mullion-test-suite-*`, ...).
+An entry is judged by the newest mtime anywhere in its tree: safe takes those
+untouched for 7 days, aggressive for 24 hours, and aggressive also runs
+`npm cache clean`.
+
+**Sockets.** A tree that contains a unix socket with a listener is skipped
+whole: a live process owns it. A socket nobody has bound (a crashed test run
+leaves these behind) no longer blocks its tree. Listeners come from
+`/proc/net/unix`, read once per scan and again right before each removal; where
+that can't be read (not Linux) every socket protects its tree, as before. Only
+the server's own network namespace is visible, so the age window is what
+protects a tree written to by a process in another one.
 
 ### Claude scratch under `claude-<uid>`
 
@@ -395,3 +404,14 @@ Mullion; one created before this existed is not tracked (they carry no
 whether some remote branch happens to contain its tip.
 
 During orphan removal a temporary `.mullion-orphan-*` directory can appear as untracked in the project. If restoration fails it remains there with the recovery files; check the recovery notice before moving them.
+
+## Per-session files under the sessions directory
+
+`<id>.tmp/`, `<id>.opencode-config/`, `<id>.hooks.json`, `<id>.mcp.json` and the
+token, state, agent-guide, workflow-conventions, briefing and opencode seed
+files are removed when a session terminates. Sessions that never got that far
+(a crashed server, a killed host) are caught by the orphan sweep, which runs at
+boot and on every reconcile tick: it treats every one of those artifacts as
+belonging to the session id in its name, waits until the _newest_ of them is a
+minute old, asks PtyManager whether the session is confirmed dead, and then
+removes them all. A session that is alive or of unknown state is left alone.
