@@ -566,18 +566,20 @@ export async function tasksRoute(app: FastifyInstance) {
   // #729 — a `failed` GitHub-linked task that was NEVER claimed is the
   // first exception: auto-failed by `syncUnlabeledIssueToLocal` (issue lost
   // the `mullion-task` label, or closed, while still backlog/ready), it has
-  // no `branchName`, so Retry can't recover it (`no-worktree`,
-  // task-claim.ts's retryTask) and it was otherwise permanently orphaned —
+  // no `branchName`, so there is nothing for Retry to resume (it only resets
+  // such a row to `ready`, where it would be claimed afresh against an issue
+  // that is no longer tracked) and it was otherwise permanently orphaned —
   // neither refusal above has an escape hatch for it. Gated on
   // `branchName === null`, not just `status === "failed"`: a task that WAS
   // claimed carries a real worktree/branch Retry CAN resume from, and its
   // issue can independently end up closed/unlabeled later (at promote time,
   // a maintainer tidying labels, ...) — deleting that row would silently
   // discard recoverable work with no cascade to clean up the worktree it
-  // points at. That branch check alone also closes off any race with a
-  // concurrent Retry: retryTask requires a non-null `branchName` too, so
-  // nothing can move a `branchName === null`, `failed` row forward while
-  // this handler's own GitHub round-trip is in flight.
+  // points at. The branch check does NOT close off a race with a concurrent
+  // Retry: Retry moves a branchless `failed` row to `ready` while this
+  // handler's own GitHub round-trip is in flight. What keeps that safe is the
+  // status compare-and-swap below (`deleteTaskWhenStatus`, and its 409), which
+  // is load-bearing — do not remove it.
   //
   // #746 — `done` is the second exception, for both local and GitHub-linked
   // tasks. Deliberately does NOT extend the `branchName === null` guard to
