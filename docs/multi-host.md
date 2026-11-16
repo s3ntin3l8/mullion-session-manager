@@ -2027,6 +2027,15 @@ you pass `MULLION_AGENT_ADVERTISE_URL` / `MULLION_AGENT_HOST` /
 `MULLION_AGENT_PORT`, which are still accepted exactly as before; a rerun never
 rewrites an existing `.env`.
 
+If an agent's configured `HOST` address is not on the machine at startup (a
+laptop away from its home network, a down interface), the listen fails with
+`EADDRNOTAVAIL`. Instead of exiting, and crash-looping under a supervisor, the
+agent logs a warning naming the host and listens on `127.0.0.1:<PORT>`; the
+outbound channel and local sessions keep working, only inbound LAN dialing is
+lost until a restart on a network that has the address. The fallback is
+loopback only, and a primary still exits. `HOST=127.0.0.1` remains the right
+setting for an outbound-only agent.
+
 Everything except the browser WebSocket (`/internal/ws/browser/:id`, which
 still dials the advertised URL) rides the channel, so a host with no URL can do
 terminal attach, live events, the control relay, ssh-agent fan-out, previews and
