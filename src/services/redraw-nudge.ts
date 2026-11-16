@@ -20,8 +20,10 @@
 // This module owns the generic dip/restore/grace-reset timing and
 // cancellation mechanics; it does NOT own pty process control (resizing
 // requires the dtach attach-client handle, which only Session has) or the
-// two onData consumers of `suppressingOutput` (scrollback capture and the
-// attention state machine — see pty-manager.ts's own onData comments for
+// two onData consumers (scrollback capture, via `shouldCapture`/
+// `capturePolicy` — #3154: only the dip's repaint is dropped and the restore's
+// repaint is deduped against the ring, so real output in the window is kept —
+// and the attention state machine, via `suppressingOutput` — see pty-manager.ts's own onData comments for
 // why a synthesized repaint must not be mistaken for real program output by
 // either). Session hands this class a pair of callbacks — `resize()` and
 // `getSize()` — rather than this class reaching into Session's ptyProcess/
@@ -42,6 +44,25 @@
 // re-render — not synchronously with the resize() call, so the window has to
 // extend past it rather than closing the instant the last resize() returns.
 export const NUDGE_REPAINT_GRACE_MS = 500;
+
+/**
+ * What Session's onData should do with a chunk of output, for scrollback
+ * capture only, while a nudge cycle is in flight (the attention consumer keeps
+ * using `suppressingOutput`, unchanged):
+ *
+ * - `store`: capture normally. No repaint can exist yet (trigger() -> dip is
+ *   the 300 ms before the first resize), or no suppressing cycle is running.
+ * - `drop`: the dip's own reduced-height repaint is in flight; never store it
+ *   (it would be replayed as a cut-off frame). Real output in this ~400 ms
+ *   span is still lost from the ring (live listeners still get it) — the
+ *   residual of this fix, since a half-height frame and real output cannot be
+ *   told apart by content.
+ * - `dedupe`: the restore's full-size repaint (plus the grace tail). Store the
+ *   chunk only if the ring does not already contain its exact bytes, so a
+ *   repaint identical to what is stored is not stored twice while novel
+ *   (real) output is kept.
+ */
+export type NudgeCapturePolicy = "store" | "drop" | "dedupe";
 
 /**
  * Callbacks Session provides so this class can drive a repaint without
@@ -76,6 +97,9 @@ export class RedrawNudge {
   // onData comments for why both consumers need it and why they must stay
   // in sync with each other.
   private suppressed = false;
+  // Which part of a suppressing cycle we are in — see `capturePolicy`. Only
+  // ever non-"store" while `suppressed` is true.
+  private policy: NudgeCapturePolicy = "store";
   // Handle for whichever stage (dip / restore / grace-reset) of the current
   // cycle is still pending — see cancel()'s doc comment for why this must be
   // tracked at all. A single nullable handle rather than a list: the three
@@ -90,6 +114,28 @@ export class RedrawNudge {
    * need to check this from two different, independent places. */
   get suppressingOutput(): boolean {
     return this.suppressed;
+  }
+
+  /**
+   * How scrollback capture should treat a chunk arriving right now (see
+   * NudgeCapturePolicy). Replaces the old all-or-nothing use of
+   * `suppressingOutput` for capture: that dropped everything for the whole
+   * ~1.2 s window, including real program output (#3154). Attention-clearing
+   * still keys off `suppressingOutput`, which is unchanged.
+   */
+  get capturePolicy(): NudgeCapturePolicy {
+    return this.suppressed ? this.policy : "store";
+  }
+
+  /**
+   * Whether Session's onData should store `chunk` in scrollback right now,
+   * per `capturePolicy` (never an empty chunk). `ring` is the stored scrollback, consulted only to
+   * recognise a repaint identical to what it already holds.
+   */
+  shouldCapture(chunk: Buffer, ring: { contains(chunk: Buffer): boolean }): boolean {
+    if (chunk.length === 0) return false;
+    const policy = this.capturePolicy;
+    return policy === "store" || (policy === "dedupe" && !ring.contains(chunk));
   }
 
   /**
@@ -117,7 +163,10 @@ export class RedrawNudge {
     // dip-then-restore cycle plus a grace period past the final resize — see
     // `suppressingOutput`'s docstring for why the window has to extend past
     // resize() returning.
-    if (suppressCapture) this.suppressed = true;
+    if (suppressCapture) {
+      this.suppressed = true;
+      this.policy = "store";
+    }
     const { rows } = this.host.getSize();
     const dipRows = Math.max(4, Math.floor(rows / 2));
     this.timer = setTimeout(() => this.dip(dipRows, suppressCapture), 300);
@@ -134,6 +183,7 @@ export class RedrawNudge {
   private dip(dipRows: number, suppressCapture: boolean): void {
     const { cols } = this.host.getSize();
     this.host.resize(cols, dipRows);
+    if (suppressCapture) this.policy = "drop";
     this.timer = setTimeout(() => this.restore(suppressCapture), 400);
   }
 
@@ -141,6 +191,7 @@ export class RedrawNudge {
     const { cols, rows } = this.host.getSize();
     this.host.resize(cols, rows);
     if (suppressCapture) {
+      this.policy = "dedupe";
       this.timer = setTimeout(() => this.graceReset(), NUDGE_REPAINT_GRACE_MS);
     } else {
       this.timer = null;
@@ -149,6 +200,7 @@ export class RedrawNudge {
 
   private graceReset(): void {
     this.suppressed = false;
+    this.policy = "store";
     this.timer = null;
   }
 
@@ -175,5 +227,6 @@ export class RedrawNudge {
       this.timer = null;
     }
     if (this.suppressed) this.suppressed = false;
+    this.policy = "store";
   }
 }

@@ -1267,21 +1267,15 @@ describe("PtyManager", () => {
       await vi.advanceTimersByTimeAsync(700 + 500);
       const before = session.getScrollback().toString();
 
-      const received: Buffer[] = [];
-      session.onData((chunk) => received.push(chunk));
-
       session.requestRedraw();
-      // Repaint output arriving mid-nudge (asynchronously, as the real
-      // program would emit it after SIGWINCH) should still reach live
-      // subscribers...
+      await vi.advanceTimersByTimeAsync(300); // the dip's repaint arrives (live fan-out: see pty-manager-redraw-capture.test.ts)
       pty.emitData("repaint frame");
-      expect(received.map((c) => c.toString())).toEqual(["repaint frame"]);
-      // ...but not land in the buffer replayed to the next attaching client.
+      // It must not land in the buffer replayed to the next attaching client.
       expect(session.getScrollback().toString()).toBe(before);
 
-      // Once the suppression window (dip 300ms + restore 400ms + grace
-      // 500ms) has fully elapsed, capture resumes as normal.
-      await vi.advanceTimersByTimeAsync(300 + 400 + 500);
+      // Once the suppression window (restore 400ms + grace 500ms) has fully
+      // elapsed, capture resumes as normal.
+      await vi.advanceTimersByTimeAsync(400 + 500);
       pty.emitData("post-nudge output");
       expect(session.getScrollback().toString()).toBe(`${before}post-nudge output`);
     } finally {
@@ -3746,8 +3740,7 @@ describe("PtyManager", () => {
         // Starts a suppression window -- `suppressed` flips synchronously,
         // before the dip/restore timers even fire.
         session.requestRedraw();
-        // The exit sequence plus some synthesized "repaint" bytes arrive
-        // while suppressed -- neither should land in the ring.
+        await vi.advanceTimersByTimeAsync(300); // dip: repaint in flight; exit + repaint bytes must not land in the ring
         pty.emitData("\x1b[?1049lstale");
         session.write("y"); // clears the altScreenExit confirmation
         expect(session.toInfo().attention).toBe(false);
@@ -3757,7 +3750,7 @@ describe("PtyManager", () => {
         // timers advances the mocked clock by the same amount, so the real
         // post-nudge chunk below lands at start + 1_200 + 1_200, not
         // start + 1_200 -- the final tick() target accounts for that.
-        await vi.advanceTimersByTimeAsync(300 + 400 + 500);
+        await vi.advanceTimersByTimeAsync(400 + 500);
 
         pty.emitData("build succeeded\r\n"); // genuine post-nudge output
 

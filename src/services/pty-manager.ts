@@ -1723,11 +1723,10 @@ export class Session {
         data = rest;
       }
       const chunk = Buffer.from(data, "utf8");
-      // Skipped during a redraw-nudge repaint window — see
-      // redrawNudge's docstring above. Listeners below still get it live. A
-      // chunk that was nothing but answered startup queries is still output
-      // (activity, attention) but has nothing left to store or fan out.
-      const pushedToScrollback = data !== "" && !this.redrawNudge.suppressingOutput;
+      // Capture follows RedrawNudge.shouldCapture (#3154): real output in a nudge
+      // window is kept, the dip/repeat repaint is not. Listeners still get it live.
+      // A chunk of only answered startup queries has nothing left to store/fan out.
+      const pushedToScrollback = this.redrawNudge.shouldCapture(chunk, this.scrollbackBuffer);
       if (pushedToScrollback) this.scrollbackBuffer.push(chunk);
 
       // Prepend any carry from the previous chunk so a `?1049h`/mouse-mode
