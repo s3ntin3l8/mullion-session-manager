@@ -4,6 +4,7 @@ import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { getStoredSettings } from "./settings.js";
 import { hermesTaskReviewerUsable } from "./hermes-integration.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { stripFencedCode } from "./issue-body-directives.js";
 
 // Phase 6 Task Master (6.2/#215) — an issue body can override the worker
 // agent for its own task with an `Agent: <name>` line, mirroring the
@@ -19,7 +20,7 @@ const REVIEW_AGENT_LINE_RE = /^\s*ReviewAgent:\s*(\S+)\s*$/im;
 
 function parseDirectiveLine(body: string | null, re: RegExp): string | null {
   if (body === null) return null;
-  const match = re.exec(body);
+  const match = re.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 

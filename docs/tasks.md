@@ -974,9 +974,13 @@ Host: 3f2a9c1e-…
   `win32`; matched case-insensitively). `Host: <host id>` — exactly that host.
   Give both and both must hold ("this host, and it must be a Mac").
 - Matched like the other directives: key case-insensitive, alone on its line,
-  one-word value, first match wins (so a `Host: localhost` line in a pasted HTTP
-  example _is_ read as the directive; the refusal names the line it came from,
-  and a line behind a `- ` bullet or `> ` quote prefix is not matched). A value no host reports (`mac` instead of
+  one-word value, first match wins (so a `Host: localhost` line in plain prose
+  _is_ read as the directive; the refusal names the line it came from,
+  and a line behind a `- ` bullet or `> ` quote prefix is not matched). Lines
+  inside a fenced code block (``` or ~~~) are ignored by every directive
+  (`Host:`, `Platform:`, `Agent:`, `Model:`, `Manual:`, ...), so a quoted
+  snippet or HTTP example is safe; an unterminated fence ignores the rest of
+  the body. A value no host reports (`mac` instead of
   `darwin`) matches nothing and is refused naming it.
 - **It is a hard requirement.** Only an _eligible_ host qualifies — online, not
   parked, reporting its capacity, and with a path for this project (the

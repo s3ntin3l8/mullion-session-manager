@@ -26,6 +26,7 @@ import {
 } from "./task-state.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { isTrustedAuthor, resolveTrustedLogins } from "./task-trust.js";
+import { stripFencedCode } from "./issue-body-directives.js";
 import {
   dependencyGate,
   refreshTaskBlockers,
@@ -145,7 +146,7 @@ const MAX_PARENT_TITLE_ATTEMPT_ENTRIES = 500;
 const MANUAL_LINE_RE = /^\s*Manual:\s*true\s*$/im;
 
 export function isManualOnly(body: string | null): boolean {
-  return body !== null && MANUAL_LINE_RE.test(body);
+  return body !== null && MANUAL_LINE_RE.test(stripFencedCode(body));
 }
 
 // #1016 — an issue with GitHub sub-issues that still has OPEN children is a
