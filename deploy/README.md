@@ -756,6 +756,62 @@ the keys above, that the installer refuses cleanly without `launchctl`, and —
 the load-bearing one — that a `dtach` master really does survive its launchd
 job being stopped.
 
+### Preparing a Mac to build mobile tasks
+
+The launchd agent only makes the Mac a **host**. A Task Master task placed on it
+with `Platform: darwin` can build iOS or Android only if the Mac's toolchain is
+also finished — nothing Mullion does checks this for you (the `xcode`
+capability proves at most that full Xcode is selected, not that it is usable;
+see [multi-host](../docs/multi-host.md#host-capabilities)). An incomplete setup
+does not fail fast: a build can hang or loop until the task's time budget runs
+out. Work through this list once per Mac, in this order, as the user the agent
+runs as.
+
+1. **Xcode selected.** Full Xcode, not just the Command Line Tools.
+   `xcode-select -p` should print a path inside `/Applications/Xcode.app`
+   (fix: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`).
+2. **Licence accepted.** `sudo xcodebuild -license accept`.
+3. **First-launch components installed.** `xcodebuild -runFirstLaunch`; verify
+   with `xcodebuild -checkFirstLaunchStatus` — exit status 0 means done.
+   Do this **before** anything that touches the simulator: on an incomplete
+   install, `xcrun simctl list` starts the first-launch installer itself, which
+   can sit for a long time inside a task's session.
+4. **At least one simulator runtime.** `xcodebuild -downloadPlatform iOS`;
+   verify with `xcrun simctl list runtimes` (at least one `iOS` line that is
+   not `unavailable`).
+5. **Homebrew tools on the session PATH.** The launchd agent has a minimal
+   `PATH` (see "The PATH" above), and sessions get theirs by running
+   `$SHELL -lc` and merging in the `PATH` resolved from your interactive shell
+   (`~/.zprofile` / `~/.zshrc`; see
+   [Where a session's `PATH` comes from](../docs/configuration.md#where-a-sessions-path-comes-from)).
+   `/opt/homebrew/bin` (Apple Silicon; `/usr/local/bin` on Intel) must come out
+   of that, or `brew`-installed tools — swiftlint, xcbeautify, fastlane,
+   CocoaPods — are "command not found" in a session even though they work in
+   your own terminal. The usual fix is `eval "$(/opt/homebrew/bin/brew shellenv)"`
+   in `~/.zprofile`.
+6. **Android (only if tasks build Android).** Install the SDK and NDK, then:
+   - `ANDROID_HOME` (the SDK root) and `ANDROID_NDK_HOME` must be set **in the
+     session's environment**. Only `PATH` is recovered from your interactive
+     shell — a variable exported only in `~/.zshrc` is **not** seen by
+     sessions. Put the `export` lines in `~/.zprofile`.
+   - `emulator` (`$ANDROID_HOME/emulator`) and `adb`
+     (`$ANDROID_HOME/platform-tools`) on `PATH`; verify with `which emulator adb`.
+   - For the `android-emulator` capability, set `DEVICE_EMULATOR_PATH` in the
+     install's `.env` to the absolute path of the `emulator` binary (see
+     [`docs/device-panel.md`](../docs/device-panel.md)).
+
+**Self-check.** Open a Mullion session on the Mac (so it sees the environment a
+task would) and run:
+
+```sh
+xcode-select -p; xcodebuild -checkFirstLaunchStatus; echo $?; which -a xcodebuild swift brew; echo $PATH
+```
+
+You want a `/Applications/Xcode.app/...` path, exit status `0`, one
+`xcodebuild`/`swift` under `/usr/bin` (the shims) and `brew` under
+`/opt/homebrew/bin`, and a `PATH` that contains `/opt/homebrew/bin`. For
+Android also check `echo $ANDROID_HOME $ANDROID_NDK_HOME`.
+
 ## Windows: the scheduled-task deployment (issue #2160 / #1728)
 
 A Windows machine can be a Mullion **agent host** (a primary still runs on

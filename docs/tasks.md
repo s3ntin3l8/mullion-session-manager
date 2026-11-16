@@ -1008,6 +1008,9 @@ Host: 3f2a9c1e-…
   a past placement can be explained.
 - The target host needs an agent build new enough to serve the task routes
   (see [Known limitations](#known-limitations)).
+- `Platform: darwin` only guarantees a darwin host, not a working iOS or
+  Android toolchain on it; see
+  [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 
 ## Configuring Task Master
 
