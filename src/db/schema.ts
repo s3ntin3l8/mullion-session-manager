@@ -2072,6 +2072,44 @@ export const workspaces = sqliteTable("workspaces", {
     .$defaultFn(() => new Date()),
 });
 
+// #3033 — a session opened in a workspace on the fold (800-1099px) or the
+// phone, waiting for a desktop client to add its pane. The fold and the phone
+// never write `workspaces.layout` (a device-local view, see the frontend's
+// useWorkspacePersistence), so the open is recorded here and the desktop
+// client, which does save the layout, adds the pane with its own dockview API
+// and acknowledges it (deletes the row). The backend never reads the layout
+// for this: it only stores which session, in which workspace, beside which
+// reference session. One row per (workspace, session): opening it again on
+// the fold before the desk applied it just updates the reference.
+export const workspacePendingOpens = sqliteTable(
+  "workspace_pending_opens",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    sessionId: integer("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    // The session the new one replaced in its half on the fold (or on the
+    // phone's single pane); the desktop places the new pane beside it.
+    referenceSessionId: integer("reference_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("workspace_pending_opens_workspace_session_unique").on(
+      table.workspaceId,
+      table.sessionId,
+    ),
+    // killSession drops a session's opens by session alone.
+    index("workspace_pending_opens_session_idx").on(table.sessionId),
+  ],
+);
+
 // #95 prerequisite — a single, auto-generated VAPID keypair for Web Push,
 // not an env var: src/plugins/env.ts's @fastify/env schema has `required: []`
 // (every var optional-with-default), so an env-var-only VAPID design would be

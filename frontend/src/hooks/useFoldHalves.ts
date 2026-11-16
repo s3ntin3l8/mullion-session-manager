@@ -6,6 +6,7 @@ import type { FoldHalvesState } from "../lib/foldHalves.js";
 import type { LayoutPresentation } from "../lib/layoutTier.js";
 import { isTiledPanel, sessionIdFromPanelId, setHalvesRouter } from "../panelUtils.js";
 import { useDashboardStore } from "../store/index.js";
+import { api as http } from "../api/index.js";
 
 function currentHalves(): FoldHalvesState {
   const { foldHalves, activeWorkspaceId } = useDashboardStore.getState();
@@ -49,6 +50,67 @@ export function preferredPaneFor(presentation: LayoutPresentation): string | nul
   return null;
 }
 
+interface ShownPanes {
+  left: string | null;
+  right: string | null;
+  active: string | null;
+}
+
+const NO_SHOWN_PANES: ShownPanes = { left: null, right: null, active: null };
+
+function shownPanes(api: DockviewApi): ShownPanes {
+  const halves = currentHalves();
+  return { left: halves.shownLeft, right: halves.shownRight, active: api.activePanel?.id ?? null };
+}
+
+/**
+ * #3033 — records on the server the sessions opened in this workspace on the
+ * fold or the phone, for a desktop client to add, and withdraws the ones
+ * closed here before it did. Closing stays local otherwise: the desk's pane
+ * is not touched. Each open names the session it replaced on its half (the
+ * phone: the pane on show before it), which the desk places it beside.
+ * Fire and forget: a failed record leaves the session opened here only.
+ */
+/** The session of a terminal pane (`session-<id>`); null for any other pane,
+ * including a session's timeline or browser pane. */
+function terminalSessionId(panelId: string | null): number | null {
+  const match = panelId?.match(/^session-(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function syncPendingOpens(
+  workspaceId: number,
+  presentation: LayoutPresentation,
+  opened: readonly string[],
+  closed: readonly string[],
+  before: ShownPanes,
+): void {
+  const halves = currentHalves();
+  for (const panelId of opened) {
+    const sessionId = terminalSessionId(panelId);
+    if (sessionId === null) continue;
+    // The halves' assignment is not kept up on the phone (no router runs
+    // there), so the phone takes the pane that was on show: the active one.
+    const replaced =
+      presentation === "halves"
+        ? ((halfOf(halves, panelId) === "right" ? before.right : before.left) ?? before.active)
+        : before.active;
+    const referenceSessionId = terminalSessionId(replaced);
+    void http
+      .recordPendingOpen(
+        workspaceId,
+        sessionId,
+        referenceSessionId === sessionId ? null : referenceSessionId,
+      )
+      .catch(() => {});
+  }
+  for (const panelId of closed) {
+    const sessionId = terminalSessionId(panelId);
+    if (sessionId === null) continue;
+    void http.withdrawPendingOpen(workspaceId, sessionId).catch(() => {});
+  }
+}
+
 // Set by RightSidebar just before it reopens, on unfolding, the view it
 // closed for the phone (design 9.2); consumed by the next view-open below.
 let viewRestored = false;
@@ -90,9 +152,16 @@ export function useFoldHalves({
   // The panes seen open last time, per workspace: a pane gone since then was
   // closed and is forgotten. The first look after a workspace (re)loads only
   // records, since a restored layout lacks what the halves opened.
-  const lastSeen = useRef<{ workspaceId: number | null; ids: string[] | null }>({
+  const lastSeen = useRef<{
+    workspaceId: number | null;
+    ids: string[] | null;
+    // The panes on show at that look: a session opened since replaced one
+    // of them (#3033's reference session).
+    shown: ShownPanes;
+  }>({
     workspaceId: null,
     ids: null,
+    shown: NO_SHOWN_PANES,
   });
   // The restore marks itself done a tick after it bumps panelsVersion, so the
   // effect below can run while it still reads "restoring": it checks again
@@ -160,18 +229,36 @@ export function useFoldHalves({
         useDashboardStore.getState().forgetFoldPanes(gone);
       }
       // The panes as reopened are the baseline for spotting closes.
-      lastSeen.current = { workspaceId: null, ids: null };
+      lastSeen.current = { workspaceId: null, ids: null, shown: NO_SHOWN_PANES };
     }
     const store = useDashboardStore.getState();
     const ids = dockviewApi.panels.map((p) => p.id);
     const seen = lastSeen.current;
     if (seen.workspaceId === activeWorkspaceId && seen.ids !== null) {
-      store.forgetFoldPanes(seen.ids.filter((id) => !ids.includes(id)));
+      const closed = seen.ids.filter((id) => !ids.includes(id));
+      store.forgetFoldPanes(closed);
+      // #3033 — a session opened here reaches the shared workspace: the
+      // desk adds its pane (useApplyPendingOpens). Only a pane seen opening
+      // counts, not one reopened from this device's memory after a restore
+      // (the baseline above already holds those), and only off the desk:
+      // a grid client saves its own layout.
+      if (presentation !== "grid") {
+        const opened = ids.filter((id) => !seen.ids!.includes(id));
+        syncPendingOpens(activeWorkspaceId, presentation, opened, closed, seen.shown);
+      }
     }
-    lastSeen.current = { workspaceId: activeWorkspaceId, ids };
+    lastSeen.current = { workspaceId: activeWorkspaceId, ids, shown: shownPanes(dockviewApi) };
     if (active) store.noteFoldOpen(ids);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- panelsVersion is the layout-change signal
-  }, [dockviewApi, panelsVersion, activeWorkspaceId, active, sessionsLoaded, retryTick]);
+  }, [
+    dockviewApi,
+    panelsVersion,
+    activeWorkspaceId,
+    active,
+    sessionsLoaded,
+    retryTick,
+    presentation,
+  ]);
 
   // The left half always shows a left-half pane: after a restore, a move to
   // the right, or the shown pane closing.

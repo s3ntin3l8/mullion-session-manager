@@ -862,6 +862,13 @@
       "when": 1794687027709,
       "tag": "0122_spooky_cable",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "6",
+      "when": 1794838927057,
+      "tag": "0123_redundant_blizzard",
+      "breakpoints": true
     }
   ]
 }

@@ -668,6 +668,60 @@ right-sidebar view, so at most two sessions are on screen. Which pane shows on
 which half is device-local (`crs.foldHalves`) and never written into the saved
 workspace layout.
 
+**A session opened on the fold or the phone joins the shared workspace**
+(#3033). Both are device-local views and never save `workspaces.layout`
+(`useWorkspacePersistence` suspends saves there). Instead,
+`useFoldHalves` diffs the panes it sees and records each session opened
+there on the server (`POST /api/workspaces/:id/pending-opens`, the
+`workspace_pending_opens` table, with the session it replaced on its half as
+the reference). A client that saves the layout (the grid presentation)
+polls `GET …/pending-opens` (`useApplyPendingOpens`, every 5s while the
+tab is visible), adds each pane with its own dockview API, not activated, and
+acknowledges it (`POST …/pending-opens/:sessionId/ack`, one atomic
+delete). The usual autosave then persists the pane. The hook uses the same
+gates as `useAutoOpenChildPanels`: the restore has finished, `restoringRef` is
+down, and saves are not suspended. A session already open, or one that has
+ended, is acknowledged without adding anything. A session the client has not
+listed yet is left for a later poll. An open older than a day is left out of
+the list and deleted on the next record or acknowledge (the polled GET stays a
+plain read), so a long stretch on the phone does not land at the desk as a
+burst of panes. The backend never reads the layout for any of this.
+
+Closing a pane on the fold or the phone stays local: the desk's pane stays,
+and a pending open not yet applied is withdrawn (`DELETE
+…/pending-opens/:sessionId`). Killing a session there removes its pane at the
+desk as well. `killSession` drops its pending opens, a killed session cannot
+be recorded, and `useCloseKilledSessionPanels` closes the desk's pane.
+
+The placement rule is `placePendingOpen` in `panelUtils.ts`, a pure function
+over the tiled groups' rects. The user's own column count limits the width,
+each column may be split once into two rows, and after that new sessions
+become tabs:
+
+1. One pane: the new session opens to its right, 50/50.
+2. Two or more columns: no column is added. A column with a single row is
+   split `below`, so two columns fill to 2x2 and three to 3x2.
+3. When every column has two rows, or a split would break the size floor, the
+   new session becomes a tab.
+4. The pane split is the reference session's, if rule 2 allows it. Otherwise
+   it is the largest pane rule 2 allows. A tab goes to the reference
+   session's pane, otherwise to the pane last active.
+5. A split only happens when the axis it halves keeps at least 40 columns (a
+   split to the right) or 10 rows (a split below) of the desktop's terminal
+   font (`terminalCellPx`) in both resulting panes. The other axis does not
+   change and is not checked. The floor only stops slivers in a small window:
+   2x2 fills on a 1440px laptop even with both sidebars open (a grid of about
+   900 x 700px).
+6. The added pane is not activated, so the desk keeps showing what it showed.
+   The issue's attention marker until first activation is not implemented: no
+   such marker exists yet, and the pane shows only the session's own status
+   badge.
+
+An empty workspace gets the session as its single pane. A layout whose
+columns are not plain stacks of rows counts its leaf panes: with fewer than
+2 x columns, and room above the floor, the largest pane is split `below`;
+otherwise the new session is a tab.
+
 **Phone** (under 700px): the top bar (`Toolbar.tsx`: the session switcher, the
 palette, the bell), the mode bar (`PhoneModeBar.tsx`) and its "⋯" sheet, which
 lists exactly the right rail's views (each opening full screen) and Settings.

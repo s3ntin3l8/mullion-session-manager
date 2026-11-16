@@ -699,6 +699,151 @@ export function shouldAutoOpenChildPanels(input: {
   );
 }
 
+// #3033 — where a desktop client adds a session opened on the fold or the
+// phone (the owner's placement rule, issue #3033). The user's own column
+// count is the limit for width; each column may be split once into two rows;
+// after that, tabs:
+//   1. one pane in the workspace: the new one opens to its right, 50/50;
+//   2. two or more columns: no column is added; a column with a single row is
+//      split `below` (so two columns fill to 2x2, three to 3x2);
+//   3. every column has two rows, or a split would break the size floor: tab;
+//   4. the pane split, or tabbed into, is the reference session's when rule 2
+//      allows it, else the largest one rule 2 allows; a tab goes to the
+//      reference session's pane, else the pane last active;
+//   5. size floor: a split only happens when the axis it halves keeps at
+//      least PENDING_OPEN_MIN_COLS (a `right` split) or PENDING_OPEN_MIN_ROWS
+//      (a `below` split) terminal cells in both resulting panes. Only the
+//      halved axis is checked; the other one does not change. The floor
+//      (40 x 10) only stops slivers in a small window: 2x2 must fill on a
+//      1440px laptop with both sidebars open (a grid about 900 x 700px), so
+//      it never shapes a normal layout (#3033 review);
+//   6. focus: not decided here. The caller adds the pane inactive; the
+//      issue's "attention marker until first activated" is not implemented,
+//      because no such marker exists yet (the pane shows the session's own
+//      status badge only);
+//   7. an empty workspace: the caller adds the session as its only pane
+//      (null here).
+// A "column" is a top-level horizontal division of the grid, found from the
+// groups' rects: a vertical line no group straddles. A layout whose columns
+// are not each a plain stack of rows (nested the other way) counts its leaf
+// panes instead: fewer than 2 x columns and room above the floor splits the
+// largest pane `below`, anything else is a tab. Pure: the hook
+// (useApplyPendingOpens) measures the rects and adds the panel.
+
+export const PENDING_OPEN_MIN_COLS = 40;
+export const PENDING_OPEN_MIN_ROWS = 10;
+// Sub-pixel slack when comparing edges of rects dockview laid out.
+const RECT_EPSILON_PX = 1;
+
+export interface GroupRect {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One terminal cell, in px, at the desktop's terminal font. */
+export interface CellMetrics {
+  cellWidth: number;
+  cellHeight: number;
+}
+
+export type PendingOpenPlacement =
+  { referenceGroup: string; direction: "right" | "below" } | { referenceGroup: string; tab: true };
+
+/** Whether halving `rect` along `direction` keeps the floor on that axis. */
+function canSplit(rect: GroupRect, direction: "right" | "below", metrics: CellMetrics): boolean {
+  return direction === "right"
+    ? rect.width / 2 + RECT_EPSILON_PX >= PENDING_OPEN_MIN_COLS * metrics.cellWidth
+    : rect.height / 2 + RECT_EPSILON_PX >= PENDING_OPEN_MIN_ROWS * metrics.cellHeight;
+}
+
+function area(rect: GroupRect): number {
+  return rect.width * rect.height;
+}
+
+function largest(rects: readonly GroupRect[]): GroupRect | undefined {
+  let best: GroupRect | undefined;
+  for (const rect of rects) if (!best || area(rect) > area(best)) best = rect;
+  return best;
+}
+
+/** The grid's top-level columns: groups between vertical lines no group
+ * straddles, left to right. */
+export function columnsOfGroups(groups: readonly GroupRect[]): GroupRect[][] {
+  const cuts = [...new Set(groups.map((g) => g.x + g.width))]
+    .sort((a, b) => a - b)
+    .filter((cut) =>
+      groups.every((g) => g.x + g.width <= cut + RECT_EPSILON_PX || g.x >= cut - RECT_EPSILON_PX),
+    );
+  const columns: GroupRect[][] = [];
+  let left = -Infinity;
+  for (const cut of cuts) {
+    const members = groups.filter(
+      (g) => g.x >= left - RECT_EPSILON_PX && g.x + g.width <= cut + RECT_EPSILON_PX,
+    );
+    if (members.length > 0) columns.push(members);
+    left = cut;
+  }
+  return columns;
+}
+
+/** A column that is a plain vertical stack: every member spans its width. */
+function isStackOfRows(column: readonly GroupRect[]): boolean {
+  const x = Math.min(...column.map((g) => g.x));
+  const right = Math.max(...column.map((g) => g.x + g.width));
+  return column.every(
+    (g) =>
+      Math.abs(g.x - x) <= RECT_EPSILON_PX && Math.abs(g.x + g.width - right) <= RECT_EPSILON_PX,
+  );
+}
+
+export function placePendingOpen(input: {
+  /** The workspace's tiled groups (floating ones left out). */
+  groups: readonly GroupRect[];
+  /** The group holding the reference session's pane, if it is open. */
+  referenceGroupId: string | null;
+  /** The group last active on this desktop, for a tab without a reference. */
+  activeGroupId: string | null;
+  metrics: CellMetrics;
+}): PendingOpenPlacement | null {
+  const { groups, metrics } = input;
+  if (groups.length === 0) return null;
+  const byId = (id: string | null) => (id === null ? undefined : groups.find((g) => g.id === id));
+  const reference = byId(input.referenceGroupId);
+  const tab = (): PendingOpenPlacement => ({
+    referenceGroup: (reference ?? byId(input.activeGroupId) ?? largest(groups)!).id,
+    tab: true,
+  });
+
+  if (groups.length === 1) {
+    const only = groups[0]!;
+    return canSplit(only, "right", metrics)
+      ? { referenceGroup: only.id, direction: "right" }
+      : tab();
+  }
+
+  const columns = columnsOfGroups(groups);
+  if (columns.every(isStackOfRows)) {
+    // Rule 2: only a column still holding a single row may be split.
+    const splittable = columns
+      .filter((column) => column.length === 1)
+      .map((column) => column[0]!)
+      .filter((rect) => canSplit(rect, "below", metrics));
+    const target =
+      (reference && splittable.find((r) => r.id === reference.id)) ?? largest(splittable);
+    return target ? { referenceGroup: target.id, direction: "below" } : tab();
+  }
+
+  // Nested the other way: count leaf panes.
+  const big = largest(groups)!;
+  if (groups.length < 2 * columns.length && canSplit(big, "below", metrics)) {
+    return { referenceGroup: big.id, direction: "below" };
+  }
+  return tab();
+}
+
 // Where a NEW panel lands: dockview's own placement options. A panel either
 // floats (with an explicit size, so it is big enough to use) or is positioned
 // relative to another panel/group — never both, and neither at all means "a

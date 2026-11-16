@@ -92,3 +92,17 @@ on-screen keyboard). It has a second tab, **Open existing**: the sessions by
 project, the project named under each title — the project groups of the
 phone's session switcher (without its "Needs you" and "Open panes" groups),
 because a touch layout has no sidebar to pick a session from. The desktop dialog has no such tab: there the sidebar lists sessions.
+
+## A session opened on the fold or the phone
+
+Between 800 and 1099px (the two halves) and on the phone, the workspace you
+see is a view of this device only, and its layout is never saved there. A
+session you open there still reaches the shared workspace. The open is
+recorded on the server, and the next time a desktop (or any client that saves
+the layout) shows that workspace, it adds the session's pane without switching
+to it. The pane goes beside the session it replaced on the fold. A pane that
+is already there is split into two rows; once every column has two rows, the
+session becomes a tab. Closing a pane on the fold or the phone only closes it
+there. If the desk has not added it yet, the open is withdrawn. Killing a
+session there closes its pane at the desk too. See
+[`architecture.md`](architecture.md), "Two halves", for the placement rule.

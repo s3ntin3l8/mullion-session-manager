@@ -90,6 +90,14 @@ export interface UseWorkspacePersistenceResult {
   // effect, so nothing else would clear the mark and every pane change made
   // after unfolding would be dropped until a reload or workspace switch.
   liftPhoneTaint: () => void;
+  // #3033 — true while a layout change made now would not be saved for the
+  // active workspace: the live presentation is not the grid (the phone, or
+  // the halves, by isPhoneTierNow's live matchMedia read; the `layoutTier`
+  // prop is not consulted), or the phone taint that outlives unfolding until
+  // liftPhoneTaint. A pane added for a pending
+  // open in that window would never reach the saved layout, so
+  // useApplyPendingOpens waits for this to read false.
+  isSaveSuspended: () => boolean;
 }
 
 // Extracted from App.tsx (PR 34a of the hook-extraction series) — restores
@@ -455,5 +463,12 @@ export function useWorkspacePersistence({
     if (activeWorkspaceId !== null) phoneTouchedRef.current.delete(activeWorkspaceId);
   }, [activeWorkspaceId]);
 
-  return { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint };
+  const isSaveSuspended = useCallback(
+    () =>
+      isPhoneTierNow() ||
+      (activeWorkspaceId !== null && phoneTouchedRef.current.has(activeWorkspaceId)),
+    [activeWorkspaceId],
+  );
+
+  return { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint, isSaveSuspended };
 }

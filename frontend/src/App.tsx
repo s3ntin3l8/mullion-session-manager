@@ -92,6 +92,7 @@ import { useHydrateSettings } from "./hooks/useHydrateSettings.js";
 import { useThemeWatch } from "./hooks/useThemeWatch.js";
 import { useAutoFocusOnAttention } from "./hooks/useAutoFocusOnAttention.js";
 import { useAutoOpenChildPanels } from "./hooks/useAutoOpenChildPanels.js";
+import { useApplyPendingOpens } from "./hooks/useApplyPendingOpens.js";
 import { useCloseKilledSessionPanels } from "./hooks/useCloseKilledSessionPanels.js";
 import { useCloseMissingDevicePanels } from "./hooks/useCloseMissingDevicePanels.js";
 import { useCloseStaleProjectPanels } from "./hooks/useCloseStaleProjectPanels.js";
@@ -386,13 +387,14 @@ export function App() {
   // deep-link, and push-message effects further down, which read
   // restoringRef/restoredWorkspaceIdRef and depend on a restore having
   // already run) is unchanged — see that hook's own header comment.
-  const { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint } = useWorkspacePersistence({
-    dockviewApi,
-    activeWorkspaceId,
-    workspaces,
-    layoutTier,
-    setPanelsVersion,
-  });
+  const { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint, isSaveSuspended } =
+    useWorkspacePersistence({
+      dockviewApi,
+      activeWorkspaceId,
+      workspaces,
+      layoutTier,
+      setPanelsVersion,
+    });
 
   // Repaints every other terminal after a panel is added (issue #107).
   // Extracted to useTerminalRepaintOnPanelAdd; called here, where the effect was.
@@ -557,6 +559,21 @@ export function App() {
     restoredWorkspaceIdRef,
     seenChildSessionIdsRef,
     hasSeededChildSessionsRef,
+  });
+
+  // #3033 — adds the sessions opened in this workspace on the fold or the
+  // phone, on a client that saves the layout. Same gates as above.
+  useApplyPendingOpens({
+    dockviewApi,
+    activeWorkspaceId,
+    presentation: layoutPresentation,
+    sessions,
+    sessionsLoaded,
+    projects,
+    terminalFontSize: settings.terminal.fontSize,
+    restoringRef,
+    restoredWorkspaceIdRef,
+    isSaveSuspended,
   });
 
   // The backgrounded-tab document.title/favicon-badge effect used to be
