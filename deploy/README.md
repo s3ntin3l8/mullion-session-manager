@@ -729,6 +729,11 @@ gui/$UID <plist>` + `launchctl enable`. The job is booted out first (that is
   default PATH is only `/usr/bin:/bin:/usr/sbin:/sbin` — where a Homebrew
   dtach is not. The installer resolves `dtach`'s real directory and writes a
   PATH (dtach's, node's, and the system ones) into the job.
+  SDK variables exported only in `~/.zshrc` (`ANDROID_HOME`, `ANDROID_SDK_ROOT`,
+  `ANDROID_NDK_HOME`, `JAVA_HOME`) are recovered from the user's interactive
+  shell for sessions; the list is `SESSION_ENV_RECOVER_KEYS` (empty disables).
+  Any other variable must go in `~/.zprofile`/`~/.zshenv`
+  ([`docs/configuration.md`](../docs/configuration.md)).
 - **The `.env`.** launchd has no `EnvironmentFile`, so the plist runs
   `scripts/run-with-env.sh`, which PARSES the install's `.env` (parsing, not
   sourcing — `EnvironmentFile=` never executes the file) and `exec`s node.

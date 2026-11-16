@@ -914,6 +914,13 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Comma-separated variable NAMES recovered from the user's interactive
+    // shell (user-shell-env.ts) into every session's env, beyond PATH. Empty
+    // disables. See docs/configuration.md.
+    SESSION_ENV_RECOVER_KEYS: {
+      type: "string",
+      default: "ANDROID_HOME,ANDROID_SDK_ROOT,ANDROID_NDK_HOME,JAVA_HOME",
+    },
     // Issue #1133 — opt-out for scaffold-generate.ts's mandatory bwrap
     // sandboxing of a generation turn. Default ON: when a usable bwrap is
     // present, `defaultSpawnGenerationTurn` wraps the turn and does NOT
@@ -1216,6 +1223,7 @@ declare module "fastify" {
       DEVICE_DISCOVERY_ENABLED: boolean;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
+      SESSION_ENV_RECOVER_KEYS: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;
       MULLION_WEBHOOK_BASE_URL: string;
       MULLION_PUBLIC_URL: string;

@@ -27,7 +27,47 @@ const SENTINEL = "__MULLION_USER_ENV_8f3a1c__";
 // different startup model (config.fish, no .zshrc/.bashrc) — only shells known
 // to behave are resolved; anything else falls back to today's behaviour.
 const SUPPORTED_SHELLS = new Set(["bash", "zsh"]);
-const RESOLVE_SCRIPT = `printf '%s%s%s' '${SENTINEL}' "$PATH" '${SENTINEL}'`;
+// Recovered variables use their own open/close markers, one record per key:
+// OPEN NAME=value CLOSE. Never `export`/`env` output, which is ambiguous for
+// values containing newlines or `=`.
+const KEY_OPEN = "__MULLION_USER_KEY_8f3a1c__";
+const KEY_CLOSE = "__MULLION_USER_KEY_END_8f3a1c__";
+const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RECORD = new RegExp(`${KEY_OPEN}([A-Za-z_][A-Za-z0-9_]*)=([\\s\\S]*?)${KEY_CLOSE}`, "g");
+
+/** Pure: the key names of a comma-separated `SESSION_ENV_RECOVER_KEYS` value.
+ * Entries that are not plain identifiers are dropped (they are interpolated
+ * into the shell script, so nothing else may through). */
+export function parseRecoverKeys(raw: string | undefined): string[] {
+  const keys = (raw ?? "")
+    .split(",")
+    .map((k) => k.trim())
+    .filter((k) => KEY_NAME.test(k) && k !== "PATH");
+  return [...new Set(keys)];
+}
+
+function buildResolveScript(keys: readonly string[]): string {
+  // `printenv` reports only EXPORTED variables, and exists on macOS and Linux.
+  const records = keys
+    .map((k) => `printf '%s%s=%s%s' '${KEY_OPEN}' '${k}' "$(printenv ${k})" '${KEY_CLOSE}'`)
+    .join("; ");
+  const path = `printf '%s%s%s' '${SENTINEL}' "$PATH" '${SENTINEL}'`;
+  return records ? `${path}; ${records}` : path;
+}
+
+/** Pure: the `keys` the shell printed with a non-empty value. Names outside
+ * `keys` are ignored even if present in the output. */
+export function parseUserShellKeys(
+  stdout: string,
+  keys: readonly string[],
+): Record<string, string> {
+  const allowed = new Set(keys);
+  const out: Record<string, string> = {};
+  for (const m of stdout.matchAll(RECORD)) {
+    if (allowed.has(m[1]) && m[2]) out[m[1]] = m[2];
+  }
+  return out;
+}
 
 /** Why a host's sessions got only the service PATH (the session-env probe). */
 export type SessionEnvFallbackReason =
@@ -43,6 +83,7 @@ export interface UserShellEnvStatus {
 
 export interface UserShellEnvLogger {
   debug: (obj: object, msg: string) => void;
+  info?: (obj: object, msg: string) => void;
   warn: (obj: object, msg: string) => void;
 }
 let log: UserShellEnvLogger | undefined;
@@ -52,9 +93,21 @@ export function setUserShellEnvLogger(logger: UserShellEnvLogger | undefined): v
   log = logger;
 }
 
-let resolved: { path: string } | null = null;
+let recoverKeys: readonly string[] = [];
+/** Wired once at boot (server.ts) from `app.config.SESSION_ENV_RECOVER_KEYS`
+ * (via parseRecoverKeys). Empty disables recovery. */
+export function setUserShellRecoverKeys(keys: readonly string[]): void {
+  recoverKeys = [...keys];
+}
+/** The configured allowlist (what buildSessionEnv() asks for). */
+export function getUserShellRecoverKeys(): readonly string[] {
+  return recoverKeys;
+}
+
+let resolved: { path: string; env: Record<string, string> } | null = null;
 // Why the last resolve fell back, for the session-env probe (null: it did not).
 let lastFailure: SessionEnvFallbackReason | null = null;
+let announced = false;
 let settled = false;
 let inflight: Promise<void> | null = null;
 
@@ -93,12 +146,12 @@ function fallbackNote(): string {
   return resolved ? "keeping the previous PATH" : "using the service environment's PATH";
 }
 
-function runInteractiveShell(shell: string): Promise<string | null> {
+function runInteractiveShell(shell: string, script: string): Promise<string | null> {
   // The spawn/timeout/kill machinery lives in `shell-spawn.ts`, shared with
   // the login-shell probe (issue #1833).
   return runShellCapture({
     shell,
-    args: ["-ilc", RESOLVE_SCRIPT],
+    args: ["-ilc", script],
     env: process.env,
     timeoutMs: RESOLVE_TIMEOUT_MS,
     killEscalationMs: RESOLVE_KILL_ESCALATION_MS,
@@ -152,13 +205,15 @@ export function resolveUserShellEnv(): Promise<void> {
     settled = true;
     return Promise.resolve();
   }
-  inflight = runInteractiveShell(shell)
+  const keys = recoverKeys;
+  inflight = runInteractiveShell(shell, buildResolveScript(keys))
     .then((stdout) => {
       const path = stdout === null ? null : parseUserShellPath(stdout);
+      const env = stdout === null ? {} : parseUserShellKeys(stdout, keys);
       // Only overwrite on success: a failed rescan (rc hiccup, timeout) must
       // not discard the PATH an earlier resolve already found.
       if (path) {
-        resolved = { path };
+        resolved = { path, env };
         lastFailure = null;
       }
       // stdout === null already logged its own reason (timeout / spawn error);
@@ -168,6 +223,14 @@ export function resolveUserShellEnv(): Promise<void> {
         log?.warn(
           { shell },
           `user-shell-env: no PATH from the interactive shell (unparseable output); ${fallbackNote()}`,
+        );
+      }
+      // Names only, never values; once per process, however many rescans.
+      if (!announced) {
+        announced = true;
+        log?.info?.(
+          { recovered: Object.keys(env), requested: keys, interactiveResolved: Boolean(path) },
+          "user-shell-env: recovered session environment variables from the interactive shell",
         );
       }
     })
@@ -211,9 +274,22 @@ export interface SessionEnvInfo {
   recoveredKeys: string[];
 }
 
-/** This process's own session environment summary (recovery config #3152 not present: no keys). */
+/** This process's own session environment summary. */
 export function getSessionEnvInfo(): SessionEnvInfo {
-  return { ...getUserShellEnvStatus(), path: getSessionPathEntries(), recoveredKeys: [] };
+  return {
+    ...getUserShellEnvStatus(),
+    path: getSessionPathEntries(),
+    recoveredKeys: Object.keys(getUserShellEnv(getUserShellRecoverKeys())),
+  };
+}
+
+/** The allowlisted variables (`keys` ∩ the configured allowlist) the
+ * interactive shell exported, or {} when unresolved/disabled/empty config. */
+export function getUserShellEnv(keys: readonly string[]): Record<string, string> {
+  if (isDisabled() || !resolved) return {};
+  const out: Record<string, string> = {};
+  for (const k of keys) if (resolved.env[k]) out[k] = resolved.env[k];
+  return out;
 }
 
 /** Marks the cached result stale so the next resolveUserShellEnv() re-runs the
@@ -230,4 +306,6 @@ export function resetUserShellEnvForTests(): void {
   lastFailure = null;
   settled = false;
   inflight = null;
+  announced = false;
+  recoverKeys = [];
 }

@@ -28,6 +28,8 @@ vi.mock("../../src/services/user-shell-env.js", () => ({
   resolveUserShellEnv: () => Promise.resolve(),
   invalidateUserShellEnv: () => {},
   getUserShellPath: () => null,
+  getUserShellEnv: () => ({}),
+  getUserShellRecoverKeys: () => [],
   mergePaths: (base: string | undefined) => base ?? "",
 }));
 

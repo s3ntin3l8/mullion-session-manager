@@ -1,6 +1,11 @@
 import { schema as envSchema } from "../plugins/env.js";
 import { GIT_CONFIG_COUNT_KEY, GIT_ENV_KEYS_TO_STRIP, type GitIdentity } from "./git-env.js";
-import { getUserShellPath, mergePaths } from "./user-shell-env.js";
+import {
+  getUserShellEnv,
+  getUserShellPath,
+  getUserShellRecoverKeys,
+  mergePaths,
+} from "./user-shell-env.js";
 
 // Mullion-owned config keys (see src/plugins/env.ts's schema) that must
 // never bleed from the server process into a spawned terminal session.
@@ -298,5 +303,12 @@ export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.P
   // `-lc` shells Mullion spawns never read them. See user-shell-env.ts.
   const userPath = getUserShellPath();
   if (userPath) env.PATH = mergePaths(env.PATH, userPath);
+  // Allowlisted SDK variables (ANDROID_HOME, JAVA_HOME, …) the same rc files
+  // export. Never overrides a key the service env already carries; a session's
+  // own `env` is applied after this (launch-plan.ts) and wins over both.
+  const recovered = getUserShellEnv(getUserShellRecoverKeys());
+  for (const [key, value] of Object.entries(recovered)) {
+    if (env[key] === undefined || env[key] === "") env[key] = value;
+  }
   return env;
 }
