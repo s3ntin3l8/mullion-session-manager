@@ -20,6 +20,9 @@ function SpaceRow({ entry, root, total }: { entry: SpaceEntry; root: string; tot
       <span className="space-row-name" title={entry.path}>
         {displayPath(entry.path, root)}
         {entry.coveredBy && <span className="space-chip">cleanable: {entry.coveredBy}</span>}
+        {!entry.coveredBy && entry.notCovered && (
+          <span className="space-not-covered">{entry.notCovered}</span>
+        )}
       </span>
       <span className="space-row-size">{formatBytes(entry.bytes)}</span>
       <span className="space-row-bar" aria-hidden="true">

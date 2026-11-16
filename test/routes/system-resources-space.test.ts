@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type * as SpaceReport from "../../src/services/space-report.js";
 
@@ -59,6 +60,16 @@ describe("/api/storage/space", () => {
         "/tmp/space-route-proj/.worktrees",
         "/tmp/space-route-proj/.claude/worktrees",
       ]),
+    );
+  });
+
+  it("marks the sessions directory as covered by session cleanup", async () => {
+    inspectSpaceReport.mockClear();
+    const app = await buildTestApp();
+    await app.inject({ method: "GET", url: "/api/storage/space" });
+    const covered = inspectSpaceReport.mock.calls[0]?.[0]?.covered ?? [];
+    expect(covered.find((c) => c.label === "session cleanup")?.path).toBe(
+      path.resolve(app.config.SESSIONS_DIR),
     );
   });
 });

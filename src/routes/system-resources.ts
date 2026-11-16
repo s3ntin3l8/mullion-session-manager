@@ -216,6 +216,8 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     // The directory the temp tier actually empties, not all of ~/.npm.
     { path: npmCachePath(), label: "npm cache" },
     { path: path.dirname(defaultOpencodeDbPath()), label: "opencode database" },
+    // Per-session files, swept on terminate and by the orphan sweep.
+    { path: path.resolve(app.config.SESSIONS_DIR), label: "session cleanup" },
     ...devWorktreeOptions().projects.flatMap((project) =>
       DEV_WORKTREE_DIRS.map((dir) => ({
         path: path.join(project.cwd, dir),

@@ -29,6 +29,8 @@ export interface SpaceEntry {
   isDirectory: boolean;
   /** What cleanup source owns this path, when one does (e.g. "uv"). */
   coveredBy?: string;
+  /** Why nothing in Mullion cleans this; set only when `coveredBy` is not. */
+  notCovered?: string;
   /** The biggest entries inside it; absent at the deepest level and for files. */
   children?: SpaceEntry[];
 }
@@ -117,11 +119,49 @@ async function measure(
   return { bytes, children };
 }
 
-function tag(entries: SpaceEntry[], covered: ReadonlyMap<string, string>): void {
+// What to say about an uncovered entry, by path relative to the home directory.
+// First match wins; a rule matches the path itself or anything beneath it.
+// `.config/<anything>` needs one more segment, so `.config` itself gets no hint.
+// `.cargo` skips its registry cache, which a cleanup source may own.
+const NOT_COVERED_HINTS: ReadonlyArray<{ match: RegExp; hint: string }> = [
+  {
+    match: /^\.cargo\/registry(\/|$)/,
+    hint: "",
+  },
+  {
+    match: /^(\.pyenv|\.nvm|\.rustup|\.cargo)(\/|$)/,
+    hint: "a toolchain you installed; not touched",
+  },
+  {
+    match: /^(\.claude\/projects|\.codex\/sessions|\.gemini)(\/|$)/,
+    hint: "agent session history; resuming a session needs it",
+  },
+  { match: /^\.config\/[^/]+(\/|$)/, hint: "application data, managed by that application" },
+  { match: /^(Android|\.android)(\/|$)/, hint: "Android SDK and emulators; not touched" },
+  {
+    match: /^projects(\/|$)/,
+    hint: "your checkouts; developer worktrees are covered separately",
+  },
+];
+
+function notCoveredHint(entryPath: string, root: string): string | undefined {
+  const rel = path.relative(root, entryPath);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+  // An empty hint is an exclusion: the first match decides, and says nothing.
+  const rule = NOT_COVERED_HINTS.find((r) => r.match.test(rel.split(path.sep).join("/")));
+  return rule?.hint || undefined;
+}
+
+function tag(entries: SpaceEntry[], covered: ReadonlyMap<string, string>, root: string): void {
   for (const entry of entries) {
     const label = covered.get(entry.path);
-    if (label !== undefined) entry.coveredBy = label;
-    if (entry.children) tag(entry.children, covered);
+    if (label !== undefined) {
+      entry.coveredBy = label;
+    } else {
+      const hint = notCoveredHint(entry.path, root);
+      if (hint !== undefined) entry.notCovered = hint;
+    }
+    if (entry.children) tag(entry.children, covered, root);
   }
 }
 
@@ -151,7 +191,7 @@ export async function inspectSpaceReport(options: SpaceReportOptions = {}): Prom
       measure(root, 0, walk),
       fs.statfs(root),
     ]);
-    tag(children, new Map((options.covered ?? []).map((c) => [c.path, c.label])));
+    tag(children, new Map((options.covered ?? []).map((c) => [c.path, c.label])), root);
     const filesystemUsedBytes = (fsStats.blocks - fsStats.bfree) * fsStats.bsize;
     return {
       available: true,
