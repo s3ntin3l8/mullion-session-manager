@@ -91,6 +91,24 @@
       }
     },
     {
+      "name": "kanban-tall-column",
+      "path": "/",
+      "tags": ["check"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=/^Tasks/] >> nth=0"
+        },
+        {
+          "wait": 3000
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .task-card { min-height: 220px !important; }"
+      }
+    },
+    {
       "name": "github-pr",
       "path": "/",
       "tags": ["presentation", "check", "audit"],
