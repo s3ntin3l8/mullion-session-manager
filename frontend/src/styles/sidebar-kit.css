@@ -1399,6 +1399,11 @@ button.sb-chip--label[aria-pressed="true"] {
   background: var(--sidebar-2);
   margin: 0 var(--sb-inset);
 }
+/* The held-workflow-change panel is shared with the docked task view, whose
+   edge-to-edge layout it was written for; inside the sidebar it takes the inset. */
+.sb-detail .task-detail-workflow-change {
+  margin: 0 var(--sb-inset);
+}
 .sb-detail .sb-actions-block {
   padding: 0 var(--sb-inset);
   border-bottom: 0;
