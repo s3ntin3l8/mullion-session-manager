@@ -142,6 +142,65 @@ describe("temp-storage", () => {
     }
   });
 
+  it("treats a socket as live when the table reports it through a symlinked directory", async () => {
+    const dir = await makeEntry("symlink-bound", 30 * DAY);
+    const server = net.createServer();
+    const sock = path.join(dir, "s.sock");
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+    // The kernel lists the path the binder used: here a symlink to `dir`.
+    const alias = path.join(path.dirname(root), "alias-dir");
+    await fs.symlink(dir, alias);
+    const table = path.join(path.dirname(root), "unix-table-symlink");
+    await fs.writeFile(
+      table,
+      `Num RefCount Protocol Flags Type St Inode Path\n0: 2 0 10000 1 1 1 ${path.join(alias, "s.sock")}\n`,
+    );
+    try {
+      const t = new Date(NOW - 30 * DAY);
+      await fs.lutimes(sock, t, t);
+      await fs.utimes(dir, t, t);
+      await pruneTempStorage("safe", {
+        root,
+        npmCacheDir: npmDir,
+        now: NOW,
+        unixSocketTable: table,
+      });
+      expect(await exists(dir)).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("treats a relative-path listener as possibly this socket (fails closed)", async () => {
+    const dir = await makeEntry("relative-bound", 30 * DAY);
+    const server = net.createServer();
+    const sock = path.join(dir, "s.sock");
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+    try {
+      const t = new Date(NOW - 30 * DAY);
+      await fs.lutimes(sock, t, t);
+      await fs.utimes(dir, t, t);
+      // A binder with a relative path shows as just "s.sock", whatever its cwd was.
+      await pruneTempStorage("safe", {
+        root,
+        npmCacheDir: npmDir,
+        now: NOW,
+        liveSockets: new Set(["s.sock"]),
+      });
+      expect(await exists(dir)).toBe(true);
+      // An unrelated relative name does not protect it.
+      await pruneTempStorage("safe", {
+        root,
+        npmCacheDir: npmDir,
+        now: NOW,
+        liveSockets: new Set(["other.sock"]),
+      });
+      expect(await exists(dir)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
   it("keeps every socket tree when the listener table is unavailable", async () => {
     const dir = await makeEntry("unknown-listeners", 30 * DAY);
     const server = net.createServer();

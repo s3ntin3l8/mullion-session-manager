@@ -11,7 +11,11 @@ import {
   opencodeSeedPath,
   opencodeConfigDir,
 } from "./hook-adapters/opencode.js";
-import { claudeHooksSettingsPath, claudeMcpConfigPath } from "./hook-adapters/claude-code.js";
+import {
+  claudeHooksSettingsPath,
+  claudeMcpConfigPath,
+  claudeSessionBundleDir,
+} from "./hook-adapters/claude-code.js";
 
 /**
  * Path to this session's isolated temporary directory (`<sessionsDir>/<id>.tmp`).
@@ -48,6 +52,8 @@ export async function cleanupSessionFiles(sessionsDir: string, id: string): Prom
     // written at spawn time but never removed, so every session leaked two files.
     fsPromises.unlink(claudeHooksSettingsPath(sessionsDir, id)),
     fsPromises.unlink(claudeMcpConfigPath(sessionsDir, id)),
+    // Composed per project skill / reviewer agent; a whole directory.
+    fsPromises.rm(claudeSessionBundleDir(sessionsDir, id), { recursive: true, force: true }),
     fsPromises.rm(opencodeConfigDir(sessionsDir, id), { recursive: true, force: true }),
     fsPromises.rm(sessionTmpDirPath(sessionsDir, id), { recursive: true, force: true }),
     // The pty-host session token (Windows, #1728) — the backend's stop()
@@ -62,10 +68,10 @@ export async function cleanupSessionFiles(sessionsDir: string, id: string): Prom
  * absent — the liveness check, not the file's presence, decides a session is dead.
  */
 const SESSION_ARTIFACT_RE =
-  /^([^./]+)\.(?:tmp|opencode-config|opencode-tier0\.md|opencode-seed\.md|hooks\.json|mcp\.json|token|pty-token|state\.json|agent-guide\.md|workflow-conventions\.md|briefing\.md)$/;
+  /^([^./]+)\.(?:tmp|opencode-config|mullion-bundle|opencode-tier0\.md|opencode-seed\.md|hooks\.json|mcp\.json|token|pty-token|state\.json|agent-guide\.md|workflow-conventions\.md|briefing\.md)$/;
 
 /** Artifacts that are directories; every other suffix is a plain file. */
-const DIRECTORY_ARTIFACT_SUFFIXES = new Set(["tmp", "opencode-config"]);
+const DIRECTORY_ARTIFACT_SUFFIXES = new Set(["tmp", "opencode-config", "mullion-bundle"]);
 
 function sessionIdOfArtifact(entry: { name: string; isDirectory(): boolean }): string | null {
   const m = SESSION_ARTIFACT_RE.exec(entry.name);
@@ -100,7 +106,8 @@ export type DeadSessionFilter = (candidateIds: string[]) => Promise<Set<string>>
  * Sweeps the orphaned per-session artifacts (`<id>.tmp`, `<id>.opencode-config`,
  * `<id>.hooks.json`, `<id>.mcp.json`, ...) under `sessionsDir` whose session ID is
  * confirmed dead and whose mtime is older than `minAgeMs` (default 1 minute).
- * Returns the number of swept directories. Never throws.
+ * Returns how many sessions had every artifact removed (a session with a file
+ * that could not be removed is retried next pass, not counted). Never throws.
  */
 export async function sweepOrphanedSessionTmpDirs(
   sessionsDir: string,
@@ -169,22 +176,35 @@ export async function sweepOrphanedSessionTmpDirs(
     return 0;
   }
 
-  let swept = 0;
+  const removed = [...confirmedDead];
   await Promise.allSettled(
-    [...confirmedDead].map(async (id) => {
-      try {
-        // cleanupSessionFiles is best-effort per file and never throws, so one
-        // unremovable artifact cannot keep the rest of the session's files alive.
-        await cleanupSessionFiles(sessionsDir, id);
-        swept++;
-      } catch (err) {
-        resolvedLog?.warn(
-          { err, id },
-          "sweepOrphanedSessionTmpDirs: failed to clean session files",
-        );
-      }
+    removed.map(async (id) => {
+      // cleanupSessionFiles never throws and unlinks the dtach master's own
+      // socket here only: a master confirmed dead leaves that inode behind, but
+      // kill() also reaches cleanupSessionFiles and must not touch a socket.
+      await cleanupSessionFiles(sessionsDir, id);
+      await fsPromises.unlink(path.join(sessionsDir, `${id}.sock`)).catch(() => {});
     }),
   );
 
+  // Count what is actually gone: a removal that failed leaves its artifact
+  // behind, and the next pass retries it.
+  let remaining: Set<string>;
+  try {
+    remaining = new Set(
+      (await fsPromises.readdir(sessionsDir, { withFileTypes: true }))
+        .map((entry) => sessionIdOfArtifact(entry))
+        .filter((id): id is string => id !== null),
+    );
+  } catch {
+    return removed.length;
+  }
+  const swept = removed.filter((id) => !remaining.has(id)).length;
+  if (swept < removed.length) {
+    resolvedLog?.warn(
+      { stuck: removed.length - swept },
+      "sweepOrphanedSessionTmpDirs: some session files could not be removed",
+    );
+  }
   return swept;
 }

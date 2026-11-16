@@ -412,6 +412,11 @@ export function claudeHooksSettingsPath(sessionsDir: string, id: string): string
   return path.join(sessionsDir, `${id}.hooks.json`);
 }
 
+/** Per-session composed plugin bundle directory (`<sessionsDir>/<id>.mullion-bundle`). */
+export function claudeSessionBundleDir(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.mullion-bundle`);
+}
+
 /** Per-session Claude Code MCP config file (`<sessionsDir>/<id>.mcp.json`). */
 export function claudeMcpConfigPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.mcp.json`);
@@ -458,7 +463,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const bundleSettingsFiles: Array<{ path: string; contents: string }> = [];
   if (ctx.injectMullionBundle) {
     if (ctx.projectSkill || ctx.projectReviewerAgent) {
-      const composedDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.mullion-bundle`);
+      const composedDir = claudeSessionBundleDir(ctx.sessionsDir, ctx.sessionId);
       const files = composeClaudeSessionBundle(composedDir, {
         skill: ctx.projectSkill,
         reviewerAgent: ctx.projectReviewerAgent,

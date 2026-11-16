@@ -109,13 +109,18 @@ export interface TempStorageOptions {
 }
 
 /**
- * Filesystem paths of unix sockets that currently have a listener, from
- * `/proc/net/unix`. Returns `null` where the table can't be read (not Linux),
- * so callers fall back to treating every socket as live.
+ * Unix sockets that currently have a listener, from `/proc/net/unix`, as the
+ * paths the kernel reports plus, for absolute ones, their resolved form. The
+ * table shows a socket's path *as it was bound*, which may be spelled through a
+ * symlink or relative to the binder's working directory, so a path match alone
+ * can't prove a socket is stale: see {@link isSocketLive}.
  *
- * Only this network namespace is visible: a socket bound by a process in
- * another one (e.g. a container with /tmp bind-mounted) would look stale. The
- * age window is what protects that case, since such a tree is being written to.
+ * Returns `null` where the table can't be read (not Linux), so callers fall
+ * back to treating every socket as live.
+ *
+ * Only this network namespace is visible: a listener in another one (e.g. a
+ * container with /tmp bind-mounted) is invisible here, and an idle one is not
+ * protected by the age window either. That case is documented, not handled.
  */
 export async function readLiveUnixSockets(
   table = "/proc/net/unix",
@@ -132,9 +137,32 @@ export async function readLiveUnixSockets(
     const parts = line.trim().split(/\s+/);
     if (parts.length < 8) continue;
     const socketPath = parts.slice(7).join(" ");
-    if (socketPath.startsWith("/")) live.add(socketPath);
+    if (socketPath.startsWith("@")) continue;
+    live.add(socketPath);
+    if (socketPath.startsWith("/")) {
+      const real = await fs.realpath(socketPath).catch(() => null);
+      if (real) live.add(real);
+    }
   }
   return live;
+}
+
+/**
+ * Whether a socket file at `fullPath` may have a listener. Errs towards "live":
+ * it matches the path itself, its resolved form (a listener bound through a
+ * symlinked directory), and any relative bind path the table reports (the
+ * kernel doesn't record the binder's cwd, so `rel.sock` could be this file).
+ */
+async function isSocketLive(fullPath: string, live: ReadonlySet<string>): Promise<boolean> {
+  if (live.has(fullPath)) return true;
+  const real = await fs.realpath(fullPath).catch(() => null);
+  if (real !== null && live.has(real)) return true;
+  for (const entry of live) {
+    if (!entry.startsWith("/") && (fullPath === entry || fullPath.endsWith(path.sep + entry))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 interface Candidate {
@@ -243,7 +271,9 @@ async function walk(
     // behind, and removing it hurts nothing. One that is bound belongs to a
     // live process, so the whole tree stays.
     const staleSocket =
-      st.isSocket() && liveSockets !== null && !liveSockets.has(path.join(dir, name));
+      st.isSocket() &&
+      liveSockets !== null &&
+      !(await isSocketLive(path.join(dir, name), liveSockets));
     if ((st.isSocket() && !staleSocket) || st.dev !== rootDev) {
       // This entry is not removable at all, so the rest of its walk is wasted:
       // exhausting the budget makes every sibling still in flight bail out.
@@ -526,6 +556,14 @@ export async function pruneTempStorage(
     let reclaimedBytes = 0;
     let removed = 0;
     const errors: string[] = [];
+    // One listener-table read serves every target removed within the same second.
+    let sockets: { at: number; value: ReadonlySet<string> | null } | undefined;
+    const recentLiveSockets = async () => {
+      if (!sockets || Date.now() - sockets.at > 1000) {
+        sockets = { at: Date.now(), value: await resolveLiveSockets(options) };
+      }
+      return sockets.value;
+    };
     for (const target of targets) {
       const { entry } = target;
       // A big rm -r can take minutes and listing happened up front: re-check
@@ -536,8 +574,8 @@ export async function pruneTempStorage(
         rootDev,
         uid,
         path.basename(entry.fullPath),
-        // Re-read: a listener may have appeared since the listing.
-        await resolveLiveSockets(options),
+        // Re-read (at most once a second): a listener may have appeared since the listing.
+        await recentLiveSockets(),
       );
       if (!fresh || now - fresh.newestMtimeMs <= windowFor(target, mode)) continue;
       if (target.kind === "session" || target.kind === "bundled") {

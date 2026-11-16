@@ -232,7 +232,33 @@ describe("session-files-cleanup", () => {
       expect(fs.existsSync(path.join(tmpDir, "9.mcp.json"))).toBe(false);
     });
 
-    it("an unremovable artifact does not stop the sweep or the other removals", async () => {
+    it("removes the composed bundle dir and the dead master's socket, only in the sweep", async () => {
+      const old = new Date(Date.now() - 120_000);
+      const bundle = path.join(tmpDir, "4005.mullion-bundle");
+      fs.mkdirSync(path.join(bundle, "skills"), { recursive: true });
+      fs.writeFileSync(path.join(bundle, "skills", "SKILL.md"), "x");
+      fs.utimesSync(bundle, old, old);
+      fs.writeFileSync(path.join(tmpDir, "4005.sock"), "stale");
+      fs.writeFileSync(path.join(tmpDir, "4006.sock"), "other session");
+      fs.writeFileSync(path.join(tmpDir, "4007.mullion-bundle.d"), "unrelated file");
+
+      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, (ids) => new Set(ids), {
+        minAgeMs: 60_000,
+      });
+
+      expect(swept).toBe(1);
+      expect(fs.existsSync(bundle)).toBe(false);
+      expect(fs.existsSync(path.join(tmpDir, "4005.sock"))).toBe(false);
+      expect(fs.existsSync(path.join(tmpDir, "4006.sock"))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, "4007.mullion-bundle.d"))).toBe(true);
+
+      // terminate() reaches cleanupSessionFiles, which must leave the socket alone.
+      fs.writeFileSync(path.join(tmpDir, "4008.sock"), "live master");
+      await cleanupSessionFiles(tmpDir, "4008");
+      expect(fs.existsSync(path.join(tmpDir, "4008.sock"))).toBe(true);
+    });
+
+    it("does not count a session whose file could not be removed, and retries it", async () => {
       const old = new Date(Date.now() - 120_000);
       const orphanDir = sessionTmpDirPath(tmpDir, "4004");
       fs.mkdirSync(orphanDir, { recursive: true });
@@ -240,14 +266,31 @@ describe("session-files-cleanup", () => {
       fs.utimesSync(orphanDir, old, old);
       fs.utimesSync(path.join(tmpDir, "4004.mcp.json"), old, old);
 
-      const rmSpy = vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(new Error("rm failed"));
-      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, (ids) => new Set(ids), {
+      const realRm = fsPromises.rm.bind(fsPromises);
+      const rmSpy = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, opts) => {
+        if (String(target) === orphanDir) throw new Error("rm failed");
+        return realRm(target, opts);
+      });
+      const mockLogger: SweepLogger = { warn: vi.fn() };
+      const first = await sweepOrphanedSessionTmpDirs(tmpDir, (ids) => new Set(ids), {
         minAgeMs: 60_000,
+        log: mockLogger,
       });
       rmSpy.mockRestore();
 
-      expect(swept).toBe(1);
+      expect(first).toBe(0); // the other file went, but the session is not clean
       expect(fs.existsSync(path.join(tmpDir, "4004.mcp.json"))).toBe(false);
+      expect(fs.existsSync(orphanDir)).toBe(true);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ stuck: 1 }),
+        expect.stringContaining("could not be removed"),
+      );
+
+      const second = await sweepOrphanedSessionTmpDirs(tmpDir, (ids) => new Set(ids), {
+        minAgeMs: 60_000,
+      });
+      expect(second).toBe(1);
+      expect(fs.existsSync(orphanDir)).toBe(false);
     });
   });
 });
