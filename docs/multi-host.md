@@ -1390,13 +1390,21 @@ Simulator toolchain) and `android-emulator` (an emulator Mullion can start).
 and the primary keeps it beside the agent list (same TTL, same invalidation).
 `GET /api/hosts` exposes it as `capabilities`; Settings → Hosts shows chips.
 
-- `xcode`: darwin only, and `xcrun --find simctl` must exit 0 (Command Line
-  Tools alone do not have it). Nothing is spawned on any other platform.
-  This is a **minimum**, not a readiness check: at minimum, full Xcode is
-  selected. It does not guarantee that the licence is accepted, that Xcode's
-  first-launch components are installed, that a simulator runtime exists, that
-  Homebrew tools are on a session's `PATH`, or that anything Android is set up.
-  A task on an `xcode` host can still hang in a build. The checklist is in
+- `xcode`: darwin only, and all of these hold, checked in order and stopping
+  at the first failure: `xcrun --find simctl` exits 0 (Command Line Tools alone
+  do not have it); `xcodebuild -checkFirstLaunchStatus` exits 0 (Xcode's
+  first-launch setup is done and the licence accepted); and
+  `xcrun simctl list runtimes available -j` exits 0 and lists at least one
+  runtime. The last step only runs after the second passed, because
+  `simctl list` on an incomplete install starts the first-launch installer.
+  Each step has a 10 s budget. A timeout or spawn error is inconclusive, not
+  "lacks": the previous reading is kept (and a warning logged), while a clean
+  non-zero exit is a real "lacks". The agent logs at info, once per change,
+  which step failed (`simctl missing`, `first launch incomplete`,
+  `no simulator runtime`). It does **not** promise swiftlint, xcbeautify,
+  fastlane, CocoaPods or an Android SDK, or that Homebrew tools are on a
+  session's `PATH`, so a task on an `xcode` host can still fail in a build.
+  Nothing is spawned on any other platform. The checklist is in
   [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 - `android-emulator`: the device panel's emulator support is enabled and
   `DEVICE_EMULATOR_PATH` is set to an executable file. That is exactly what
