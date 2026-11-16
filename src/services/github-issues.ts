@@ -10,6 +10,7 @@
 // library is needed here; the frontend sanitizes before inserting it.
 
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
+import { parseParentIssueUrl } from "./github.js";
 
 const PAGE_SIZE = 50;
 /** Most raw list pages a title search reads (1000 issues) before giving up and flagging `truncated`. */
@@ -183,18 +184,15 @@ async function getRelations(
   const currentRepo = repoOfUrl(base) ?? "";
   // The parent may live in another repo of the same owner: fetch it from the
   // repo its URL names, not from this one.
-  const parentMatch = /\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)$/.exec(
-    issue.parent_issue_url ?? "",
-  );
+  const parentRef = parseParentIssueUrl(issue.parent_issue_url);
   const [children, parent] = await Promise.all([
     total > 0
       ? getJson<RawIssue[]>(`${base}/sub_issues?per_page=100`, token).catch(() => [])
       : Promise.resolve([] as RawIssue[]),
-    parentMatch
-      ? getJson<RawIssue>(
-          `/repos/${parentMatch[1]}/${parentMatch[2]}/issues/${parentMatch[3]}`,
-          token,
-        ).catch(() => null)
+    parentRef
+      ? getJson<RawIssue>(`/repos/${parentRef.repo}/issues/${parentRef.number}`, token).catch(
+          () => null,
+        )
       : Promise.resolve(null),
   ]);
   return {
@@ -202,10 +200,7 @@ async function getRelations(
     subIssuesSummary: issue.sub_issues_summary
       ? { total, completed: issue.sub_issues_summary.completed ?? 0 }
       : null,
-    parent:
-      parent && parentMatch
-        ? toRef(parent, currentRepo, decodeURIComponent(`${parentMatch[1]}/${parentMatch[2]}`))
-        : null,
+    parent: parent && parentRef ? toRef(parent, currentRepo, parentRef.repo) : null,
   };
 }
 

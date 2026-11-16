@@ -679,7 +679,7 @@ export interface TaskIssue {
  * can live in a different repo than the child's own project) — not just
  * the repo name.
  */
-function parseParentIssueUrl(
+export function parseParentIssueUrl(
   url: string | null | undefined,
 ): { repo: string; number: number } | null {
   if (!url) return null;
