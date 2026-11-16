@@ -483,6 +483,9 @@ up anyway. Outstanding non-shell background work, or a worker still mid-turn
 with no commits, still fails on budget expiry — except a worker whose
 rate-limit grace window is still open (#2930), which is held instead of
 force-failed. The budget applies again once that window has elapsed.
+A worker that finished behind a shell tail with no commits is not salvaged either; its
+failure reason says so (`budget exceeded after N minutes; the worker had no commits and was
+waiting on a background shell job`, #3111). The shell-tail helpers live in `task-turn-signals.ts`.
 
 ## The agent's contract
 
