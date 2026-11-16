@@ -37,8 +37,13 @@ import type { RightSidebarViewProps } from "./views.js";
 // Selecting a row never starts a command (a tap should not start a dev
 // server); Start does. Selecting a Compose service starts its log stream if it
 // is off, as the bottom Dock does: reading the log is why you tapped it, and
-// `docker compose logs` changes nothing. The view does not run the Dock's
-// "Auto-attach Docker logs" effect; the bottom Dock does.
+// `docker compose logs` changes nothing. "Stop log" ends a service's log
+// stream and leaves the container running (its Stop is `docker compose
+// stop`).
+//
+// "Auto-attach Docker logs" runs here only while the bottom Dock is not
+// mounted for the project (a coarse pointer, a collapsed Dock, Tasks mode);
+// when it is, the bottom Dock runs it. useDockProject decides which.
 
 type RowKind = "command" | "service" | "log";
 
@@ -109,7 +114,8 @@ function DockRow({
 }
 
 // The selected row's actions, as buttons. A command: restart, stop or start,
-// branch. A service: restart, stop or start, check for update. A log-only row
+// branch. A service: restart, stop or start, check for update, and "Stop log" while
+// its log stream runs. A log-only row
 // (a stack action's run, an orphaned stream): stop the stream.
 function DockActions({ view }: { view: DockControlView }) {
   const { control } = view;
@@ -118,6 +124,7 @@ function DockActions({ view }: { view: DockControlView }) {
   const disabled = view.held;
 
   const stopLabel = view.armed ? "Tap again to stop" : "Stop";
+
   let buttons;
   if (kind === "service") {
     const startable = control.docker ? isStartable(control.docker.state) : false;
@@ -160,6 +167,19 @@ function DockActions({ view }: { view: DockControlView }) {
         >
           Check for update
         </button>
+        {/* Ends the service's log stream (its `docker-logs:<container>`
+            session), not the container, behind the same second tap as a
+            command's Stop when "Confirm before kill" is on. */}
+        {view.running && (
+          <button
+            type="button"
+            className={view.armed ? "armed" : undefined}
+            disabled={disabled}
+            onClick={view.stop}
+          >
+            {view.armed ? "Tap again to stop log" : "Stop log"}
+          </button>
+        )}
       </>
     );
   } else if (kind === "log") {
@@ -320,7 +340,7 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
   // the way the other sidebar views open a session (the store's request,
   // which App turns into a pane).
   const dock = useDockProject(projectId, {
-    autoAttach: false,
+    surface: "sidebar-view",
     onOpenSession: (session) => useDashboardStore.getState().requestOpenSession(session.id),
   });
   const {
@@ -357,31 +377,27 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
   const selected = selectedControl ? controlView(selectedControl) : null;
 
   // Selecting a Compose service starts its log stream when it is off (see the
-  // header comment). Keyed on the row and its running state, so it fires once
-  // per selection, not on every poll.
-  // Only a row the user tapped: the fallback selection never starts anything.
-  const startLog =
-    selected &&
-    selectedKey === effectiveKey &&
-    rowKind(selected.control) === "service" &&
-    !selected.running &&
-    !selected.held
-      ? selected
-      : null;
-  const startLogKey = startLog ? dockRowKey(startLog.control) : null;
-  // Each tap counts, so tapping the selected row again restarts a log
-  // stream that ended (a service restart ends `docker logs`).
+  // header comment). Each tap is one attempt, used up once: a tap on a
+  // service whose stream is off starts it, a tap on one whose stream is
+  // already on starts nothing, and neither starts the stream again when it
+  // later ends ("Stop log", a service restart). Tapping the row again
+  // does. Only a row the user tapped: the fallback selection never starts
+  // anything. A held (recreating) service waits until it is back; if it
+  // comes back with its stream already running, the tap is used up with
+  // nothing to start.
   const [taps, setTaps] = useState(0);
+  const tapped = selected && selectedKey === effectiveKey ? selected : null;
+  const tapAttempt = tapped ? `${dockRowKey(tapped.control)}#${taps}` : null;
+  const tappedLogOff = tapped !== null && rowKind(tapped.control) === "service" && !tapped.running;
+  const waitForRow = tappedLogOff && tapped.held;
   const startedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (startLogKey === null) return;
-    const attempt = `${startLogKey}#${taps}`;
-    if (startedForRef.current === attempt) return;
-    startedForRef.current = attempt;
-    void startLog?.start();
-    // startLog is this render's view of the same row; the key is its identity.
+    if (tapAttempt === null || waitForRow || startedForRef.current === tapAttempt) return;
+    startedForRef.current = tapAttempt;
+    if (tappedLogOff) void tapped.start();
+    // `tapped` is this render's view of the row the attempt names.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startLogKey, taps]);
+  }, [tapAttempt, waitForRow]);
 
   const select = (control: DockControl) => {
     setSelectedKey(dockRowKey(control));

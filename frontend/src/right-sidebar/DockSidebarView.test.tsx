@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DockSidebarView } from "./DockSidebarView.js";
+import { Dock } from "../Dock.js";
 import type { RightSidebarActions } from "./views.js";
 import { useDashboardStore } from "../store/index.js";
 import { ApiError } from "../api/index.js";
@@ -63,7 +64,8 @@ const WEB = {
   }),
 };
 
-let controls: unknown[];
+// null: the dock GET fails (500).
+let controls: unknown[] | null;
 let checkUpdate: unknown;
 const calls: string[] = [];
 
@@ -102,7 +104,11 @@ describe("DockSidebarView (#3012)", () => {
       return jsonResponse(name.startsWith("stack") ? 201 : 200, body);
     };
     const { fetchMock } = mockFetch({
-      "GET /api/projects/:id/dock": () => jsonResponse(200, controls),
+      "GET /api/projects/:id/dock": () =>
+        controls === null ? jsonResponse(500, {}) : jsonResponse(200, controls),
+      // The bottom Dock's own GitHub row, for the tests that mount it too.
+      "GET /api/projects/:id/github": () => jsonResponse(204),
+      "GET /api/projects/:id/github/prs": () => jsonResponse(204),
       "POST /api/projects/:id/docker/check-update": () => {
         calls.push("check-update");
         return jsonResponse(200, checkUpdate);
@@ -119,6 +125,12 @@ describe("DockSidebarView (#3012)", () => {
       "POST /api/projects/:id/docker/stack/rebuild": record("stack-rebuild", { reused: true }),
     });
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "ResizeObserver",
+      vi.fn(function () {
+        return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
+      }),
+    );
     createSession = vi
       .fn<(...args: unknown[]) => Promise<Session>>()
       .mockResolvedValue({} as Session);
@@ -360,19 +372,240 @@ describe("DockSidebarView (#3012)", () => {
     expect(calls).not.toContain("stack-stop");
   });
 
-  it("does not run the Dock's auto-attach, nor start the row it selects by default", async () => {
+  it("does not start the row it selects by default", async () => {
     controls = [API];
-    useDashboardStore.setState({
-      settings: {
-        ...useDashboardStore.getState().settings,
-        dock: { ...useDashboardStore.getState().settings.dock, autoAttachDockerLogs: true },
-      },
-    });
     renderView();
     await screen.findByRole("region", { name: "Stack aurora-dev" });
     // The service is selected by default, but only a tap starts its log.
     expect(screen.getByRole("group", { name: "api actions" })).toBeInTheDocument();
     await new Promise((r) => setTimeout(r, 0));
     expect(createSession).not.toHaveBeenCalled();
+  });
+
+  describe("Auto-attach Docker logs (#3031)", () => {
+    const autoAttachOn = () =>
+      useDashboardStore.setState({
+        settings: {
+          ...useDashboardStore.getState().settings,
+          dock: { ...useDashboardStore.getState().settings.dock, autoAttachDockerLogs: true },
+        },
+      });
+    const attachedApi = () =>
+      createSession.mock.calls.filter(
+        ([, , opts]) => (opts as { name?: string }).name === "docker-logs:aurora-dev-api-1",
+      ).length;
+    const renderBottomDock = () =>
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+    beforeEach(() => {
+      controls = [API, WEB];
+      autoAttachOn();
+    });
+
+    it("starts a running container's log once when the bottom Dock is absent", async () => {
+      renderView();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      // WEB is exited: nothing to attach to.
+      expect(createSession).toHaveBeenCalledTimes(1);
+      // A later render (an unrelated store write) does not attach it again.
+      act(() => useDashboardStore.setState({ sessions: [] }));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(createSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("never runs it while the bottom Dock is mounted for the project", async () => {
+      // Mounted in one commit, the view first: it must not race the Dock.
+      render(
+        <>
+          <DockSidebarView projectId={1} actions={actions} />
+          <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />
+        </>,
+      );
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      await new Promise((r) => setTimeout(r, 0));
+      // One log session for the container, the bottom Dock's.
+      expect(createSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a failed attach to the surface that ran it", async () => {
+      // Which surface ran the effect shows on its own row: the failure.
+      createSession.mockRejectedValue(new Error("boom"));
+      render(
+        <>
+          <DockSidebarView projectId={1} actions={actions} />
+          <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />
+        </>,
+      );
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      const bottomDock = document.querySelector(".dock") as HTMLElement;
+      expect(await within(bottomDock).findByText("Auto-attach failed")).toBeInTheDocument();
+      const group = screen.getByRole("group", { name: "api actions" });
+      expect(within(group).queryByText("Auto-attach failed")).not.toBeInTheDocument();
+    });
+
+    it("reports a failed attach on the view's row when it ran it", async () => {
+      createSession.mockRejectedValue(new Error("boom"));
+      renderView();
+      const group = await screen.findByRole("group", { name: "api actions" });
+      expect(await within(group).findByText("Auto-attach failed")).toBeInTheDocument();
+    });
+
+    const bumpDockConfig = () =>
+      act(() =>
+        useDashboardStore.setState((st) => ({
+          dockConfigRefreshTrigger: st.dockConfigRefreshTrigger + 1,
+        })),
+      );
+    const WEB_RUNNING = { ...WEB, docker: { ...WEB.docker, state: "running" } };
+    const attachedWeb = () =>
+      createSession.mock.calls.filter(
+        ([, , opts]) => (opts as { name?: string }).name === "docker-logs:aurora-prod-web-1",
+      ).length;
+
+    it("takes it over when the bottom Dock goes, without attaching a container twice", async () => {
+      renderView();
+      const dock = renderBottomDock();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      dock.unmount();
+      await new Promise((r) => setTimeout(r, 0));
+      // The view now owns the effect, and knows the container is attached.
+      expect(createSession).toHaveBeenCalledTimes(1);
+      // A container that starts running from here on is the view's to attach.
+      controls = [API, WEB_RUNNING];
+      bumpDockConfig();
+      await waitFor(() => expect(attachedWeb()).toBe(1));
+      expect(attachedApi()).toBe(1);
+    });
+
+    it("hands it to the bottom Dock when the Dock mounts beside the view", async () => {
+      controls = [{ ...API, docker: { ...API.docker, state: "exited" } }];
+      renderView();
+      renderBottomDock();
+      await screen.findByRole("region", { name: "Stack aurora-dev" });
+      expect(createSession).not.toHaveBeenCalled();
+      // The container starts; its attach fails, on the surface that ran it.
+      createSession.mockRejectedValue(new Error("boom"));
+      controls = [API];
+      bumpDockConfig();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      const bottomDock = document.querySelector(".dock") as HTMLElement;
+      expect(await within(bottomDock).findByText("Auto-attach failed")).toBeInTheDocument();
+      const group = screen.getByRole("group", { name: "api actions" });
+      expect(within(group).queryByText("Auto-attach failed")).not.toBeInTheDocument();
+    });
+
+    it("does nothing while the setting is off", async () => {
+      useDashboardStore.setState({
+        settings: {
+          ...useDashboardStore.getState().settings,
+          dock: { ...useDashboardStore.getState().settings.dock, autoAttachDockerLogs: false },
+        },
+      });
+      renderView();
+      await screen.findByRole("region", { name: "Stack aurora-dev" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it("does not bring back a stream ended with Stop log after a failed poll", async () => {
+      useDashboardStore.setState({
+        settings: {
+          ...useDashboardStore.getState().settings,
+          sessions: { ...useDashboardStore.getState().settings.sessions, confirmBeforeKill: false },
+        },
+      });
+      createSession.mockImplementation(async () => {
+        useDashboardStore.setState({
+          sessions: [dockSession(8, "docker-logs:aurora-dev-api-1", "docker compose logs -f api")],
+        });
+        return {} as Session;
+      });
+      deleteSession.mockImplementation(async (id: number) => {
+        useDashboardStore.setState((st) => ({
+          sessions: st.sessions.filter((x) => x.id !== id),
+        }));
+      });
+      renderView();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      const group = await screen.findByRole("group", { name: "api actions" });
+      await userEvent.click(await within(group).findByRole("button", { name: "Stop log" }));
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledWith(8));
+      // One poll fails (the list shows empty), the next one answers again.
+      const failing = controls;
+      controls = null;
+      bumpDockConfig();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /^api, recreating/ })).toBeInTheDocument(),
+      );
+      controls = failing;
+      bumpDockConfig();
+      await screen.findByRole("button", { name: /^api, running/ });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(attachedApi()).toBe(1);
+    });
+
+    it("does not bring back a stream ended with Stop log when the view remounts", async () => {
+      useDashboardStore.setState({
+        settings: {
+          ...useDashboardStore.getState().settings,
+          sessions: { ...useDashboardStore.getState().settings.sessions, confirmBeforeKill: false },
+        },
+      });
+      createSession.mockImplementation(async () => {
+        useDashboardStore.setState({
+          sessions: [dockSession(8, "docker-logs:aurora-dev-api-1", "docker compose logs -f api")],
+        });
+        return {} as Session;
+      });
+      deleteSession.mockImplementation(async (id: number) => {
+        useDashboardStore.setState((st) => ({
+          sessions: st.sessions.filter((x) => x.id !== id),
+        }));
+      });
+      const first = renderView();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      const group = await screen.findByRole("group", { name: "api actions" });
+      await userEvent.click(await within(group).findByRole("button", { name: "Stop log" }));
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledWith(8));
+      first.unmount();
+      renderView();
+      await screen.findByRole("region", { name: "Stack aurora-dev" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(attachedApi()).toBe(1);
+    });
+  });
+
+  it("stops a service's log stream with Stop log, leaving the container running", async () => {
+    controls = [API];
+    useDashboardStore.setState({
+      sessions: [dockSession(8, "docker-logs:aurora-dev-api-1", "docker compose logs -f api")],
+    });
+    // A real end: the session leaves the store, as a delete does.
+    deleteSession.mockImplementation(async (id: number) => {
+      useDashboardStore.setState((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }));
+    });
+    renderView();
+    await userEvent.click(await screen.findByRole("button", { name: /^api, running/ }));
+    const group = screen.getByRole("group", { name: "api actions" });
+    expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-session-id", "8");
+    // "Confirm before kill" is on by default: the first tap only arms.
+    await userEvent.click(within(group).getByRole("button", { name: "Stop log" }));
+    expect(deleteSession).not.toHaveBeenCalled();
+    await userEvent.click(within(group).getByRole("button", { name: "Tap again to stop log" }));
+    await waitFor(() => expect(deleteSession).toHaveBeenCalledWith(8));
+    expect(await screen.findByText("No log stream.")).toBeInTheDocument();
+    // The container is untouched, and the stream does not come back on its own.
+    expect(calls).not.toContain("service-stop");
+    expect(within(group).queryByRole("button", { name: "Stop log" })).not.toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("offers no Stop log while a service's log stream is off", async () => {
+    controls = [API];
+    renderView();
+    await screen.findByRole("region", { name: "Stack aurora-dev" });
+    const group = screen.getByRole("group", { name: "api actions" });
+    expect(within(group).queryByRole("button", { name: "Stop log" })).not.toBeInTheDocument();
   });
 });

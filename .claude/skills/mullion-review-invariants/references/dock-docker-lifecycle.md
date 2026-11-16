@@ -27,9 +27,15 @@ state-backed input, the helper stays pure, and held rows stay unclickable.
 
 ## 2. Docker-logs auto-attach is edge-triggered by identity, pruned each poll
 
-The effect lives in `useDockProject` and runs only for a caller that passes
-`autoAttach: true` (the bottom Dock). Two mounted copies for one project would
-each start a log session for the same container.
+The effect lives in `useDockProject` and runs on exactly one surface per
+project (#3031): the bottom Dock (`surface: "bottom-dock"`) while its
+`DockProjectGroup` is mounted, otherwise the right sidebar's Dock view. The
+decision is made in that hook alone, from the registry in
+`frontend/src/dock/dockAutoAttach.ts`, where the bottom Dock registers in a
+layout effect so a view mounting in the same commit already sees it. Two
+copies running the effect for one project would each start a log session for
+the same container; the bookkeeping is per project (and outlives the
+surfaces) for the same reason.
 
 **Invariant.** Auto-attach fires on an eligible false-to-true edge (or a timed
 retry after failure), keyed by `dockerSessionIdentity` in
