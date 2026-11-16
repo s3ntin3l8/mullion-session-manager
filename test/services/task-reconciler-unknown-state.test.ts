@@ -285,6 +285,84 @@ describe("#2416 — the states that used to be swallowed", () => {
     return row;
   }
 
+  describe("a shell tail with no commits (pocket #1264)", () => {
+    const shellTask = { id: "b1", type: "shell", status: "running", description: "wait" };
+    const MIN = 60_000;
+
+    async function run(hash: string) {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(
+        app,
+        "in_progress",
+        new Date(Date.now() - 30 * MIN),
+      );
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now() - 10 * MIN,
+            outstandingBackgroundTasks: [shellTask],
+          }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus(hash));
+      await reconcileTasks(app);
+      const row = await getTask(app, taskId);
+      await app.close();
+      return row;
+    }
+
+    it("keeps waiting instead of failing a worker that has not committed", async () => {
+      const row = await run(BASE_SHA);
+      expect(row.status).toBe("in_progress");
+      expect(row.failureReason).toBeNull();
+    });
+
+    it("fails open to the gate, so reviewing, when the worktree cannot be read", async () => {
+      mockResolveHostGitStatus.mockResolvedValue(unreachable());
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(
+        app,
+        "in_progress",
+        new Date(Date.now() - 30 * MIN),
+      );
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now() - 10 * MIN,
+            outstandingBackgroundTasks: [shellTask],
+          }),
+      } as never);
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
+    it("fails open to the gate, so reviewing, when the task has no base SHA", async () => {
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus(BASE_SHA));
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(
+        app,
+        "in_progress",
+        new Date(Date.now() - 30 * MIN),
+      );
+      // No base SHA: checkReviewingGate fails open, so the wait must not apply.
+      getDb().update(tasks).set({ baseSha: null }).where(eq(tasks.id, taskId)).run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now() - 10 * MIN,
+            outstandingBackgroundTasks: [shellTask],
+          }),
+      } as never);
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
+    it("still hands a committed worker off to review", async () => {
+      expect((await run("abcdef1")).status).toBe("reviewing");
+    });
+  });
+
   describe("the three-state verdict (resolveCommitsPastBase)", () => {
     const task = {
       id: 42,

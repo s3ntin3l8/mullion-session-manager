@@ -1110,6 +1110,9 @@ function turnFinishedSinceClaim(
 // TTL, default 2h, PLUS a PTY-silence requirement any later redraw breaks)
 // can't beat the claim-anchored budget. Only shell tasks are excused —
 // outstanding agent/MCP work still blocks the handoff (issue #428).
+// A worker with no commits past base is never handed off on this path: it is
+// mid-work behind a long job, and the budget deadline (when one is set; `0` is
+// unlimited) is its backstop.
 const SHELL_TAIL_GRACE_MS = 5 * 60_000;
 const SHELL_TAIL_STATUSES: ReadonlySet<SessionStatus> = new Set([
   "background",
@@ -5207,6 +5210,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // branch above — same "don't strand it in reviewing" reasoning.
             const gate = await checkReviewingGate(app, task, project, info, hostId);
             if (!gate.ok) {
+              // Shell tail + no commits: mid-work behind a long job (pocket #1264); keep
+              // waiting. The budget deadline, when set, is the backstop.
+              if (shellTail) continue;
               await failReviewingGate(
                 app,
                 task,
