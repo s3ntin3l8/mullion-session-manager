@@ -227,7 +227,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // becomes the active panel and stays it (a click on its tab, keyboard
   // navigation, the first focus of a split pane, which is visible at once)
   // or when a background tab becomes its group's visible one (dockview
-  // showing it because the tab in front of it closed).
+  // showing it because the tab in front of it closed). Only a pane that was
+  // hidden behind another tab counts: dockview also hides and re-shows a
+  // group's front panel with the group itself (another group maximized,
+  // then restored), and that re-show is not a first look at a split pane.
   useEffect(() => {
     if (!isNew) return;
     const clear = () => useDashboardStore.getState().clearPanelNew(panelId);
@@ -244,8 +247,14 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       });
       return () => cancelAnimationFrame(frame);
     }
+    let hiddenBehindTab = !props.api.isVisible;
     const disposable = props.api.onDidVisibilityChange((e) => {
-      if (e.isVisible) clear();
+      if (!e.isVisible) {
+        // Its group still visible: another tab of the group is in front.
+        hiddenBehindTab = props.api.group.api.isVisible;
+        return;
+      }
+      if (hiddenBehindTab) clear();
     });
     return () => disposable.dispose();
   }, [isNew, isActive, panelId, props.api]);
@@ -253,15 +262,22 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // #3122 — ", new" in the tab's accessible name. dockview names the tab
   // element (.dv-tab, this component's host) with an aria-label of the bare
   // title, which wins over any text inside it, so the suffix has to go on
-  // that label. Re-applied when the title changes, since dockview rewrites
-  // the label then.
-  const title = props.api.title;
+  // that label. Re-applied on every title change: dockview rewrites the
+  // label then (its own listener runs first, it subscribed earlier), and a
+  // setTitle does not re-render this component.
   useEffect(() => {
-    const tab = tabRef.current?.closest(".dv-tab");
-    if (!isNew || !tab || title === undefined) return;
-    tab.setAttribute("aria-label", `${title}, new`);
-    return () => tab.setAttribute("aria-label", props.api.title ?? title);
-  }, [isNew, title, props.api]);
+    if (!isNew) return;
+    const label = (title: string | undefined, suffix: string) => {
+      const tab = tabRef.current?.closest(".dv-tab");
+      if (tab && title !== undefined) tab.setAttribute("aria-label", `${title}${suffix}`);
+    };
+    label(props.api.title, ", new");
+    const disposable = props.api.onDidTitleChange((e) => label(e.title, ", new"));
+    return () => {
+      disposable.dispose();
+      label(props.api.title, "");
+    };
+  }, [isNew, props.api]);
 
   // Clears the unread badge by advancing the read cursor (store.ts's
   // markEventSeen, which updates the local lastSeenSeq and sends the "seen"

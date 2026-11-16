@@ -137,12 +137,18 @@ vi.mock("./store/index.js", () => {
 // clears its badge on).
 let activeChangeHandler: ((e: { isActive: boolean }) => void) | null;
 let visibilityChangeHandler: ((e: { isVisible: boolean }) => void) | null;
+let titleChangeHandler: ((e: { title: string }) => void) | null;
 
 function makeProps(
-  overrides: { isActive?: boolean; groupPanels?: Partial<IDockviewPanel>[] } = {},
+  overrides: {
+    isActive?: boolean;
+    isVisible?: boolean;
+    groupPanels?: Partial<IDockviewPanel>[];
+  } = {},
 ): IDockviewPanelHeaderProps<TerminalPaneParams> {
   activeChangeHandler = null;
   visibilityChangeHandler = null;
+  titleChangeHandler = null;
   return {
     api: {
       // Split (PaneActionsMenu.tsx's "Split right"/"Split down" items)
@@ -158,11 +164,16 @@ function makeProps(
         activeChangeHandler = cb;
         return { dispose: vi.fn() };
       }),
+      isVisible: overrides.isVisible ?? false,
       onDidVisibilityChange: vi.fn((cb: (e: { isVisible: boolean }) => void) => {
         visibilityChangeHandler = cb;
         return { dispose: vi.fn() };
       }),
-      group: { panels: overrides.groupPanels ?? [] },
+      onDidTitleChange: vi.fn((cb: (e: { title: string }) => void) => {
+        titleChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+      group: { panels: overrides.groupPanels ?? [], api: { isVisible: true } },
     },
     // A stable marker object, not a real DockviewApi — the "View timeline"
     // test below only asserts this exact reference was forwarded to
@@ -1293,6 +1304,37 @@ describe("new-pane mark (#3122)", () => {
     render(<PaneTab {...makeProps()} />);
     act(() => visibilityChangeHandler?.({ isVisible: false }));
     expect(clearPanelNew).not.toHaveBeenCalled();
+    act(() => visibilityChangeHandler?.({ isVisible: true }));
+    expect(clearPanelNew).toHaveBeenCalledWith(panelId());
+  });
+
+  it("keeps ', new' in the name when dockview rewrites the label on a title change", () => {
+    newPanelIds = [panelId()];
+    const props = makeProps();
+    const { container } = render(inDvTab(props));
+    const dvTab = container.querySelector(".dv-tab")!;
+    // What dockview's own Tab listener does first, then ours runs.
+    dvTab.setAttribute("aria-label", "renamed by the agent");
+    act(() => titleChangeHandler?.({ title: "renamed by the agent" }));
+    expect(dvTab).toHaveAttribute("aria-label", "renamed by the agent, new");
+  });
+
+  it("keeps the mark on a split pane its group hides and shows again", () => {
+    newPanelIds = [panelId()];
+    const props = makeProps({ isVisible: true });
+    render(<PaneTab {...props} />);
+    // Another group maximized: this group, and so this pane, hidden.
+    (props.api.group.api as { isVisible: boolean }).isVisible = false;
+    act(() => visibilityChangeHandler?.({ isVisible: false }));
+    (props.api.group.api as { isVisible: boolean }).isVisible = true;
+    act(() => visibilityChangeHandler?.({ isVisible: true }));
+    expect(clearPanelNew).not.toHaveBeenCalled();
+  });
+
+  it("clears a split pane shown again after another tab of its group was in front", () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps({ isVisible: true })} />);
+    act(() => visibilityChangeHandler?.({ isVisible: false }));
     act(() => visibilityChangeHandler?.({ isVisible: true }));
     expect(clearPanelNew).toHaveBeenCalledWith(panelId());
   });
