@@ -416,7 +416,7 @@ export type CreateSessionParams = CreateSessionBody & {
   // `small_model` config key.
   smallModel?: string;
   // Set ONLY by the Task Master spawn sites (task-claim.ts's
-  // dispatchClaimedTask/retryTask, task-reconciler.ts's spawnReviewAgentNow,
+  // dispatchClaimedTask/dispatchQueuedRetry, task-reconciler.ts's spawnReviewAgentNow,
   // task-reseed.ts's reseedTaskIfSessionExited) to signal "this session is
   // an unattended Task Master agent." Threaded all the way through to the
   // opencode and codex adapters' HookAdapterContext.taskId, which use a

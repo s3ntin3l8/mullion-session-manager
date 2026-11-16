@@ -5429,9 +5429,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               // forever, no longer pointed to by any task row — exactly the
               // orphan this PR exists to stop creating (see #772).
               // Best-effort, fire-and-forget — deliberately NOT awaited,
-              // unlike retryTask's/failReviewingGate's own kill calls
-              // (task-claim.ts, above in this file): those run at the END
-              // of their function, with nothing left to do afterward, so
+              // unlike failReviewingGate's own kill call
+              // (task-gate-failure.ts): that one runs at the END
+              // of its function, with nothing left to do afterward, so
               // awaiting costs nothing. This one sits in the MIDDLE of the
               // "-> reviewing" transition, with `recordTaskTransition` and
               // `syncTaskTransition` still to come — a kill failure must

@@ -422,9 +422,9 @@ export async function attemptAutoRebase(
     }
   }
 
-  // task.branchName should always be set by this point (retryTask's own
-  // reservation transaction refuses a null branchName before a task can
-  // even reach "done"), but fall back the same way task-claim.ts's resume
+  // task.branchName should always be set by this point (Retry resets a
+  // failed task with no branch to "ready" rather than resuming it, so a task
+  // never reaches "done" without one), but fall back the same way task-claim.ts's resume
   // path does rather than crash on an unexpected null.
   const branchName = task.branchName ?? deriveTaskBranchName(task);
 

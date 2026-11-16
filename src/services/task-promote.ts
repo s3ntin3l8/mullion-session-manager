@@ -732,7 +732,7 @@ export async function openDraftPRForTask(
     );
     clearGithubSyncError(app, task.id);
     // #972 — task.prUrl can still be null here on a row that predates
-    // retryTask clearing prUrl/prNumber together (a retry that cleared only
+    // enqueueRetry clearing prUrl/prNumber together (a retry that cleared only
     // prUrl left this exact inconsistent pair). Asserting it non-null would
     // hand `null` to a caller (maybeOpenDraftPR) that writes it straight
     // back into tasks.prUrl, re-affirming the bad state forever. Fetch the

@@ -1055,7 +1055,7 @@ export const tasks = sqliteTable(
     // left running — no path in the task lifecycle ever terminated it once
     // this pointer moved on, so it lingered indefinitely as a live process
     // with no task attached to it. See task-approve.ts's cleanupTaskSessions
-    // and task-claim.ts's retryTask for the two call sites that touch this
+    // and task-retry.ts's enqueueRetry for the two call sites that touch this
     // column directly.
     sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
     // Claimed-task-never-starts-a-turn fix — whether the worker's most
@@ -1747,7 +1747,7 @@ export const tasks = sqliteTable(
     // behaviours hang off it), and deliberately NOT the same thing as
     // `archivedAt`: a merge archives the copy, but a human can Unarchive it
     // (which clears only `archivedAt`), and the fact that a merge superseded
-    // it does not change when the row is unhidden. `retryTask` refuses a
+    // it does not change when the row is unhidden. `enqueueRetry` refuses a
     // marked task outright (it would otherwise resume the copy's branch and
     // spawn a duplicate worker for work another task already owns). Null =
     // "not superseded" — the safe default for every pre-existing row.
