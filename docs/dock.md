@@ -631,7 +631,10 @@ The view shows the project the right sidebar follows:
   when Settings → Session management → "Confirm before kill" is on.
 - **A service's actions**: Restart, Stop (two taps) or Start, and Check for
   update. The image tag stays on the row and is tinted when an update is
-  available.
+  available. While the service's log stream runs, **Stop log** ends the
+  stream (its `docker-logs:<container>` session) and leaves the container
+  running; like a command's Stop, it asks for a second tap when "Confirm
+  before kill" is on. Tap the row again to start the stream again.
 - **A stack's own actions** (Restart stack, Apply config, Pull & restart,
   Rebuild & restart, Stop stack) open from the "⋯" on the stack's heading as
   a sheet with touch-size rows. Pull, rebuild and stop take a second tap.
@@ -639,11 +642,19 @@ The view shows the project the right sidebar follows:
   in the bottom Dock.
 
 The view leaves out the bottom Dock's GitHub row and its **Preview ▾**
-shortcut: GitHub and Browser are right-rail views of their own. It does not
-run "Auto-attach Docker logs"; the bottom Dock does, and the two can be on
-screen together with a mouse at these widths. On a touch screen the bottom Dock is not
-mounted, so the setting has no effect there yet (#3031), and the view cannot
-yet turn a service's log stream off.
+shortcut: GitHub and Browser are right-rail views of their own.
+
+**"Auto-attach Docker logs" runs on exactly one surface per project**
+(#3031). The bottom Dock runs it while it is mounted for the project; the
+view runs it when the bottom Dock is not: on a touch screen and on the phone
+tier (where the bottom Dock is never mounted), while the bottom Dock is
+collapsed, and in Tasks mode. With a mouse at these widths both can be on
+screen for one project, and the view then leaves it to the bottom Dock. The
+choice is made in one place, `useDockProject` (its `surface` option): the
+bottom Dock registers itself for the project while its `DockProjectGroup` is
+mounted. Which containers have already been attached is kept per project,
+not per surface, so the surface that takes the effect over does not attach
+a container a second time.
 
 **The log is read only.** The bottom Dock is not mounted under a touch
 pointer, because the mobile key bar sends input by session and cannot tell a

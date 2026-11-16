@@ -114,8 +114,9 @@ export function DockProjectGroup({
 }) {
   const prsRefreshTrigger = useDashboardStore((s) => s.prsRefreshTriggerByProject[projectId] ?? 0);
   // The project's Dock data and every action on it (#3012): useDockProject.ts,
-  // shared with the right sidebar's Dock view. Only this bottom Dock runs the
-  // auto-attach effect (see that hook's header comment).
+  // shared with the right sidebar's Dock view. While this is mounted, it is
+  // the surface that runs the auto-attach effect (see that hook's header
+  // comment).
   const {
     project,
     configuredControls,
@@ -129,7 +130,7 @@ export function DockProjectGroup({
     runningFor,
     controlView,
     stackActions,
-  } = useDockProject(projectId, { autoAttach: true, onOpenSession });
+  } = useDockProject(projectId, { surface: "bottom-dock", onOpenSession });
 
   // ---- Collapsible project section (unified-rail dock rework) ----
   // Expanded by default; persisted per project per workspace so a user's

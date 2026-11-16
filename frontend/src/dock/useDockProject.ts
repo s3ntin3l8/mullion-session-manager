@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/index.js";
 import type {
   DockControl,
@@ -25,7 +25,15 @@ import type { DockerStackGroup } from "./dockHelpers.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
-import { DOCKER_POLL_INTERVAL_MS, useSharedDockControls } from "./dockProjectShared.js";
+import {
+  DOCKER_POLL_INTERVAL_MS,
+  isBottomDockMounted,
+  registerBottomDock,
+  sharedAutoAttachState,
+  useBottomDockMounted,
+  useSharedDockControls,
+} from "./dockProjectShared.js";
+import type { AutoAttachEntry } from "./dockProjectShared.js";
 
 // One project's Dock data and actions (#3012): its controls (dock.json and
 // the Docker Compose discovery), how they group, which are running, and every
@@ -37,10 +45,14 @@ import { DOCKER_POLL_INTERVAL_MS, useSharedDockControls } from "./dockProjectSha
 // and the same actions instead of a fork of them. The code below moved here
 // verbatim; only its packaging changed.
 //
-// `autoAttach` gates the "Auto-attach Docker logs" effect. Only the bottom
-// Dock runs it: the view and the Dock can both be mounted for one project (a
-// fine pointer between 700 and 1099px), and two copies of the effect would
-// each start a log session for the same container.
+// `surface` says which layout this copy serves, and decides (here, and
+// nowhere else) which one runs the "Auto-attach Docker logs" effect (#3031):
+// exactly one per project. The bottom Dock runs it whenever it is mounted
+// for the project; the right sidebar's Dock view runs it only when the
+// bottom Dock is not (a coarse pointer, the phone tier, a collapsed Dock,
+// Tasks mode). With a fine pointer between 700 and 1099px both can be
+// mounted for one project, and two copies of the effect would each start a
+// log session for the same container.
 
 // Discovery is `docker ps -a`-driven (docker-service-detect.ts's
 // probeComposeServices), not compose-config-driven — a `compose up -d`
@@ -102,13 +114,15 @@ export interface DockStackActions {
   stop: () => void;
 }
 
+export type DockSurface = "bottom-dock" | "sidebar-view";
+
 export function useDockProject(
   projectId: number,
   {
-    autoAttach,
+    surface,
     onOpenSession,
   }: {
-    autoAttach: boolean;
+    surface: DockSurface;
     // Issue #2069 — "Open holder" on a port-in-use row.
     onOpenSession?: (session: Session) => void;
   },
@@ -327,32 +341,48 @@ export function useDockProject(
 
   const allRenderedControls: DockControl[] = [...controlsBeforeOrphans, ...orphanControls];
 
-  const AUTO_ATTACH_RETRY_MS = 60_000;
-  const autoAttachStateRef = useRef<Map<string, { eligible: boolean; failedAt: number | null }>>(
-    new Map(),
+  // Which surface runs auto-attach (see the header comment). The bottom Dock
+  // registers in a layout effect, so a view mounting in the same commit
+  // already sees it when its own (passive) auto-attach effect runs; the
+  // effect also re-checks the registry rather than trusting this render's
+  // value alone.
+  useLayoutEffect(
+    () => (surface === "bottom-dock" ? registerBottomDock(projectId) : undefined),
+    [surface, projectId],
   );
+  const bottomDockMounted = useBottomDockMounted(projectId);
+  const autoAttach = surface === "bottom-dock" || !bottomDockMounted;
+
+  const AUTO_ATTACH_RETRY_MS = 60_000;
+  // The bookkeeping is the project's, not this mount's (dockProjectShared.ts):
+  // when the effect moves from one surface to the other, the new owner knows
+  // which containers were already attached, or are being attached right now,
+  // and does not start a second log session for them.
+  const localAutoAttachStateRef = useRef<Map<string, AutoAttachEntry>>(new Map());
   useEffect(() => {
     if (!autoAttach || !sessionsLoaded) return;
+    if (surface !== "bottom-dock" && isBottomDockMounted(projectId)) return;
+    const autoAttachState = sharedAutoAttachState(projectId) ?? localAutoAttachStateRef.current;
     const autoAttachOn = settings.dock.autoAttachDockerLogs;
     const currentIdentities = new Set(
       discoveredControls
         .map((control) => dockerSessionIdentity(control))
         .filter((identity): identity is string => identity !== null),
     );
-    for (const identity of autoAttachStateRef.current.keys()) {
-      if (!currentIdentities.has(identity)) autoAttachStateRef.current.delete(identity);
+    for (const identity of autoAttachState.keys()) {
+      if (!currentIdentities.has(identity)) autoAttachState.delete(identity);
     }
     const nowMs = Date.now();
     for (const control of discoveredControls) {
       const identity = dockerSessionIdentity(control);
       if (identity === null) continue;
       const eligible = autoAttachOn && control.docker?.state === "running";
-      const entry = autoAttachStateRef.current.get(identity);
+      const entry = autoAttachState.get(identity);
       const wasEligible = entry?.eligible ?? false;
       const failedAt = entry?.failedAt ?? null;
       const dueForRetry = failedAt !== null && nowMs - failedAt >= AUTO_ATTACH_RETRY_MS;
       if (eligible && (!wasEligible || dueForRetry) && !runningFor(control)) {
-        autoAttachStateRef.current.set(identity, { eligible: true, failedAt });
+        autoAttachState.set(identity, { eligible: true, failedAt });
         useDashboardStore
           .getState()
           .createSession(projectId, control.command, {
@@ -362,19 +392,26 @@ export function useDockProject(
             ...(control.env ? { env: control.env } : {}),
           })
           .then(() => {
-            autoAttachStateRef.current.set(identity, { eligible: true, failedAt: null });
+            autoAttachState.set(identity, { eligible: true, failedAt: null });
           })
           .catch(() => {
             console.warn("[dock] auto-attach docker logs failed", control.id);
             showCheckStatus(control.id, "Auto-attach failed", true);
-            autoAttachStateRef.current.set(identity, { eligible: true, failedAt: Date.now() });
+            autoAttachState.set(identity, { eligible: true, failedAt: Date.now() });
           });
         continue;
       }
-      autoAttachStateRef.current.set(identity, { eligible, failedAt });
+      autoAttachState.set(identity, { eligible, failedAt });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runningFor/discoveredControls are recomputed fresh from `controls`/`sessions` every render; depending on `controls` avoids re-running this effect on every unrelated re-render.
-  }, [autoAttach, controls, sessionsLoaded, settings.dock.autoAttachDockerLogs, projectId]);
+  }, [
+    autoAttach,
+    surface,
+    controls,
+    sessionsLoaded,
+    settings.dock.autoAttachDockerLogs,
+    projectId,
+  ]);
 
   const handleCheckUpdate = async (control: DockControl) => {
     try {
