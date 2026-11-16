@@ -155,7 +155,7 @@ in `machine_credential`.
   agent is terminal in memory, so nothing short of a restart re-reads either
   file; `install.sh` restarts a unit that was running when it rewrote the
   `.env`). The recipe is tested through the real boot path
-  (`test/plugins/agent-restart-reenroll.test.ts`). A credential unused for 90 days is rejected the same way as a
+  (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not at rotation time: rotating to retire a leaked token does not need it. A credential unused for 90 days is rejected the same way as a
   revoked one, so the agent log's "revoked or unknown" can also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
@@ -334,14 +334,25 @@ specific address.
   blocks `/api/internal/register`, so use the primary's direct address
   (e.g. `http://dev-01:3100`) if that applies to you.
 - **Rotate token** (the host's `…` menu, click twice to confirm) mints a new
-  token, shows it once, and clears the host's session. The running agent is
-  locked out until its `.env` carries the new value and it is restarted —
-  re-running the installer does not rewrite an existing `.env`. An agent that
-  registered itself needs `MULLION_ENROLLMENT_TOKEN=<new>` and
-  `MULLION_AGENT_TOKEN=` empty (leave its `MULLION_PRIMARY_URL` as installed); a host added with **Use my own token** needs
-  `MULLION_AGENT_TOKEN=<new>` instead (it never registers, so clearing it would
-  leave the agent with no credential and it would refuse to boot). The dialog
-  shows both.
+  token, shows it once, and clears the host's session. What that means depends
+  on the host:
+  - **No live machine identity** (a manual-token host, a legacy agent, a revoked
+    row): the running agent is locked out until its `.env` carries the new value
+    and it is restarted — re-running the installer does not rewrite an existing
+    `.env`. An agent that registered itself needs
+    `MULLION_ENROLLMENT_TOKEN=<new>` and `MULLION_AGENT_TOKEN=` empty (leave its
+    `MULLION_PRIMARY_URL` as installed); a host added with **Use my own token**
+    needs `MULLION_AGENT_TOKEN=<new>` instead (it never registers, so clearing it
+    would leave the agent with no credential and it would refuse to boot). The
+    dialog shows both.
+  - **Live machine identity** (the agent registered itself): the running agent is
+    unaffected. It renews with its `{hostId, machineCredential}` and never
+    presents the bootstrap token again, so the new token is only needed if it has
+    to register again (state file lost, identity revoked, or expired after 90
+    days unused). The menu then also offers **Rotate token and discard it**,
+    which kills the old token without ever displaying the new one; the recovery
+    recipe (rotate, put the token in `.env`, delete `agent-identity.json`,
+    restart) is done at repair time, by rotating again, not at rotation time.
 - Tick **Use my own token** to supply a token yourself instead (the manual
   flow below).
 

@@ -21,6 +21,11 @@ interface AgentInstallInstructionsProps {
    * installed and must have its .env updated.
    */
   kind: "install" | "rotate";
+  /**
+   * "rotate" only: the agent holds a live machine identity, so the rotation
+   * did not lock it out and the new token is only needed to register again.
+   */
+  agentUnaffected?: boolean;
   primaryUrl: string;
   baseUrl?: string;
 }
@@ -62,6 +67,7 @@ export function AgentInstallInstructions({
   token,
   hostName,
   kind,
+  agentUnaffected = false,
   primaryUrl,
   baseUrl,
 }: AgentInstallInstructionsProps) {
@@ -90,6 +96,15 @@ export function AgentInstallInstructions({
         </>
       ) : (
         <>
+          {agentUnaffected && (
+            <span className="create-modal-field-hint" data-testid="rotate-unaffected">
+              The running agent is unaffected: it holds a machine identity and keeps renewing on it,
+              so there is nothing to do now. You only need this token if the agent has to register
+              again (its state file is lost, or its identity is revoked or expired after 90 days
+              unused): then put it in the .env below, delete agent-identity.json and restart the
+              agent.
+            </span>
+          )}
           <CopyBlock
             label="Agent's .env (installed with the Add host command)"
             text={envUpdateSnippet(token)}
@@ -100,7 +115,10 @@ export function AgentInstallInstructions({
           />
           <span className="create-modal-field-hint">
             Use the one that matches how this host was added (keep the primary URL the agent's .env
-            already has), then restart the agent. Until you do, it can no longer reach this primary.
+            already has), then restart the agent.{" "}
+            {agentUnaffected
+              ? "Until then the agent keeps running on its identity."
+              : "Until you do, it can no longer reach this primary."}{" "}
             Re-running the installer would not apply it: the installer never rewrites an existing
             .env.
           </span>

@@ -170,7 +170,11 @@ export function HostsSection() {
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   // A freshly rotated token, shown once (the DB only keeps it encrypted).
-  const [rotated, setRotated] = useState<{ name: string; token: string } | null>(null);
+  const [rotated, setRotated] = useState<{
+    name: string;
+    token: string;
+    liveIdentity: boolean;
+  } | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
   const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingState>>({});
@@ -373,10 +377,22 @@ export function HostsSection() {
   const handleRotate = (host: Host) => {
     setRotateError(null);
     rotateHostToken(host.id)
-      .then((token) => setRotated({ name: host.name, token }))
+      .then((token) =>
+        setRotated({ name: host.name, token, liveIdentity: host.hasLiveMachineIdentity === true }),
+      )
       .catch((err: unknown) =>
         setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
       );
+  };
+
+  // Rotate and discard: the old token dies, the new one is never rendered or
+  // kept. Only offered for a host with a live machine identity (it renews on
+  // that, so it does not need the value).
+  const handleRotateDiscard = (host: Host) => {
+    setRotateError(null);
+    rotateHostToken(host.id).catch((err: unknown) =>
+      setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
+    );
   };
 
   const confirmCascadeDelete = () => {
@@ -659,16 +675,36 @@ export function HostsSection() {
                           ? []
                           : [
                               {
-                                // Replaces the host's token. The running agent is
-                                // locked out until its .env carries the new one,
-                                // hence the arm-then-confirm click.
+                                // Replaces the host's token. Without a live
+                                // machine identity the running agent is locked
+                                // out until its .env carries the new one; with
+                                // one it keeps renewing, and the new token is
+                                // only needed to register again. Arm-then-confirm
+                                // either way.
                                 key: "rotate",
                                 label: "Rotate token",
-                                armLabel: "Click again to rotate",
+                                armLabel:
+                                  host.hasLiveMachineIdentity === true
+                                    ? "Click again to rotate (agent unaffected)"
+                                    : "Click again to rotate",
                                 icon: <GearIcon size={14} style={{ color: "var(--muted)" }} />,
                                 confirm: true,
                                 onClick: () => handleRotate(host),
                               },
+                              ...(host.hasLiveMachineIdentity === true
+                                ? [
+                                    {
+                                      key: "rotate-discard",
+                                      label: "Rotate token and discard it",
+                                      armLabel: "Click again to rotate (token not shown)",
+                                      icon: (
+                                        <GearIcon size={14} style={{ color: "var(--muted)" }} />
+                                      ),
+                                      confirm: true,
+                                      onClick: () => handleRotateDiscard(host),
+                                    },
+                                  ]
+                                : []),
                             ]),
                         // Issue #2568 — only a host that holds a machine identity
                         // has one to revoke.
@@ -776,6 +812,7 @@ export function HostsSection() {
           kind="rotate"
           token={rotated.token}
           hostName={rotated.name}
+          agentUnaffected={rotated.liveIdentity}
           primaryUrl={window.location.origin}
           onClose={() => setRotated(null)}
         />
