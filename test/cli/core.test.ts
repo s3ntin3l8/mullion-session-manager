@@ -3437,6 +3437,18 @@ describe("runCommand", () => {
       expect(await run([])).toBe(2);
       expect(await run(["7"])).toBe(2);
       expect(await run(["7", "x", "--after-offset", "-1"])).toBe(2);
+      expect(await run(["7", "x", "--after-seq", "-1"])).toBe(2);
+      expect(await run(["7", "x", "--after-seq", "abc"])).toBe(2);
+    });
+
+    it("sends --after-seq as afterSeq", async () => {
+      const request = vi.fn(async (_op: string, _body: unknown) => ({ matched: true }));
+      const code = await runCommand(["session", "wait-output", "7", "x", "--after-seq", "12"], {
+        client: fakeClient({ request }),
+        io: fakeIo(),
+      });
+      expect(code).toBe(0);
+      expect(request.mock.calls[0][1]).toMatchObject({ sessionId: "7", afterSeq: 12 });
     });
   });
 

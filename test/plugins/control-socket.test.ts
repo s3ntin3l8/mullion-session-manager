@@ -3771,6 +3771,9 @@ describe("controlSocketPlugin (issue #185)", () => {
             ok: false,
             status: 400,
           });
+          for (const afterSeq of [-1, "3"]) {
+            expect(await bad({ match: "x", afterSeq })).toMatchObject({ ok: false, status: 400 });
+          }
           for (const match of ["(a+)+$", "(a)\\1", "(?=a)b", "("]) {
             expect(await bad({ match, regex: true })).toMatchObject({ ok: false, status: 400 });
           }
