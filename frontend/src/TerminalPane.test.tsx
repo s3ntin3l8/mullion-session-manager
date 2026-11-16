@@ -549,7 +549,7 @@ function renderPane(
       projectRoots: [],
       autoDetectHostCheckouts: false,
       externalReadRoots: [],
-      diskCleanup: { cacheDirs: [] },
+      diskCleanup: { cacheDirs: [], optIns: [] },
       launchers: {
         defaultShell: "bash",
         defaultAgent: "claude",

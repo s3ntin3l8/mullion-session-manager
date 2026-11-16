@@ -189,10 +189,16 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       else app.log.debug(fields, "storage measurement");
     };
 
-  const docker = createMeasuredProbe(() => inspectDockerStorage(), {
-    ttlMs: DOCKER_INSPECT_CACHE_MS,
-    onRun: logRun("docker"),
-  });
+  const docker = createMeasuredProbe(
+    () =>
+      inspectDockerStorage(undefined, {
+        countVolumes: getStoredSettings(app.db).diskCleanup.optIns.includes("docker-volumes"),
+      }),
+    {
+      ttlMs: DOCKER_INSPECT_CACHE_MS,
+      onRun: logRun("docker"),
+    },
+  );
   const temp = createMeasuredProbe(
     () => inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) }),
     { ttlMs: SLOW_INSPECT_CACHE_MS, onRun: logRun("temp") },
@@ -377,9 +383,20 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   // server has already measured (never from the client, and never by starting a
   // new measurement). A source nobody has measured yet still runs: each prune
   // re-checks its own safety.
-  function cleanupPlans(mode: CleanupMode, requestedCacheDirs?: string[]): CleanupStepPlan[] {
+  function cleanupPlans(
+    mode: CleanupMode,
+    requestedCacheDirs?: string[],
+    requestedOptIns?: string[],
+  ): CleanupStepPlan[] {
     const plans: CleanupStepPlan[] = [];
     const dockerSeen = docker.peek(SKIP_DECISION_MAX_AGE_MS);
+    // Same two-sided rule as the caches, but stricter: with no request list at
+    // all nothing runs, so a stored opt-in alone can never delete a volume.
+    // Safe mode never prunes volumes, whatever is stored.
+    const pruneVolumes =
+      mode === "aggressive" &&
+      requestedOptIns?.includes("docker-volumes") === true &&
+      getStoredSettings(app.db).diskCleanup.optIns.includes("docker-volumes");
     plans.push({
       source: "docker",
       label: "Docker",
@@ -387,7 +404,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         dockerSeen && !dockerSeen.available
           ? `Docker unavailable: ${dockerSeen.error ?? "not installed, or permission denied"}`
           : null,
-      run: step(docker, () => pruneDockerStorage(mode)),
+      run: step(docker, () => pruneDockerStorage(mode, undefined, { pruneVolumes })),
     });
     const tempSeen = temp.peek(SKIP_DECISION_MAX_AGE_MS);
     plans.push({
@@ -467,7 +484,9 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
   });
 
-  app.post<{ Body?: { mode?: CleanupMode; cacheDirs?: string[] } | null }>(
+  app.post<{
+    Body?: { mode?: CleanupMode; cacheDirs?: string[]; optIns?: string[] } | null;
+  }>(
     "/api/storage/cleanup",
     {
       config: { rateLimit: PRUNE_RATE_LIMIT },
@@ -477,6 +496,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
           properties: {
             mode: { type: "string", enum: ["safe", "aggressive"] },
             cacheDirs: { type: "array", items: { type: "string" }, maxItems: 20 },
+            optIns: { type: "array", items: { type: "string" }, maxItems: 20 },
           },
           additionalProperties: false,
         },
@@ -490,7 +510,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       try {
         const job = cleanup.start(
           request.body?.mode ?? "safe",
-          cleanupPlans(request.body?.mode ?? "safe", request.body?.cacheDirs),
+          cleanupPlans(request.body?.mode ?? "safe", request.body?.cacheDirs, request.body?.optIns),
         );
         return reply.code(202).send(job);
       } catch (error) {

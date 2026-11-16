@@ -1,4 +1,5 @@
 import { sanitizeCacheDirIds } from "./cache-storage.js";
+import { sanitizeOptInIds } from "./cleanup-opt-ins.js";
 import { clampGitIdentityField } from "./git-identity.js";
 import { DEVICE_EMULATOR_GPU_PATTERN } from "./device-defaults.js";
 import { eq } from "drizzle-orm";
@@ -97,7 +98,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   projectRoots: [],
   autoDetectHostCheckouts: false,
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
-  diskCleanup: { cacheDirs: [] },
+  diskCleanup: { cacheDirs: [], optIns: [] },
   launchers: {
     defaultShell: "zsh",
     defaultAgent: "claude",
@@ -523,7 +524,10 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
     externalReadRoots: sanitizeExternalReadRoots(settings.externalReadRoots),
     // A patch can only ever replace the array wholesale; drop anything that
     // isn't an allowlisted cache id so it can't be persisted, let alone acted on.
-    diskCleanup: { cacheDirs: sanitizeCacheDirIds(settings.diskCleanup.cacheDirs) },
+    diskCleanup: {
+      cacheDirs: sanitizeCacheDirIds(settings.diskCleanup.cacheDirs),
+      optIns: sanitizeOptInIds(settings.diskCleanup.optIns),
+    },
     terminal: {
       ...settings.terminal,
       fontSize: safeNumber(settings.terminal.fontSize, {

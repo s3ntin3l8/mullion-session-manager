@@ -381,6 +381,8 @@ export function StorageSection() {
   const settings = useDashboardStore((s) => s.settings);
   const updateSettings = useDashboardStore((s) => s.updateSettings);
   const selectedCaches = settings.diskCleanup.cacheDirs;
+  const selectedOptIns = settings.diskCleanup.optIns;
+  const volumesOptedIn = selectedOptIns.includes("docker-volumes");
   // A cache that was opted in but has since disappeared from disk stays listed
   // (as "not found") so the stale opt-in can still be cleared.
   const visibleCaches = (caches?.caches ?? []).filter(
@@ -529,6 +531,38 @@ export function StorageSection() {
             : "Volumes: unknown (Docker's detailed usage could not be read)"}
         </div>
       )}
+      {docker?.available && (
+        <div data-testid="docker-volumes-optin">
+          <div className="settings-info-row">
+            <span className="settings-info-key">Also remove unused anonymous volumes</span>
+            <span className="settings-info-value">
+              <Toggle
+                size="small"
+                on={volumesOptedIn}
+                ariaLabel="Also remove unused anonymous volumes"
+                onChange={(on) =>
+                  updateSettings({
+                    diskCleanup: {
+                      cacheDirs: selectedCaches,
+                      optIns: on
+                        ? [
+                            ...selectedOptIns.filter((id) => id !== "docker-volumes"),
+                            "docker-volumes",
+                          ]
+                        : selectedOptIns.filter((id) => id !== "docker-volumes"),
+                    },
+                  })
+                }
+              />
+            </span>
+          </div>
+          <div className="settings-footer-note">
+            Deleted permanently. Anything an unused, unnamed volume still holds, such as a stopped
+            dev database, is lost. Named volumes are never removed. Aggressive cleanup only, and
+            only on Docker Engine 23 or newer.
+          </div>
+        </div>
+      )}
 
       <div className="storage-tiers">
         <TierCard
@@ -543,7 +577,7 @@ export function StorageSection() {
               armedLabel="Confirm safe cleanup"
               title="Remove dangling images and stale containers, networks, build cache, and temp files"
               disabled={cleanup.running}
-              onConfirm={() => void cleanup.start("safe", selectedCaches)}
+              onConfirm={() => void cleanup.start("safe", selectedCaches, selectedOptIns)}
             >
               {cleanup.activeMode === "safe" ? "Cleaning up…" : "Clean up (safe)…"}
             </ConfirmButton>
@@ -568,7 +602,7 @@ export function StorageSection() {
               armedLabel="Confirm aggressive cleanup"
               title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, the npm cache, free space inside opencode's database, and developer worktrees whose branch is merged or gone"
               disabled={cleanup.running}
-              onConfirm={() => void cleanup.start("aggressive", selectedCaches)}
+              onConfirm={() => void cleanup.start("aggressive", selectedCaches, selectedOptIns)}
             >
               {cleanup.activeMode === "aggressive" ? "Cleaning up…" : "Aggressive cleanup…"}
             </ConfirmButton>
@@ -593,6 +627,7 @@ export function StorageSection() {
                     onChange={(on) =>
                       updateSettings({
                         diskCleanup: {
+                          optIns: selectedOptIns,
                           cacheDirs: on
                             ? [...selectedCaches, cache.id]
                             : selectedCaches.filter((id) => id !== cache.id),
@@ -759,7 +794,8 @@ export function StorageSection() {
           Aggressive cleanup also removes <strong>all unused images, including tagged ones</strong>{" "}
           (they must be pulled or rebuilt again) and all unused build cache, and it drops the 7-day
           window for stopped containers and unused networks too. Neither uses <code>--volumes</code>
-          , so volumes are always preserved. Figures are estimates.
+          , so volumes are preserved unless you opt in to removing unused anonymous volumes
+          (aggressive only, Docker Engine 23+, never named volumes). Figures are estimates.
         </div>
         {temp?.available && (
           <div className="settings-footer-note">

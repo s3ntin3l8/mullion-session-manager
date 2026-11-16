@@ -5,6 +5,7 @@
 // every existing importer keeps its path. Types plus the `LOG_LEVELS`
 // constant: no defaults, no logic.
 import type { CacheDirId } from "./cache-storage.js";
+import type { OptInId } from "./cleanup-opt-ins.js";
 import type {
   Theme,
   CursorStyle,
@@ -125,6 +126,9 @@ export interface AppSettings {
   // because they're slow to re-download (Playwright browsers, HF models).
   diskCleanup: {
     cacheDirs: CacheDirId[];
+    // Non-directory sources the aggressive cleanup may act on (e.g.
+    // "docker-volumes"); allowlisted by OPT_IN_IDS. Empty = none.
+    optIns: OptInId[];
   };
   launchers: {
     defaultShell: string;

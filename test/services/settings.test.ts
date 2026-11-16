@@ -6,6 +6,7 @@ import {
   mergeSettings,
   DEFAULT_SETTINGS,
 } from "../../src/services/settings.js";
+import { sanitizeOptInIds } from "../../src/services/cleanup-opt-ins.js";
 import { SESSION_STATUSES } from "../../src/services/session-status.js";
 
 describe("deepMerge", () => {
@@ -251,6 +252,16 @@ describe("sanitizeSettings", () => {
     });
     expect(sanitizeSettings(dirty).diskCleanup.cacheDirs).toEqual(["pip", "go-build"]);
     expect(sanitizeSettings(mergeSettings({})).diskCleanup.cacheDirs).toEqual([]);
+  });
+
+  it("keeps only allowlisted ids in diskCleanup.optIns", () => {
+    const dirty = mergeSettings({
+      diskCleanup: { optIns: ["docker-volumes", "rm -rf", "docker-volumes", 7] },
+    });
+    expect(sanitizeSettings(dirty).diskCleanup.optIns).toEqual(["docker-volumes"]);
+    expect(sanitizeSettings(mergeSettings({})).diskCleanup.optIns).toEqual([]);
+    expect(sanitizeOptInIds("docker-volumes")).toEqual([]);
+    expect(sanitizeOptInIds(undefined)).toEqual([]);
   });
 
   it("clamps out-of-range and non-finite numeric fields to their defaults", () => {

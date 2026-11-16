@@ -20,7 +20,14 @@ export const DOCKER_SAFE_PRUNE_STEPS: ReadonlyArray<readonly string[]> = [
   ["builder", "prune", "--force", "--filter", "until=24h"],
 ];
 // Never --volumes: volumes hold data. --all also removes unused tagged images.
+// Volumes are only ever touched by the separate, opted-in step below.
 export const DOCKER_PRUNE_AGGRESSIVE_ARGS = ["system", "prune", "--all", "--force"] as const;
+// Exactly this, never --all (named volumes) and never --filter. Docker 23+
+// removes only anonymous volumes with it; older engines also remove unused
+// NAMED volumes, hence the version gate in pruneDockerStorage.
+export const DOCKER_VOLUME_PRUNE_ARGS = ["volume", "prune", "--force"] as const;
+const DOCKER_SERVER_VERSION_ARGS = ["version", "--format", "{{.Server.Version}}"] as const;
+const MIN_ANONYMOUS_ONLY_VOLUME_PRUNE_MAJOR = 23;
 const DOCKER_USAGE_ARGS = ["system", "df", "--format", "{{json .}}"] as const;
 const DOCKER_VERBOSE_USAGE_ARGS = ["system", "df", "-v", "--format", "{{json .}}"] as const;
 const DOCKER_DANGLING_IMAGES_ARGS = [
@@ -39,6 +46,13 @@ export interface DockerPruneResult {
   reclaimedBytes: number;
   /** Set when a multi-step cleanup stopped early; earlier steps still freed space. */
   error?: string;
+  /** Something the cleanup chose not to do, shown next to the figure. */
+  note?: string;
+}
+
+export interface PruneDockerOptions {
+  /** Also run `docker volume prune --force` (aggressive only, Docker 23+ only). */
+  pruneVolumes?: boolean;
 }
 
 export interface DockerUsageRow {
@@ -314,12 +328,19 @@ async function estimateTiers(spawnDocker?: SpawnDocker): Promise<{
 
 export async function inspectDockerStorage(
   spawnDocker?: SpawnDocker,
+  options: { countVolumes?: boolean } = {},
 ): Promise<DockerStorageStatus> {
   try {
     const [usage, tiers] = await Promise.all([
       runDocker(DOCKER_USAGE_ARGS, spawnDocker),
       estimateTiers(spawnDocker),
     ]);
+    // Unused anonymous volumes join the aggressive figure only when the cleanup
+    // would really remove them: opted in, and an engine the prune is safe on.
+    const volumeBytes =
+      options.countVolumes === true && tiers && (await dockerVolumePruneAllowed(spawnDocker))
+        ? tiers.volumes.anonymousUnused.bytes
+        : 0;
     const rows = parseDockerUsage(usage);
     const rowsAggressive = rows
       .filter((row) => row.type !== "Local Volumes")
@@ -333,7 +354,7 @@ export async function inspectDockerStorage(
         safeBytes: tiers?.safeBytes ?? null,
         // The larger of the two: the rows are all there is when the verbose call
         // fails, and the per-entry sum corrects them where they understate.
-        aggressiveBytes: Math.max(rowsAggressive, tiers?.aggressiveBytes ?? 0),
+        aggressiveBytes: Math.max(rowsAggressive, tiers?.aggressiveBytes ?? 0) + volumeBytes,
       },
       ...(tiers ? { volumes: tiers.volumes } : {}),
     };
@@ -353,9 +374,39 @@ export async function inspectDockerStorage(
 // module cache; keep every route importing this canonical .js specifier.
 let pruneRunning = false;
 
+/** The engine's major version, or null when it can't be read or isn't a number. */
+export function parseDockerMajorVersion(output: string): number | null {
+  const match = output.trim().match(/^v?(\d+)\.\d+/);
+  return match ? Number(match[1]) : null;
+}
+
+// Fails closed: anything but a readable version of 23 or newer is a no.
+async function volumePruneBlockedReason(spawnDocker?: SpawnDocker): Promise<string | null> {
+  let raw = "";
+  let major: number | null = null;
+  try {
+    raw = (await runDocker(DOCKER_SERVER_VERSION_ARGS, spawnDocker)).trim();
+    major = parseDockerMajorVersion(raw);
+  } catch {
+    // Treated as an unknown version below.
+  }
+  if (major !== null && major >= MIN_ANONYMOUS_ONLY_VOLUME_PRUNE_MAJOR) return null;
+  return `Docker volume cleanup skipped: needs Docker Engine ${MIN_ANONYMOUS_ONLY_VOLUME_PRUNE_MAJOR}+ (found ${major !== null ? raw : "unknown"})`;
+}
+
+/**
+ * Whether the aggressive estimate may count the unused anonymous volumes: the
+ * same version gate the prune applies, so the figure never promises space the
+ * prune would refuse to free.
+ */
+export async function dockerVolumePruneAllowed(spawnDocker?: SpawnDocker): Promise<boolean> {
+  return (await volumePruneBlockedReason(spawnDocker)) === null;
+}
+
 export async function pruneDockerStorage(
   mode: DockerPruneMode = "safe",
   spawnDocker?: SpawnDocker,
+  options: PruneDockerOptions = {},
 ): Promise<DockerPruneResult> {
   if (pruneRunning) throw new Error("DOCKER_PRUNE_IN_PROGRESS");
   pruneRunning = true;
@@ -379,6 +430,21 @@ export async function pruneDockerStorage(
       completedSteps += 1;
       output += stepOutput;
       reclaimedBytes += parseReclaimed(stepOutput);
+    }
+    if (mode !== "aggressive" || options.pruneVolumes !== true) return { output, reclaimedBytes };
+
+    const blocked = await volumePruneBlockedReason(spawnDocker);
+    if (blocked) return { output, reclaimedBytes, note: blocked };
+    try {
+      const volumeOutput = await runDocker(DOCKER_VOLUME_PRUNE_ARGS, spawnDocker);
+      output += volumeOutput;
+      reclaimedBytes += parseReclaimed(volumeOutput);
+    } catch (error) {
+      return {
+        output,
+        reclaimedBytes,
+        error: error instanceof Error ? error.message : "Docker volume cleanup failed",
+      };
     }
     return { output, reclaimedBytes };
   } finally {
