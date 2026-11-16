@@ -10,8 +10,10 @@ import { removeCheckoutIfClean } from "./checkout-removal.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
 import type { SessionBackend } from "./session-backend.js";
 import type { SessionInfo } from "./pty-manager.js";
+import type { SessionStatus } from "./session-status.js";
 import { syncTaskTransition } from "./task-github-sync.js";
-import { nudgeInsteadOfFailing } from "./task-nudge.js";
+import { nudgeInsteadOfFailing, nudgeShellTailWorker } from "./task-nudge.js";
+import { isShellTailNudgeDue } from "./task-turn-signals.js";
 import { recordTaskTransition } from "./task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import {
@@ -265,4 +267,39 @@ export async function failReviewingGate(
   if (task.worktreePath) {
     await removeFailedTaskWorktree(app, task, project, workerHostId, "the no-commits gate failure");
   }
+}
+
+/**
+ * Handles a failed `checkReviewingGate` on an `in_progress` task: when the
+ * worker's turn ended behind a shell-only tail, keeps waiting (nudging once
+ * `SHELL_TAIL_NUDGE_MS` has elapsed); otherwise runs `failReviewingGate`.
+ */
+export async function gateFailOrNudge(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  session: typeof sessions.$inferSelect,
+  project: typeof projects.$inferSelect,
+  backend: SessionBackend,
+  failureReason: string,
+  now: Date,
+  info: SessionInfo | null,
+  shellTail: boolean,
+  derivedStatus: SessionStatus,
+): Promise<void> {
+  if (shellTail) {
+    if (isShellTailNudgeDue(derivedStatus, info, task, now.getTime()))
+      await nudgeShellTailWorker(app, task, info, now);
+    return;
+  }
+  await failReviewingGate(
+    app,
+    task,
+    session,
+    project,
+    backend,
+    "in_progress",
+    failureReason,
+    now,
+    info,
+  );
 }

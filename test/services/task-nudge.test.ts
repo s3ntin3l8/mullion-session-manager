@@ -47,7 +47,9 @@ const { projects, tasks } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const {
   buildContinuationNudge,
+  buildShellTailNudge,
   nudgeInsteadOfFailing,
+  nudgeShellTailWorker,
   nudgesThisSpell,
   MAX_WORKER_NUDGES,
   NUDGE_TURN_GRACE_MS,
@@ -270,5 +272,77 @@ describe("task nudge", () => {
     expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
     cleanup();
     await app.close();
+  });
+
+  describe("nudgeShellTailWorker", () => {
+    const shellInfo = (over: Record<string, unknown> = {}) =>
+      info({
+        workFinishedAt: NOW.getTime() - 25 * 60_000,
+        outstandingBackgroundTasks: [
+          {
+            id: "b1",
+            type: "shell",
+            status: "running",
+            description: "while pgrep -f npm; do sleep 5; done",
+          },
+        ],
+        ...over,
+      });
+
+    it("words the shell-tail nudge with the job description and wait-loop guidance", () => {
+      const text = buildShellTailNudge("mullion/task-1", "wait loop");
+      expect(text).toContain("wait loop");
+      expect(text).toContain("nothing is committed on mullion/task-1");
+      expect(text).toContain("pgrep -f");
+      expect(text).toContain("kill it");
+      expect(text).not.toBe(buildContinuationNudge("mullion/task-1"));
+    });
+
+    it("truncates job descriptions longer than 200 characters and records the nudge", async () => {
+      const { app, task, load, cleanup } = await setup();
+      const longDesc = "x".repeat(250);
+      const live = shellInfo({
+        outstandingBackgroundTasks: [
+          { id: "b1", type: "shell", status: "running", description: longDesc },
+        ],
+      });
+      expect(await nudgeShellTailWorker(app, task, live, NOW)).toBe(true);
+      expect(mockPromptLiveTaskWorker).toHaveBeenCalledTimes(1);
+      expect(mockPromptLiveTaskWorker.mock.calls[0][3]).toBe("task shell-tail nudge");
+      const sentText = mockPromptLiveTaskWorker.mock.calls[0][2] as string;
+      expect(sentText).toContain(`${"x".repeat(200)}…`);
+      expect(sentText).not.toContain("x".repeat(201));
+      expect(load().nudgeCount).toBe(1);
+      cleanup();
+      await app.close();
+    });
+
+    it("leaves a worker behind the same job alone until a new turn ends", async () => {
+      const nudgedAt = new Date(NOW.getTime() - NUDGE_TURN_GRACE_MS - 60_000);
+      const { app, task, load, cleanup } = await setup({ nudgeCount: 1, lastNudgedAt: nudgedAt });
+      const sameTurn = shellInfo({
+        workFinishedAt: nudgedAt.getTime() - 60_000,
+        agentTurnInFlight: false,
+      });
+      expect(await nudgeShellTailWorker(app, task, sameTurn, NOW)).toBe(false);
+      expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+      expect(load().nudgeCount).toBe(1);
+
+      const newerTurn = shellInfo({ workFinishedAt: nudgedAt.getTime() + 60_000 });
+      expect(await nudgeShellTailWorker(app, task, newerTurn, NOW)).toBe(true);
+      expect(mockPromptLiveTaskWorker).toHaveBeenCalledTimes(1);
+      expect(load().nudgeCount).toBe(2);
+      cleanup();
+      await app.close();
+    });
+
+    it("does not count a nudge when the worker cannot be typed into", async () => {
+      mockPromptLiveTaskWorker.mockResolvedValue("unreachable");
+      const { app, task, load, cleanup } = await setup();
+      expect(await nudgeShellTailWorker(app, task, shellInfo(), NOW)).toBe(false);
+      expect(load()).toMatchObject({ nudgeCount: 0, lastNudgedAt: null });
+      cleanup();
+      await app.close();
+    });
   });
 });

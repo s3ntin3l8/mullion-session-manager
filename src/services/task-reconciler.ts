@@ -32,7 +32,7 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveCommitsPastBase } from "./commits-past-base.js";
 // #2416 — one throttle policy for the reconciler's "this state is stuck"
 // warnings, instead of a copy per lookup.
-import { killDiags, failReviewingGate, removeFailedTaskWorktree } from "./task-gate-failure.js";
+import { killDiags, gateFailOrNudge, removeFailedTaskWorktree } from "./task-gate-failure.js";
 import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
@@ -5121,18 +5121,19 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             const gate = await checkReviewingGate(app, task, project, info, hostId);
             if (!gate.ok) {
               // Shell tail + no commits: mid-work behind a long job (pocket #1264); keep
-              // waiting. The budget deadline, when set, is the backstop.
-              if (shellTail) continue;
-              await failReviewingGate(
+              // waiting, nudging past SHELL_TAIL_NUDGE_MS so a stuck wait loop can be
+              // killed while the budget deadline stays the backstop.
+              await gateFailOrNudge(
                 app,
                 task,
                 session,
                 project,
                 backend,
-                "in_progress",
                 gate.failureReason,
                 now,
                 info,
+                shellTail,
+                derived.status,
               );
               continue;
             }
