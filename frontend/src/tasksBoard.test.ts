@@ -18,6 +18,7 @@ import {
 } from "./tasksBoard.js";
 import type { PhoneSegmentId } from "./tasksBoard.js";
 import type { Task, TaskStatus } from "./api/index.js";
+import { TASK_DERIVED_DEFAULTS } from "./test/fixtures.js";
 
 function makeTask(overrides: Partial<Task>): Task {
   return {
@@ -58,9 +59,7 @@ function makeTask(overrides: Partial<Task>): Task {
     prUrl: null,
     prNumber: null,
     prTitle: null,
-    prTitleFallback: false,
-    issueAgent: null,
-    issueReviewAgent: null,
+    ...TASK_DERIVED_DEFAULTS,
     mergeRequestedAt: null,
     mergeError: null,
     releaseRequestedAt: null,

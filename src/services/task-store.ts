@@ -174,6 +174,9 @@ const TASK_ROW_COLUMNS = {
   // actually started). See task-claim.ts's enqueueTask/dispatchClaimedTask.
   queuedAt: tasks.queuedAt,
   claimedAt: tasks.claimedAt,
+  // #3179 — raw nudge columns; withTaskDerived turns them into the card's fields.
+  nudgeCount: tasks.nudgeCount,
+  lastNudgedAt: tasks.lastNudgedAt,
   startedAt: tasks.startedAt,
   reviewingAt: tasks.reviewingAt,
   completedAt: tasks.completedAt,

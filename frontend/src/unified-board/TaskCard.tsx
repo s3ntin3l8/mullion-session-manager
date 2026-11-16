@@ -38,6 +38,11 @@ function blockerLabel(b: TaskBlocker): string {
 // .claude/plans/can-we-do-a-warm-cocke.md) — a single task card in the
 // board's kanban columns (TaskColumn.tsx). Owns its own drag-to-reorder
 // wiring and nested worker/review session strips (TaskSessionSlot.tsx).
+/** The card's worker-nudge note: nudges sent this spell over the cap. */
+function nudgeNoteText(task: Pick<Task, "nudgeCount" | "nudgeLimit">): string {
+  return `Nudged the worker to continue (${task.nudgeCount}/${task.nudgeLimit})`;
+}
+
 export function TaskCard({
   task,
   project,
@@ -556,6 +561,21 @@ export function TaskCard({
           {task.needsHumanReason === "blocked-threads" && (
             <MergeBlockedThreadsDetail raw={task.mergeBlockedThreads} />
           )}
+        </div>
+      )}
+      {/* #3179 — a nudged worker sits still for up to 10 min per nudge; say why.
+          nudgeCount is this spell's only (the serializer applies that rule). */}
+      {task.status === "in_progress" && task.nudgeCount > 0 && (
+        <div
+          className="task-card-review-round"
+          role="status"
+          title={
+            task.lastNudgedAt
+              ? `Last nudge ${formatRelativeAge(Date.parse(task.lastNudgedAt))}`
+              : undefined
+          }
+        >
+          {nudgeNoteText(task)}
         </div>
       )}
       {task.status === "reviewing" && task.autoReturnRounds > 0 && !task.approvalState && (

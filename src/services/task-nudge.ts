@@ -5,6 +5,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { promptLiveTaskWorker } from "./task-reseed.js";
 import { isTaskInRateLimitGrace } from "./task-rate-limit-grace.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { broadcastTaskEvent } from "./task-events.js";
 
 // A Task Master worker runs unattended, and ending its turn is what signals
 // "done" (task-prompt.ts). A turn that ends with NO commits — a summary that
@@ -38,6 +39,7 @@ export function buildContinuationNudge(branchName: string | null): string {
 type NudgeTask = Pick<
   typeof tasks.$inferSelect,
   | "id"
+  | "projectId"
   | "claimedAt"
   | "nudgeCount"
   | "lastNudgedAt"
@@ -116,5 +118,6 @@ export async function nudgeInsteadOfFailing(
     { taskId: task.id, nudge: sent + 1, max: MAX_WORKER_NUDGES },
     "task nudge: worker ended its turn with no commits — typed a continuation instead of failing",
   );
+  broadcastTaskEvent({ taskId: task.id, projectId: task.projectId, kind: "nudge", ts: Date.now() });
   return true;
 }

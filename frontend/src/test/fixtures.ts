@@ -126,6 +126,9 @@ export const TASK_DERIVED_DEFAULTS = {
   prTitleFallback: false,
   issueAgent: null,
   issueReviewAgent: null,
+  nudgeCount: 0,
+  nudgeLimit: 2,
+  lastNudgedAt: null,
 } as const;
 
 export function makeTask(overrides: Partial<Task> = {}): Task {
@@ -168,9 +171,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     prUrl: null,
     prNumber: null,
     prTitle: null,
-    prTitleFallback: false,
-    issueAgent: null,
-    issueReviewAgent: null,
+    ...TASK_DERIVED_DEFAULTS,
     mergeRequestedAt: null,
     mergeError: null,
     mergeBlockedThreads: null,
