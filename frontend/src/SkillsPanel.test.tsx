@@ -88,6 +88,35 @@ describe("SkillsPanel", () => {
     expect(attempt).toBe(2);
   });
 
+  it("disables Retry and shows progress while the retry request is pending", async () => {
+    let attempt = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(async () => {
+        attempt++;
+        if (attempt === 1) throw new Error("network error");
+        await gate;
+        return jsonResponse(200, [makeSkill()]);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<SkillsPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+    const pending = await screen.findByRole("button", { name: "Retrying…" });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+    await user.click(pending);
+    expect(attempt).toBe(2);
+
+    release();
+    expect(await screen.findByText("my-skill")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retrying…" })).toBeNull();
+  });
+
   it("shows an empty state when no skills are discovered", async () => {
     vi.stubGlobal(
       "fetch",

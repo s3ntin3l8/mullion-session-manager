@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useBusyAction } from "../hooks/useBusyAction.js";
 import { useFileTreeMutations } from "../hooks/useFileTreeMutations.js";
 import { refreshGitStatuses, useTreeGitDecorations } from "../hooks/useTreeGitDecorations.js";
 import { useTreeUploads } from "../hooks/useTreeUploads.js";
@@ -166,10 +167,10 @@ export function FilesSidebarView({
     if (!open && !dirs[dirPath]) void loadDir(dirPath);
   };
 
-  const refresh = () => {
+  const { run: refresh, busy: refreshing } = useBusyAction(() =>
     // Re-list everything that is currently open.
-    for (const dirPath of expanded) void loadDir(dirPath);
-  };
+    Promise.all([...expanded].map((dirPath) => loadDir(dirPath))),
+  );
 
   // Folders whose contents changed: re-list the open ones, and drop the cached
   // listing of a closed one so expanding it later doesn't show stale rows.
@@ -527,7 +528,13 @@ export function FilesSidebarView({
       <SidebarHeader
         label={VIEW_TITLES.files}
         actions={[
-          { key: "refresh", label: "Refresh", icon: RefreshIcon, onClick: refresh },
+          {
+            key: "refresh",
+            label: "Refresh",
+            icon: RefreshIcon,
+            onClick: refresh,
+            busy: refreshing,
+          },
           {
             key: "new-file",
             label: `New file in ${selectedDir || "project root"}`,

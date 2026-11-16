@@ -70,6 +70,27 @@ describe("project preview configuration", () => {
     );
   });
 
+  it("disables Retry loading previews while the retry is pending", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.mocked(api.getProjectPreviewTargets)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockImplementationOnce(async () => {
+        await gate;
+        return structuredClone(initial);
+      });
+    const user = userEvent.setup();
+    render(<PreviewTargetsEditor projectId={1} />);
+    await user.click(await screen.findByRole("button", { name: "Retry loading previews" }));
+
+    const pending = screen.getByRole("button", { name: "Retrying…" });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+
+    release();
+    expect(await screen.findByLabelText("Dev server destination")).toBeInTheDocument();
+  });
+
   it("offers detected ports without overwriting a configured value, and saves an explicit clear", async () => {
     const user = userEvent.setup();
     render(<PreviewTargetsEditor projectId={1} />);

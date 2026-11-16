@@ -1771,6 +1771,25 @@ describe("project list load state (audit finding 14)", () => {
     expect(refreshProjects).toHaveBeenCalled();
   });
 
+  it("disables Retry while the project list is re-fetching", async () => {
+    projects = [];
+    projectsLoaded = true;
+    projectsError = "the server said no";
+    let release!: () => void;
+    renderSidebar();
+    // Mount effects may call refreshProjects too: arm the pending call after them.
+    refreshProjects.mockClear();
+    refreshProjects.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+    await userEvent.click(screen.getByRole("button", { name: /Retry/ }));
+
+    const pending = screen.getByRole("button", { name: /Retrying…/ });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+
+    await act(async () => release());
+    expect(screen.getByRole("button", { name: /^Retry/ })).toBeEnabled();
+  });
+
   // The list on screen is the last-known-good one, which is the right
   // thing to keep — but the user has to be told it is stale.
   it("marks a stale list when a refresh failed but projects are known", () => {

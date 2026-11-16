@@ -1,3 +1,4 @@
+import { useBusyAction } from "./hooks/useBusyAction.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import { FileTextIcon } from "./ui/icons.js";
@@ -462,14 +463,20 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
       cancelledRef.current = true;
     };
   }, [fetchTooling]);
+  const { run: retryLoad, busy: retrying } = useBusyAction(() => fetchTooling());
 
   if (tooling === undefined) {
     if (loadError) {
       return (
         <EmptyStateNote>
           <div>Couldn't load this project's Mullion tooling.</div>
-          <button className="git-panel-fetch-btn" onClick={() => void fetchTooling()}>
-            Retry
+          <button
+            className="git-panel-fetch-btn"
+            disabled={retrying}
+            aria-busy={retrying || undefined}
+            onClick={retryLoad}
+          >
+            {retrying ? "Retrying…" : "Retry"}
           </button>
         </EmptyStateNote>
       );

@@ -85,6 +85,41 @@ describe("ProjectBriefingPanel", () => {
             skill: null,
             reviewerAgent: null,
           });
+
+          it("disables Retry and shows progress while the retry request is pending", async () => {
+            let attempt = 0;
+            let release!: () => void;
+            const gate = new Promise<void>((r) => (release = r));
+            vi.stubGlobal(
+              "fetch",
+              mockFetch({
+                get: async () => {
+                  attempt++;
+                  if (attempt === 1) throw new Error("network error");
+                  await gate;
+                  return jsonResponse(200, {
+                    briefing: "existing briefing",
+                    skill: null,
+                    reviewerAgent: null,
+                  });
+                },
+              }),
+            );
+            const user = userEvent.setup();
+            render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+            await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+            const pending = await screen.findByRole("button", { name: "Retrying…" });
+            expect(pending).toBeDisabled();
+            expect(pending).toHaveAttribute("aria-busy", "true");
+            await user.click(pending);
+            expect(attempt).toBe(2);
+
+            release();
+            expect(await screen.findByDisplayValue("existing briefing")).toBeInTheDocument();
+            expect(screen.queryByRole("button", { name: "Retrying…" })).toBeNull();
+          });
         },
       }),
     );

@@ -1,3 +1,4 @@
+import { useBusyAction } from "./hooks/useBusyAction.js";
 import {
   useCallback,
   useEffect,
@@ -143,6 +144,9 @@ export function Sidebar({
   openSessionIds = null,
   onOpenGlobalLauncher,
 }: SidebarProps) {
+  const { run: retryProjects, busy: retryingProjects } = useBusyAction(() =>
+    useDashboardStore.getState().refreshProjects(),
+  );
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription); split into one selector per rendered field (via
   // useShallow, same shape as App.tsx's own top-level selector block) plus
@@ -624,15 +628,12 @@ export function Sidebar({
                 <EmptyStateActions>
                   <button
                     className="ui-empty-state-btn-primary"
-                    onClick={() => {
-                      void useDashboardStore
-                        .getState()
-                        .refreshProjects()
-                        .catch(() => {});
-                    }}
+                    disabled={retryingProjects}
+                    aria-busy={retryingProjects || undefined}
+                    onClick={retryProjects}
                   >
                     <RefreshIcon size={12} strokeWidth={2} />
-                    Retry
+                    {retryingProjects ? "Retrying…" : "Retry"}
                   </button>
                 </EmptyStateActions>
               </EmptyState>
