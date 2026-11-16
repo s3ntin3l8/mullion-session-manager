@@ -64,6 +64,7 @@ import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
   deliverPrompt,
   REMOTE_WAIT_CHUNK_MS,
+  resolveWaitStartOffset,
   type PromptOutcome,
   type WaitOutputOutcome,
   type WaitOutputRequest,
@@ -614,12 +615,13 @@ class LocalBackend implements SessionBackend {
     if (!matcher.ok) return { failed: true, status: 400, error: matcher.error };
     const session = this.app.pty.get(id);
     if (!session || !session.isAlive) return { notRunning: true };
+    const start = resolveWaitStartOffset(session, req.afterOffset, req.afterSeq);
     const result = await waitForOutput(matcher, req.timeoutMs, {
       signal: req.signal,
       onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
       // A cursor from before a restart can be AHEAD of the counter; treat
       // that as "no gap output" rather than an error (like afterSeq).
-      ...(req.afterOffset !== undefined ? { seed: session.getOutputSince(req.afterOffset) } : {}),
+      ...(start !== undefined ? { seed: session.getOutputSince(start) } : {}),
       alive: () => session.isAlive && req.alive(),
       size: session.size,
       warn: (msg, err) => this.app.log.warn({ err }, msg),
@@ -985,6 +987,8 @@ class RemoteBackend implements SessionBackend {
           regex: req.regex,
           timeoutMs: Math.min(remaining, REMOTE_WAIT_CHUNK_MS),
           ...(cursor !== undefined ? { afterOffset: cursor } : {}),
+          // Resolved on the owning host; an agent that predates it drops it.
+          ...(req.afterSeq !== undefined ? { afterSeq: req.afterSeq } : {}),
         });
       } catch (err) {
         return { failed: true, ...this.remoteRefusal(err, "session-control", false) };

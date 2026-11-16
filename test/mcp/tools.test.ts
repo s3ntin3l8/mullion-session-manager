@@ -1011,6 +1011,9 @@ describe("wait_for_output", () => {
     await expect(
       tool.handler({ sessionId: "1", match: "x", afterOffset: -2 }, client),
     ).rejects.toThrow(/afterOffset/);
+    await expect(
+      tool.handler({ sessionId: "1", match: "x", afterSeq: 1.5 }, client),
+    ).rejects.toThrow(/afterSeq/);
     expect(client.waitForOutput).not.toHaveBeenCalled();
   });
 });

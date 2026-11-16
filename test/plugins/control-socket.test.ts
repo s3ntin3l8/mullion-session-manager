@@ -3771,6 +3771,9 @@ describe("controlSocketPlugin (issue #185)", () => {
             ok: false,
             status: 400,
           });
+          for (const afterSeq of [-1, "3"]) {
+            expect(await bad({ match: "x", afterSeq })).toMatchObject({ ok: false, status: 400 });
+          }
           for (const match of ["(a+)+$", "(a)\\1", "(?=a)b", "("]) {
             expect(await bad({ match, regex: true })).toMatchObject({ ok: false, status: 400 });
           }
@@ -4177,11 +4180,8 @@ describe("controlSocketPlugin (issue #185)", () => {
             text: "draft",
             submit: false,
           });
-          expect(reply.result).toEqual({
-            delivered: true,
-            submitted: false,
-            outputOffset: expect.any(Number),
-          });
+          expect(reply.result).toMatchObject({ delivered: true, submitted: false });
+          expect(reply.result).toHaveProperty("afterSeq");
           expect(writes(pty)).toEqual([`${PASTE}draft${PASTE_END}`]);
           socket.destroy();
         });

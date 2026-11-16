@@ -542,7 +542,9 @@ const waitForOutput = {
     "matches the RENDERED view of the output (the last 64 KiB of raw output replayed through a terminal emulator, so a TUI's in-place repaints resolve to what a person would read; text/line are that rendered text, last 16 KiB window). To catch output a prompt_session just " +
     "provoked, pass that call's outputOffset as afterOffset (taken after the prompt was typed and " +
     "submitted, so the typed echo is excluded; with submit:false the echo is still inside the window) — otherwise only output from now on counts. A TUI " +
-    "may redraw the submitted prompt into its transcript, so do not use a marker the prompt " +
+    "may redraw the submitted prompt into its transcript: also pass that reply's afterSeq, and for a CLI that emits hook events " +
+    "(Claude Code) the window then starts once the child began answering, so a marker the prompt contains no longer matches the echo. " +
+    "Without afterSeq, or for a CLI with no hook events (or before its first one arrived), do not use a marker the prompt " +
     "itself contains (ask for e.g. 'print the word DONE reversed', then match the reversed form). Default timeout 50s: on timedOut:true just call it again. Session scope may only " +
     "wait on its own children.",
   inputSchema: {
@@ -555,6 +557,11 @@ const waitForOutput = {
       afterOffset: {
         type: "number",
         description: "A previous prompt_session/wait_for_output outputOffset to start from.",
+      },
+      afterSeq: {
+        type: "number",
+        description:
+          "The prompt_session reply's afterSeq: with it, the match window starts where the child began answering (its first turn_start/progress hook), so a marker the prompt itself contains does not match its redrawn echo.",
       },
       timeoutSeconds: {
         type: "number",
@@ -580,6 +587,12 @@ const waitForOutput = {
     ) {
       throw new Error("afterOffset must be a non-negative integer");
     }
+    if (
+      args.afterSeq !== undefined &&
+      (typeof args.afterSeq !== "number" || !Number.isInteger(args.afterSeq) || args.afterSeq < 0)
+    ) {
+      throw new Error("afterSeq must be a non-negative integer");
+    }
     const { timeoutMs } = normalizeWaitArgs(args);
     const result = await client.waitForOutput({
       sessionId: args.sessionId,
@@ -587,6 +600,7 @@ const waitForOutput = {
       regex: args.regex,
       timeoutMs,
       afterOffset: args.afterOffset,
+      afterSeq: args.afterSeq,
     });
     return JSON.stringify(result);
   },
@@ -599,7 +613,7 @@ const promptSession = {
     "it as a new turn — the way to give a worker a follow-up after spawn_child_session. With " +
     "wait:true it then blocks server-side until the child's turn ends (finished, or it needs a " +
     "permission/plan/question answer, errored, or exited) and returns the wait result alongside " +
-    "{delivered, submitted, outputOffset} (pass outputOffset to wait_for_output as afterOffset); on wait.timedOut:true call wait_for_session to keep waiting. " +
+    "{delivered, submitted, outputOffset, afterSeq} (pass outputOffset and afterSeq to wait_for_output as afterOffset/afterSeq); on wait.timedOut:true call wait_for_session to keep waiting. " +
     "Refused with 409 `agent_blocked` while the child is waiting on a dialog (typing would " +
     "answer it — resolve that first), 409 `agent_busy` if you pass wait:true while the child is " +
     "mid-turn (prompt without wait to queue the message, or wait_for_session first), and 501 for " +

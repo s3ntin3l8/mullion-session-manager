@@ -68,6 +68,7 @@ import { TitleChangeDebouncer } from "./title-change-debouncer.js";
 import { loadOrCreateHookToken } from "./hook-token.js";
 import { isGenuineUserInput } from "./terminal-input-classify.js";
 import { HOOK_HANDLERS, type SessionHookContext } from "./hook-handlers.js";
+import { noteHookForAnswerStart } from "./answer-start-offsets.js";
 // Re-exported so existing importers (src/routes/agents.ts, this module's own
 // tests) keep reaching these through pty-manager.js unchanged — PR 32 moved
 // their actual definitions into launch-plan.ts, alongside buildLaunchPlan().
@@ -2478,9 +2479,7 @@ export class Session {
     // delivered" is exactly the signal that keeps an untrusted codex
     // session honest. Latching it from a synthesized message would let a
     // session read as hook-proven with no hook ever delivered to it.
-    if (options?.provesHookPipeline !== false) {
-      this.hooksProven = true;
-    }
+    if (options?.provesHookPipeline !== false) this.hooksProven = true;
     // PR 33a (Wave 6) — was a 24-case switch; now a thin dispatch through
     // HOOK_HANDLERS (hook-handlers.ts), one entry per hook kind, each
     // operating over the narrow SessionHookContext built by
@@ -2489,6 +2488,7 @@ export class Session {
     // HOOK_HANDLERS' own doc comment for why a missing key is never an
     // error) is a silent no-op, same as the original switch's
     // `default: return`.
+    noteHookForAnswerStart(this, message.kind);
     const handler = HOOK_HANDLERS.get(message.kind);
     if (handler) {
       // The context facade is built once per Session (lazily) rather than

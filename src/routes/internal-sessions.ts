@@ -9,7 +9,11 @@ import {
 import { expandHome } from "../services/project-config.js";
 import { setSessionPalette } from "../services/terminal-query-reply.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
-import { deliverPrompt, REMOTE_WAIT_CHUNK_MS } from "../services/session-prompt.js";
+import {
+  deliverPrompt,
+  REMOTE_WAIT_CHUNK_MS,
+  resolveWaitStartOffset,
+} from "../services/session-prompt.js";
 import {
   rememberSessionBrowserTarget,
   sessionBrowserTarget,
@@ -570,12 +574,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       };
       reply.raw.once("close", onClose);
       try {
+        const start = resolveWaitStartOffset(
+          session,
+          request.body.afterOffset,
+          request.body.afterSeq,
+        );
         const result = await waitForOutput(matcher, request.body.timeoutMs, {
           signal: controller.signal,
           onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
-          ...(request.body.afterOffset !== undefined
-            ? { seed: session.getOutputSince(request.body.afterOffset) }
-            : {}),
+          ...(start !== undefined ? { seed: session.getOutputSince(start) } : {}),
           alive: () => session.isAlive,
           size: session.size,
           warn: (msg, err) => request.log.warn({ err }, msg),
