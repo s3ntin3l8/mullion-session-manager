@@ -71,6 +71,7 @@ import type { GitBranchOpResult } from "./git-branch-ops.js";
 import type { CloneHealth, RepairOutcome, RepairPlan } from "./git-doctor.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
+import type { SessionEnvInfo } from "./user-shell-env.js";
 import type {
   ProjectDirListing,
   ProjectFileContent,
@@ -503,6 +504,9 @@ export class RemoteHostClient {
   // Issue #2306 — an agent build without the route answers 404 (unknown).
   detectCapabilities = (): Promise<{ capabilities: string[] }> =>
     this.request("/internal/capabilities");
+
+  // Issue #3156 — the session environment summary; 404 on an older agent.
+  detectSessionEnv = (): Promise<SessionEnvInfo> => this.request("/internal/session-env");
 
   // Issue #2248 — the protocol handshake; an agent build without it answers 404.
   detectProtocol = (): Promise<AgentProtocolInfo> => this.request("/internal/protocol");

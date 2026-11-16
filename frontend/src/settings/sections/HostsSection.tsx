@@ -92,6 +92,51 @@ function HostCapabilitiesLine({ host }: { host: Host }) {
 }
 
 /**
+ * Issue #3156 — the environment a session on this host starts with: whether the
+ * interactive-shell PATH recovery worked, the shell, and the PATH entries.
+ * Collapsed by default; a fallback shows a warning chip naming the reason, and
+ * null (an older agent) reads "not reported".
+ */
+function HostSessionEnvDetail({ host }: { host: Host }) {
+  const env = host.sessionEnv;
+  if (env === undefined) return null;
+  return (
+    <details data-testid={`host-session-env-${host.id}`} style={{ marginTop: 2 }}>
+      <summary style={{ cursor: "pointer" }}>
+        Session environment
+        {env === null && " — not reported"}
+        {env?.interactiveResolve === "fallback" && (
+          <span
+            data-testid={`host-session-env-warning-${host.id}`}
+            style={{ color: "var(--y)", marginLeft: 6 }}
+            title="The interactive shell's PATH could not be recovered, so sessions on this host get only the service PATH."
+          >
+            ⚠ PATH recovery fell back{env.reason ? `: ${env.reason}` : ""}
+          </span>
+        )}
+      </summary>
+      {env && (
+        <div>
+          <div>
+            Interactive resolve: {env.interactiveResolve}
+            {env.reason ? ` (${env.reason})` : ""} · shell: {env.shell ?? "none"}
+          </div>
+          <div>PATH:</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {env.path.map((entry, i) => (
+              <li key={`${i}:${entry}`}>
+                <code>{entry}</code>
+              </li>
+            ))}
+          </ul>
+          {env.recoveredKeys.length > 0 && <div>Recovered: {env.recoveredKeys.join(", ")}</div>}
+        </div>
+      )}
+    </details>
+  );
+}
+
+/**
  * Issue #2248 — protocol version, incompatibility and missing operations. The
  * remedy for both is the row's existing Update action. Null renders nothing
  * (not negotiated yet).
@@ -520,6 +565,7 @@ export function HostsSection() {
                     {" · "}
                     <HostCapabilitiesLine host={host} />
                     <HostProtocolLine host={host} />
+                    <HostSessionEnvDetail host={host} />
                     {(host.leakedBrowsers ?? 0) > 0 && (
                       <>
                         {" · "}

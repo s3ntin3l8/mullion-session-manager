@@ -245,6 +245,8 @@ export async function hostsRoute(app: FastifyInstance) {
         legacyAgent: host.legacyAgent && !superseded.has(host.id),
         agents: agentEntry?.agents ?? null,
         capabilities: agentEntry?.capabilities ?? null,
+        // Issue #3156 — null = not reported (an older agent, or nothing read yet).
+        sessionEnv: agentEntry?.sessionEnv ?? null,
         protocol: protocolStatus(agentEntry?.protocol),
         // Issue #2450 — channel readiness, separate from pairing/credential
         // state (hasMachineIdentity / machineIdentityRevoked above).

@@ -209,6 +209,45 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText("no extra capabilities")).toBeInTheDocument();
   });
 
+  it("shows the session environment, a fallback warning, and 'not reported' (#3156)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "mac",
+          sessionEnv: {
+            shell: "/bin/zsh",
+            interactiveResolve: "fallback",
+            reason: "timeout",
+            path: ["/usr/bin", "/bin"],
+            recoveredKeys: [],
+          },
+        }),
+        makeHost({ id: "h2", name: "old", sessionEnv: null }),
+        makeHost({
+          id: "h3",
+          name: "fine",
+          sessionEnv: {
+            shell: "/bin/bash",
+            interactiveResolve: "ok",
+            reason: null,
+            path: ["/opt/bin"],
+            recoveredKeys: ["ANDROID_HOME"],
+          },
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    const warning = screen.getByTestId("host-session-env-warning-h1");
+    expect(warning).toHaveTextContent("PATH recovery fell back: timeout");
+    expect(screen.getByTestId("host-session-env-h1")).not.toHaveAttribute("open");
+    expect(screen.getByText("/usr/bin")).toBeInTheDocument();
+    expect(screen.getByTestId("host-session-env-h2")).toHaveTextContent("not reported");
+    expect(screen.queryByTestId("host-session-env-warning-h3")).not.toBeInTheDocument();
+    expect(screen.getByText("Recovered: ANDROID_HOME")).toBeInTheDocument();
+  });
+
   it("shows the protocol version, legacy hosts, incompatibility and missing operations", () => {
     stubFetch({});
     useDashboardStore.setState({

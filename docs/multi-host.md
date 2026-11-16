@@ -1405,6 +1405,39 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
   read yet), which is not the same as `[]` (known to have none). A failed
   read keeps the previous reading.
 
+### Session environment
+
+Issue [#3156](https://github.com/s3ntin3l8/mullion-session-manager/issues/3156)
+— why a worker says "build tools not available" is decided on the agent: the
+service PATH plus whatever `resolveUserShellEnv()` recovers from the user's
+interactive shell. `GET /internal/session-env` on the agent (same auth and rate
+limit as its siblings) reports it from the resolver's cached state, never
+re-running the shell, and never with a variable's value:
+
+```json
+{
+  "shell": "/bin/zsh",
+  "interactiveResolve": "fallback",
+  "reason": "timeout",
+  "path": ["/usr/bin", "/bin"],
+  "recoveredKeys": []
+}
+```
+
+`interactiveResolve` is `ok` or `fallback`; the `reason` for a fallback is one of
+`disabled` (`MULLION_RESOLVE_INTERACTIVE_ENV=0`), `unsupported-shell`, `timeout`,
+`spawn-failed`, `unparseable` or `pending` (not resolved yet). `path` is the PATH
+a new session gets. `recoveredKeys` lists names only and stays empty until the
+SDK-environment recovery config (#3152) lands.
+
+The primary reads it beside the capabilities (same TTL) and `GET /api/hosts`
+returns it as `sessionEnv`. As with capabilities, a 404 (an older agent) means
+unknown (`null`, shown as "not reported"), and any other failure keeps the
+previous reading. Settings → Hosts shows a collapsed "Session environment"
+detail per host, with a warning chip naming the reason on a fallback. A task
+that fails while placed on an agent host also records this reading in its
+failure diagnostics (skipped when unknown).
+
 Enrollment's `capabilities` / `hosts.agentMetadata` is a static snapshot that
 goes stale, so it is intentionally **not** read.
 

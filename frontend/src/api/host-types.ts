@@ -19,6 +19,14 @@ export interface HostChannelStatus {
   carriedOperations: string[];
 }
 
+export interface HostSessionEnv {
+  shell: string | null;
+  interactiveResolve: "ok" | "fallback";
+  reason: string | null;
+  path: string[];
+  recoveredKeys: string[];
+}
+
 export interface Host {
   id: string;
   name: string;
@@ -74,6 +82,9 @@ export interface Host {
   agents?: string[] | null;
   // Issue #2306 — "xcode" / "android-emulator"; null while unknown (an old agent).
   capabilities?: PlacementCapability[] | null;
+  // Issue #3156 — the environment this host gives its sessions. Null = not
+  // reported (an older agent); absent from an older primary.
+  sessionEnv?: HostSessionEnv | null;
   mullionVersion?: string | null;
   // Issue #2248 — the negotiated agent protocol; null while not read yet.
   protocol?: HostProtocolStatus | null;
