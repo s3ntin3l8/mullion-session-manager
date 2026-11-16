@@ -54,6 +54,8 @@ vi.mock("../../src/services/user-shell-env.js", () => ({
   resolveUserShellEnv: () => resolveUserShellEnvImpl(),
   invalidateUserShellEnv: () => {},
   getUserShellPath: () => null,
+  getUserShellEnv: () => ({}),
+  getUserShellRecoverKeys: () => [],
   mergePaths: (base: string | undefined) => base ?? "",
 }));
 
