@@ -674,6 +674,11 @@ export async function seedDemo({
           agent: "claude",
           claimedAt: ago(80),
           startedAt: ago(75),
+          // A held workflow push, for the tasks-workflow-approval scene.
+          workflowChange: JSON.stringify({
+            sha: "0123456789abcdef0123456789abcdef01234567", // pragma: allowlist secret
+            files: [".github/workflows/ci-cd.yml"],
+          }),
         },
       ],
     }),

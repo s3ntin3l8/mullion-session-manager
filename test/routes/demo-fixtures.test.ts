@@ -59,11 +59,16 @@ describe("demo fixture routes", () => {
             reviewRunIngestedId: "r1",
           },
           { title: "Failed", status: "failed", failureReason: "out of budget" },
+          {
+            title: "Held",
+            status: "in_progress",
+            workflowChange: '{"sha":"abc","files":[".github/workflows/ci.yml"]}',
+          },
         ],
       },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json().tasks).toHaveLength(3);
+    expect(res.json().tasks).toHaveLength(4);
 
     // Through the real board route, so derived fields come out too.
     const board = (await app.inject({ method: "GET", url: "/api/tasks" })).json();
@@ -72,6 +77,9 @@ describe("demo fixture routes", () => {
     expect(new Date(byTitle["Running"].startedAt).toISOString()).toBe(startedAt);
     expect(byTitle["Failed"]).toMatchObject({ status: "failed", failureReason: "out of budget" });
     expect(byTitle["Awaiting approval"].approvalState).toBe("awaiting-human");
+    expect(byTitle["Held"].workflowChange).toBe(
+      '{"sha":"abc","files":[".github/workflows/ci.yml"]}',
+    );
     await app.close();
   });
 
