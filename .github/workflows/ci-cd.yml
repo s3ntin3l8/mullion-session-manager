@@ -31,6 +31,12 @@ jobs:
       contents: read
     uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@main
     with:
+      # Pinned: `ubuntu-latest` moved to 26.04 on 2026-11-16, where bwrap works,
+      # so the live bwrap tests run for the first time and
+      # scaffold-generate's "timeout kills the sandboxed subtree" check fails
+      # (the inner process survives). 24.04 is the last known-good environment.
+      # Unpin once that is fixed (#3089).
+      runner: ubuntu-24.04
       node-version: "26"
       typecheck-script: "typecheck"
       format-check-script: "format:check"
