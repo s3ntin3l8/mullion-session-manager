@@ -5,7 +5,6 @@ import { mkdirSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { URL } from "node:url";
-import { timingSafeTokenMatch } from "./crypto-utils.js";
 import { probeSocket } from "./unix-socket.js";
 import { ipcPath, isPipePath } from "../cli/ipc-path.mjs";
 
@@ -66,6 +65,7 @@ import {
 } from "./session-files-cleanup.js";
 import { TitleChangeDebouncer } from "./title-change-debouncer.js";
 import { loadOrCreateHookToken } from "./hook-token.js";
+import { forgetHookToken, registerHookToken, resolveHookToken } from "./hook-token-registry.js";
 import { isGenuineUserInput } from "./terminal-input-classify.js";
 import { HOOK_HANDLERS, type SessionHookContext } from "./hook-handlers.js";
 import { noteHookForAnswerStart } from "./answer-start-offsets.js";
@@ -3992,12 +3992,11 @@ export class PtyManager {
   readonly hookSocketPath: string;
   // Phase 2 (issue #172) — token -> session id, populated as each Session is
   // constructed (getOrCreate below) and cleaned up when a session is fully
-  // removed from `sessions` (kill()). Deliberately resolved via a linear scan
-  // + timingSafeTokenMatch (resolveToken below) rather than a plain
-  // Map.get(token) lookup — see the Session.hookToken field doc comment and
-  // crypto-utils.ts's timingSafeTokenMatch for why a constant-time compare
-  // matters even for an already-filesystem-scoped (0600) socket.
-  private hookTokens = new Map<string, string>();
+  // removed from `sessions` (kill()). It lives in its own module
+  // (src/services/hook-token-registry.ts) rather than here, because as of
+  // issue #3166 it must also hold the token of a session THIS PROCESS DOES
+  // NOT TRACK — one that survived a restart — and because a process-wide
+  // registry is the right scope for a per-session bearer secret.
   // Phase 4 (#185) — the general-purpose control socket
   // src/plugins/control-socket.ts listens on, distinct from hookSocketPath
   // above: the hook socket authenticates a *session's own agent* via its
@@ -4190,18 +4189,12 @@ export class PtyManager {
   }
 
   /** Resolve a hook-socket handshake token to the session id it belongs to,
-   * or undefined if it matches no currently-tracked session (unknown,
+   * or undefined if it matches no session this process accepts (unknown,
    * stale/already-killed, or forged). Linear scan + timingSafeTokenMatch
-   * rather than Map.get(token) — see the hookTokens field doc comment. */
+   * rather than Map.get(token) — see the hook-token registry's own doc
+   * comment (src/services/hook-token-registry.ts). */
   resolveToken(token: string): string | undefined {
-    for (const [candidate, id] of this.hookTokens) {
-      // Issue #1059 — both sides are fixed-length (server-minted
-      // Session.hookToken vs inbound bearer); same fixed-length
-      // assumption as auth.ts / internal.ts — see crypto-utils.ts for the
-      // full constraint.
-      if (timingSafeTokenMatch(token, candidate)) return id;
-    }
-    return undefined;
+    return resolveHookToken(token);
   }
 
   /**
@@ -4298,8 +4291,9 @@ export class PtyManager {
       this.eventUnsubs.set(opts.id, unsubscribe);
       this.sessions.set(opts.id, session);
       // Registered once, at creation, mirroring the onEvent subscription
-      // just above — see resolveToken()/the hookTokens field doc comment.
-      this.hookTokens.set(session.hookToken, opts.id);
+      // just above — see resolveToken()/the hook-token registry's own doc
+      // comment (src/services/hook-token-registry.ts).
+      registerHookToken(session.hookToken, opts.id);
     }
     if (!session.isAlive) {
       // Issue #1156 — apply the caller's requested size before spawn, but
@@ -4643,7 +4637,8 @@ export class PtyManager {
    * is also reached via killAll() on a graceful shutdown/redeploy, which is
    * explicitly NOT terminal for `id`: the dtach master and the program
    * inside it survive (see kill()'s and killAll()'s own doc comments, and
-   * hookTokens' identical non-clearing treatment right below in kill()), so
+   * the hook-token registry's identical non-clearing treatment right below
+   * in kill()), so
    * a SessionStart hook that hasn't fired yet by the time a redeploy's
    * killAll() runs can still fire once the process reattaches afterward —
    * clearing pendingSeeds unconditionally in kill() would silently and
@@ -4679,10 +4674,10 @@ export class PtyManager {
     // version of this fix — see discardPendingSeed's own doc comment for
     // why): this method is also reached via killAll() on a graceful
     // shutdown/redeploy, which is NOT terminal for `id` — the dtach master
-    // and the program inside it survive that, same reasoning as hookTokens'
-    // own non-clearing treatment just below. Callers that DO know `id` is
-    // genuinely done (terminate(), the exited-session reconciler,
-    // session-lifecycle.ts's spawn-failure rollback) call
+    // and the program inside it survive that, same reasoning as the
+    // hook-token registry's own non-clearing treatment just below. Callers
+    // that DO know `id` is genuinely done (terminate(), the exited-session
+    // reconciler, session-lifecycle.ts's spawn-failure rollback) call
     // discardPendingSeed(id) themselves alongside this method.
     // A killed session's in-memory Session object is discarded here, but —
     // unlike before hook-token persistence — its hookToken is NOT: this
@@ -4696,7 +4691,7 @@ export class PtyManager {
     // requested (on reattach), so it's re-added to this map then. Only
     // remove the map entry now, so resolveToken() can't match hook
     // messages against a token whose in-memory Session is momentarily gone.
-    if (session) this.hookTokens.delete(session.hookToken);
+    if (session) forgetHookToken(session.hookToken);
   }
 
   /**

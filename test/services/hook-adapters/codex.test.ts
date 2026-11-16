@@ -220,7 +220,14 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     sessionId: "1",
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
-    hookToken: "tok",
+    // A fake token that CANNOT appear in a path: the assertion below is a
+    // substring check against the whole transformed command, and that
+    // command embeds the MCP server's own path — which lives inside this
+    // checkout, so its path text (a worktree named after a branch that
+    // mentions "hook tokens", say) can contain almost any short string.
+    // "tok" was such a string: the check then failed on the PATH, not on a
+    // leaked secret.
+    hookToken: "s3cr3t-hook-value",
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,

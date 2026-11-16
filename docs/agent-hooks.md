@@ -106,6 +106,15 @@ there is no error reply for a failed handshake, only a closed socket. A
 successful handshake attributes every subsequent line on that connection to
 this session; you don't need to repeat the token.
 
+A token is minted per session and persisted next to the session's socket
+(`<sessionsDir>/<id>.token`), so it survives a restart of the Mullion
+process that created the session. After such a restart the token is
+re-registered at boot on an agent host (issue #3166) whenever the session's
+scope is still alive — so a surviving session's hook connections are
+accepted again instead of being refused with "unknown or invalid token". A
+session whose scope is gone (or whose token file is missing or malformed) is
+not re-registered, and its token stays refused.
+
 Every message after the handshake is validated JSON, one object per line,
 against a `kind`-discriminated shape. This table (rewritten against the
 current code — issue: extend surfaced session statuses; the previous

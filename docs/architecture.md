@@ -32,6 +32,38 @@ themselves with their own ad-hoc parsing. Any `session.command` inspection
 outside these sanctioned adapter/helper call sites is the red flag, not a
 call into one of them.
 
+**The surviving hook token (issue #3166).** A session's hook token is
+persisted next to its socket (`<sessionsDir>/<id>.token`, minted by
+`loadOrCreateHookToken` in `src/services/hook-token.ts`), so it outlives the
+process that created it; `PtyManager`'s in-memory token map does not. After a
+restart, every hook handshake a surviving session's agent makes is refused —
+"hook connection presented an unknown or invalid token" — including the final
+`Stop`, which is how a Task Master worker reports that it finished. On the
+primary, `adoptActiveTaskSessions` (#2945) covers the local task sessions,
+because rebuilding a `Session` re-reads the token file — but that path reads
+the `sessions`/`projects` TABLES, and an agent-role host has no database at
+all (see `src/app.ts`'s role branch). `src/services/hook-token-adopt.ts` is
+the database-free half: at boot, an agent-role host finds the scopes it still
+owns and registers each one's persisted token with `PtyManager.resolveToken()`
+— without rebuilding the session, without a database row, and without
+touching the running program. The scope backend answers the liveness and
+ownership question (on Linux `listOwnedScopes`, resolving ownership by the
+scope's dtach socket path and never by unit name; on macOS the detached
+backend's probe of that same socket), and the candidate's own socket is
+probed too, so a token is never paired with a scope that is not the one it
+belongs to. It is strictly read-only: no respawn, no reattach, no
+`terminate()`, no scope stop — a dead scope's token stays unresolvable, and
+the summary it logs carries session ids, never a token value.
+
+That re-registration is what the handshake needs, and only that: the hook
+socket now ACCEPTS the surviving session's agent again, and the hook kinds
+the server answers on its own (`session_start`, `github_token`,
+`browser_action`) work for it. A message that is routed into a
+`Session` (`PtyManager.emitHookEvent`) is still dropped for a session this
+host does not track — re-attaching it needs the session's row, which lives
+on the primary. That half is the primary-side reconciler's job (see
+[#3175](https://github.com/s3ntin3l8/mullion-session-manager/issues/3175)).
+
 The scope's unit name (`crs-session-<instanceId>-<id>`,
 `session-process.ts`'s `scopeUnitName`) is namespaced per Mullion instance
 (issue #1140) since the underlying systemd `--user` namespace is

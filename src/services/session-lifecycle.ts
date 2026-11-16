@@ -2022,7 +2022,8 @@ async function spawnOrRollback(
     //
     // Fresh-review finding (Hermes, this PR): a LOCAL spawn failure means
     // PtyManager.getOrCreate() already inserted a Session into its own
-    // `sessions`/`hookTokens` maps before spawn() was awaited — that Session
+    // `sessions` map (and its token into the hook-token registry, issue
+    // #3166) before spawn() was awaited — that Session
     // never attached anything, so app.pty.kill() here is a safe,
     // side-effect-free map eviction, not a real "detach a live client" call.
     // Without this, a failed local spawn permanently leaks that Session plus
