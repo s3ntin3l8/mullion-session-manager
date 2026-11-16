@@ -205,4 +205,67 @@ describe("cache-storage", () => {
     );
     await first;
   });
+
+  describe("npx cache and Trash", () => {
+    it("keeps npx entries a running process references and removes the rest", async () => {
+      const npx = path.join(base, ".npm", "_npx");
+      for (const hash of ["inuse", "idle"]) {
+        await fs.mkdir(path.join(npx, hash, "node_modules"), { recursive: true });
+        await fs.writeFile(path.join(npx, hash, "node_modules", "x.js"), "x".repeat(2000));
+      }
+      // A fake /proc: one process runs a script from the "inuse" entry, one has
+      // an unreadable cmdline, and a non-pid entry is ignored.
+      const proc = path.join(base, "proc");
+      await fs.mkdir(path.join(proc, "100"), { recursive: true });
+      await fs.writeFile(
+        path.join(proc, "100", "cmdline"),
+        `node\0${path.join(npx, "inuse", "node_modules", "x.js")}\0`,
+      );
+      await fs.mkdir(path.join(proc, "101"));
+      await fs.mkdir(path.join(proc, "self-ish"));
+
+      const result = await pruneCacheStorage(["npm-npx"], {
+        cacheRoot: root,
+        homeDir: base,
+        procDir: proc,
+      });
+
+      expect(await exists(path.join(npx, "inuse"))).toBe(true);
+      expect(await exists(path.join(npx, "idle"))).toBe(false);
+      expect(result.reclaimedBytes).toBeGreaterThan(0);
+    });
+
+    it("keeps everything when /proc can't be read", async () => {
+      const entry = path.join(base, ".npm", "_npx", "abc");
+      await fs.mkdir(entry, { recursive: true });
+      await pruneCacheStorage(["npm-npx"], {
+        cacheRoot: root,
+        homeDir: base,
+        procDir: path.join(base, "no-such-proc"),
+      });
+      expect(await exists(entry)).toBe(true);
+    });
+
+    it("empties the Trash but leaves usable files/ and info/ dirs", async () => {
+      const trash = path.join(base, ".local", "share", "Trash");
+      await fs.mkdir(path.join(trash, "files", "old-dir"), { recursive: true });
+      await fs.writeFile(path.join(trash, "files", "old-dir", "f"), "x".repeat(4000));
+      await fs.mkdir(path.join(trash, "info"), { recursive: true });
+      await fs.writeFile(path.join(trash, "info", "old-dir.trashinfo"), "[Trash Info]");
+      await fs.writeFile(path.join(trash, "directorysizes"), "1 2 old-dir");
+
+      const result = await pruneCacheStorage(["trash"], { cacheRoot: root, homeDir: base });
+
+      expect(await fs.readdir(path.join(trash, "files"))).toEqual([]);
+      expect(await fs.readdir(path.join(trash, "info"))).toEqual([]);
+      expect(await exists(path.join(trash, "directorysizes"))).toBe(false);
+      expect(result.reclaimedBytes).toBeGreaterThan(0);
+    });
+
+    it("offers the new ids on the allowlist", () => {
+      expect(CACHE_DIR_IDS).toEqual(
+        expect.arrayContaining(["gh", "claude-cli-nodejs", "npm-npx", "trash"]),
+      );
+    });
+  });
 });

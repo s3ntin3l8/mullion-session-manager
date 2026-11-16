@@ -145,6 +145,18 @@ fails with `EACCES`; symlinks are never followed or changed. The server only emp
 are both ticked in the stored settings and requested, so neither side can
 widen the other.
 
+Four more were added because they grow unnoticed (#2188):
+
+- **`gh`** (`~/.cache/gh`) and **`claude-cli-nodejs`** (`~/.cache/claude-cli-nodejs`):
+  plain re-creatable caches.
+- **`npm-npx`** (`~/.npm/_npx`): `npx` runs packages from here, so an entry whose
+  path appears in any running process's command line or working directory is
+  kept (an agent's MCP server is the usual one). If `/proc` can't be read, nothing
+  is removed.
+- **`trash`** (`~/.local/share/Trash`): emptied permanently, with `files/` and
+  `info/` put back empty. Anything in it is unrecoverable afterwards, which is why
+  it is opt-in.
+
 ## opencode's database
 
 `services/opencode-storage.ts`. opencode keeps every session in one SQLite

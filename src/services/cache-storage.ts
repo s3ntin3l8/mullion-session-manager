@@ -22,7 +22,35 @@ const CACHE_DIRS = [
   { id: "go-mod", label: "Go module cache", dir: "go/pkg/mod", base: "home" },
   { id: "gradle", label: "Gradle caches", dir: ".gradle/caches", base: "home" },
   { id: "cargo-registry", label: "Cargo registry", dir: ".cargo/registry", base: "home" },
-] as const;
+  { id: "gh", label: "GitHub CLI", dir: "gh", base: "cache" },
+  {
+    id: "claude-cli-nodejs",
+    label: "Claude Code CLI cache",
+    dir: "claude-cli-nodejs",
+    base: "cache",
+  },
+  // `npx` unpacks packages here and runs them from here, e.g. an MCP server
+  // an agent session launched: an entry some process still references is kept
+  // (see `entriesInUse`).
+  { id: "npm-npx", label: "npx packages", dir: ".npm/_npx", base: "home", skipInUse: true },
+  // Emptied for good, not moved anywhere, which is why it is opt-in like the
+  // rest. `files` and `info` are put back so the next trash operation works
+  // even for a tool that doesn't create them.
+  {
+    id: "trash",
+    label: "Trash",
+    dir: ".local/share/Trash",
+    base: "home",
+    recreate: ["files", "info"],
+  },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  label: string;
+  dir: string;
+  base: "cache" | "home";
+  skipInUse?: boolean;
+  recreate?: readonly string[];
+}>;
 
 export type CacheDirId = (typeof CACHE_DIRS)[number]["id"];
 export const CACHE_DIR_IDS: readonly CacheDirId[] = CACHE_DIRS.map((c) => c.id);
@@ -32,6 +60,8 @@ export interface CacheStorageOptions {
   cacheRoot?: string;
   /** Defaults to the user's home directory. */
   homeDir?: string;
+  /** Test seam: the /proc scanned for processes using a `skipInUse` cache. */
+  procDir?: string;
 }
 
 export interface CacheDirStatus {
@@ -80,6 +110,53 @@ async function removeEntry(target: string, readOnlyByDesign: boolean): Promise<v
     await makeWritable(target);
     await fs.rm(target, { recursive: true, force: true });
   }
+}
+
+/**
+ * Which of `candidates` (absolute paths) appear in a running process's command
+ * line or working directory. Unreadable processes are skipped, so this can miss
+ * one owned by another user; every cache using it lives in the user's own home,
+ * where only their own processes run.
+ */
+async function entriesInUse(
+  candidates: readonly string[],
+  procDir = "/proc",
+): Promise<Set<string>> {
+  const used = new Set<string>();
+  let pids: string[];
+  try {
+    pids = (await fs.readdir(procDir)).filter((n) => /^\d+$/.test(n));
+  } catch {
+    // Can't tell what runs: the caller treats every entry as in use.
+    return new Set(candidates);
+  }
+  for (const pid of pids) {
+    let cmdline = "";
+    let cwd = "";
+    try {
+      cmdline = (await fs.readFile(path.join(procDir, pid, "cmdline"), "utf8")).replaceAll(
+        "\0",
+        " ",
+      );
+    } catch {
+      // exited, or not ours
+    }
+    try {
+      cwd = await fs.readlink(path.join(procDir, pid, "cwd"));
+    } catch {
+      // exited, or not ours
+    }
+    for (const candidate of candidates) {
+      if (
+        cmdline.includes(candidate) ||
+        cwd === candidate ||
+        cwd.startsWith(candidate + path.sep)
+      ) {
+        used.add(candidate);
+      }
+    }
+  }
+  return used;
 }
 
 /** Where each allowlisted cache lives, for callers that need to recognise the paths. */
@@ -158,7 +235,15 @@ export async function pruneCacheStorage(
         }
         continue;
       }
+      const keep =
+        "skipInUse" in entry && entry.skipInUse
+          ? await entriesInUse(
+              names.map((n) => path.join(full, n)),
+              options.procDir,
+            )
+          : new Set<string>();
       for (const name of names) {
+        if (keep.has(path.join(full, name))) continue;
         try {
           await removeEntry(path.join(full, name), id === "go-mod");
         } catch (error) {
@@ -168,6 +253,9 @@ export async function pruneCacheStorage(
             );
           }
         }
+      }
+      for (const sub of "recreate" in entry ? entry.recreate : []) {
+        await fs.mkdir(path.join(full, sub), { recursive: true, mode: 0o700 }).catch(() => {});
       }
       reclaimedBytes += Math.max(0, before - (await dirSize(full)));
       cleaned.push(id);
