@@ -37,12 +37,17 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
         await Promise.allSettled(pending);
       }
     };
-    const minTimer = new Promise<void>((resolve) => setTimeout(resolve, REFRESH_MIN_MS));
+    let minHandle: ReturnType<typeof setTimeout> | undefined;
+    const minTimer = new Promise<void>((resolve) => {
+      minHandle = setTimeout(resolve, REFRESH_MIN_MS);
+    });
     const cap = setTimeout(finish, REFRESH_MAX_MS);
-    void Promise.all([minTimer, settle()]).then(finish);
+    // finish on an unexpected failure too: a busy button must never stick.
+    void Promise.all([minTimer, settle()]).then(finish, finish);
     return () => {
       cancelled = true;
       clearTimeout(cap);
+      clearTimeout(minHandle);
     };
   }, [refreshing, projectId]);
   // The same list the panel renders (the live store wins over the cached fetch).
