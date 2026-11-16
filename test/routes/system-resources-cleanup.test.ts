@@ -56,7 +56,9 @@ const pruneTempStorage = vi.fn(
     reclaimedBytes: 7,
   }),
 );
-vi.mock("../../src/services/temp-storage.js", () => ({
+vi.mock("../../src/services/temp-storage.js", async (importOriginal) => ({
+  // cache-storage's real sizing helpers, for the keepNewest route test.
+  ...(await importOriginal<typeof TempStorage>()),
   inspectTempStorage: (...args: unknown[]) => inspectTempStorage(...args),
   pruneTempStorage: (mode?: string, options?: unknown) => pruneTempStorage(mode, options),
 }));
@@ -99,6 +101,7 @@ vi.mock("../../src/services/dev-worktrees.js", () => ({
   pruneDevWorktrees: (...args: unknown[]) => pruneDevWorktrees(...args),
 }));
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { projects, sessions } from "../../src/db/schema.js";
 import { defaultClaudeSessionsDir } from "../../src/services/claude-scratch.js";
@@ -250,6 +253,35 @@ describe("/api/storage/cleanup", () => {
       // Nothing requested: fall back to the saved set.
       await runCleanup(app, { mode: "aggressive" });
       expect(pruneCacheStorage).toHaveBeenLastCalledWith(["pip", "go-build"]);
+    });
+
+    it("removes only the removable children of a keepNewest cache", async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "cleanup-route-home-"));
+      try {
+        const dir = path.join(home, ".local/share/claude/versions");
+        await fs.mkdir(dir, { recursive: true });
+        for (const v of ["2.1.99", "2.1.302", "2.1.322"])
+          await fs.writeFile(path.join(dir, v), "x");
+        const proc = path.join(home, "proc");
+        await fs.mkdir(path.join(proc, "9"), { recursive: true });
+        await fs.symlink(path.join(dir, "2.1.302"), path.join(proc, "9", "exe"));
+        const actual = await vi.importActual<typeof CacheStorage>(
+          "../../src/services/cache-storage.js",
+        );
+        pruneCacheStorage.mockImplementationOnce((ids) =>
+          actual.pruneCacheStorage(ids ?? [], {
+            homeDir: home,
+            procDir: proc,
+            now: Date.now() + 3_600_000,
+          }),
+        );
+        const app = await buildTestApp();
+        await setCacheDirs(app, ["claude-versions"]);
+        await runCleanup(app, { mode: "aggressive", cacheDirs: ["claude-versions"] });
+        expect((await fs.readdir(dir)).sort()).toEqual(["2.1.302", "2.1.322"]);
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
     });
 
     it("leaves caches out when nothing is opted in", async () => {

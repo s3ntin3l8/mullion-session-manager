@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { dirSize } from "./temp-storage.js";
+import { diskBytes, dirSize } from "./temp-storage.js";
 
 // A fixed allowlist of re-creatable cache directories (issue #1606): mostly
 // subtrees of ~/.cache, plus a few toolchain caches that live elsewhere under
@@ -44,12 +44,43 @@ const CACHE_DIRS = [
     recreate: ["files", "info"],
     permanent: true,
   },
+  // Agent CLIs keep every version they download. Only the old ones go: see
+  // `keepEntries` for what is always kept (newest, running, `current`).
+  {
+    id: "claude-versions",
+    label: "Claude Code binaries (old versions)",
+    dir: ".local/share/claude/versions",
+    base: "home",
+    skipInUse: true,
+    keepNewest: true,
+  },
+  {
+    id: "claude-remote-cli",
+    label: "Claude Code remote CLI (old versions)",
+    dir: ".claude/remote/ccd-cli",
+    base: "home",
+    skipInUse: true,
+    keepNewest: true,
+  },
+  {
+    id: "minimax-releases",
+    label: "MiniMax Code releases (old versions)",
+    dir: ".minimax-code/releases",
+    base: "home",
+    skipInUse: true,
+    keepNewest: true,
+  },
 ] as const satisfies ReadonlyArray<{
   id: string;
   label: string;
   dir: string;
   base: "cache" | "home";
   skipInUse?: boolean;
+  /**
+   * Children are versions: the newest is kept, and so is any a running process
+   * executes or a `current` symlink points at. Unparsable names are kept.
+   */
+  keepNewest?: boolean;
   recreate?: readonly string[];
   /** Not rebuilt or re-downloaded afterwards: the UI must say so. */
   permanent?: boolean;
@@ -134,6 +165,7 @@ async function entriesInUse(
   candidates: readonly string[],
   procDir = "/proc",
   now = Date.now(),
+  checkExe = false,
 ): Promise<Set<string>> {
   const used = new Set<string>();
   // The kernel reports a process's cwd with symlinks resolved, and tools that
@@ -163,6 +195,7 @@ async function entriesInUse(
   for (const pid of pids) {
     let cmdline = "";
     let cwd = "";
+    let exe = "";
     try {
       cmdline = (await fs.readFile(path.join(procDir, pid, "cmdline"), "utf8")).replaceAll(
         "\0",
@@ -176,13 +209,106 @@ async function entriesInUse(
     } catch {
       // exited, or not ours
     }
+    if (checkExe) {
+      // A binary run from a version directory: the kernel reports its resolved
+      // path (with " (deleted)" appended if unlinked, which then matches nothing).
+      try {
+        const target = await fs.readlink(path.join(procDir, pid, "exe"));
+        exe = await fs.realpath(target).catch(() => target);
+      } catch {
+        // exited, kernel thread, or not ours
+      }
+    }
+    const inside = (p: string, f: string) => p !== "" && (p === f || p.startsWith(f + path.sep));
     for (const { candidate, forms } of spellings) {
-      if (forms.some((f) => cmdline.includes(f) || cwd === f || cwd.startsWith(f + path.sep))) {
+      if (
+        forms.some(
+          (f) => cmdline.includes(f) || cwd === f || cwd.startsWith(f + path.sep) || inside(exe, f),
+        )
+      ) {
         used.add(candidate);
       }
     }
   }
   return used;
+}
+
+const VERSION_RE = /^(\d+(?:\.\d+)*)/;
+
+function compareVersions(a: string, b: string): number {
+  const pa = (VERSION_RE.exec(a)?.[1] ?? "").split(".").map(Number);
+  const pb = (VERSION_RE.exec(b)?.[1] ?? "").split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** The newest by leading dotted number; a name without one is never newest. */
+function newestVersion(names: readonly string[]): string | undefined {
+  let newest: string | undefined;
+  for (const name of names) {
+    if (!VERSION_RE.test(name)) continue;
+    if (newest === undefined || compareVersions(name, newest) > 0) newest = name;
+  }
+  return newest;
+}
+
+/** Real targets of the symlinks named `current` beside, or one level above, the versions. */
+async function currentTargets(full: string): Promise<string[]> {
+  const targets: string[] = [];
+  for (const dir of [full, path.dirname(full)]) {
+    const link = path.join(dir, "current");
+    try {
+      if ((await fs.lstat(link)).isSymbolicLink()) targets.push(await fs.realpath(link));
+    } catch {
+      // absent, or a dangling link (which names nothing to keep)
+    }
+  }
+  return targets;
+}
+
+/**
+ * The children of `full` a cleanup must leave alone (absolute paths). Anything
+ * that can't be determined counts as kept; an unreadable /proc keeps them all.
+ */
+async function keepEntries(
+  entry: (typeof CACHE_DIRS)[number],
+  full: string,
+  names: readonly string[],
+  options: CacheStorageOptions,
+): Promise<Set<string>> {
+  const keepNewest = "keepNewest" in entry && entry.keepNewest === true;
+  if (!("skipInUse" in entry && entry.skipInUse) && !keepNewest) return new Set();
+  const keep = await entriesInUse(
+    names.map((n) => path.join(full, n)),
+    options.procDir,
+    options.now,
+    keepNewest,
+  );
+  if (!keepNewest) return keep;
+  const newest = newestVersion(names);
+  const targets = await currentTargets(full);
+  for (const name of names) {
+    const child = path.join(full, name);
+    if (name === newest || !VERSION_RE.test(name)) {
+      keep.add(child);
+      continue;
+    }
+    const real = await fs.realpath(child).catch(() => child);
+    if (targets.some((t) => t === real || t.startsWith(real + path.sep))) keep.add(child);
+  }
+  return keep;
+}
+
+async function entrySize(target: string): Promise<number> {
+  try {
+    const st = await fs.lstat(target);
+    return diskBytes(st) + (st.isDirectory() ? await dirSize(target) : 0);
+  } catch {
+    return 0;
+  }
 }
 
 /** Where each allowlisted cache lives, for callers that need to recognise the paths. */
@@ -221,11 +347,22 @@ export async function inspectCacheStorage(
     const { id, label } = entry;
     const full = cachePath(entry, options);
     const exists = await realDirectory(full);
+    let bytes = 0;
+    if (exists && "keepNewest" in entry && entry.keepNewest) {
+      // Only what ticking the toggle would free.
+      const names = await fs.readdir(full).catch(() => [] as string[]);
+      const keep = await keepEntries(entry, full, names, options);
+      for (const name of names) {
+        if (!keep.has(path.join(full, name))) bytes += await entrySize(path.join(full, name));
+      }
+    } else if (exists) {
+      bytes = await dirSize(full);
+    }
     caches.push({
       id,
       label,
       exists,
-      bytes: exists ? await dirSize(full) : 0,
+      bytes,
       permanent: "permanent" in entry && entry.permanent === true,
     });
   }
@@ -267,14 +404,7 @@ export async function pruneCacheStorage(
         }
         continue;
       }
-      const keep =
-        "skipInUse" in entry && entry.skipInUse
-          ? await entriesInUse(
-              names.map((n) => path.join(full, n)),
-              options.procDir,
-              options.now,
-            )
-          : new Set<string>();
+      const keep = await keepEntries(entry, full, names, options);
       for (const name of names) {
         if (keep.has(path.join(full, name))) continue;
         try {
