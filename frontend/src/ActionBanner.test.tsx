@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ActionBanner } from "./ActionBanner.js";
-import { expectNoNestedInteractive } from "./test/a11y.js";
+import { expectNameHasVisibleText, expectNoNestedInteractive } from "./test/a11y.js";
 
 function renderBanner(dismiss = true) {
   const onOpen = vi.fn();
@@ -34,6 +34,7 @@ describe("ActionBanner", () => {
     expect(screen.getByRole("button", { name: /v1 → v2 available/ })).toHaveTextContent(
       "v1 → v2 available Click for details",
     );
+    for (const button of screen.getAllByRole("button")) expectNameHasVisibleText(button);
   });
 
   it("opens from its button, once per click, and from anywhere else on the strip", async () => {

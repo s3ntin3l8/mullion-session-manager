@@ -43,9 +43,9 @@ export function ActionBanner({
         <button
           type="button"
           className="update-banner-dismiss"
-          // Named by its title: the "×" is hidden, so the name holds no text
-          // the button does not show, and axe has no label to match against it.
-          title={dismissTitle ?? "Dismiss"}
+          // Its own name, independent of the tooltip; the "×" is hidden.
+          aria-label={dismissTitle ?? "Dismiss"}
+          title={dismissTitle}
           onClick={(e) => {
             e.stopPropagation();
             onDismiss();
