@@ -1386,6 +1386,12 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
 
 - `xcode`: darwin only, and `xcrun --find simctl` must exit 0 (Command Line
   Tools alone do not have it). Nothing is spawned on any other platform.
+  This is a **minimum**, not a readiness check: at minimum, full Xcode is
+  selected. It does not guarantee that the licence is accepted, that Xcode's
+  first-launch components are installed, that a simulator runtime exists, that
+  Homebrew tools are on a session's `PATH`, or that anything Android is set up.
+  A task on an `xcode` host can still hang in a build. The checklist is in
+  [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 - `android-emulator`: the device panel's emulator support is enabled and
   `DEVICE_EMULATOR_PATH` is set to an executable file. That is exactly what
   the device manager launches, so there is no `PATH` or SDK-root fallback.
