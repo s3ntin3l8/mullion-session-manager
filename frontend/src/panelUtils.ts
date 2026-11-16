@@ -710,8 +710,15 @@ export function shouldAutoOpenChildPanels(input: {
 //   4. the pane split, or tabbed into, is the reference session's when rule 2
 //      allows it, else the largest one rule 2 allows; a tab goes to the
 //      reference session's pane, else the pane last active;
-//   5. a split only happens when both resulting panes are at least
-//      PENDING_OPEN_MIN_COLS x PENDING_OPEN_MIN_ROWS terminal cells;
+//   5. size floor: a split only happens when the axis it halves keeps at
+//      least PENDING_OPEN_MIN_COLS (a `right` split) or PENDING_OPEN_MIN_ROWS
+//      (a `below` split) terminal cells in both resulting panes. Only the
+//      halved axis is checked: the other one does not change, and checking it
+//      too made every open a tab on a laptop-sized grid (#3033 review);
+//   6. focus: not decided here. The caller adds the pane inactive; the
+//      issue's "attention marker until first activated" is not implemented,
+//      because no such marker exists yet (the pane shows the session's own
+//      status badge only);
 //   7. an empty workspace: the caller adds the session as its only pane
 //      (null here).
 // A "column" is a top-level horizontal division of the grid, found from the
@@ -743,17 +750,11 @@ export interface CellMetrics {
 export type PendingOpenPlacement =
   { referenceGroup: string; direction: "right" | "below" } | { referenceGroup: string; tab: true };
 
-function fitsFloor(width: number, height: number, metrics: CellMetrics): boolean {
-  return (
-    width + RECT_EPSILON_PX >= PENDING_OPEN_MIN_COLS * metrics.cellWidth &&
-    height + RECT_EPSILON_PX >= PENDING_OPEN_MIN_ROWS * metrics.cellHeight
-  );
-}
-
+/** Whether halving `rect` along `direction` keeps the floor on that axis. */
 function canSplit(rect: GroupRect, direction: "right" | "below", metrics: CellMetrics): boolean {
   return direction === "right"
-    ? fitsFloor(rect.width / 2, rect.height, metrics)
-    : fitsFloor(rect.width, rect.height / 2, metrics);
+    ? rect.width / 2 + RECT_EPSILON_PX >= PENDING_OPEN_MIN_COLS * metrics.cellWidth
+    : rect.height / 2 + RECT_EPSILON_PX >= PENDING_OPEN_MIN_ROWS * metrics.cellHeight;
 }
 
 function area(rect: GroupRect): number {

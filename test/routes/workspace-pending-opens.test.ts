@@ -7,7 +7,10 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { sessions, workspacePendingOpens, workspaces } from "../../src/db/schema.js";
 import type * as SessionBackendModule from "../../src/services/session-backend.js";
-import { dropPendingOpensForSession } from "../../src/services/workspace-pending-opens.js";
+import {
+  PENDING_OPEN_MAX_AGE_MS,
+  dropPendingOpensForSession,
+} from "../../src/services/workspace-pending-opens.js";
 
 // #3033 — sessions opened on the fold or the phone, waiting for a desktop
 // client to add their panes. Session rows are inserted directly: nothing here
@@ -74,7 +77,7 @@ describe("workspace pending opens", () => {
       url,
       payload: { sessionId: b, referenceSessionId: null },
     });
-    expect(again.statusCode).toBe(201);
+    expect(again.statusCode).toBe(200);
     const listed = await app.inject({ method: "GET", url });
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toEqual([
@@ -194,6 +197,25 @@ describe("workspace pending opens", () => {
     expect((await app.inject({ method: "GET", url })).json()).toEqual([
       expect.objectContaining({ sessionId: b }),
     ]);
+    await app.close();
+  });
+
+  it("drops an open older than a day instead of listing it", async () => {
+    const app = await buildApp();
+    const { workspaceId, a, b } = await setup(app);
+    const url = `/api/workspaces/${workspaceId}/pending-opens`;
+    await app.inject({ method: "POST", url, payload: { sessionId: a } });
+    await app.inject({ method: "POST", url, payload: { sessionId: b } });
+    app.db
+      .update(workspacePendingOpens)
+      .set({ createdAt: new Date(Date.now() - PENDING_OPEN_MAX_AGE_MS - 60_000) })
+      .where(eq(workspacePendingOpens.sessionId, a))
+      .run();
+    expect((await app.inject({ method: "GET", url })).json()).toEqual([
+      expect.objectContaining({ sessionId: b }),
+    ]);
+    const left = app.db.select().from(workspacePendingOpens).all();
+    expect(left.map((r) => r.sessionId)).not.toContain(a);
     await app.close();
   });
 });

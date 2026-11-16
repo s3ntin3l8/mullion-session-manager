@@ -2105,6 +2105,8 @@ export const workspacePendingOpens = sqliteTable(
       table.workspaceId,
       table.sessionId,
     ),
+    // killSession drops a session's opens by session alone.
+    index("workspace_pending_opens_session_idx").on(table.sessionId),
   ],
 );
 

@@ -682,8 +682,9 @@ delete). The usual autosave then persists the pane. The hook uses the same
 gates as `useAutoOpenChildPanels`: the restore has finished, `restoringRef` is
 down, and saves are not suspended. A session already open, or one that has
 ended, is acknowledged without adding anything. A session the client has not
-listed yet is left for a later poll. The backend never reads the layout for
-any of this.
+listed yet is left for a later poll. An open older than a day is dropped when
+the list is read, so a long stretch on the phone does not land at the desk as
+a burst of panes. The backend never reads the layout for any of this.
 
 Closing a pane on the fold or the phone stays local: the desk's pane stays,
 and a pending open not yet applied is withdrawn (`DELETE
@@ -704,8 +705,14 @@ become tabs:
 4. The pane split is the reference session's, if rule 2 allows it. Otherwise
    it is the largest pane rule 2 allows. A tab goes to the reference
    session's pane, otherwise to the pane last active.
-5. A split only happens when both resulting panes are at least 80 x 20
-   terminal cells at the desktop's terminal font (`terminalCellPx`).
+5. A split only happens when the axis it halves keeps at least 80 columns (a
+   split to the right) or 20 rows (a split below) of the desktop's terminal
+   font (`terminalCellPx`) in both resulting panes. The other axis does not
+   change and is not checked.
+6. The added pane is not activated, so the desk keeps showing what it showed.
+   The issue's attention marker until first activation is not implemented: no
+   such marker exists yet, and the pane shows only the session's own status
+   badge.
 
 An empty workspace gets the session as its single pane. A layout whose
 columns are not plain stacks of rows counts its leaf panes: with fewer than

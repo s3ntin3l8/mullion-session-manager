@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4d4f2774-97e4-4acd-828d-9a3fb16907b8",
+  "id": "06151af8-d98d-42be-956f-bd8238866ec0",
   "prevId": "5f3f6db8-daa1-4dd5-bc92-2033bb172253",
   "tables": {
     "bridges": {
@@ -3090,6 +3090,13 @@
             "session_id"
           ],
           "isUnique": true
+        },
+        "workspace_pending_opens_session_idx": {
+          "name": "workspace_pending_opens_session_idx",
+          "columns": [
+            "session_id"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {

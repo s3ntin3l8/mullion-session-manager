@@ -235,6 +235,22 @@ describe("useApplyPendingOpens", () => {
     expect(empty.api.addPanel.mock.calls[0]![0]).not.toHaveProperty("position");
   });
 
+  it("retries an open whose pane could not be added, without acknowledging it", async () => {
+    pending = [open(3)];
+    const dock = twoColumns();
+    dock.api.addPanel.mockImplementationOnce(() => {
+      throw new Error("group gone");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { rerender, props } = setup(dock);
+    await waitFor(() => expect(dock.api.addPanel).toHaveBeenCalledTimes(1));
+    expect(acknowledgePendingOpen).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    rerender({ ...props, sessions: [...props.sessions] });
+    expect(dock.api.addPanel).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(acknowledgePendingOpen).toHaveBeenCalledWith(1, 3));
+  });
+
   it("retries an acknowledge that failed", async () => {
     pending = [open(3)];
     acknowledgePendingOpen.mockRejectedValueOnce(new Error("offline"));

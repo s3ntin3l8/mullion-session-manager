@@ -91,8 +91,10 @@ export interface UseWorkspacePersistenceResult {
   // after unfolding would be dropped until a reload or workspace switch.
   liftPhoneTaint: () => void;
   // #3033 — true while a layout change made now would not be saved for the
-  // active workspace: a phone or halves presentation, or the phone taint
-  // that outlives unfolding until liftPhoneTaint. A pane added for a pending
+  // active workspace: the live presentation is not the grid (the phone, or
+  // the halves, by isPhoneTierNow's live matchMedia read; the `layoutTier`
+  // prop is not consulted), or the phone taint that outlives unfolding until
+  // liftPhoneTaint. A pane added for a pending
   // open in that window would never reach the saved layout, so
   // useApplyPendingOpens waits for this to read false.
   isSaveSuspended: () => boolean;

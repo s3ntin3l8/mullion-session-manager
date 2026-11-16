@@ -117,8 +117,16 @@ export function useApplyPendingOpens({
       if (!session) continue;
       handled.current.add(key);
       const panelId = `session-${session.id}`;
-      if (session.status === "active" && !dockviewApi.getPanel(panelId)) {
-        addPendingPanel(dockviewApi, session, open, projects, terminalFontSize);
+      try {
+        if (session.status === "active" && !dockviewApi.getPanel(panelId)) {
+          addPendingPanel(dockviewApi, session, open, projects, terminalFontSize);
+        }
+      } catch (err) {
+        // A failed add (a group gone mid-change) is not acknowledged: the
+        // next poll tries it again, as after a failed acknowledge.
+        handled.current.delete(key);
+        console.warn("[pending-opens] could not add the pane", err);
+        continue;
       }
       http.acknowledgePendingOpen(workspaceId, session.id).catch(() => handled.current.delete(key));
     }

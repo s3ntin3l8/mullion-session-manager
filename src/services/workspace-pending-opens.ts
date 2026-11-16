@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, lt } from "drizzle-orm";
 import type { getDb } from "../db/client.js";
 import { sessions, workspacePendingOpens, workspaces } from "../db/schema.js";
 
@@ -10,8 +10,14 @@ type Db = ReturnType<typeof getDb>;
 
 export type PendingOpenRow = typeof workspacePendingOpens.$inferSelect;
 
+// An open older than this is dropped rather than applied: a day of use on
+// the phone alone must not land as a burst of panes when the desk next shows
+// the workspace.
+export const PENDING_OPEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export type RecordPendingOpenResult =
-  { ok: true; row: PendingOpenRow } | { ok: false; reason: "workspace" | "session" | "killed" };
+  | { ok: true; row: PendingOpenRow; created: boolean }
+  | { ok: false; reason: "workspace" | "session" | "killed" };
 
 function sessionStatus(db: Db, id: number): string | undefined {
   return db.select({ status: sessions.status }).from(sessions).where(eq(sessions.id, id)).get()
@@ -53,19 +59,43 @@ export function recordPendingOpen(
     sessionExists(db, referenceSessionId)
       ? referenceSessionId
       : null;
+  const existed =
+    db
+      .select({ id: workspacePendingOpens.id })
+      .from(workspacePendingOpens)
+      .where(
+        and(
+          eq(workspacePendingOpens.workspaceId, workspaceId),
+          eq(workspacePendingOpens.sessionId, sessionId),
+        ),
+      )
+      .get() !== undefined;
+  // A re-record also renews the open's age.
   const row = db
     .insert(workspacePendingOpens)
     .values({ workspaceId, sessionId, referenceSessionId: reference })
     .onConflictDoUpdate({
       target: [workspacePendingOpens.workspaceId, workspacePendingOpens.sessionId],
-      set: { referenceSessionId: reference },
+      set: { referenceSessionId: reference, createdAt: new Date() },
     })
     .returning()
     .get();
-  return { ok: true, row };
+  return { ok: true, row, created: !existed };
 }
 
-export function listPendingOpens(db: Db, workspaceId: number): PendingOpenRow[] {
+export function listPendingOpens(
+  db: Db,
+  workspaceId: number,
+  now: number = Date.now(),
+): PendingOpenRow[] {
+  db.delete(workspacePendingOpens)
+    .where(
+      and(
+        eq(workspacePendingOpens.workspaceId, workspaceId),
+        lt(workspacePendingOpens.createdAt, new Date(now - PENDING_OPEN_MAX_AGE_MS)),
+      ),
+    )
+    .run();
   return db
     .select()
     .from(workspacePendingOpens)

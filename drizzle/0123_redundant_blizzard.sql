@@ -9,4 +9,5 @@ CREATE TABLE `workspace_pending_opens` (
 	FOREIGN KEY (`reference_session_id`) REFERENCES `sessions`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `workspace_pending_opens_workspace_session_unique` ON `workspace_pending_opens` (`workspace_id`,`session_id`);
+CREATE UNIQUE INDEX `workspace_pending_opens_workspace_session_unique` ON `workspace_pending_opens` (`workspace_id`,`session_id`);--> statement-breakpoint
+CREATE INDEX `workspace_pending_opens_session_idx` ON `workspace_pending_opens` (`session_id`);

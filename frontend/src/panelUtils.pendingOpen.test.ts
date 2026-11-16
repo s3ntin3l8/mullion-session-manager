@@ -34,6 +34,11 @@ describe("placePendingOpen", () => {
 
   it("tabs onto a single pane too narrow to halve", () => {
     expect(place([rect("a", 0, 0, 1000, 1000)])).toEqual({ referenceGroup: "a", tab: true });
+    // Its height does not matter for a split to the right.
+    expect(place([rect("a", 0, 0, 1400, 200)])).toEqual({
+      referenceGroup: "a",
+      direction: "right",
+    });
   });
 
   it("splits the reference pane's column below when there are two columns", () => {
@@ -90,9 +95,10 @@ describe("placePendingOpen", () => {
     // 700 px tall: two rows of 350 px are under 20 rows (378 px).
     const groups = [rect("a", 0, 0, 800, 700), rect("b", 800, 0, 800, 700)];
     expect(place(groups, "a")).toEqual({ referenceGroup: "a", tab: true });
-    // A column narrower than 80 cells cannot be split either.
-    const narrow = [rect("a", 0, 0, 600, 1000), rect("b", 600, 0, 600, 1000)];
-    expect(place(narrow, "a")).toEqual({ referenceGroup: "a", tab: true });
+    // Only the halved axis counts: a column narrower than 80 cells (a 1440px
+    // laptop with the sidebar open, ~550px columns) still splits below.
+    const narrow = [rect("a", 0, 0, 550, 900), rect("b", 550, 0, 550, 900)];
+    expect(place(narrow, "a")).toEqual({ referenceGroup: "a", direction: "below" });
   });
 
   it("splits the largest allowed pane without a reference", () => {
