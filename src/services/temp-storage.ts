@@ -155,7 +155,8 @@ export async function readLiveUnixSockets(
  */
 async function isSocketLive(fullPath: string, live: ReadonlySet<string>): Promise<boolean> {
   if (live.has(fullPath)) return true;
-  const real = await fs.realpath(fullPath).catch(() => null);
+  // Through the limiter: this runs inside the walk's fanout.
+  const real = await limited(() => fs.realpath(fullPath)).catch(() => null);
   if (real !== null && live.has(real)) return true;
   for (const entry of live) {
     if (!entry.startsWith("/") && (fullPath === entry || fullPath.endsWith(path.sep + entry))) {

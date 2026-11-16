@@ -1,5 +1,7 @@
 import path from "node:path";
 import fsPromises from "node:fs/promises";
+import { isPipePath } from "../cli/ipc-path.mjs";
+import { sessionSocketPath } from "./scope/dtach.js";
 import { stateFilePath } from "./session-state-file.js";
 import { hookTokenPath } from "./hook-token.js";
 import { ptyHostTokenPath } from "./pty-host-token.js";
@@ -179,11 +181,16 @@ export async function sweepOrphanedSessionTmpDirs(
   const removed = [...confirmedDead];
   await Promise.allSettled(
     removed.map(async (id) => {
-      // cleanupSessionFiles never throws and unlinks the dtach master's own
-      // socket here only: a master confirmed dead leaves that inode behind, but
-      // kill() also reaches cleanupSessionFiles and must not touch a socket.
+      // cleanupSessionFiles never throws. The master's own socket is removed
+      // here and not there: terminate() reaches cleanupSessionFiles only after
+      // the scope backend has stopped the master (which takes its socket with
+      // it), so a socket still on disk is one a master died without removing.
+      // Keeping the unlink out of cleanupSessionFiles keeps that function to
+      // files this module owns.
       await cleanupSessionFiles(sessionsDir, id);
-      await fsPromises.unlink(path.join(sessionsDir, `${id}.sock`)).catch(() => {});
+      const socket = sessionSocketPath(sessionsDir, id);
+      // On Windows the socket is a named pipe with nothing on disk to remove.
+      if (!isPipePath(socket)) await fsPromises.unlink(socket).catch(() => {});
     }),
   );
 
@@ -196,8 +203,13 @@ export async function sweepOrphanedSessionTmpDirs(
         .map((entry) => sessionIdOfArtifact(entry))
         .filter((id): id is string => id !== null),
     );
-  } catch {
-    return removed.length;
+  } catch (err) {
+    // Can't tell what is left, so don't claim anything was swept.
+    resolvedLog?.warn(
+      { err, removed: removed.length },
+      "sweepOrphanedSessionTmpDirs: could not re-list the sessions directory to count removals",
+    );
+    return 0;
   }
   const swept = removed.filter((id) => !remaining.has(id)).length;
   if (swept < removed.length) {

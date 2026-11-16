@@ -421,7 +421,8 @@ files are removed when a session terminates. Sessions that never got that far
 boot and on every reconcile tick: it treats every one of those artifacts as
 belonging to the session id in its name, waits until the _newest_ of them is a
 minute old, asks PtyManager whether the session is confirmed dead, and then
-removes them all, and the dead master's `<id>.sock` with them (only in the sweep:
-terminating a session never unlinks it). A session that is alive or of unknown
+removes them all, and the dead master's `<id>.sock` with them (a normal
+terminate stops the master through the scope backend, which removes the socket
+itself; the sweep handles a master that died without doing so). A session that is alive or of unknown
 state is left alone. The sweep reports a session as swept only when none of its
 files remain; a stuck one is retried on the next pass.

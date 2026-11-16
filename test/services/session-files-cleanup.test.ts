@@ -258,6 +258,33 @@ describe("session-files-cleanup", () => {
       expect(fs.existsSync(path.join(tmpDir, "4008.sock"))).toBe(true);
     });
 
+    it("reports 0, not every candidate, when the directory can't be re-listed to count removals", async () => {
+      const old = new Date(Date.now() - 120_000);
+      fs.writeFileSync(path.join(tmpDir, "4010.mcp.json"), "x");
+      fs.utimesSync(path.join(tmpDir, "4010.mcp.json"), old, old);
+
+      const realReaddir = fsPromises.readdir.bind(fsPromises);
+      let calls = 0;
+      const spy = vi.spyOn(fsPromises, "readdir").mockImplementation(((...args: unknown[]) => {
+        calls += 1;
+        if (calls === 2) return Promise.reject(new Error("EIO"));
+        return (realReaddir as (...a: unknown[]) => unknown)(...args);
+      }) as unknown as typeof fsPromises.readdir);
+      const mockLogger: SweepLogger = { warn: vi.fn() };
+      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, (ids) => new Set(ids), {
+        minAgeMs: 60_000,
+        log: mockLogger,
+      });
+      spy.mockRestore();
+
+      expect(swept).toBe(0);
+      expect(fs.existsSync(path.join(tmpDir, "4010.mcp.json"))).toBe(false);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ removed: 1 }),
+        expect.stringContaining("could not re-list"),
+      );
+    });
+
     it("does not count a session whose file could not be removed, and retries it", async () => {
       const old = new Date(Date.now() - 120_000);
       const orphanDir = sessionTmpDirPath(tmpDir, "4004");
