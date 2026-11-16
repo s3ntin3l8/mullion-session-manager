@@ -9,7 +9,7 @@ export interface SidebarToolbarAction {
   icon: ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
   onClick: () => void;
   disabled?: boolean;
-  /** A request is in flight: the button is disabled, `aria-busy`, and its icon spins. */
+  /** A request is in flight: the button is `aria-busy` / `aria-disabled` (it keeps focus; clicks are ignored) and its icon spins. */
   busy?: boolean;
   /** Small status dot on the corner (e.g. clone health). */
   dot?: "success" | "warn" | "danger";
@@ -36,8 +36,9 @@ export function SidebarToolbar({
           aria-label={label}
           aria-busy={busy || undefined}
           title={label}
-          disabled={disabled || busy}
-          onClick={onClick}
+          disabled={disabled}
+          aria-disabled={busy || undefined}
+          onClick={busy ? undefined : onClick}
         >
           <Icon size={14} />
           {dot && <span className={`sb-ibtn-dot sb-ibtn-dot--${dot}`} aria-hidden="true" />}

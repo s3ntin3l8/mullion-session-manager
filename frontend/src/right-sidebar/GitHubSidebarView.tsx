@@ -19,39 +19,30 @@ const REFRESH_MAX_MS = 5000;
 export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps) {
   const [link, setLink] = useState<{ url: string; label: string } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  // Busy from the click until this project's cached entries have revalidated
-  // (refreshGithubProject marks them fetchedAt 0; the mounted views refetch).
-  // An entry that failed to refetch also sits at fetchedAt 0 but carries an
-  // error: that is settled, not pending.
+  // Busy from the click until this project's GitHub requests have settled (the
+  // mounted views refetch after refreshGithubProject), for at least
+  // REFRESH_MIN_MS and at most REFRESH_MAX_MS. Waits on requests actually in
+  // flight, not on stale cache keys: a key nothing mounted consumes (a
+  // hover-prefetched PR, an older issues page) never revalidates.
   useEffect(() => {
     if (!refreshing) return;
-    const startedAt = Date.now();
-    const prefix = `${projectId}:`;
-    let settled = false;
-    let minTimer: ReturnType<typeof setTimeout> | null = null;
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      setRefreshing(false);
+    let cancelled = false;
+    const finish = () => {
+      if (!cancelled) setRefreshing(false);
     };
-    const pending = () =>
-      Object.entries(useDashboardStore.getState().githubCache).some(
-        ([key, entry]) => key.startsWith(prefix) && entry.fetchedAt === 0 && entry.error === null,
-      );
-    const check = () => {
-      if (settled || pending()) return;
-      const wait = REFRESH_MIN_MS - (Date.now() - startedAt);
-      if (wait <= 0) done();
-      else if (minTimer === null) minTimer = setTimeout(done, wait);
+    const settle = async () => {
+      for (;;) {
+        const pending = useDashboardStore.getState().githubInFlight(projectId);
+        if (pending.length === 0) return;
+        await Promise.allSettled(pending);
+      }
     };
-    const unsubscribe = useDashboardStore.subscribe(check);
-    const cap = setTimeout(done, REFRESH_MAX_MS);
-    check();
+    const minTimer = new Promise<void>((resolve) => setTimeout(resolve, REFRESH_MIN_MS));
+    const cap = setTimeout(finish, REFRESH_MAX_MS);
+    void Promise.all([minTimer, settle()]).then(finish);
     return () => {
-      settled = true;
-      unsubscribe();
+      cancelled = true;
       clearTimeout(cap);
-      if (minTimer !== null) clearTimeout(minTimer);
     };
   }, [refreshing, projectId]);
   // The same list the panel renders (the live store wins over the cached fetch).

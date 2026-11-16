@@ -249,44 +249,87 @@ describe("GitHubSidebarView", () => {
 });
 
 describe("GitHubSidebarView Refresh feedback", () => {
-  const STALE = { "4:prs": { data: null, fetchedAt: 0, error: null } };
-  const markStale = () => useDashboardStore.setState({ githubCache: STALE });
+  const realRefresh = useDashboardStore.getState().refreshGithubProject;
+  const realInFlight = useDashboardStore.getState().githubInFlight;
 
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useDashboardStore.setState({
+      refreshGithubProject: realRefresh,
+      githubInFlight: realInFlight,
+      githubCache: {},
+    });
+  });
   afterEach(() => vi.useRealTimers());
 
   const button = () => screen.getByRole("button", { name: "Refresh" });
-
-  it("spins and disables Refresh until the project's entries revalidate, then settles", async () => {
-    useDashboardStore.setState({ refreshGithubProject: markStale, githubCache: {} });
+  const mount = async () => {
     renderView(4);
     await act(async () => {});
+  };
+
+  it("spins until the project's in-flight requests settle, then clears", async () => {
+    let finish: () => void = () => {};
+    const request = new Promise<void>((resolve) => (finish = resolve));
+    let inFlight = [request as Promise<unknown>];
+    useDashboardStore.setState({
+      refreshGithubProject: vi.fn(),
+      githubInFlight: () => inFlight,
+    });
+    await mount();
     expect(button()).not.toHaveAttribute("aria-busy");
 
     fireEvent.click(button());
     expect(button()).toHaveAttribute("aria-busy", "true");
-    expect(button()).toBeDisabled();
+    expect(button()).toHaveAttribute("aria-disabled", "true");
 
-    // Still stale: stays busy past the minimum.
+    // Past the minimum but the request is still in flight: stays busy.
     await act(async () => {
       vi.advanceTimersByTime(1000);
     });
     expect(button()).toHaveAttribute("aria-busy", "true");
 
-    // Revalidated: clears (after the minimum visible time has already passed).
+    inFlight = [];
     await act(async () => {
-      useDashboardStore.setState({
-        githubCache: { "4:prs": { data: null, fetchedAt: Date.now(), error: null } },
-      });
+      finish();
     });
     expect(button()).not.toHaveAttribute("aria-busy");
-    expect(button()).toBeEnabled();
   });
 
-  it("never sticks: clears after the cap when nothing revalidates", async () => {
-    useDashboardStore.setState({ refreshGithubProject: markStale, githubCache: {} });
-    renderView(4);
-    await act(async () => {});
+  it("ignores a click while busy and keeps focus on the button", async () => {
+    const refresh = vi.fn();
+    useDashboardStore.setState({
+      refreshGithubProject: refresh,
+      githubInFlight: () => [new Promise<unknown>(() => {})],
+    });
+    await mount();
+    button().focus();
+    fireEvent.click(button());
+    fireEvent.click(button());
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(button()).toBe(document.activeElement);
+  });
+
+  it("is not held by a stale key nothing consumes (a hover-prefetched PR)", async () => {
+    // Real refreshGithubProject marks every key stale; 4:pr:12 has no mounted consumer.
+    useDashboardStore.setState({
+      githubCache: { "4:pr:12": { data: null, fetchedAt: 1, error: null } },
+    });
+    await mount();
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
+  });
+
+  it("never sticks: clears after the cap when a request never settles", async () => {
+    useDashboardStore.setState({
+      refreshGithubProject: vi.fn(),
+      githubInFlight: () => [new Promise<unknown>(() => {})],
+    });
+    await mount();
     fireEvent.click(button());
     expect(button()).toHaveAttribute("aria-busy", "true");
     await act(async () => {
@@ -295,10 +338,9 @@ describe("GitHubSidebarView Refresh feedback", () => {
     expect(button()).not.toHaveAttribute("aria-busy");
   });
 
-  it("shows busy for a minimum moment even when nothing was stale", async () => {
-    useDashboardStore.setState({ refreshGithubProject: vi.fn(), githubCache: {} });
-    renderView(4);
-    await act(async () => {});
+  it("shows busy for a minimum moment even when nothing is in flight", async () => {
+    useDashboardStore.setState({ refreshGithubProject: vi.fn(), githubInFlight: () => [] });
+    await mount();
     fireEvent.click(button());
     expect(button()).toHaveAttribute("aria-busy", "true");
     await act(async () => {
