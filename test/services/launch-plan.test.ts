@@ -289,6 +289,11 @@ describe("buildLaunchPlan — issue #822 caller-supplied env", () => {
   });
 
   it("an explicit session.env wins over a key recovered from the user's shell (#3152)", async () => {
+    // The service env wins over a recovered key, so a runner that already
+    // exports JAVA_HOME/ANDROID_HOME (CI images do) would mask the recovery.
+    const saved = { ANDROID_HOME: process.env.ANDROID_HOME, JAVA_HOME: process.env.JAVA_HOME };
+    delete process.env.ANDROID_HOME;
+    delete process.env.JAVA_HOME;
     const shellEnv = await import("../../src/services/user-shell-env.js");
     vi.spyOn(shellEnv, "getUserShellRecoverKeys").mockReturnValue(["ANDROID_HOME", "JAVA_HOME"]);
     vi.spyOn(shellEnv, "getUserShellEnv").mockReturnValue({
@@ -301,6 +306,10 @@ describe("buildLaunchPlan — issue #822 caller-supplied env", () => {
       expect(plan.env.JAVA_HOME).toBe("/recovered/jdk");
     } finally {
       vi.restoreAllMocks();
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
     }
   });
 
