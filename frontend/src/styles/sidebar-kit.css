@@ -810,7 +810,7 @@ button.sb-chip--label[aria-pressed="true"] {
   align-items: baseline;
   gap: 4px;
   padding: 0 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .gh-detail-parent .gh-ref-row {
   width: auto;
