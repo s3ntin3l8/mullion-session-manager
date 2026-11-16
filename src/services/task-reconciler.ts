@@ -32,7 +32,7 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveCommitsPastBase } from "./commits-past-base.js";
 // #2416 — one throttle policy for the reconciler's "this state is stuck"
 // warnings, instead of a copy per lookup.
-import { failReviewingGate, removeFailedTaskWorktree } from "./task-gate-failure.js";
+import { killDiags, failReviewingGate, removeFailedTaskWorktree } from "./task-gate-failure.js";
 import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
@@ -4893,12 +4893,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               !salvage &&
               !isTaskInRateLimitGrace(task, resolvedTaskMaster.rateLimitGraceMinutes)
             ) {
+              // The scrollback dies with the PTY, so read it before the kill.
+              // Best-effort and bounded: null on any failure or timeout.
+              const budgetDiagnostics = await killDiags(app, task, session, backend, now);
               const updated = app.db
                 .update(tasks)
                 .set({
                   status: "failed",
                   failureReason,
-                  failureDiagnostics: null,
+                  failureDiagnostics: budgetDiagnostics,
                   completedAt: now,
                 })
                 .where(
@@ -4932,7 +4935,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                     ...task,
                     status: "failed",
                     failureReason,
-                    failureDiagnostics: null,
+                    failureDiagnostics: budgetDiagnostics,
                     completedAt: now,
                   },
                   project,
@@ -4942,9 +4945,8 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // inspection rather than retried forever (see
                 // removeWorktreeIfClean's own doc comment on why "dirty" is
                 // the only real refusal condition it has).
-                if (task.worktreePath) {
-                  await removeFailedTaskWorktree(app, task, project, hostId, "budget failure");
-                }
+                // (removeFailedTaskWorktree itself no-ops without a worktreePath.)
+                await removeFailedTaskWorktree(app, task, project, hostId, "budget failure");
               }
               continue;
             }

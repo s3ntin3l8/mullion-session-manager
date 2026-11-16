@@ -81,6 +81,24 @@ export async function collectScrollbackTail(
   }
 }
 
+/**
+ * Like `collectScrollbackTail`, but reads the backend's RENDERED scrollback
+ * (what a terminal would show, with the `--- alternate screen ---` marker) so
+ * a TUI worker's last screen is readable instead of a raw repaint stream.
+ * Throws on a read failure: the caller decides what an unreadable tail means.
+ */
+export async function collectRenderedScrollbackTail(
+  backend: SessionBackend,
+  sessionId: number,
+): Promise<string> {
+  const rendered = await backend.getRenderedScrollback(String(sessionId));
+  const lines = sanitizeDiagnosticText(rendered.slice(-SCROLLBACK_TAIL_BYTES))
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l.length > 0);
+  return lines.slice(-SCROLLBACK_TAIL_LINES).join("\n");
+}
+
 export function collectRecentEvents(app: FastifyInstance, sessionId: number): string[] | null {
   try {
     const rows = app.db

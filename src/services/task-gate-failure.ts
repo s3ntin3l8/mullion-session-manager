@@ -16,10 +16,60 @@ import { recordTaskTransition } from "./task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import {
   collectRecentEvents,
+  collectRenderedScrollbackTail,
   collectScrollbackTail,
   formatFailureDiagnostics,
   type DiagnosticParts,
 } from "./task-failure-diagnostics.js";
+
+/** Upper bound on the diagnostics read before a worker is killed. */
+export const KILL_DIAGNOSTICS_TIMEOUT_MS = 5_000;
+
+/**
+ * Diagnostic snapshot for a task about to be failed WITH its live session
+ * killed (budget exceeded): the scrollback dies with the PTY, so it is read
+ * first. Strictly best-effort — any error or a timeout yields `null` (logged
+ * at warn) and must never stop the caller from failing the task or killing
+ * the session.
+ */
+export async function killDiags(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  session: typeof sessions.$inferSelect,
+  backend: SessionBackend,
+  now: Date,
+  timeoutMs: number = KILL_DIAGNOSTICS_TIMEOUT_MS,
+): Promise<string | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const collect = (async () => {
+      const scrollback = await collectRenderedScrollbackTail(backend, session.id);
+      const events = collectRecentEvents(app, session.id);
+      return formatFailureDiagnostics(
+        task,
+        { scrollback, events, gitStatus: null, salvage: null },
+        now,
+      );
+    })();
+    // A late rejection after the timeout wins the race must not go unhandled.
+    collect.catch(() => {});
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`diagnostics read timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+    return await Promise.race([collect, timeout]);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id, sessionId: session.id },
+      "task reconcile: failure diagnostics unavailable before kill",
+    );
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /** Best-effort removal of a failed task's worktree (and its browsers, via
  * `removeCheckoutIfClean`); a dirty tree stays for inspection. */
