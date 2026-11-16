@@ -2,24 +2,15 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { api } from "../api/index.js";
 import type { DockControl } from "../api/index.js";
 
-// What every mounted useDockProject for one project shares (#3036, #3031):
-//
-// - ONE poll of GET /api/projects/:id/dock. The bottom Dock's
-//   DockProjectGroup and the right sidebar's Dock view can both be mounted
-//   for one project (a fine pointer between 700 and 1099px); each used to
-//   poll on its own timer, so there were two requests per interval and the
-//   two copies could disagree on a container's state between their polls.
-//   Now the first subscriber starts the poll, the last one to leave stops it
-//   and drops the cache, and every subscriber reads the same `controls`.
-// - The "Auto-attach Docker logs" bookkeeping, so the surface that takes the
-//   effect over from another one knows a container was already attached (or
-//   is being attached) and does not start a second log session for it. It
-//   outlives the poll: a view that unmounts and comes back (another rail
-//   view, another project and back) must not re-attach a stream the user
-//   ended with "Stop log".
-// - Whether the bottom Dock is mounted for the project, which decides which
-//   surface runs auto-attach (useDockProject, where `autoAttach` is derived
-//   from its `surface` option).
+// What every mounted useDockProject for one project shares for its data
+// (#3036): ONE poll of GET /api/projects/:id/dock. The bottom Dock's
+// DockProjectGroup and the right sidebar's Dock view can both be mounted for
+// one project (a fine pointer between 700 and 1099px); each used to poll on
+// its own timer, so there were two requests per interval and the two copies
+// could disagree on a container's state between their polls. Now the first
+// subscriber starts the poll, the last one to leave stops it and drops the
+// cache, and every subscriber reads the same `controls`. The auto-attach
+// state the surfaces share is in dockAutoAttach.ts.
 
 // Issue #73 — how often a project with a mounted Dock surface re-fetches
 // GET .../dock, so a container's state/image reflects `docker ps` reality
@@ -28,11 +19,6 @@ import type { DockControl } from "../api/index.js";
 // specifically so this 15s interval only pays for a fresh `docker ps`
 // roughly once per poll, not once per project.
 export const DOCKER_POLL_INTERVAL_MS = 15_000;
-
-export interface AutoAttachEntry {
-  eligible: boolean;
-  failedAt: number | null;
-}
 
 interface Entry {
   controls: DockControl[];
@@ -136,63 +122,4 @@ export function useSharedDockControls(projectId: number, refreshTrigger: number)
     if (entry) await fetchControls(projectId, entry, false);
   }, [projectId]);
   return { controls, loaded: controls !== NOT_LOADED, refreshNow };
-}
-
-// Kept for the page's lifetime, per project. The effect prunes a project's
-// identities that leave its poll, so each map stays the size of the
-// project's running containers.
-const autoAttachByProject = new Map<number, Map<string, AutoAttachEntry>>();
-
-/** The project's auto-attach bookkeeping, shared by every surface. */
-export function sharedAutoAttachState(projectId: number): Map<string, AutoAttachEntry> {
-  let state = autoAttachByProject.get(projectId);
-  if (!state) {
-    state = new Map();
-    autoAttachByProject.set(projectId, state);
-  }
-  return state;
-}
-
-/** Test-only: forget every project's auto-attach bookkeeping. */
-export function __resetDockAutoAttachStateForTests() {
-  autoAttachByProject.clear();
-}
-
-// ---- Which surface runs auto-attach (#3031) ----
-//
-// The bottom Dock registers here while its DockProjectGroup is mounted for a
-// project (a layout effect, so the registration is in place before any
-// passive effect of the same commit, the view's auto-attach effect
-// included). A collapsed or unavailable bottom Dock does not mount
-// DockProjectGroup, so it counts as absent.
-
-const bottomDockMounts = new Map<number, number>();
-const bottomDockListeners = new Set<() => void>();
-
-function notifyBottomDock() {
-  for (const listener of bottomDockListeners) listener();
-}
-
-export function registerBottomDock(projectId: number): () => void {
-  bottomDockMounts.set(projectId, (bottomDockMounts.get(projectId) ?? 0) + 1);
-  notifyBottomDock();
-  return () => {
-    const left = (bottomDockMounts.get(projectId) ?? 1) - 1;
-    if (left > 0) bottomDockMounts.set(projectId, left);
-    else bottomDockMounts.delete(projectId);
-    notifyBottomDock();
-  };
-}
-
-export function isBottomDockMounted(projectId: number): boolean {
-  return bottomDockMounts.has(projectId);
-}
-
-function subscribeBottomDock(listener: () => void): () => void {
-  bottomDockListeners.add(listener);
-  return () => bottomDockListeners.delete(listener);
-}
-
-export function useBottomDockMounted(projectId: number): boolean {
-  return useSyncExternalStore(subscribeBottomDock, () => isBottomDockMounted(projectId));
 }

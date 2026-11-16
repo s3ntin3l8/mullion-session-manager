@@ -31,7 +31,7 @@ The effect lives in `useDockProject` and runs on exactly one surface per
 project (#3031): the bottom Dock (`surface: "bottom-dock"`) while its
 `DockProjectGroup` is mounted, otherwise the right sidebar's Dock view. The
 decision is made in that hook alone, from the registry in
-`frontend/src/dock/dockProjectShared.ts`, where the bottom Dock registers in a
+`frontend/src/dock/dockAutoAttach.ts`, where the bottom Dock registers in a
 layout effect so a view mounting in the same commit already sees it. Two
 copies running the effect for one project would each start a log session for
 the same container; the bookkeeping is per project (and outlives the

@@ -5,7 +5,7 @@ import { __resetRateLimitBreakerForTests } from "./api/client.js";
 import { __resetSessionRefreshBlockForTests } from "./store/slices/sessions.js";
 import { __resetGithubCacheForTests } from "./store/githubCacheReset.js";
 import { __discardPendingSettingsPatchForTests } from "./store/slices/ui.js";
-import { __resetDockAutoAttachStateForTests } from "./dock/dockProjectShared.js";
+import { __resetDockAutoAttachStateForTests } from "./dock/dockAutoAttach.js";
 
 // vitest.config.ts doesn't set `test.globals: true` (this repo's convention
 // is explicit `import { describe, it, ... } from "vitest"` everywhere), so
@@ -65,7 +65,7 @@ afterEach(() => {
   __resetGithubCacheForTests();
 });
 
-// The Dock's auto-attach bookkeeping (dock/dockProjectShared.ts) is kept per
+// The Dock's auto-attach bookkeeping (dock/dockAutoAttach.ts) is kept per
 // project for the page's lifetime, so one test's attached container would
 // read as already attached in the next test's mount of the same project.
 afterEach(() => {

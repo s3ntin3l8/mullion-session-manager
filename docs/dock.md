@@ -651,7 +651,7 @@ tier (where the bottom Dock is never mounted), while the bottom Dock is
 collapsed, and in Tasks mode. With a mouse at these widths both can be on
 screen for one project, and the view then leaves it to the bottom Dock. The
 choice is made in one place, `useDockProject` (its `surface` option): the
-bottom Dock registers itself for the project while its `DockProjectGroup` is
+bottom Dock registers itself for the project (`frontend/src/dock/dockAutoAttach.ts`) while its `DockProjectGroup` is
 mounted. Which containers have already been attached is kept per project,
 not per surface, and outlives both: the surface that takes the effect over
 does not attach a container a second time, and a view that remounts (another

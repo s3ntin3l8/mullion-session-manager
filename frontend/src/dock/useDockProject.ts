@@ -25,14 +25,13 @@ import type { DockerStackGroup } from "./dockHelpers.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
+import { DOCKER_POLL_INTERVAL_MS, useSharedDockControls } from "./dockProjectShared.js";
 import {
-  DOCKER_POLL_INTERVAL_MS,
   isBottomDockMounted,
   registerBottomDock,
   sharedAutoAttachState,
   useBottomDockMounted,
-  useSharedDockControls,
-} from "./dockProjectShared.js";
+} from "./dockAutoAttach.js";
 
 // One project's Dock data and actions (#3012): its controls (dock.json and
 // the Docker Compose discovery), how they group, which are running, and every
@@ -354,7 +353,7 @@ export function useDockProject(
   const autoAttach = surface === "bottom-dock" || !bottomDockMounted;
 
   const AUTO_ATTACH_RETRY_MS = 60_000;
-  // The bookkeeping is the project's, not this mount's (dockProjectShared.ts):
+  // The bookkeeping is the project's, not this mount's (dockAutoAttach.ts):
   // when the effect moves from one surface to the other, or a surface
   // remounts, the owner knows which containers were already attached, or
   // are being attached right now, and does not start a second log session
