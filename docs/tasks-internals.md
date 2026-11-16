@@ -475,8 +475,8 @@ handoff above (once the grace has elapsed, the reconciler stops waiting and
 runs the normal commits-past-base gate; a worker with no commits yet keeps
 waiting instead, since the gate could only fail it, and the budget is its
 backstop — though once `now - lastTurnEndedAt` reaches `SHELL_TAIL_NUDGE_MS`
-(20 minutes), `nudgeShellTailWorker` nudges it once to check or kill a stuck
-wait loop), and the per-task time budget
+(20 minutes), `nudgeShellTailWorker` nudges it (at most twice per spell, sharing
+`MAX_WORKER_NUDGES`) to check or kill a stuck wait loop), and the per-task time budget
 (`tasks.md`'s Safety envelope) — a task that hits its budget while its
 worker has finished (cleanly, or behind such a shell tail) **with commits on
 the branch** is handed to `reviewing` instead of force-failed, since failing
