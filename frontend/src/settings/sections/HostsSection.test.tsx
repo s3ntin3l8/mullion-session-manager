@@ -285,4 +285,70 @@ describe("HostsSection token rotation", () => {
     expect(await screen.findByText(/boom/)).toBeInTheDocument();
     expect(screen.queryByText(/New token for/)).not.toBeInTheDocument();
   });
+
+  it("for a live-identity host says the agent is unaffected and offers rotate-and-discard", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "win-pc",
+          baseUrl: null,
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+        }),
+      ],
+    });
+    stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    await user.click(screen.getByText("Rotate token"));
+    await user.click(screen.getByText("Click again to rotate (agent unaffected)"));
+
+    expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
+    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/unaffected/);
+    expect(screen.queryByText(/can no longer reach this primary/)).not.toBeInTheDocument();
+  });
+
+  it("rotate-and-discard never renders the token and keeps no dialog open", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "win-pc",
+          baseUrl: null,
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+        }),
+      ],
+    });
+    const calls = stubFetch({ rotate: () => jsonResponse(200, { token: "secret-token-xyz" }) });
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    await user.click(screen.getByText("Rotate token and discard it"));
+    await user.click(screen.getByText("Click again to rotate (token not shown)"));
+
+    await vi.waitFor(() => expect(calls).toContain("POST /api/hosts/h1/rotate-token"));
+    expect(screen.queryByText(/New token for/)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("secret-token-xyz");
+    expect(JSON.stringify(useDashboardStore.getState())).not.toContain("secret-token-xyz");
+  });
+
+  it("for a host without a live identity keeps the lockout copy and offers no discard", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [makeHost({ id: "h1", name: "win-pc", baseUrl: null })],
+    });
+    stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    expect(screen.queryByText("Rotate token and discard it")).not.toBeInTheDocument();
+    await user.click(screen.getByText("Rotate token"));
+    await user.click(screen.getByText("Click again to rotate"));
+
+    expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
+    expect(screen.queryByTestId("rotate-unaffected")).not.toBeInTheDocument();
+    expect(screen.getByText(/can no longer reach this primary/)).toBeInTheDocument();
+  });
 });
