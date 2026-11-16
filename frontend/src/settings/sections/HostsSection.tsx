@@ -119,9 +119,10 @@ function HostProtocolLine({ host }: { host: Host }) {
 }
 
 // Issue #3091 — a host that connects out needs no stored address, so it may be
-// cleared; one without a live machine identity is reached only by it.
+// cleared; one without a live machine identity (none, revoked or expired) is
+// reached only by it. The server enforces the same rule.
 function canClearAddress(host: Host): boolean {
-  return host.hasMachineIdentity === true && host.machineIdentityRevoked !== true;
+  return host.hasLiveMachineIdentity === true;
 }
 
 export function HostsSection() {

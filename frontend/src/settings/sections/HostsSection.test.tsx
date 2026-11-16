@@ -154,6 +154,7 @@ describe("HostsSection token rotation", () => {
           name: "macbook",
           baseUrl: "http://192.168.2.92:3000",
           hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
         }),
       ],
     });

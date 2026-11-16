@@ -11,6 +11,7 @@ import {
   createHost,
   deleteHost,
   getHostRow,
+  hasLiveMachineIdentity,
   listHosts,
   findPossibleDuplicates,
   mintHostToken,
@@ -347,12 +348,7 @@ export async function hostsRoute(app: FastifyInstance) {
       if (request.body.baseUrl === null) {
         const row = getHostRow(app, id);
         if (!row) return reply.notFound();
-        const live =
-          row.machineCredentialEnc !== null &&
-          row.machineCredentialRevokedAt === null &&
-          row.machineCredentialExpiresAt !== null &&
-          row.machineCredentialExpiresAt.getTime() > Date.now();
-        if (!live) {
+        if (!hasLiveMachineIdentity(row)) {
           return reply.badRequest(
             "the address can only be cleared for a host with a live machine identity: without " +
               "one nothing else can reach it",

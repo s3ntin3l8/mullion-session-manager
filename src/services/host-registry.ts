@@ -58,6 +58,9 @@ export interface HostSummary {
   // persistent identity), and whether an operator revoked it. Never the
   // credential itself.
   hasMachineIdentity: boolean;
+  // Issue #3091 — the identity is also unrevoked and unexpired, so the agent
+  // connects out and the host's address may be cleared.
+  hasLiveMachineIdentity: boolean;
   machineIdentityRevoked: boolean;
   // Issue #2969 — an agent the primary has to dial at its stored baseUrl: it
   // has an address but no machine identity (a release before the outbound
@@ -130,6 +133,27 @@ export class HostHasProjectsError extends Error {
 
 type HostRow = typeof hosts.$inferSelect;
 
+/**
+ * Issue #3091 — whether a host holds a machine identity that is still usable:
+ * a credential is present, was not revoked, and has not expired (an identity
+ * with no recorded expiry counts as expired, as renewal treats it). One rule
+ * for renewal, the grace-slot check and the "may its address be cleared"
+ * guard, so they cannot drift apart.
+ */
+export function hasLiveMachineIdentity(
+  row: Pick<
+    HostRow,
+    "machineCredentialEnc" | "machineCredentialRevokedAt" | "machineCredentialExpiresAt"
+  >,
+): boolean {
+  return (
+    row.machineCredentialEnc !== null &&
+    row.machineCredentialRevokedAt === null &&
+    row.machineCredentialExpiresAt !== null &&
+    row.machineCredentialExpiresAt.getTime() > Date.now()
+  );
+}
+
 function toSummary(row: HostRow): HostSummary {
   return {
     id: row.id,
@@ -143,6 +167,7 @@ function toSummary(row: HostRow): HostSummary {
     drained: row.drained,
     role: row.role,
     hasMachineIdentity: row.machineCredentialEnc !== null,
+    hasLiveMachineIdentity: hasLiveMachineIdentity(row),
     machineIdentityRevoked: row.machineCredentialRevokedAt !== null,
     legacyAgent:
       row.id !== LOCAL_HOST_ID &&
@@ -749,22 +774,12 @@ function issueMachineCredential(app: FastifyInstance, hostId: string): string {
   // same per-host token. Keep a still-live credential in the grace slot so a
   // displaced agent converges onto the new one at its next renewal instead of
   // being 401-ed permanently.
-  const existing = app.db
-    .select({
-      enc: hosts.machineCredentialEnc,
-      revokedAt: hosts.machineCredentialRevokedAt,
-      expiresAt: hosts.machineCredentialExpiresAt,
-    })
-    .from(hosts)
-    .where(eq(hosts.id, hostId))
-    .get();
+  const existing = getHostRow(app, hostId);
+  const prevEnc =
+    existing && hasLiveMachineIdentity(existing) ? existing.machineCredentialEnc : null;
   // An expired credential is already dead (renewMachineCredential rejects the
   // row), so it must not be revived into the grace slot.
-  const replacesLive =
-    !!existing?.enc &&
-    !existing.revokedAt &&
-    !!existing.expiresAt &&
-    existing.expiresAt.getTime() > Date.now();
+  const replacesLive = prevEnc !== null;
   if (replacesLive) {
     app.log.warn(
       { hostId },
@@ -776,7 +791,7 @@ function issueMachineCredential(app: FastifyInstance, hostId: string): string {
     .update(hosts)
     .set({
       machineCredentialEnc: app.encryption.encryptString(credential),
-      machineCredentialPrevEnc: replacesLive ? existing.enc : null,
+      machineCredentialPrevEnc: prevEnc,
       machineCredentialRotatedAt: replacesLive ? new Date() : null,
       machineCredentialExpiresAt: new Date(Date.now() + MACHINE_CREDENTIAL_TTL_MS),
       machineCredentialRevokedAt: null,
@@ -829,11 +844,9 @@ export function renewMachineCredential(
   input: Pick<RegisterAgentInput, "baseUrl" | "hostname" | "name" | "platform" | "capabilities">,
 ): HostRegistration | null {
   const row = getHostRow(app, hostId);
-  if (!row || row.id === LOCAL_HOST_ID || !row.machineCredentialEnc) return null;
-  if (row.machineCredentialRevokedAt) return null;
-  if (!row.machineCredentialExpiresAt || row.machineCredentialExpiresAt.getTime() <= Date.now()) {
-    return null;
-  }
+  if (!row || row.id === LOCAL_HOST_ID || !hasLiveMachineIdentity(row)) return null;
+  // hasLiveMachineIdentity proved the credential is present.
+  if (!row.machineCredentialEnc) return null;
   // Evaluate both so timing does not reveal which slot matched.
   const isCurrent = safeMatch(app, presented, row.machineCredentialEnc);
   const prevLive =

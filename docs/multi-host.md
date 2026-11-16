@@ -2092,7 +2092,7 @@ or `PATCH /api/hosts/:id` with `{ "baseUrl": null }`. The row then reads "outbou
 only — waiting for the agent to connect" until the channel reports online (the
 clear drops the old health verdict), and "connected over the outbound channel"
 after that. An empty string is still rejected, and the clear is refused (400) for
-a host without a live machine identity (none, revoked, or expired): without one
+a host without a live machine identity (none, revoked, expired, or with no recorded expiry): without one
 the address is the only way anything reaches it.
 
 Clearing only sticks while the agent stops advertising an address. A registration

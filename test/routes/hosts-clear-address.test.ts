@@ -93,11 +93,17 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
         hostname: "expired",
         wantsMachineCredential: true,
       });
+      const live = async () =>
+        (await app.inject({ method: "GET", url: "/api/hosts" }))
+          .json()
+          .find((h: { id: string }) => h.id === hostId).hasLiveMachineIdentity;
+      expect(await live()).toBe(true);
       app.db
         .update(hosts)
         .set({ machineCredentialExpiresAt: new Date(Date.now() - 1000) })
         .where(eq(hosts.id, hostId))
         .run();
+      expect(await live()).toBe(false);
       const res = await clear(app, hostId);
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toMatch(/live machine identity/);
