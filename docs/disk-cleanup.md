@@ -177,6 +177,25 @@ Four more were added because they grow unnoticed (#2188):
   Storage says under the toggles that it is the exception to "rebuilt or
   re-downloaded on next use".
 
+Three more hold the old versions agent CLIs download and never remove:
+**`claude-versions`** (`~/.local/share/claude/versions`), **`claude-remote-cli`**
+(`~/.claude/remote/ccd-cli`) and **`minimax-releases`** (`~/.minimax-code/releases`).
+They carry `keepNewest`, and a child is kept when any of these holds:
+
+- it is the newest by version (the leading dotted number compared numerically,
+  so `2.1.322` > `2.1.99`; the full name breaks a tie). A name with no leading
+  number is never the newest and is never removed;
+- a running process executes it: `/proc/<pid>/exe` resolves to the child or
+  inside it. The newest is not always the one running, so this check is
+  independent of the first;
+- a symlink named `current`, beside the versions or one directory above them
+  (`~/.minimax-code/current`), resolves to it;
+- the `npm-npx` rules above apply (command line or working directory, 10-minute
+  grace).
+
+If `/proc` can't be read nothing is removed. The size shown next to each toggle
+is only what ticking it would free.
+
 ## opencode's database
 
 `services/opencode-storage.ts`. opencode keeps every session in one SQLite

@@ -333,4 +333,94 @@ describe("cache-storage", () => {
       );
     });
   });
+
+  describe("keepNewest version caches", () => {
+    const VERSIONS = ".local/share/claude/versions";
+    let proc: string;
+
+    const fakeProc = async (pid: string, exeTarget: string) => {
+      await fs.mkdir(path.join(proc, pid), { recursive: true });
+      await fs.symlink(exeTarget, path.join(proc, pid, "exe"));
+    };
+    const opts = () => ({ cacheRoot: root, homeDir: base, procDir: proc, now: PAST_GRACE() });
+    const at = (name: string) => path.join(base, VERSIONS, name);
+    const seed = async (names: string[]) => {
+      await fs.mkdir(path.join(base, VERSIONS), { recursive: true });
+      for (const n of names) await fs.writeFile(at(n), "x".repeat(8192));
+    };
+
+    beforeEach(async () => {
+      proc = path.join(base, "proc");
+      await fs.mkdir(proc);
+    });
+
+    it("keeps the newest by number (2.1.322 > 2.1.99) and removes the rest", async () => {
+      await seed(["2.1.99", "2.1.322", "2.1.100"]);
+      await pruneCacheStorage(["claude-versions"], opts());
+      expect(await exists(at("2.1.322"))).toBe(true);
+      expect(await exists(at("2.1.99"))).toBe(false);
+      expect(await exists(at("2.1.100"))).toBe(false);
+    });
+
+    it("keeps an older version a live process executes", async () => {
+      await seed(["2.1.302", "2.1.310", "2.1.322"]);
+      await fakeProc("4242", at("2.1.302"));
+      await pruneCacheStorage(["claude-versions"], opts());
+      expect(await exists(at("2.1.302"))).toBe(true);
+      expect(await exists(at("2.1.322"))).toBe(true);
+      expect(await exists(at("2.1.310"))).toBe(false);
+    });
+
+    it("keeps a directory release a process runs from inside, and the `current` target", async () => {
+      const rel = path.join(base, ".minimax-code", "releases");
+      for (const v of ["0.7.4", "0.7.5", "0.7.6", "0.7.7"]) {
+        await fs.mkdir(path.join(rel, v, "bin"), { recursive: true });
+        await fs.writeFile(path.join(rel, v, "bin", "mm"), "x");
+      }
+      await fs.symlink(path.join(rel, "0.7.5"), path.join(base, ".minimax-code", "current"));
+      await fakeProc("77", path.join(rel, "0.7.4", "bin", "mm"));
+      await pruneCacheStorage(["minimax-releases"], opts());
+      expect(await fs.readdir(rel)).toEqual(["0.7.4", "0.7.5", "0.7.7"]);
+    });
+
+    it("keeps a fresh child and a child with no numeric prefix", async () => {
+      await seed(["1.0.0", "2.0.0", "latest", "1.5.0"]);
+      const old = new Date(Date.now() - 3_600_000);
+      for (const n of ["1.0.0", "2.0.0", "latest"]) await fs.utimes(at(n), old, old);
+      await pruneCacheStorage(["claude-versions"], {
+        cacheRoot: root,
+        homeDir: base,
+        procDir: proc,
+        now: Date.now(),
+      });
+      expect((await fs.readdir(path.join(base, VERSIONS))).sort()).toEqual([
+        "1.5.0",
+        "2.0.0",
+        "latest",
+      ]);
+    });
+
+    it("removes nothing when /proc can't be read", async () => {
+      await seed(["1.0.0", "2.0.0"]);
+      await pruneCacheStorage(["claude-versions"], {
+        ...opts(),
+        procDir: path.join(base, "no-such-proc"),
+      });
+      expect(await fs.readdir(path.join(base, VERSIONS))).toHaveLength(2);
+    });
+
+    it("reports only the removable bytes", async () => {
+      await seed(["1.0.0", "1.1.0", "2.0.0"]);
+      const status = await inspectCacheStorage(opts());
+      const cache = status.caches.find((c) => c.id === "claude-versions");
+      const one = (await fs.lstat(at("1.0.0"))).blocks * 512;
+      expect(cache?.bytes).toBe(2 * one);
+      await pruneCacheStorage(["claude-versions"], opts());
+      expect(
+        (await inspectCacheStorage(opts())).caches.find((c) => c.id === "claude-versions"),
+      ).toMatchObject({
+        bytes: 0,
+      });
+    });
+  });
 });
