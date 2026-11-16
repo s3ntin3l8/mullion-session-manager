@@ -268,9 +268,9 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
     via: "dispatch-give-up",
     hostId: null,
     // A task that only ever waited for its host cut nothing: the branch and
-    // path stamped at claim time name nothing it owns, and clearing them makes
-    // Retry refuse cleanly (`no-worktree`) rather than try to resume a branch
-    // that was never created. After a failed ATTEMPT they are left alone — a
+    // path stamped at claim time name nothing it owns, and clearing them lets
+    // Retry reset the task to ready rather than try to resume a branch that
+    // was never created. After a failed ATTEMPT they are left alone — a
     // partial or unclean worktree may exist on the host, and Retry (or the
     // user) can still find it through them.
     extra: row.held ? { worktreePath: null, branchName: null } : {},

@@ -1006,7 +1006,7 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("400s when the task has no recorded branch to resume", async () => {
+    it("resets a branchless failed task to ready (202) instead of refusing", async () => {
       const app = await buildApp();
       const cwd = createGitRepo();
       const projectId = await createProjectWithGitRepo(app, cwd);
@@ -1017,7 +1017,7 @@ describe("tasks route", () => {
         .all();
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
-      expect(res.statusCode).toBe(400);
+      expect([res.statusCode, res.json().status]).toEqual([202, "ready"]);
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();

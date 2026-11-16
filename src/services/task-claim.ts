@@ -1272,8 +1272,8 @@ export async function dispatchQueuedRetry(
     if (!current || current.status !== "claimed" || !current.resumeQueued) {
       return { reserved: false as const };
     }
-    // Defensive: enqueueRetry refuses a branchless task, so this is a row
-    // written by something else.
+    // Defensive: enqueueRetry resets a branchless task to ready instead of
+    // queuing it, so a queued branchless row was written by something else.
     if (!current.branchName) return { reserved: false as const, noBranch: true as const };
     const inFlight = tx
       .select({ id: tasks.id })
