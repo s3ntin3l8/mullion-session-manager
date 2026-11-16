@@ -65,7 +65,7 @@ const right = <ChevronDownIcon size={15} style={{ transform: "rotate(-90deg)" }}
 // remapping Enter would break bash, git commit, y/n prompts, and TUI menus,
 // which all need it to keep meaning "\r".
 const ROW1_BEFORE_CTRL: KeyBarKey[] = [
-  { label: "Esc", ariaLabel: "Escape", send: (h) => h.sendInput("\x1b") },
+  { label: "Esc", ariaLabel: "Esc", send: (h) => h.sendInput("\x1b") },
   { label: "Tab", ariaLabel: "Tab", send: (h) => h.sendInput("\t") },
   { label: "⇧Tab", ariaLabel: "Shift+Tab", send: (h) => h.sendInput("\x1b[Z") },
 ];

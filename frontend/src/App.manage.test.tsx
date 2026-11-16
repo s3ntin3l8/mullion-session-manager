@@ -48,7 +48,7 @@ function storeActions() {
   };
 }
 
-const chip = () => screen.getByRole("button", { name: /^Switch workspace/ });
+const chip = () => screen.getByRole("button", { name: /switch workspace$/ });
 
 describe("App: managing workspaces and projects without the sidebar (#3048)", () => {
   let actions: ReturnType<typeof storeActions>;

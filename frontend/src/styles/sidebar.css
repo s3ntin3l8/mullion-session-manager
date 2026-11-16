@@ -2286,6 +2286,32 @@ button.discover-header:hover {
   cursor: pointer;
   user-select: none;
 }
+/* The banner's one keyboard control (ActionBanner, #2886): a real <button>
+   around the icon and text, reset so it lays out as the banner's own flex
+   items did. */
+.update-banner-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: inherit;
+}
+.update-banner:has(.update-banner-open:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.update-banner-open:focus-visible {
+  outline: none;
+}
 .update-banner-title {
   font-size: 0.78125rem;
   font-weight: 600;
@@ -2308,6 +2334,8 @@ button.discover-header:hover {
   color: var(--dim);
   border-radius: 6px;
   cursor: pointer;
+  padding: 0;
+  font-family: inherit;
   font-size: 1rem;
   line-height: 1;
 }

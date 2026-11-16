@@ -49,7 +49,7 @@ export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void })
             onClick={() => setViewMode("kanban")}
           >
             <LayersIcon size={17} aria-hidden="true" />
-            Tasks
+            Tasks{" "}
             {needsYou > 0 && (
               <span className="phone-mode-badge" aria-hidden="true">
                 {needsYou > 99 ? "99+" : needsYou}

@@ -278,14 +278,16 @@ export function MobileSessionSwitcher({
         <div className="mobile-session-list">
           {visibleSections.map((section) => (
             <section key={section.key} className="mobile-session-section">
-              <h3
+              {/* h2: the page's only heading above it is the app's h1, so an
+                  h3 skipped a level (axe heading-order, #2886). */}
+              <h2
                 className={`mobile-session-section-head${
                   section.kind === "needs-you" ? " needs-you" : ""
                 }`}
               >
                 <span>{section.label}</span>
                 <span className="mobile-session-section-count">{section.rows.length}</span>
-              </h3>
+              </h2>
               <ul>
                 {section.rows.map((row) => {
                   // The pin only repeats rows that live under their
