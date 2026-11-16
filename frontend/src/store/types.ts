@@ -780,6 +780,14 @@ export interface UiSlice {
   // the panel body (TerminalPanelWrapper) read this to apply the flash.
   highlightedPanelId: string | null;
   triggerPanelHighlight: (id: string) => void;
+  // #3122 — panels a fold or phone open added to this desktop's workspace
+  // (useApplyPendingOpens) that have not been shown here yet. PaneTab draws
+  // a "new" dot on them and clears it on first activation; the hook clears
+  // it when the panel is closed. Client state for this device only: never
+  // written into workspaces.layout, and a reload forgets it.
+  newPanelIds: string[];
+  markPanelNew: (id: string) => void;
+  clearPanelNew: (id: string) => void;
   activePanelId: string | null;
   setActivePanelId: (id: string | null) => void;
   // May reference a workspace that no longer exists (deleted in another

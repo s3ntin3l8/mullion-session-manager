@@ -84,6 +84,12 @@ const requestSplit = vi.fn();
 // is reported through.
 const renameSession = vi.fn();
 const reportError = vi.fn();
+// #3122 — panels marked "new" by useApplyPendingOpens. Mutable, like the
+// real slice, so clearPanelNew's effect shows on the next render.
+let newPanelIds: string[] = [];
+const clearPanelNew = vi.fn((id: string) => {
+  newPanelIds = newPanelIds.filter((x) => x !== id);
+});
 
 function storeState() {
   return {
@@ -108,6 +114,8 @@ function storeState() {
     markEventSeen,
     requestSplit,
     ackAttention,
+    newPanelIds,
+    clearPanelNew,
   };
 }
 
@@ -128,11 +136,13 @@ vi.mock("./store/index.js", () => {
 // simulate dockview firing it (the "tab became active" transition PaneTab
 // clears its badge on).
 let activeChangeHandler: ((e: { isActive: boolean }) => void) | null;
+let visibilityChangeHandler: ((e: { isVisible: boolean }) => void) | null;
 
 function makeProps(
   overrides: { isActive?: boolean; groupPanels?: Partial<IDockviewPanel>[] } = {},
 ): IDockviewPanelHeaderProps<TerminalPaneParams> {
   activeChangeHandler = null;
+  visibilityChangeHandler = null;
   return {
     api: {
       // Split (PaneActionsMenu.tsx's "Split right"/"Split down" items)
@@ -146,6 +156,10 @@ function makeProps(
       isActive: overrides.isActive ?? false,
       onDidActiveChange: vi.fn((cb: (e: { isActive: boolean }) => void) => {
         activeChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+      onDidVisibilityChange: vi.fn((cb: (e: { isVisible: boolean }) => void) => {
+        visibilityChangeHandler = cb;
         return { dispose: vi.fn() };
       }),
       group: { panels: overrides.groupPanels ?? [] },
@@ -251,6 +265,8 @@ beforeEach(() => {
   lastSeenSeq = {};
   dismissedEventKeys = {};
   mutedSessionIds = [];
+  newPanelIds = [];
+  clearPanelNew.mockClear();
   hosts = [makeHost({ id: "mac-mini", name: "mac-mini" })];
   markEventSeen.mockClear();
   requestSplit.mockClear();
@@ -1231,5 +1247,88 @@ describe("failed rename (audit finding 9)", () => {
       expect(props.api.setTitle).toHaveBeenCalledWith("renamed");
     });
     expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+// #3122 — a pane a fold or phone open added here in the background carries a
+// "new" dot until it is first shown on this desktop.
+describe("new-pane mark (#3122)", () => {
+  const panelId = () => `session-${BASE_SESSION.id}`;
+  // dockview's own tab element, which it names with the bare title.
+  const inDvTab = (props: ReturnType<typeof makeProps>) => (
+    <div className="dv-tab" role="tab" aria-label="claude code">
+      <PaneTab {...props} />
+    </div>
+  );
+
+  it("shows the dot and ', new' in the tab's name while marked", () => {
+    newPanelIds = [panelId()];
+    const { container } = render(inDvTab(makeProps()));
+    expect(container.querySelector(".pane-tab-new-dot")).not.toBeNull();
+    expect(screen.getByRole("tab", { name: "claude code, new" })).toBeInTheDocument();
+  });
+
+  it("shows neither when the pane is not marked", () => {
+    const { container } = render(inDvTab(makeProps()));
+    expect(container.querySelector(".pane-tab-new-dot")).toBeNull();
+    expect(screen.getByRole("tab", { name: "claude code" })).toBeInTheDocument();
+  });
+
+  it("clears both when the tab is activated", async () => {
+    newPanelIds = [panelId()];
+    const props = makeProps();
+    const { container, rerender } = render(inDvTab(props));
+    expect(screen.getByRole("tab", { name: "claude code, new" })).toBeInTheDocument();
+    expect(clearPanelNew).not.toHaveBeenCalled();
+    (props.api as { isActive: boolean }).isActive = true;
+    act(() => activeChangeHandler?.({ isActive: true }));
+    await waitFor(() => expect(clearPanelNew).toHaveBeenCalledWith(panelId()));
+    rerender(inDvTab(props));
+    expect(container.querySelector(".pane-tab-new-dot")).toBeNull();
+    expect(screen.getByRole("tab", { name: "claude code" })).toBeInTheDocument();
+  });
+
+  it("clears when a background tab becomes its group's visible one", () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps()} />);
+    act(() => visibilityChangeHandler?.({ isVisible: false }));
+    expect(clearPanelNew).not.toHaveBeenCalled();
+    act(() => visibilityChangeHandler?.({ isVisible: true }));
+    expect(clearPanelNew).toHaveBeenCalledWith(panelId());
+  });
+
+  it("clears on a pane that is already the active one", async () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps({ isActive: true })} />);
+    await waitFor(() => expect(clearPanelNew).toHaveBeenCalledWith(panelId()));
+  });
+
+  // A click on another tab of the same group activates the group, and so
+  // this panel, for an instant before the clicked tab takes over.
+  it("keeps the mark through a momentary activation", async () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps()} />);
+    act(() => {
+      activeChangeHandler?.({ isActive: true });
+      activeChangeHandler?.({ isActive: false });
+    });
+    act(() => activeChangeHandler?.({ isActive: true }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(clearPanelNew).not.toHaveBeenCalled();
+  });
+
+  it("shows the mark and the attention state together, neither hiding the other", () => {
+    newPanelIds = [panelId()];
+    session = {
+      ...BASE_SESSION,
+      attention: true,
+      sessionStatus: "needs_input",
+      sessionStatusAttentionRequired: true,
+    } as Session;
+    const { container } = render(<PaneTab {...makeProps()} />);
+    const tab = container.querySelector(".pane-tab")!;
+    expect(tab).toHaveClass("attention-ring");
+    expect(container.querySelector(".pane-tab-new-dot")).not.toBeNull();
+    expect(container.querySelector(".pane-tab-badge")).not.toBeNull();
   });
 });
