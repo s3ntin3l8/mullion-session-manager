@@ -5,7 +5,8 @@ import { terminalCellPx } from "./dock/dockHelpers.js";
 
 // #3033 — the owner's placement rule for a session opened on the fold or the
 // phone, applied by a desktop client. At the default 14px font a cell is
-// 8.4 x 18.9 px, so the 80 x 20 floor is 672 x 378 px.
+// 8.4 x 18.9 px, so the 40-column floor of a split to the right is 336 px
+// per half, and the 10-row floor of a split below 189 px per half.
 const metrics = terminalCellPx(14);
 
 function rect(id: string, x: number, y: number, width: number, height: number): GroupRect {
@@ -33,7 +34,8 @@ describe("placePendingOpen", () => {
   });
 
   it("tabs onto a single pane too narrow to halve", () => {
-    expect(place([rect("a", 0, 0, 1000, 1000)])).toEqual({ referenceGroup: "a", tab: true });
+    // 600px wide: two halves of 300px are under 40 columns (336px).
+    expect(place([rect("a", 0, 0, 600, 800)])).toEqual({ referenceGroup: "a", tab: true });
     // Its height does not matter for a split to the right.
     expect(place([rect("a", 0, 0, 1400, 200)])).toEqual({
       referenceGroup: "a",
@@ -92,13 +94,46 @@ describe("placePendingOpen", () => {
   });
 
   it("tabs when splitting a column would go under the size floor", () => {
-    // 700 px tall: two rows of 350 px are under 20 rows (378 px).
-    const groups = [rect("a", 0, 0, 800, 700), rect("b", 800, 0, 800, 700)];
+    // 300px tall: two rows of 150px are under 10 rows (189px).
+    const groups = [rect("a", 0, 0, 800, 300), rect("b", 800, 0, 800, 300)];
     expect(place(groups, "a")).toEqual({ referenceGroup: "a", tab: true });
-    // Only the halved axis counts: a column narrower than 80 cells (a 1440px
-    // laptop with the sidebar open, ~550px columns) still splits below.
-    const narrow = [rect("a", 0, 0, 550, 900), rect("b", 550, 0, 550, 900)];
-    expect(place(narrow, "a")).toEqual({ referenceGroup: "a", direction: "below" });
+  });
+
+  // The owner uses 2x2 on a desktop and on a 1440px laptop: with the left
+  // sidebar open the grid is about 1100 x 800px, with the right sidebar too
+  // about 900 x 700px. Neither may hit the floor.
+  it("splits a single laptop-sized pane right, 50/50", () => {
+    for (const [w, h] of [
+      [1100, 800],
+      [900, 700],
+    ]) {
+      expect(place([rect("a", 0, 0, w!, h!)])).toEqual({
+        referenceGroup: "a",
+        direction: "right",
+      });
+    }
+  });
+
+  it("fills two laptop-sized columns to 2x2, then tabs", () => {
+    for (const [w, h] of [
+      [550, 800],
+      [450, 700],
+    ]) {
+      const two = [rect("a", 0, 0, w!, h!), rect("b", w!, 0, w!, h!)];
+      expect(place(two, "a")).toEqual({ referenceGroup: "a", direction: "below" });
+      const oneSplit = [
+        rect("a1", 0, 0, w!, h! / 2),
+        rect("a2", 0, h! / 2, w!, h! / 2),
+        rect("b", w!, 0, w!, h!),
+      ];
+      expect(place(oneSplit, "a1")).toEqual({ referenceGroup: "b", direction: "below" });
+      const quad = [
+        ...oneSplit.filter((g) => g.id !== "b"),
+        rect("b1", w!, 0, w!, h! / 2),
+        rect("b2", w!, h! / 2, w!, h! / 2),
+      ];
+      expect(place(quad, "a1")).toEqual({ referenceGroup: "a1", tab: true });
+    }
   });
 
   it("splits the largest allowed pane without a reference", () => {

@@ -713,8 +713,10 @@ export function shouldAutoOpenChildPanels(input: {
 //   5. size floor: a split only happens when the axis it halves keeps at
 //      least PENDING_OPEN_MIN_COLS (a `right` split) or PENDING_OPEN_MIN_ROWS
 //      (a `below` split) terminal cells in both resulting panes. Only the
-//      halved axis is checked: the other one does not change, and checking it
-//      too made every open a tab on a laptop-sized grid (#3033 review);
+//      halved axis is checked; the other one does not change. The floor
+//      (40 x 10) only stops slivers in a small window: 2x2 must fill on a
+//      1440px laptop with both sidebars open (a grid about 900 x 700px), so
+//      it never shapes a normal layout (#3033 review);
 //   6. focus: not decided here. The caller adds the pane inactive; the
 //      issue's "attention marker until first activated" is not implemented,
 //      because no such marker exists yet (the pane shows the session's own
@@ -728,8 +730,8 @@ export function shouldAutoOpenChildPanels(input: {
 // largest pane `below`, anything else is a tab. Pure: the hook
 // (useApplyPendingOpens) measures the rects and adds the panel.
 
-export const PENDING_OPEN_MIN_COLS = 80;
-export const PENDING_OPEN_MIN_ROWS = 20;
+export const PENDING_OPEN_MIN_COLS = 40;
+export const PENDING_OPEN_MIN_ROWS = 10;
 // Sub-pixel slack when comparing edges of rects dockview laid out.
 const RECT_EPSILON_PX = 1;
 

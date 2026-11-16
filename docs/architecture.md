@@ -705,10 +705,12 @@ become tabs:
 4. The pane split is the reference session's, if rule 2 allows it. Otherwise
    it is the largest pane rule 2 allows. A tab goes to the reference
    session's pane, otherwise to the pane last active.
-5. A split only happens when the axis it halves keeps at least 80 columns (a
-   split to the right) or 20 rows (a split below) of the desktop's terminal
+5. A split only happens when the axis it halves keeps at least 40 columns (a
+   split to the right) or 10 rows (a split below) of the desktop's terminal
    font (`terminalCellPx`) in both resulting panes. The other axis does not
-   change and is not checked.
+   change and is not checked. The floor only stops slivers in a small window:
+   2x2 fills on a 1440px laptop even with both sidebars open (a grid of about
+   900 x 700px).
 6. The added pane is not activated, so the desk keeps showing what it showed.
    The issue's attention marker until first activation is not implemented: no
    such marker exists yet, and the pane shows only the session's own status
