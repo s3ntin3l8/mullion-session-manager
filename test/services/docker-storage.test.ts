@@ -9,6 +9,7 @@ import {
   estimateSafePrune,
   inspectDockerStorage,
   parseDockerUsage,
+  parseDockerVolumes,
   parseReclaimed,
   pruneDockerStorage,
   type SpawnDocker,
@@ -307,5 +308,60 @@ describe("Docker storage", () => {
     });
     expect(fake.child.kill).toHaveBeenCalledWith("SIGKILL");
     vi.useRealTimers();
+  });
+
+  describe("volumes", () => {
+    const anon = (c: string) => c.repeat(64);
+    const verbose = JSON.stringify({
+      Images: [],
+      Containers: [],
+      BuildCache: [],
+      Volumes: [
+        { Name: anon("a"), Links: "0", Size: "68MB" },
+        { Name: anon("b"), Links: 0, Size: "32MB" },
+        { Name: anon("c"), Links: "2", Size: "10MB" },
+        { Name: "pgdata", Links: "0", Size: "1GB" },
+        { Name: "uploads", Links: "1", Size: "500MB" },
+        { Name: anon("D"), Links: "0", Size: "1MB" },
+        { Name: "a".repeat(63), Links: "0", Size: "1MB" },
+        { Name: anon("e"), Links: "N/A", Size: "5MB" },
+        { Name: anon("f"), Size: "5MB" },
+        { Size: "5MB", Links: "0" },
+        "junk",
+        null,
+      ],
+    });
+
+    it("splits anonymous unused, anonymous in use and named, skipping malformed rows", () => {
+      expect(parseDockerVolumes(verbose)).toEqual({
+        anonymousUnused: { count: 2, bytes: 100 * 1000 ** 2 },
+        inUse: { count: 1, bytes: 10 * 1000 ** 2 },
+        // Uppercase and 63-character hex names are named volumes by the rule.
+        named: { count: 4, bytes: 1000 ** 3 + 500 * 1000 ** 2 + 2 * 1000 ** 2 },
+      });
+    });
+
+    it("is empty when there are no volumes", () => {
+      expect(parseDockerVolumes("{}").named).toEqual({ count: 0, bytes: 0 });
+      expect(parseDockerVolumes('{"Volumes":null}').anonymousUnused.count).toBe(0);
+    });
+
+    it("reports volumes from the verbose call and omits them when it fails", async () => {
+      const df =
+        '{"Type":"Images","TotalCount":"1","Active":"0","Size":"1GB","Reclaimable":"1GB"}\n';
+      const ok: SpawnDocker = (command, args) =>
+        fakeSpawn({
+          stdout: args.includes("-v") ? verbose : args[0] === "images" ? "" : df,
+        }).spawn(command, args);
+      const status = await inspectDockerStorage(ok);
+      expect(status.volumes?.anonymousUnused.count).toBe(2);
+      const failing: SpawnDocker = (command, args) =>
+        args.includes("-v")
+          ? fakeSpawn({ stderr: "nope", code: 1 }).spawn(command, args)
+          : fakeSpawn({ stdout: args[0] === "images" ? "" : df }).spawn(command, args);
+      const failed = await inspectDockerStorage(failing);
+      expect(failed.available).toBe(true);
+      expect("volumes" in failed).toBe(false);
+    });
   });
 });

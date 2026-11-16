@@ -49,6 +49,23 @@ export interface DockerUsageRow {
   reclaimableBytes: number;
 }
 
+export interface DockerVolumeTotal {
+  count: number;
+  bytes: number;
+}
+
+/**
+ * Docker volumes split by what cleanup may ever consider. Anonymous means the
+ * name is exactly 64 lowercase hex characters (what `docker run -v /path`
+ * creates); named volumes are never candidates, in use or not.
+ */
+export interface DockerVolumesSummary {
+  anonymousUnused: DockerVolumeTotal;
+  named: DockerVolumeTotal;
+  /** Anonymous volumes still linked to a container. */
+  inUse: DockerVolumeTotal;
+}
+
 export interface DockerStorageStatus {
   available: boolean;
   rows: DockerUsageRow[];
@@ -56,6 +73,8 @@ export interface DockerStorageStatus {
   reclaimableBytes: number;
   /** What each cleanup tier is expected to free; `safeBytes` is null if it couldn't be computed. */
   estimates: { safeBytes: number | null; aggressiveBytes: number };
+  /** Omitted (not zeroed) when `docker system df -v` failed: "unknown", not "none". */
+  volumes?: DockerVolumesSummary;
   error?: string;
 }
 
@@ -179,6 +198,48 @@ export function estimateAggressivePrune(verboseJson: string): number {
   return total;
 }
 
+const ANONYMOUS_VOLUME_NAME = /^[0-9a-f]{64}$/;
+
+/**
+ * Splits the `Volumes` entries of `docker system df -v` output into anonymous
+ * unused, anonymous in use and named. A malformed entry (not an object, no
+ * name, no usable link count) is skipped rather than guessed at, since the
+ * unused-anonymous figure is what a later cleanup would act on.
+ */
+export function parseDockerVolumes(verboseJson: string): DockerVolumesSummary {
+  const df = JSON.parse(verboseJson) as Record<string, unknown> | null;
+  const entries = Array.isArray(df?.Volumes) ? (df.Volumes as unknown[]) : [];
+  const summary: DockerVolumesSummary = {
+    anonymousUnused: { count: 0, bytes: 0 },
+    named: { count: 0, bytes: 0 },
+    inUse: { count: 0, bytes: 0 },
+  };
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const volume = entry as Record<string, unknown>;
+    if (typeof volume.Name !== "string" || volume.Name === "") continue;
+    const bytes = parseSize(volume.Size);
+    if (!ANONYMOUS_VOLUME_NAME.test(volume.Name)) {
+      summary.named.count += 1;
+      summary.named.bytes += bytes;
+      continue;
+    }
+    const links = Number(volume.Links);
+    if (
+      volume.Links === undefined ||
+      volume.Links === "" ||
+      !Number.isInteger(links) ||
+      links < 0
+    ) {
+      continue;
+    }
+    const bucket = links === 0 ? summary.anonymousUnused : summary.inUse;
+    bucket.count += 1;
+    bucket.bytes += bytes;
+  }
+  return summary;
+}
+
 async function runDocker(
   args: readonly string[],
   spawnDocker: SpawnDocker = (command, commandArgs) => spawn(command, commandArgs),
@@ -225,9 +286,11 @@ async function runDocker(
   });
 }
 
-async function estimateTiers(
-  spawnDocker?: SpawnDocker,
-): Promise<{ safeBytes: number; aggressiveBytes: number } | null> {
+async function estimateTiers(spawnDocker?: SpawnDocker): Promise<{
+  safeBytes: number;
+  aggressiveBytes: number;
+  volumes: DockerVolumesSummary;
+} | null> {
   try {
     const [verbose, dangling] = await Promise.all([
       runDocker(DOCKER_VERBOSE_USAGE_ARGS, spawnDocker, VERBOSE_OUTPUT_LIMIT_BYTES),
@@ -242,6 +305,7 @@ async function estimateTiers(
     return {
       safeBytes: estimateSafePrune(verbose, ids),
       aggressiveBytes: estimateAggressivePrune(verbose),
+      volumes: parseDockerVolumes(verbose),
     };
   } catch {
     return null;
@@ -271,6 +335,7 @@ export async function inspectDockerStorage(
         // fails, and the per-entry sum corrects them where they understate.
         aggressiveBytes: Math.max(rowsAggressive, tiers?.aggressiveBytes ?? 0),
       },
+      ...(tiers ? { volumes: tiers.volumes } : {}),
     };
   } catch (error) {
     return {
