@@ -923,12 +923,10 @@ describe("wrapWithSandbox", () => {
       "--bind",
       "/tmp/some/scratch-worktree",
       "/tmp/some/scratch-worktree",
+      "--unshare-pid",
       "--die-with-parent",
       "--",
-      "claude",
-      "-p",
-      "--",
-      "hello",
+      ...["claude", "-p", "--", "hello"],
     ]);
   });
 
