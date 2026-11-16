@@ -60,6 +60,26 @@
   align-items: center;
   gap: 8px;
 }
+/* #3122 — "added here while you were away": a pane a fold or phone open
+   added in the background. Blue (--b), not the theme accent: --accent-solid
+   is the same green as the attention ring (--ring, identical in the light
+   theme) and the working dot (--g), and no status dot uses --b. It is
+   positioned in .pane-tab's 11px left padding rather than in the flow, so
+   showing or clearing it never changes the tab's width or shifts the
+   neighbouring tabs' close buttons under the pointer. It sits right of the
+   2px attention bar (.pane-tab.attention-ring's inset box-shadow), so a
+   tab with both shows both. */
+.pane-tab-new-dot {
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--b);
+  pointer-events: none;
+}
 .pane-tab-dot-working {
   width: 7px;
   height: 7px;

@@ -8,6 +8,7 @@ import type { LayoutPresentation } from "../lib/layoutTier.js";
 import { isTiledGroup, placePendingOpen } from "../panelUtils.js";
 import type { GroupRect } from "../panelUtils.js";
 import { initialPaneTitle } from "../paneTitle.js";
+import { useDashboardStore } from "../store/index.js";
 import { usePolling } from "./usePolling.js";
 
 // How often a desktop client asks for opens made on the fold or the phone.
@@ -93,6 +94,17 @@ export function useApplyPendingOpens({
     },
   );
 
+  // #3122 — a closed panel loses its "new" mark. A move between groups does
+  // not fire onDidRemovePanel (dockview skips it while moving), so a pane
+  // dragged elsewhere keeps its mark until it is shown.
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const disposable = dockviewApi.onDidRemovePanel((panel) => {
+      useDashboardStore.getState().clearPanelNew(panel.id);
+    });
+    return () => disposable.dispose();
+  }, [dockviewApi]);
+
   useEffect(() => {
     if (!dockviewApi || !pending || !desktop || !sessionsLoaded) return;
     const workspaceId = pending.workspaceId;
@@ -120,6 +132,9 @@ export function useApplyPendingOpens({
       try {
         if (session.status === "active" && !dockviewApi.getPanel(panelId)) {
           addPendingPanel(dockviewApi, session, open, projects, terminalFontSize);
+          // #3122 — added in the background: PaneTab marks it "new" until it
+          // is first shown here.
+          useDashboardStore.getState().markPanelNew(panelId);
         }
       } catch (err) {
         // A failed add (a group gone mid-change) is not acknowledged: the

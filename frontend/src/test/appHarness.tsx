@@ -21,6 +21,7 @@ const { splitHarness, sidebarHarness, dockHarness, persistenceHarness } = vi.hoi
       addPanel: (opts: { id: string; params?: { sessionId?: number } }) => void;
       onDidActivePanelChange: () => { dispose: () => void };
       onDidAddPanel: () => { dispose: () => void };
+      onDidRemovePanel: () => { dispose: () => void };
       onWillMutateLayout: () => { dispose: () => void };
       onDidMutateLayout: () => { dispose: () => void };
     } | null,

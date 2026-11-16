@@ -5,6 +5,8 @@ import type { DockviewApi } from "dockview-react";
 import { api as http } from "../api/index.js";
 import type { PendingOpen, Session } from "../api/index.js";
 import { makeProject, makeSession } from "../test/fixtures.js";
+import { DockviewApi as RealDockviewApi, DockviewComponent } from "dockview-react";
+import { useDashboardStore } from "../store/index.js";
 import { useApplyPendingOpens } from "./useApplyPendingOpens.js";
 import { useCloseKilledSessionPanels } from "./useCloseKilledSessionPanels.js";
 import type { UseApplyPendingOpensParams } from "./useApplyPendingOpens.js";
@@ -27,6 +29,7 @@ function makeDock(groupRects: Record<string, Rect>, panelGroups: Record<string, 
     id,
     group: groups.find((g) => g.id === groupId),
   }));
+  const removeListeners: ((panel: { id: string }) => void)[] = [];
   const api = {
     groups,
     panels,
@@ -36,6 +39,17 @@ function makeDock(groupRects: Record<string, Rect>, panelGroups: Record<string, 
     addPanel: vi.fn((opts: { id: string }) => {
       panels.push({ id: opts.id, group: groups[0] });
     }),
+    onDidRemovePanel: (cb: (panel: { id: string }) => void) => {
+      removeListeners.push(cb);
+      return {
+        dispose: () => removeListeners.splice(removeListeners.indexOf(cb), 1),
+      };
+    },
+    removePanelForTest: (id: string) => {
+      const i = panels.findIndex((p) => p.id === id);
+      if (i >= 0) panels.splice(i, 1);
+      for (const cb of [...removeListeners]) cb({ id });
+    },
   };
   return { api, groups };
 }
@@ -46,6 +60,7 @@ let acknowledgePendingOpen: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   pending = [];
+  useDashboardStore.setState({ newPanelIds: [] });
   listPendingOpens = vi.spyOn(http, "listPendingOpens").mockImplementation(async () => pending);
   acknowledgePendingOpen = vi
     .spyOn(http, "acknowledgePendingOpen")
@@ -262,5 +277,80 @@ describe("useApplyPendingOpens", () => {
     await waitFor(() => expect(acknowledgePendingOpen).toHaveBeenCalledTimes(2));
     // The pane is open by then: it is only acknowledged, not added again.
     expect(dock.api.addPanel).toHaveBeenCalledTimes(1);
+  });
+
+  // #3122 — a pane added in the background is marked "new" on this client.
+  describe("the new-pane mark", () => {
+    it("marks the panel an applied open added", async () => {
+      pending = [open(3, 2)];
+      const dock = twoColumns();
+      setup(dock);
+      await waitFor(() => expect(acknowledgePendingOpen).toHaveBeenCalledWith(1, 3));
+      expect(useDashboardStore.getState().newPanelIds).toEqual(["session-3"]);
+    });
+
+    it("marks nothing for an open acknowledged without adding a pane", async () => {
+      pending = [open(2), open(3)];
+      const dock = twoColumns();
+      const sessions = [
+        makeSession({ id: 1 }),
+        makeSession({ id: 2 }),
+        makeSession({ id: 3, status: "exited" }),
+      ];
+      setup(dock, { sessions });
+      await waitFor(() => expect(acknowledgePendingOpen).toHaveBeenCalledTimes(2));
+      expect(useDashboardStore.getState().newPanelIds).toEqual([]);
+    });
+
+    it("marks nothing when the add failed", async () => {
+      pending = [open(3)];
+      const dock = twoColumns();
+      dock.api.addPanel.mockImplementationOnce(() => {
+        throw new Error("group gone");
+      });
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      setup(dock);
+      await waitFor(() => expect(dock.api.addPanel).toHaveBeenCalledTimes(1));
+      expect(useDashboardStore.getState().newPanelIds).toEqual([]);
+    });
+
+    it("forgets the mark when the panel is closed", async () => {
+      pending = [open(3, 2)];
+      const dock = twoColumns();
+      setup(dock);
+      await waitFor(() => expect(useDashboardStore.getState().newPanelIds).toEqual(["session-3"]));
+      dock.api.removePanelForTest("session-3");
+      expect(useDashboardStore.getState().newPanelIds).toEqual([]);
+    });
+
+    it("leaves no trace of the mark in the layout the workspace saves", async () => {
+      pending = [open(3)];
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const component = new DockviewComponent(container, {
+        createComponent: () => {
+          const element = document.createElement("div");
+          return { element, init: () => {} };
+        },
+      });
+      const real = new RealDockviewApi(component);
+      real.addPanel({
+        id: "session-1",
+        component: "terminal",
+        title: "one",
+        params: { sessionId: 1 },
+      });
+      setup({ api: real as never, groups: [] }, { dockviewApi: real as unknown as DockviewApi });
+      await waitFor(() => expect(acknowledgePendingOpen).toHaveBeenCalledWith(1, 3));
+      expect(useDashboardStore.getState().newPanelIds).toEqual(["session-3"]);
+      const saved = real.toJSON();
+      expect(saved.panels["session-3"]).toBeDefined();
+      expect(saved.panels["session-3"]!.params).toEqual({ sessionId: 3 });
+      const text = JSON.stringify(saved);
+      expect(text).not.toMatch(/\bnew\b|newPanel|inactive/i);
+      component.dispose();
+      container.remove();
+    });
   });
 });

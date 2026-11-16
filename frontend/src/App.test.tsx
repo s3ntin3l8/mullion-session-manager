@@ -584,6 +584,7 @@ describe("App explicit split on the tablet", () => {
       exitMaximizedGroup: vi.fn(),
       onDidActivePanelChange: () => ({ dispose: vi.fn() }),
       onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onDidRemovePanel: () => ({ dispose: vi.fn() }),
       onWillMutateLayout: () => ({ dispose: vi.fn() }),
       onDidMutateLayout: () => ({ dispose: vi.fn() }),
     };
@@ -726,6 +727,7 @@ describe("App sidebar workspace scope", () => {
       addPanel: vi.fn(),
       onDidActivePanelChange: () => ({ dispose: vi.fn() }),
       onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onDidRemovePanel: () => ({ dispose: vi.fn() }),
       onWillMutateLayout: () => ({ dispose: vi.fn() }),
       onDidMutateLayout: () => ({ dispose: vi.fn() }),
     };
@@ -817,6 +819,7 @@ describe("App left rail middle region", () => {
       addPanel: vi.fn(),
       onDidActivePanelChange: () => ({ dispose: vi.fn() }),
       onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onDidRemovePanel: () => ({ dispose: vi.fn() }),
       onWillMutateLayout: () => ({ dispose: vi.fn() }),
       onDidMutateLayout: () => ({ dispose: vi.fn() }),
     };

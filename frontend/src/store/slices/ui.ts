@@ -293,6 +293,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     sidebarHistory: [],
     followedProjectId: null,
     highlightedPanelId: null,
+    newPanelIds: [],
     activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
     dockConfigRefreshTrigger: 0,
@@ -319,6 +320,18 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
         highlightTimer = null;
       }, HIGHLIGHT_DURATION_MS);
     },
+
+    markPanelNew: (id) =>
+      set((state) =>
+        state.newPanelIds.includes(id) ? state : { newPanelIds: [...state.newPanelIds, id] },
+      ),
+
+    clearPanelNew: (id) =>
+      set((state) =>
+        state.newPanelIds.includes(id)
+          ? { newPanelIds: state.newPanelIds.filter((x) => x !== id) }
+          : state,
+      ),
 
     setActivePanelId: (id) => set({ activePanelId: id }),
 
