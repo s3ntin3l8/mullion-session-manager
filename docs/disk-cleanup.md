@@ -35,6 +35,9 @@ still be read. Only one job runs at a time (`409` otherwise).
   `docker-volumes` is in **both** the request's `optIns` and the saved
   `diskCleanup.optIns` (see "Docker" below). No `optIns` in the request means
   nothing opted in runs, whatever is saved.
+- Aggressive only: uninstall unused Android SDK system images when
+  `android-system-images` is in **both** the request's `optIns` and the saved
+  `diskCleanup.optIns` (see "Android system images" below).
 - A source nobody has measured yet still runs: each prune re-checks its own
   safety. The measurements are never started just to make this decision.
 
@@ -84,7 +87,7 @@ status when the verbose call fails, so "none" and "unknown" differ.
 **Opt-in volume cleanup.** `diskCleanup.optIns` (settings; ids allowlisted by
 `OPT_IN_IDS` in `services/cleanup-opt-ins.ts`, unknown ids dropped) holds
 opt-ins for sources that are not a directory, so they cannot use `cacheDirs`.
-The only id today is `docker-volumes`, ticked in Settings → Storage as "Also
+The ids today are `docker-volumes` and `android-system-images`; the first is ticked in Settings → Storage as "Also
 remove unused anonymous volumes". Like the caches it needs both sides: the
 request's `optIns` and the saved settings. Unlike the caches, a request with no
 `optIns` runs nothing, so a saved opt-in alone never deletes. Safe mode never
@@ -314,6 +317,37 @@ own path in `spaceCovered()`. The walk stays on the
 home directory's filesystem, never follows symlinks, shares the temp walks'
 syscall limiter, and stops at 3 million entries (`truncated`, every figure then
 a lower bound). It takes tens of seconds on a large home directory.
+
+## Android system images
+
+`services/android-storage.ts`, `GET /api/storage/android-images`, cleanup source
+`android-images`. An opt-in (`android-system-images`, Settings → Storage → "Also
+remove unused Android system images") for the aggressive tier, with the same
+two-sided rule as Docker volumes: the request's `optIns` and the saved settings
+must both carry it, and a request with no `optIns` runs nothing.
+
+An image under `<DEVICE_ANDROID_SDK_ROOT>/system-images/<api>/<tag>/<abi>` is
+**unreferenced** when no AVD names it. The AVDs are every `*.avd` directory and
+every `<name>.ini` pointer's `path` under the SDK's AVD roots (`avdConfigRoots()`:
+`~/.android/avd`, `$ANDROID_AVD_HOME`, `$ANDROID_USER_HOME/avd`,
+`$ANDROID_SDK_HOME/.android/avd`); a `config.ini`'s `image.sysdir.*` lines (relative
+to the SDK root, or absolute) say which image it uses. A sysdir that is only a
+parent of an image folder counts as using everything below it. With no AVDs at
+all, every image is unreferenced.
+
+**Fail closed.** The source is `available: false` with the reason, and nothing
+is offered or removed, when the SDK root is unset or missing, `sdkmanager`
+(`DEVICE_SDKMANAGER_PATH`) is not configured or not executable, or any AVD
+folder, pointer or `config.ini` cannot be read or names no image: an AVD that
+cannot be read might use any image. The references are read again right before
+each uninstall, so an AVD created meanwhile protects its image.
+
+Removal is `sdkmanager --uninstall <package> --sdk_root=<root>` (the same helper
+the AVD page uses), one image at a time, stopping at the first failure; the
+directories are never deleted directly. The estimate and the list in Settings are
+each image's disk usage. Using a removed image again means downloading it. The
+"Where the space is" report marks `system-images` as cleanable ("Android system
+images"), though only the unused images are removed.
 
 ## Developer worktrees
 

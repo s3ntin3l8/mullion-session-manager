@@ -22,6 +22,7 @@ import { useCleanupJob } from "../useCleanupJob.js";
 import { useOrphanRemoval } from "../useOrphanRemoval.js";
 import { summarizeCleanup } from "../cleanupSummary.js";
 import { KeptSessionWorktrees } from "./KeptSessionWorktrees.js";
+import { AndroidImagesOptIn } from "./AndroidImagesOptIn.js";
 import { SpaceReport } from "./SpaceReport.js";
 
 function describeWorktree(candidate: DevWorktreeCandidate): string {
@@ -374,6 +375,7 @@ export function StorageSection() {
   const caches = hasMeasuredData(probes.caches) ? probes.caches : null;
   const opencode = hasMeasuredData(probes.opencode) ? probes.opencode : null;
   const worktrees = hasMeasuredData(probes.worktrees) ? probes.worktrees : null;
+  const androidImages = hasMeasuredData(probes.androidImages) ? probes.androidImages : null;
   // Orphans are excluded from automatic cleanup, but can be removed individually.
   const removableWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason !== "orphaned");
   const orphanedWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason === "orphaned");
@@ -382,6 +384,7 @@ export function StorageSection() {
   const updateSettings = useDashboardStore((s) => s.updateSettings);
   const selectedCaches = settings.diskCleanup.cacheDirs;
   const selectedOptIns = settings.diskCleanup.optIns;
+  const androidOptedIn = selectedOptIns.includes("android-system-images");
   const volumesOptedIn = selectedOptIns.includes("docker-volumes");
   // A cache that was opted in but has since disappeared from disk stays listed
   // (as "not found") so the stale opt-in can still be cleared.
@@ -446,6 +449,15 @@ export function StorageSection() {
         : null
       : failed(data),
   );
+  const androidRow = androidOptedIn
+    ? tierRow("Android system images", probes.androidImages, (data) =>
+        data.available
+          ? data.images.length > 0
+            ? { bytes: data.reclaimableBytes }
+            : null
+          : failed(data),
+      )
+    : null;
   const present = (rows: Array<TierRow | null>) =>
     rows.filter((row): row is TierRow => row !== null);
 
@@ -564,6 +576,8 @@ export function StorageSection() {
         </div>
       )}
 
+      <AndroidImagesOptIn status={androidImages} />
+
       <div className="storage-tiers">
         <TierCard
           title="Safe"
@@ -595,6 +609,7 @@ export function StorageSection() {
             cacheRow,
             opencodeRow,
             worktreeRow,
+            androidRow,
           ])}
           action={
             <ConfirmButton

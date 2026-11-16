@@ -27,6 +27,7 @@ import type {
   CleanupStatus,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
+import type { AndroidImagesStatus } from "./storage-types.js";
 
 export function normalizeAgentId(id: string): string {
   return id.startsWith("agent:") ? id.slice(6) : id;
@@ -97,6 +98,11 @@ export const systemApi = {
 
   getCacheStorage: (refresh?: boolean) =>
     request<Measured<CacheStorageStatus>>(`/api/storage/caches${refresh ? "?refresh=1" : ""}`),
+
+  getAndroidImages: (refresh?: boolean) =>
+    request<Measured<AndroidImagesStatus>>(
+      `/api/storage/android-images${refresh ? "?refresh=1" : ""}`,
+    ),
 
   getOpencodeStorage: (refresh?: boolean) =>
     request<Measured<OpencodeStorageStatus>>(`/api/storage/opencode${refresh ? "?refresh=1" : ""}`),

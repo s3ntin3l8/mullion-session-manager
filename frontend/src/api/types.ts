@@ -191,8 +191,6 @@ export interface CacheStorageStatus {
 
 export type DockerPruneMode = "safe" | "aggressive";
 
-export type CleanupSource = "docker" | "temp" | "caches" | "opencode" | "worktrees";
-
 /** One source's part of a cleanup job. */
 export interface CleanupStepState {
   source: CleanupSource;
@@ -494,6 +492,7 @@ export type {
   HostCapacity,
   PlacementPreview,
 } from "./host-types.js";
+import type { CleanupSource } from "./storage-types.js";
 
 // Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
 // #820 PR7a/PR7c. Which of resolveSshAuthSock's three tiers is why

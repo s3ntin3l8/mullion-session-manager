@@ -4,7 +4,7 @@
  * an id only runs when the request AND the stored settings both carry it.
  * Adding a source means adding its id here and nothing else widens the set.
  */
-export const OPT_IN_IDS = ["docker-volumes"] as const;
+export const OPT_IN_IDS = ["docker-volumes", "android-system-images"] as const;
 
 export type OptInId = (typeof OPT_IN_IDS)[number];
 

@@ -82,6 +82,14 @@ describe("summarizeCleanup", () => {
     ).toBe("Freed 7 B (Docker 7 B, developer worktrees 0 B), then stopped: x");
   });
 
+  it("names the Android system images step", () => {
+    expect(
+      summarizeCleanup(
+        job(step("docker", { reclaimedBytes: 7 }), step("android-images", { reclaimedBytes: GIB })),
+      ),
+    ).toBe("Freed 1.0 GiB (Docker 7 B, Android system images 1.0 GiB).");
+  });
+
   it("says it freed nothing when no source took part", () => {
     expect(summarizeCleanup(job())).toBe("Freed 0 B.");
   });
