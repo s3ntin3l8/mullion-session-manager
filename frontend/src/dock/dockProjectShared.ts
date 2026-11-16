@@ -13,9 +13,13 @@ import type { DockControl } from "../api/index.js";
 //   and drops the cache, and every subscriber reads the same `controls`.
 // - The "Auto-attach Docker logs" bookkeeping, so the surface that takes the
 //   effect over from another one knows a container was already attached (or
-//   is being attached) and does not start a second log session for it.
+//   is being attached) and does not start a second log session for it. It
+//   outlives the poll: a view that unmounts and comes back (another rail
+//   view, another project and back) must not re-attach a stream the user
+//   ended with "Stop log".
 // - Whether the bottom Dock is mounted for the project, which decides which
-//   surface runs auto-attach (useDockProject's `useAutoAttachOwner`).
+//   surface runs auto-attach (useDockProject, where `autoAttach` is derived
+//   from its `surface` option).
 
 // Issue #73 — how often a project with a mounted Dock surface re-fetches
 // GET .../dock, so a container's state/image reflects `docker ps` reality
@@ -40,10 +44,13 @@ interface Entry {
   // Latest request wins: a response to an older request (a poll overtaken
   // by a refresh, or a poll from before a trigger bump) is dropped.
   seq: number;
-  autoAttach: Map<string, AutoAttachEntry>;
 }
 
 const EMPTY: DockControl[] = [];
+// Before the first response: empty too, but told apart from a loaded empty
+// list by identity, so auto-attach does not read "nothing discovered" (and
+// prune what it knows) before the poll has answered.
+const NOT_LOADED: DockControl[] = [];
 const entries = new Map<number, Entry>();
 
 function setControls(entry: Entry, controls: DockControl[]) {
@@ -76,12 +83,11 @@ function subscribe(projectId: number, listener: () => void): () => void {
   let entry = entries.get(projectId);
   if (!entry) {
     entry = {
-      controls: EMPTY,
+      controls: NOT_LOADED,
       listeners: new Set(),
       timer: null,
       trigger: undefined,
       seq: 0,
-      autoAttach: new Map(),
     };
     entries.set(projectId, entry);
     startPoll(projectId, entry);
@@ -109,8 +115,9 @@ function syncTrigger(projectId: number, trigger: number) {
   if (!first) startPoll(projectId, entry);
 }
 
-/** The project's shared Dock controls, and a refresh that re-fetches them
- * now for every subscriber (after a service action). */
+/** The project's shared Dock controls, whether the poll has answered yet,
+ * and a refresh that re-fetches them now for every subscriber (after a
+ * service action). */
 export function useSharedDockControls(projectId: number, refreshTrigger: number) {
   const subscribeFor = useCallback(
     (listener: () => void) => subscribe(projectId, listener),
@@ -118,7 +125,7 @@ export function useSharedDockControls(projectId: number, refreshTrigger: number)
   );
   const controls = useSyncExternalStore(
     subscribeFor,
-    () => entries.get(projectId)?.controls ?? EMPTY,
+    () => entries.get(projectId)?.controls ?? NOT_LOADED,
   );
   useEffect(() => {
     syncTrigger(projectId, refreshTrigger);
@@ -128,13 +135,27 @@ export function useSharedDockControls(projectId: number, refreshTrigger: number)
     // A failed refresh keeps what is shown: the next scheduled poll retries.
     if (entry) await fetchControls(projectId, entry, false);
   }, [projectId]);
-  return { controls, refreshNow };
+  return { controls, loaded: controls !== NOT_LOADED, refreshNow };
 }
 
-/** The project's shared auto-attach bookkeeping, or null when no surface is
- * subscribed (the caller falls back to its own). */
-export function sharedAutoAttachState(projectId: number): Map<string, AutoAttachEntry> | null {
-  return entries.get(projectId)?.autoAttach ?? null;
+// Kept for the page's lifetime, per project. The effect prunes a project's
+// identities that leave its poll, so each map stays the size of the
+// project's running containers.
+const autoAttachByProject = new Map<number, Map<string, AutoAttachEntry>>();
+
+/** The project's auto-attach bookkeeping, shared by every surface. */
+export function sharedAutoAttachState(projectId: number): Map<string, AutoAttachEntry> {
+  let state = autoAttachByProject.get(projectId);
+  if (!state) {
+    state = new Map();
+    autoAttachByProject.set(projectId, state);
+  }
+  return state;
+}
+
+/** Test-only: forget every project's auto-attach bookkeeping. */
+export function __resetDockAutoAttachStateForTests() {
+  autoAttachByProject.clear();
 }
 
 // ---- Which surface runs auto-attach (#3031) ----

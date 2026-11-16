@@ -33,7 +33,6 @@ import {
   useBottomDockMounted,
   useSharedDockControls,
 } from "./dockProjectShared.js";
-import type { AutoAttachEntry } from "./dockProjectShared.js";
 
 // One project's Dock data and actions (#3012): its controls (dock.json and
 // the Docker Compose discovery), how they group, which are running, and every
@@ -156,10 +155,11 @@ export function useDockProject(
   // of this hook for the project (#3036, dockProjectShared.ts): the bottom
   // Dock and the Dock view see the same list and make one request per
   // interval between them.
-  const { controls, refreshNow: refreshControlsNow } = useSharedDockControls(
-    projectId,
-    dockConfigRefreshTrigger,
-  );
+  const {
+    controls,
+    loaded: controlsLoaded,
+    refreshNow: refreshControlsNow,
+  } = useSharedDockControls(projectId, dockConfigRefreshTrigger);
   // Issue #73 — a "Pull & restart stack" session's synthesized control
   // (POST .../docker/update's response), never returned by GET .../dock.
   // Kept separately from `controls` so the shared 15s poll can freely
@@ -355,14 +355,16 @@ export function useDockProject(
 
   const AUTO_ATTACH_RETRY_MS = 60_000;
   // The bookkeeping is the project's, not this mount's (dockProjectShared.ts):
-  // when the effect moves from one surface to the other, the new owner knows
-  // which containers were already attached, or are being attached right now,
-  // and does not start a second log session for them.
-  const localAutoAttachStateRef = useRef<Map<string, AutoAttachEntry>>(new Map());
+  // when the effect moves from one surface to the other, or a surface
+  // remounts, the owner knows which containers were already attached, or
+  // are being attached right now, and does not start a second log session
+  // for them, nor bring back a stream the user ended.
   useEffect(() => {
-    if (!autoAttach || !sessionsLoaded) return;
+    // Not before the poll's first answer: an empty not-yet-loaded list would
+    // prune every identity the project's bookkeeping holds.
+    if (!autoAttach || !sessionsLoaded || !controlsLoaded) return;
     if (surface !== "bottom-dock" && isBottomDockMounted(projectId)) return;
-    const autoAttachState = sharedAutoAttachState(projectId) ?? localAutoAttachStateRef.current;
+    const autoAttachState = sharedAutoAttachState(projectId);
     const autoAttachOn = settings.dock.autoAttachDockerLogs;
     const currentIdentities = new Set(
       discoveredControls
@@ -408,6 +410,7 @@ export function useDockProject(
     autoAttach,
     surface,
     controls,
+    controlsLoaded,
     sessionsLoaded,
     settings.dock.autoAttachDockerLogs,
     projectId,

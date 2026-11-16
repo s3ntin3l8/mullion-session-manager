@@ -448,6 +448,18 @@ describe("DockSidebarView (#3012)", () => {
       expect(await within(group).findByText("Auto-attach failed")).toBeInTheDocument();
     });
 
+    const bumpDockConfig = () =>
+      act(() =>
+        useDashboardStore.setState((st) => ({
+          dockConfigRefreshTrigger: st.dockConfigRefreshTrigger + 1,
+        })),
+      );
+    const WEB_RUNNING = { ...WEB, docker: { ...WEB.docker, state: "running" } };
+    const attachedWeb = () =>
+      createSession.mock.calls.filter(
+        ([, , opts]) => (opts as { name?: string }).name === "docker-logs:aurora-prod-web-1",
+      ).length;
+
     it("takes it over when the bottom Dock goes, without attaching a container twice", async () => {
       renderView();
       const dock = renderBottomDock();
@@ -456,9 +468,31 @@ describe("DockSidebarView (#3012)", () => {
       await new Promise((r) => setTimeout(r, 0));
       // The view now owns the effect, and knows the container is attached.
       expect(createSession).toHaveBeenCalledTimes(1);
+      // A container that starts running from here on is the view's to attach.
+      controls = [API, WEB_RUNNING];
+      bumpDockConfig();
+      await waitFor(() => expect(attachedWeb()).toBe(1));
+      expect(attachedApi()).toBe(1);
     });
 
-    it("hands it to the bottom Dock when it mounts, and does nothing while the setting is off", async () => {
+    it("hands it to the bottom Dock when the Dock mounts beside the view", async () => {
+      controls = [{ ...API, docker: { ...API.docker, state: "exited" } }];
+      renderView();
+      renderBottomDock();
+      await screen.findByRole("region", { name: "Stack aurora-dev" });
+      expect(createSession).not.toHaveBeenCalled();
+      // The container starts; its attach fails, on the surface that ran it.
+      createSession.mockRejectedValue(new Error("boom"));
+      controls = [API];
+      bumpDockConfig();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      const bottomDock = document.querySelector(".dock") as HTMLElement;
+      expect(await within(bottomDock).findByText("Auto-attach failed")).toBeInTheDocument();
+      const group = screen.getByRole("group", { name: "api actions" });
+      expect(within(group).queryByText("Auto-attach failed")).not.toBeInTheDocument();
+    });
+
+    it("does nothing while the setting is off", async () => {
       useDashboardStore.setState({
         settings: {
           ...useDashboardStore.getState().settings,
@@ -466,10 +500,39 @@ describe("DockSidebarView (#3012)", () => {
         },
       });
       renderView();
-      renderBottomDock();
       await screen.findByRole("region", { name: "Stack aurora-dev" });
       await new Promise((r) => setTimeout(r, 0));
       expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it("does not bring back a stream ended with Stop log when the view remounts", async () => {
+      useDashboardStore.setState({
+        settings: {
+          ...useDashboardStore.getState().settings,
+          sessions: { ...useDashboardStore.getState().settings.sessions, confirmBeforeKill: false },
+        },
+      });
+      createSession.mockImplementation(async () => {
+        useDashboardStore.setState({
+          sessions: [dockSession(8, "docker-logs:aurora-dev-api-1", "docker compose logs -f api")],
+        });
+        return {} as Session;
+      });
+      deleteSession.mockImplementation(async (id: number) => {
+        useDashboardStore.setState((st) => ({
+          sessions: st.sessions.filter((x) => x.id !== id),
+        }));
+      });
+      const first = renderView();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      const group = await screen.findByRole("group", { name: "api actions" });
+      await userEvent.click(await within(group).findByRole("button", { name: "Stop log" }));
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledWith(8));
+      first.unmount();
+      renderView();
+      await screen.findByRole("region", { name: "Stack aurora-dev" });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(attachedApi()).toBe(1);
     });
   });
 

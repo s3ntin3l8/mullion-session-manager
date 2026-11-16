@@ -5,6 +5,7 @@ import { __resetRateLimitBreakerForTests } from "./api/client.js";
 import { __resetSessionRefreshBlockForTests } from "./store/slices/sessions.js";
 import { __resetGithubCacheForTests } from "./store/githubCacheReset.js";
 import { __discardPendingSettingsPatchForTests } from "./store/slices/ui.js";
+import { __resetDockAutoAttachStateForTests } from "./dock/dockProjectShared.js";
 
 // vitest.config.ts doesn't set `test.globals: true` (this repo's convention
 // is explicit `import { describe, it, ... } from "vitest"` everywhere), so
@@ -62,6 +63,13 @@ afterEach(() => {
 // served fresh to the next test's differently-mocked fetch.
 afterEach(() => {
   __resetGithubCacheForTests();
+});
+
+// The Dock's auto-attach bookkeeping (dock/dockProjectShared.ts) is kept per
+// project for the page's lifetime, so one test's attached container would
+// read as already attached in the next test's mount of the same project.
+afterEach(() => {
+  __resetDockAutoAttachStateForTests();
 });
 
 // jsdom provides no window.matchMedia at all, unlike every real browser

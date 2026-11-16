@@ -39,7 +39,9 @@ const service = (state: string) => ({
   },
 });
 
-let controls: unknown[];
+let controls: unknown[] | null;
+// When set, the next dock GET waits for this to resolve before answering.
+let gate: Promise<void> | null;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 const dockFetches = () =>
@@ -63,8 +65,15 @@ describe("one shared dock poll per project (#3036)", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     localStorage.clear();
     controls = [service("running")];
+    gate = null;
     ({ fetchMock } = mockFetch({
-      "GET /api/projects/:id/dock": () => jsonResponse(200, controls),
+      "GET /api/projects/:id/dock": async () => {
+        const body = controls;
+        const wait = gate;
+        gate = null;
+        if (wait) await wait;
+        return body === null ? jsonResponse(500, {}) : jsonResponse(200, body);
+      },
       "GET /api/projects/:id/github": () => jsonResponse(204),
       "GET /api/projects/:id/github/prs": () => jsonResponse(204),
     }));
@@ -142,5 +151,34 @@ describe("one shared dock poll per project (#3036)", () => {
     dock.unmount();
     await tick();
     expect(dockFetches()).toBe(2);
+  });
+
+  it("drops a response that a newer fetch overtook", async () => {
+    let release!: () => void;
+    gate = new Promise((r) => (release = r));
+    render(<DockSidebarView projectId={1} actions={actions} />);
+    // The first fetch (a running api) is held; a config save fetches again.
+    await flush();
+    controls = [service("exited")];
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        dockConfigRefreshTrigger: s.dockConfigRefreshTrigger + 1,
+      }));
+    });
+    const view = await screen.findByRole("region", { name: "Stack aurora-dev" });
+    expect(within(view).getByRole("button", { name: /^api, exited/ })).toBeInTheDocument();
+    release();
+    await flush();
+    expect(within(view).getByRole("button", { name: /^api, exited/ })).toBeInTheDocument();
+  });
+
+  it("clears the list when a poll fails", async () => {
+    render(<DockSidebarView projectId={1} actions={actions} />);
+    await screen.findByRole("region", { name: "Stack aurora-dev" });
+    controls = null;
+    await tick();
+    // The discovered service vanished from the list: its row is held
+    // ("recreating…") for the grace period, as for any vanished container.
+    expect(await screen.findByRole("button", { name: /^api, recreating/ })).toBeInTheDocument();
   });
 });

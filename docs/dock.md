@@ -653,8 +653,10 @@ screen for one project, and the view then leaves it to the bottom Dock. The
 choice is made in one place, `useDockProject` (its `surface` option): the
 bottom Dock registers itself for the project while its `DockProjectGroup` is
 mounted. Which containers have already been attached is kept per project,
-not per surface, so the surface that takes the effect over does not attach
-a container a second time.
+not per surface, and outlives both: the surface that takes the effect over
+does not attach a container a second time, and a view that remounts (another
+rail view, another project and back) does not bring back a stream ended with
+**Stop log**.
 
 **The log is read only.** The bottom Dock is not mounted under a touch
 pointer, because the mobile key bar sends input by session and cannot tell a
