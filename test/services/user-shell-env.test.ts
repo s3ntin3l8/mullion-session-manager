@@ -45,7 +45,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 import {
   getSessionEnvInfo,
+  getUserShellEnv,
   getUserShellPath,
+  getUserShellRecoverKeys,
+  parseRecoverKeys,
+  parseUserShellKeys,
+  setUserShellRecoverKeys,
   invalidateUserShellEnv,
   mergePaths,
   parseUserShellPath,
@@ -291,5 +296,111 @@ describe("resolveUserShellEnv", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+const KO = "__MULLION_USER_KEY_8f3a1c__";
+const KC = "__MULLION_USER_KEY_END_8f3a1c__";
+const rec = (k: string, v: string) => `${KO}${k}=${v}${KC}`;
+
+describe("recovered keys", () => {
+  it("parseRecoverKeys trims, dedupes and drops non-identifiers and PATH", () => {
+    expect(parseRecoverKeys(" A , B,A,,C-D,$(x),PATH,1X")).toEqual(["A", "B"]);
+    expect(parseRecoverKeys("")).toEqual([]);
+    expect(parseRecoverKeys(undefined)).toEqual([]);
+  });
+
+  it("parseUserShellKeys reads only allowlisted, non-empty records", () => {
+    const out = `banner\n${rec("ANDROID_HOME", "/sdk")}${rec("JAVA_HOME", "")}${rec("SECRET", "x")}${rec("MULTI", "a\nb=c")}`;
+    expect(parseUserShellKeys(out, ["ANDROID_HOME", "JAVA_HOME", "MULTI"])).toEqual({
+      ANDROID_HOME: "/sdk",
+      MULTI: "a\nb=c",
+    });
+  });
+});
+
+describe("recovery through the interactive shell", () => {
+  const savedShell = process.env.SHELL;
+  beforeEach(() => {
+    spawned = [];
+    spawnError = null;
+    childPid = undefined;
+    process.env.SHELL = "/usr/bin/zsh";
+    delete process.env.MULLION_RESOLVE_INTERACTIVE_ENV;
+    resetUserShellEnvForTests();
+    setUserShellRecoverKeys(["ANDROID_HOME", "JAVA_HOME"]);
+    stdoutToEmit = dump("/a:/b") + rec("ANDROID_HOME", "/sdk") + rec("JAVA_HOME", "/jdk");
+  });
+  afterEach(() => {
+    process.env.SHELL = savedShell;
+    resetUserShellEnvForTests();
+    setUserShellEnvLogger(undefined);
+  });
+
+  it("shares one spawn, prints only the allowlisted names, logs names not values", async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn(), info: vi.fn() };
+    setUserShellEnvLogger(logger);
+    await resolveUserShellEnv();
+    expect(spawned).toHaveLength(1);
+    const script = spawned[0].args[1];
+    expect(script).toContain("printenv ANDROID_HOME");
+    expect(script).toContain("printenv JAVA_HOME");
+    expect(script).not.toContain("printenv ANDROID_NDK_HOME");
+    expect(getUserShellRecoverKeys()).toEqual(["ANDROID_HOME", "JAVA_HOME"]);
+    expect(getUserShellEnv(["ANDROID_HOME", "JAVA_HOME", "OTHER"])).toEqual({
+      ANDROID_HOME: "/sdk",
+      JAVA_HOME: "/jdk",
+    });
+    expect(logger.info).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(logger.info.mock.calls[0]);
+    expect(logged).toContain("ANDROID_HOME");
+    expect(logged).not.toContain("/sdk");
+  });
+
+  it("recovers nothing when the config is empty", async () => {
+    setUserShellRecoverKeys([]);
+    stdoutToEmit = dump("/a");
+    await resolveUserShellEnv();
+    expect(spawned[0].args[1]).not.toContain("printenv");
+    expect(getUserShellEnv(["ANDROID_HOME"])).toEqual({});
+  });
+
+  it("reports recovered key names (never values) in the session-env info", async () => {
+    await resolveUserShellEnv();
+    const info = getSessionEnvInfo();
+    expect(info.recoveredKeys).toEqual(["ANDROID_HOME", "JAVA_HOME"]);
+    expect(JSON.stringify(info)).not.toContain("/sdk");
+  });
+
+  it("recovers nothing when the shell times out", async () => {
+    vi.useFakeTimers();
+    try {
+      stdoutToEmit = null;
+      const p = resolveUserShellEnv();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await p;
+      expect(getUserShellEnv(["ANDROID_HOME"])).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers nothing on unsupported shell/spawn error/opt-out", async () => {
+    process.env.SHELL = "/usr/bin/fish";
+    await resolveUserShellEnv();
+    expect(getUserShellEnv(["ANDROID_HOME"])).toEqual({});
+    resetUserShellEnvForTests();
+    setUserShellRecoverKeys(["ANDROID_HOME"]);
+    process.env.SHELL = "/usr/bin/zsh";
+    spawnError = new Error("boom");
+    await resolveUserShellEnv();
+    expect(getUserShellEnv(["ANDROID_HOME"])).toEqual({});
+    resetUserShellEnvForTests();
+    setUserShellRecoverKeys(["ANDROID_HOME"]);
+    spawnError = null;
+    await resolveUserShellEnv();
+    process.env.MULLION_RESOLVE_INTERACTIVE_ENV = "0";
+    expect(getUserShellEnv(["ANDROID_HOME"])).toEqual({});
+    delete process.env.MULLION_RESOLVE_INTERACTIVE_ENV;
   });
 });

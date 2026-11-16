@@ -288,6 +288,22 @@ describe("buildLaunchPlan — issue #822 caller-supplied env", () => {
     expect(plan.env.CUSTOM_VAR).toBe("hello");
   });
 
+  it("an explicit session.env wins over a key recovered from the user's shell (#3152)", async () => {
+    const shellEnv = await import("../../src/services/user-shell-env.js");
+    vi.spyOn(shellEnv, "getUserShellRecoverKeys").mockReturnValue(["ANDROID_HOME", "JAVA_HOME"]);
+    vi.spyOn(shellEnv, "getUserShellEnv").mockReturnValue({
+      ANDROID_HOME: "/recovered/sdk",
+      JAVA_HOME: "/recovered/jdk",
+    });
+    try {
+      const plan = buildLaunchPlan(baseSession({ env: { ANDROID_HOME: "/explicit/sdk" } }));
+      expect(plan.env.ANDROID_HOME).toBe("/explicit/sdk");
+      expect(plan.env.JAVA_HOME).toBe("/recovered/jdk");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("a MULLION_* injection always wins over a colliding key in session.env", () => {
     const plan = buildLaunchPlan(
       baseSession({
