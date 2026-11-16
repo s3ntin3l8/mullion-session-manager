@@ -417,6 +417,60 @@ describe("#2416 — the states that used to be swallowed", () => {
     });
   });
 
+  describe("the budget gate — a shell tail with no commits (#3111)", () => {
+    const shellTask = { id: "b1", type: "shell", status: "running", description: "wait" };
+    const MIN = 60_000;
+
+    async function overBudget(info: Record<string, unknown>, taskMaster = "true") {
+      const priorTaskMaster = process.env.MULLION_TASK_MASTER_ENABLED;
+      process.env.MULLION_TASK_BUDGET_MINUTES = "60";
+      process.env.MULLION_TASK_MASTER_ENABLED = taskMaster;
+      const app = await buildApp();
+      try {
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 120 * MIN),
+        );
+        vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+        vi.spyOn(app.pty, "get").mockReturnValue({ toInfo: () => fakeInfo(info) } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus(BASE_SHA));
+        await reconcileTasks(app);
+        return await getTask(app, taskId);
+      } finally {
+        process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+        if (priorTaskMaster === undefined) delete process.env.MULLION_TASK_MASTER_ENABLED;
+        else process.env.MULLION_TASK_MASTER_ENABLED = priorTaskMaster;
+        await app.close();
+      }
+    }
+
+    it("says the worker was held on a shell job with no commits", async () => {
+      const row = await overBudget({
+        lastTurnEndedAt: Date.now() - 10 * MIN,
+        outstandingBackgroundTasks: [shellTask],
+      });
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("budget exceeded after 60 minutes");
+      expect(row.failureReason).toContain("no commits and was waiting on a background shell job");
+    });
+
+    it("says so with Task Master disabled too", async () => {
+      const row = await overBudget(
+        { lastTurnEndedAt: Date.now() - 10 * MIN, outstandingBackgroundTasks: [shellTask] },
+        "false",
+      );
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("no commits and was waiting on a background shell job");
+    });
+
+    it("keeps the plain reason when there is no shell tail", async () => {
+      const row = await overBudget({ lastTurnEndedAt: Date.now() });
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe("budget exceeded after 60 minutes");
+    });
+  });
+
   describe("the budget gate — an unreadable worktree still fails the task, but says why", () => {
     it("fails the task as before, and logs that the commits were unknown", async () => {
       process.env.MULLION_TASK_BUDGET_MINUTES = "1";
