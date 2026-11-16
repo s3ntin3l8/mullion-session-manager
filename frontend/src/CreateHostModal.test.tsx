@@ -118,7 +118,7 @@ describe("CreateHostModal", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(
-      screen.getByText(/Base URL can't be cleared: this agent has no machine identity/),
+      screen.getByText(/Base URL can't be cleared: this agent has no live machine identity/),
     ).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
   });

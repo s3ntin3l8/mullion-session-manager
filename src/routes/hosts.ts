@@ -49,7 +49,8 @@ interface CreateHostBody {
 
 interface UpdateHostBody {
   name?: string;
-  baseUrl?: string;
+  // `null` clears the address (issue #3091).
+  baseUrl?: string | null;
   token?: string;
   // Issue #1725 / roadmap 8.11 — park this host: it takes no new work.
   // A flag, not an action — nothing is terminated.
@@ -338,16 +339,23 @@ export async function hostsRoute(app: FastifyInstance) {
       ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
-      // Issue #3091 — an address is how a host WITHOUT a machine identity is
-      // reached at all, so clearing it would strand one. A live identity means
-      // the agent connects out and the address is only the in-app browser's.
+      // Issue #3091 — an address is how a host WITHOUT a live machine identity
+      // is reached at all, so clearing it would strand one. Live means what
+      // renewal means by it (renewMachineCredential): present, not revoked,
+      // not expired. The agent then connects out and the address is only the
+      // in-app browser's.
       if (request.body.baseUrl === null) {
         const row = getHostRow(app, id);
         if (!row) return reply.notFound();
-        if (row.machineCredentialEnc === null || row.machineCredentialRevokedAt !== null) {
+        const live =
+          row.machineCredentialEnc !== null &&
+          row.machineCredentialRevokedAt === null &&
+          row.machineCredentialExpiresAt !== null &&
+          row.machineCredentialExpiresAt.getTime() > Date.now();
+        if (!live) {
           return reply.badRequest(
-            "the address can only be cleared for a host with a machine identity: without one " +
-              "nothing else can reach it",
+            "the address can only be cleared for a host with a live machine identity: without " +
+              "one nothing else can reach it",
           );
         }
       }

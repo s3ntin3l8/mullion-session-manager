@@ -131,7 +131,7 @@ describe("HostsSection token rotation", () => {
     expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
   });
 
-  it("sends a cleared address as null for a host with a machine identity, and not at all otherwise (issue #3091)", async () => {
+  it("sends a cleared address as null for a host with a machine identity (issue #3091)", async () => {
     const patches: unknown[] = [];
     vi.stubGlobal(
       "fetch",

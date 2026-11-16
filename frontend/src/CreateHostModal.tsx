@@ -77,7 +77,7 @@ export function CreateHostModal({
     // one, #3091) or, for a host that is reached by that address, a mistake.
     if (isEdit && !trimmedBaseUrl && initialBaseUrl.trim() && !canClearBaseUrl) {
       setError(
-        "Base URL can't be cleared: this agent has no machine identity, so the primary reaches it " +
+        "Base URL can't be cleared: this agent has no live machine identity, so the primary reaches it " +
           "only by this address. Upgrade the agent first.",
       );
       return;

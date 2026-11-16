@@ -2088,10 +2088,12 @@ address left over from before the agent moved to the channel (a LAN address on a
 laptop that now roams) therefore only produces `EHOSTUNREACH` from that one path.
 
 Edit the host (Settings → Hosts → ⋯ → Edit) and empty **Base URL** to clear it,
-or `PATCH /api/hosts/:id` with `{ "baseUrl": null }`. The row then reads
-"connected over the outbound channel". An empty string is still rejected, and the
-clear is refused (400) for a host with no machine identity, or one whose identity
-was revoked: without one the address is the only way anything reaches it.
+or `PATCH /api/hosts/:id` with `{ "baseUrl": null }`. The row then reads "outbound
+only — waiting for the agent to connect" until the channel reports online (the
+clear drops the old health verdict), and "connected over the outbound channel"
+after that. An empty string is still rejected, and the clear is refused (400) for
+a host without a live machine identity (none, revoked, or expired): without one
+the address is the only way anything reaches it.
 
 Clearing only sticks while the agent stops advertising an address. A registration
 or renewal that carries one overwrites the stored value, so also unset

@@ -2,8 +2,10 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { hosts } from "../../src/db/schema.js";
 import {
   claimHost,
   createHost,
@@ -78,6 +80,28 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
       expect(revokeMachineIdentity(app, hostId)).toBe(true);
       expect((await clear(app, hostId)).statusCode).toBe(400);
       expect(getHostRow(app, hostId)?.baseUrl).toBe("http://127.0.0.1:4703");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses a host whose identity has expired", async () => {
+    const app = await buildApp();
+    try {
+      const { hostId } = enrollHost(app, {
+        baseUrl: "http://127.0.0.1:4706",
+        hostname: "expired",
+        wantsMachineCredential: true,
+      });
+      app.db
+        .update(hosts)
+        .set({ machineCredentialExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(hosts.id, hostId))
+        .run();
+      const res = await clear(app, hostId);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/live machine identity/);
+      expect(getHostRow(app, hostId)?.baseUrl).toBe("http://127.0.0.1:4706");
     } finally {
       await app.close();
     }
