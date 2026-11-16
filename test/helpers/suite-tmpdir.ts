@@ -103,3 +103,73 @@ export function createSuiteTmpDir(
   if (projected <= SUITE_TMP_MAX_BYTES) return fs.mkdtempSync(path.join(base, prefix));
   return fs.mkdtempSync(path.join(fallbackRoot, "mst-"));
 }
+
+const SUITE_DIR_PREFIXES = ["mullion-test-suite-", "mst-"] as const;
+/** A suite dir this old belongs to a run that died before its teardown. */
+const STALE_SUITE_DIR_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Remove a suite dir, making read-only entries writable first. A plain
+ * `rmSync` fails with EACCES on trees a test left read-only, and the
+ * teardown swallows that, so the directory leaked.
+ */
+export function removeSuiteTmpDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return;
+  } catch {
+    // fall through to the chmod retry
+  }
+  const makeWritable = (p: string): void => {
+    try {
+      const st = fs.lstatSync(p);
+      if (st.isSymbolicLink()) return;
+      fs.chmodSync(p, st.mode | 0o700);
+      if (st.isDirectory()) for (const name of fs.readdirSync(p)) makeWritable(path.join(p, name));
+    } catch {
+      // best effort
+    }
+  };
+  makeWritable(dir);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Best-effort: the next run's sweepStaleSuiteTmpDirs retries.
+  }
+}
+
+/**
+ * Remove suite dirs left by runs that were killed before their teardown ran
+ * (Ctrl-C, OOM, a timed-out agent session). Only dirs this user owns whose
+ * newest top-level mtime is over a day old are touched, so a concurrent run
+ * is never at risk. Returns how many were removed.
+ */
+export function sweepStaleSuiteTmpDirs(
+  roots: string[] = [os.tmpdir(), "/tmp"],
+  now: number = Date.now(),
+  uid: number | undefined = process.getuid?.(),
+): number {
+  let removed = 0;
+  for (const root of new Set(roots)) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!SUITE_DIR_PREFIXES.some((p) => name.startsWith(p))) continue;
+      const full = path.join(root, name);
+      try {
+        const st = fs.lstatSync(full);
+        if (!st.isDirectory() || (uid !== undefined && st.uid !== uid)) continue;
+        if (now - st.mtimeMs < STALE_SUITE_DIR_MS) continue;
+        removeSuiteTmpDir(full);
+        if (!fs.existsSync(full)) removed++;
+      } catch {
+        // vanished or unreadable: leave it
+      }
+    }
+  }
+  return removed;
+}

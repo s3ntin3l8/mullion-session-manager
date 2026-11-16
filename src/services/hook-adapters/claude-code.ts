@@ -407,14 +407,29 @@ export function buildClaudeMcpConfig(
   };
 }
 
+/** Per-session Claude Code settings file (`<sessionsDir>/<id>.hooks.json`). */
+export function claudeHooksSettingsPath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.hooks.json`);
+}
+
+/** Per-session composed plugin bundle directory (`<sessionsDir>/<id>.mullion-bundle`). */
+export function claudeSessionBundleDir(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.mullion-bundle`);
+}
+
+/** Per-session Claude Code MCP config file (`<sessionsDir>/<id>.mcp.json`). */
+export function claudeMcpConfigPath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.mcp.json`);
+}
+
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
-  const settingsPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.hooks.json`);
+  const settingsPath = claudeHooksSettingsPath(ctx.sessionsDir, ctx.sessionId);
   const settings = buildClaudeHookSettings(
     ctx.forwarderPath,
     process.execPath,
     ctx.worktreesInDotWt ? resolveWorktreeHookPath() : undefined,
   );
-  const mcpConfigPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.mcp.json`);
+  const mcpConfigPath = claudeMcpConfigPath(ctx.sessionsDir, ctx.sessionId);
   const mcpConfig = buildClaudeMcpConfig(
     resolveMcpServerPath(),
     ctx.hookSocketPath,
@@ -448,7 +463,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const bundleSettingsFiles: Array<{ path: string; contents: string }> = [];
   if (ctx.injectMullionBundle) {
     if (ctx.projectSkill || ctx.projectReviewerAgent) {
-      const composedDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.mullion-bundle`);
+      const composedDir = claudeSessionBundleDir(ctx.sessionsDir, ctx.sessionId);
       const files = composeClaudeSessionBundle(composedDir, {
         skill: ctx.projectSkill,
         reviewerAgent: ctx.projectReviewerAgent,

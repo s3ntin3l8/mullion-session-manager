@@ -5,6 +5,8 @@ import path from "node:path";
 import { maxSunPathBytes } from "../../src/cli/sun-path.mjs";
 import {
   createSuiteTmpDir,
+  removeSuiteTmpDir,
+  sweepStaleSuiteTmpDirs,
   SUITE_DEEPEST_SOCKET_PATH_BYTES,
   SUITE_TMP_MAX_BYTES,
 } from "./suite-tmpdir.js";
@@ -126,5 +128,55 @@ describe("createSuiteTmpDir", () => {
     // so a long TMPDIR in the invoking shell cannot leak through.
     const deepest = path.join(os.tmpdir(), "mullion-opencode-gate-XXXXXX", "hooks.sock");
     expect(Buffer.byteLength(deepest)).toBeLessThanOrEqual(SUN_PATH_MAX - 1);
+  });
+});
+
+describe("removeSuiteTmpDir", () => {
+  it("removes a tree containing read-only directories and files", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mst-rm-"));
+    made.push(dir);
+    const sub = path.join(dir, "cache", "hooks");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "hooks.json"), "{}");
+    fs.chmodSync(path.join(sub, "hooks.json"), 0o444);
+    fs.chmodSync(sub, 0o555);
+    removeSuiteTmpDir(dir);
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+});
+
+describe("sweepStaleSuiteTmpDirs", () => {
+  it("removes only old suite-prefixed dirs and leaves recent and unrelated ones", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-root-"));
+    made.push(root);
+    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const mk = (name: string, aged: boolean): string => {
+      const d = path.join(root, name);
+      fs.mkdirSync(d);
+      fs.writeFileSync(path.join(d, "f"), "x");
+      if (aged) fs.utimesSync(d, old, old);
+      return d;
+    };
+    const staleA = mk("mst-AAAAAA", true);
+    const staleB = mk("mullion-test-suite-BBBBBB", true);
+    const recent = mk("mst-CCCCCC", false);
+    const other = mk("something-else", true);
+
+    expect(sweepStaleSuiteTmpDirs([root])).toBe(2);
+    expect(fs.existsSync(staleA)).toBe(false);
+    expect(fs.existsSync(staleB)).toBe(false);
+    expect(fs.existsSync(recent)).toBe(true);
+    expect(fs.existsSync(other)).toBe(true);
+  });
+
+  it("skips dirs owned by another uid", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-root-"));
+    made.push(root);
+    const d = path.join(root, "mst-DDDDDD");
+    fs.mkdirSync(d);
+    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(d, old, old);
+    expect(sweepStaleSuiteTmpDirs([root], Date.now(), -12345)).toBe(0);
+    expect(fs.existsSync(d)).toBe(true);
   });
 });

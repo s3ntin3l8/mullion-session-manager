@@ -7,7 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // AGENTS.md: a test must never let a real spawn fire.
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
-import { inspectTempStorage, pruneTempStorage } from "../../src/services/temp-storage.js";
+import {
+  inspectTempStorage,
+  pruneTempStorage,
+  readLiveUnixSockets,
+} from "../../src/services/temp-storage.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
@@ -106,6 +110,135 @@ describe("temp-storage", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("removes a tree whose only socket has no listener, keeps one with a listener", async () => {
+    const stale = await makeEntry("stale-socket-tree", 30 * DAY);
+    const live = await makeEntry("live-socket-tree", 30 * DAY);
+    const staleServer = net.createServer();
+    const liveServer = net.createServer();
+    const staleSock = path.join(stale, "s.sock");
+    const liveSock = path.join(live, "s.sock");
+    await new Promise<void>((resolve) => staleServer.listen(staleSock, resolve));
+    await new Promise<void>((resolve) => liveServer.listen(liveSock, resolve));
+    try {
+      const t = new Date(NOW - 30 * DAY);
+      // The socket inodes carry the real clock; age them with the dirs.
+      for (const p of [staleSock, liveSock]) await fs.lutimes(p, t, t);
+      await fs.utimes(stale, t, t);
+      await fs.utimes(live, t, t);
+      // Only the second socket is reported as bound by the (faked) kernel table.
+      await pruneTempStorage("safe", {
+        root,
+        npmCacheDir: npmDir,
+        now: NOW,
+        liveSockets: new Set([liveSock]),
+      });
+      expect(await exists(stale)).toBe(false);
+      expect(await exists(live)).toBe(true);
+    } finally {
+      staleServer.close();
+      liveServer.close();
+    }
+  });
+
+  it("treats a socket as live when the table reports it through a symlinked directory", async () => {
+    const dir = await makeEntry("symlink-bound", 30 * DAY);
+    const server = net.createServer();
+    const sock = path.join(dir, "s.sock");
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+    // The kernel lists the path the binder used: here a symlink to `dir`.
+    const alias = path.join(path.dirname(root), "alias-dir");
+    await fs.symlink(dir, alias);
+    const table = path.join(path.dirname(root), "unix-table-symlink");
+    await fs.writeFile(
+      table,
+      `Num RefCount Protocol Flags Type St Inode Path\n0: 2 0 10000 1 1 1 ${path.join(alias, "s.sock")}\n`,
+    );
+    try {
+      const t = new Date(NOW - 30 * DAY);
+      await fs.lutimes(sock, t, t);
+      await fs.utimes(dir, t, t);
+      await pruneTempStorage("safe", {
+        root,
+        npmCacheDir: npmDir,
+        now: NOW,
+        unixSocketTable: table,
+      });
+      expect(await exists(dir)).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("treats a relative-path listener as possibly this socket (fails closed)", async () => {
+    const dir = await makeEntry("relative-bound", 30 * DAY);
+    const server = net.createServer();
+    const sock = path.join(dir, "s.sock");
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+    try {
+      const t = new Date(NOW - 30 * DAY);
+      await fs.lutimes(sock, t, t);
+      await fs.utimes(dir, t, t);
+      // A binder with a relative path shows as just "s.sock", whatever its cwd was.
+      await pruneTempStorage("safe", {
+        root,
+        npmCacheDir: npmDir,
+        now: NOW,
+        liveSockets: new Set(["s.sock"]),
+      });
+      expect(await exists(dir)).toBe(true);
+      // An unrelated relative name does not protect it.
+      await pruneTempStorage("safe", {
+        root,
+        npmCacheDir: npmDir,
+        now: NOW,
+        liveSockets: new Set(["other.sock"]),
+      });
+      expect(await exists(dir)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("keeps every socket tree when the listener table is unavailable", async () => {
+    const dir = await makeEntry("unknown-listeners", 30 * DAY);
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(path.join(dir, "s.sock"), resolve));
+    try {
+      const t = new Date(NOW - 30 * DAY);
+      await fs.utimes(dir, t, t);
+      await pruneTempStorage("safe", { root, npmCacheDir: npmDir, now: NOW, liveSockets: null });
+      expect(await exists(dir)).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("treats mullion-test-suite-* leftovers as ordinary temp, other mullion-* as protected", async () => {
+    const suite = await makeEntry("mullion-test-suite-AbC123", 30 * DAY);
+    const other = await makeEntry("mullion-scaffold-generate", 30 * DAY);
+    await pruneTempStorage("safe", { root, npmCacheDir: npmDir, now: NOW, liveSockets: null });
+    expect(await exists(suite)).toBe(false);
+    expect(await exists(other)).toBe(true);
+  });
+
+  it("readLiveUnixSockets parses bound filesystem paths and ignores abstract ones", async () => {
+    const table = path.join(root, "..", "unix-table");
+    await fs.writeFile(
+      table,
+      [
+        "Num       RefCount Protocol Flags    Type St Inode Path",
+        "0000: 00000002 00000000 00010000 0001 01 111 /tmp/a/hooks.sock",
+        "0000: 00000003 00000000 00000000 0001 03 222",
+        "0000: 00000002 00000000 00010000 0001 01 333 @abstract",
+        "0000: 00000002 00000000 00010000 0001 01 444 /tmp/with space/x.sock",
+        "",
+      ].join("\n"),
+    );
+    const live = await readLiveUnixSockets(table);
+    expect([...(live ?? [])].sort()).toEqual(["/tmp/a/hooks.sock", "/tmp/with space/x.sock"]);
+    expect(await readLiveUnixSockets(path.join(root, "..", "does-not-exist"))).toBeNull();
   });
 
   it("aggressive mode uses the 24h window and runs npm cache clean", async () => {
