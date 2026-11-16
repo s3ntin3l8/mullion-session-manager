@@ -570,10 +570,10 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
   field next to each CLI's default and reviewer model; empty means no
   delegation guidance at all), and (3) that model is cheaper than the one the
   worker actually runs (`getAdapterDelegationHint` in
-  `hook-adapters/index.ts`; a plain shell gets nothing). Only the claim and
-  retry prompts — the initial implementation — carry it; the follow-up rounds
-  (reject, red CI, review feedback, rebase, PR comments) are small fix-ups for
-  a worker that already has it and do not repeat it. The clause names the
+  `hook-adapters/index.ts`; a plain shell gets nothing). Claim, retry, and follow-up
+  prompts (reject, red CI, review feedback, suggestions, rebase, PR comments)
+  all resolve and carry the same delegation context, so a worker re-seeded
+  into a fresh agent session receives the guidance too. The clause names the
   configured model, tells the worker a subagent adds its own cost so only
   independent, sizeable parts are worth handing off, and tells it to brief the
   subagent fully because it sees nothing else.
