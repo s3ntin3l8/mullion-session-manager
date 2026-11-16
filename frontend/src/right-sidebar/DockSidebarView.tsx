@@ -382,7 +382,9 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
   // already on starts nothing, and neither starts the stream again when it
   // later ends ("Stop log", a service restart). Tapping the row again
   // does. Only a row the user tapped: the fallback selection never starts
-  // anything. A held (recreating) service waits until it is back.
+  // anything. A held (recreating) service waits until it is back; if it
+  // comes back with its stream already running, the tap is used up with
+  // nothing to start.
   const [taps, setTaps] = useState(0);
   const tapped = selected && selectedKey === effectiveKey ? selected : null;
   const tapAttempt = tapped ? `${dockRowKey(tapped.control)}#${taps}` : null;

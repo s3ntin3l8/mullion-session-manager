@@ -35,9 +35,11 @@ export function sharedAutoAttachState(projectId: number): Map<string, AutoAttach
   return state;
 }
 
-/** Test-only: forget every project's auto-attach bookkeeping. */
+/** Test-only: forget every project's auto-attach bookkeeping, and any
+ * bottom Dock registration a test left behind. */
 export function __resetDockAutoAttachStateForTests() {
   autoAttachByProject.clear();
+  bottomDockMounts.clear();
 }
 
 // ---- Which surface runs auto-attach (#3031) ----

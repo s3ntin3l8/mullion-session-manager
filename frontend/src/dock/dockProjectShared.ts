@@ -32,11 +32,13 @@ interface Entry {
   seq: number;
 }
 
-const EMPTY: DockControl[] = [];
-// Before the first response: empty too, but told apart from a loaded empty
-// list by identity, so auto-attach does not read "nothing discovered" (and
-// prune what it knows) before the poll has answered.
+// Two empty lists that are not an answer, told apart from a real empty list
+// by identity: before the first response, and after a failed fetch (shown
+// as empty, as before). Auto-attach must not read either as "nothing
+// discovered" and prune what it knows, or a stream the user ended with
+// "Stop log" would be attached again by the next good poll.
 const NOT_LOADED: DockControl[] = [];
+const FAILED: DockControl[] = [];
 const entries = new Map<number, Entry>();
 
 function setControls(entry: Entry, controls: DockControl[]) {
@@ -52,7 +54,7 @@ function fetchControls(projectId: number, entry: Entry, clearOnError: boolean): 
       if (current()) setControls(entry, next);
     },
     () => {
-      if (current() && clearOnError) setControls(entry, EMPTY);
+      if (current() && clearOnError) setControls(entry, FAILED);
     },
   );
 }
@@ -101,8 +103,9 @@ function syncTrigger(projectId: number, trigger: number) {
   if (!first) startPoll(projectId, entry);
 }
 
-/** The project's shared Dock controls, whether the poll has answered yet,
- * and a refresh that re-fetches them now for every subscriber (after a
+/** The project's shared Dock controls, whether they are a successful
+ * answer (`known`: not the empty list shown before the first answer or
+ * after a failed fetch), and a refresh that re-fetches them now for every subscriber (after a
  * service action). */
 export function useSharedDockControls(projectId: number, refreshTrigger: number) {
   const subscribeFor = useCallback(
@@ -121,5 +124,5 @@ export function useSharedDockControls(projectId: number, refreshTrigger: number)
     // A failed refresh keeps what is shown: the next scheduled poll retries.
     if (entry) await fetchControls(projectId, entry, false);
   }, [projectId]);
-  return { controls, loaded: controls !== NOT_LOADED, refreshNow };
+  return { controls, known: controls !== NOT_LOADED && controls !== FAILED, refreshNow };
 }

@@ -156,7 +156,7 @@ export function useDockProject(
   // interval between them.
   const {
     controls,
-    loaded: controlsLoaded,
+    known: controlsKnown,
     refreshNow: refreshControlsNow,
   } = useSharedDockControls(projectId, dockConfigRefreshTrigger);
   // Issue #73 — a "Pull & restart stack" session's synthesized control
@@ -359,9 +359,10 @@ export function useDockProject(
   // are being attached right now, and does not start a second log session
   // for them, nor bring back a stream the user ended.
   useEffect(() => {
-    // Not before the poll's first answer: an empty not-yet-loaded list would
-    // prune every identity the project's bookkeeping holds.
-    if (!autoAttach || !sessionsLoaded || !controlsLoaded) return;
+    // Only on a successful answer: the empty list shown before the first one,
+    // or after a failed fetch, would prune every identity the project's
+    // bookkeeping holds, and the next good poll would re-attach them.
+    if (!autoAttach || !sessionsLoaded || !controlsKnown) return;
     if (surface !== "bottom-dock" && isBottomDockMounted(projectId)) return;
     const autoAttachState = sharedAutoAttachState(projectId);
     const autoAttachOn = settings.dock.autoAttachDockerLogs;
@@ -409,7 +410,7 @@ export function useDockProject(
     autoAttach,
     surface,
     controls,
-    controlsLoaded,
+    controlsKnown,
     sessionsLoaded,
     settings.dock.autoAttachDockerLogs,
     projectId,

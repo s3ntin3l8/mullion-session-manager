@@ -64,7 +64,8 @@ const WEB = {
   }),
 };
 
-let controls: unknown[];
+// null: the dock GET fails (500).
+let controls: unknown[] | null;
 let checkUpdate: unknown;
 const calls: string[] = [];
 
@@ -103,7 +104,8 @@ describe("DockSidebarView (#3012)", () => {
       return jsonResponse(name.startsWith("stack") ? 201 : 200, body);
     };
     const { fetchMock } = mockFetch({
-      "GET /api/projects/:id/dock": () => jsonResponse(200, controls),
+      "GET /api/projects/:id/dock": () =>
+        controls === null ? jsonResponse(500, {}) : jsonResponse(200, controls),
       // The bottom Dock's own GitHub row, for the tests that mount it too.
       "GET /api/projects/:id/github": () => jsonResponse(204),
       "GET /api/projects/:id/github/prs": () => jsonResponse(204),
@@ -503,6 +505,43 @@ describe("DockSidebarView (#3012)", () => {
       await screen.findByRole("region", { name: "Stack aurora-dev" });
       await new Promise((r) => setTimeout(r, 0));
       expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it("does not bring back a stream ended with Stop log after a failed poll", async () => {
+      useDashboardStore.setState({
+        settings: {
+          ...useDashboardStore.getState().settings,
+          sessions: { ...useDashboardStore.getState().settings.sessions, confirmBeforeKill: false },
+        },
+      });
+      createSession.mockImplementation(async () => {
+        useDashboardStore.setState({
+          sessions: [dockSession(8, "docker-logs:aurora-dev-api-1", "docker compose logs -f api")],
+        });
+        return {} as Session;
+      });
+      deleteSession.mockImplementation(async (id: number) => {
+        useDashboardStore.setState((st) => ({
+          sessions: st.sessions.filter((x) => x.id !== id),
+        }));
+      });
+      renderView();
+      await waitFor(() => expect(attachedApi()).toBe(1));
+      const group = await screen.findByRole("group", { name: "api actions" });
+      await userEvent.click(await within(group).findByRole("button", { name: "Stop log" }));
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledWith(8));
+      // One poll fails (the list shows empty), the next one answers again.
+      const failing = controls;
+      controls = null;
+      bumpDockConfig();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /^api, recreating/ })).toBeInTheDocument(),
+      );
+      controls = failing;
+      bumpDockConfig();
+      await screen.findByRole("button", { name: /^api, running/ });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(attachedApi()).toBe(1);
     });
 
     it("does not bring back a stream ended with Stop log when the view remounts", async () => {
