@@ -6,7 +6,7 @@ import path from "node:path";
 import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { eq, ne } from "drizzle-orm";
-import { hosts, projects, sessions } from "../../src/db/schema.js";
+import { hosts, projects, sessions, tasks } from "../../src/db/schema.js";
 
 // M5 — never lets a real systemd-run fire (#1137): both node-pty and
 // node:child_process's spawn are faked, and every resolveBackend() call is
@@ -300,5 +300,77 @@ describe("a task's sessions share one host (issue #1724)", () => {
     expect(resolveTaskWorkerHost(app, { sessionId: inserted.id, projectId })).toBe("remote-placed");
     // A task whose worker never ran falls back to the project's host.
     expect(resolveTaskWorkerHost(app, { sessionId: null, projectId })).toBe("local");
+  });
+
+  it("falls back to the newest worker session when task.sessionId is null, ignoring review sessions", async () => {
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { allowDuplicate: true, createDir: true, name: "p-null-sid", cwd: LOCAL_CWD },
+    });
+    const projectId = project.json().id as number;
+
+    const [taskWithWorkers] = app.db
+      .insert(tasks)
+      .values({ projectId, title: "retried", status: "claimed" })
+      .returning()
+      .all();
+
+    // Earlier worker on local, newer worker on remote-b, plus an even newer review session on local.
+    app.db
+      .insert(sessions)
+      .values([
+        {
+          projectId,
+          taskId: taskWithWorkers.id,
+          name: `Task #${taskWithWorkers.id} · worker`,
+          command: "bash",
+          hostId: "local",
+          status: "exited",
+        },
+        {
+          projectId,
+          taskId: taskWithWorkers.id,
+          name: `Task #${taskWithWorkers.id} · worker`,
+          command: "bash",
+          hostId: "remote-b",
+          status: "exited",
+        },
+        {
+          projectId,
+          taskId: taskWithWorkers.id,
+          name: `Task #${taskWithWorkers.id} · review`,
+          command: "bash",
+          hostId: "local",
+          status: "exited",
+        },
+      ])
+      .run();
+
+    expect(resolveTaskWorkerHost(app, { id: taskWithWorkers.id, sessionId: null, projectId })).toBe(
+      "remote-b",
+    );
+
+    // A task with no worker session at all (even with a review row) falls back to the project's host.
+    const [taskWithoutWorker] = app.db
+      .insert(tasks)
+      .values({ projectId, title: "never-started", status: "ready" })
+      .returning()
+      .all();
+    app.db
+      .insert(sessions)
+      .values({
+        projectId,
+        taskId: taskWithoutWorker.id,
+        name: `Task #${taskWithoutWorker.id} · review`,
+        command: "bash",
+        hostId: "remote-b",
+        status: "exited",
+      })
+      .run();
+
+    expect(
+      resolveTaskWorkerHost(app, { id: taskWithoutWorker.id, sessionId: null, projectId }),
+    ).toBe("local");
   });
 });

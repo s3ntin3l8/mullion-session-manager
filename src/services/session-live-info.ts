@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { bindingBrowserTarget } from "./browser-binding-target.js";
 import { listSessionBrowserBindings } from "./session-browsers.js";
@@ -258,7 +258,7 @@ export { resolveProjectHostId, resolveSessionHostId };
  */
 export function resolveTaskWorkerHost(
   app: FastifyInstance,
-  task: { sessionId: number | null; projectId: number },
+  task: { id?: number; sessionId: number | null; projectId: number },
   // The project row, when the caller already has it. It is AUTHORITATIVE
   // for the fallback: re-reading the project from the db would answer for
   // whatever row carries that id — not necessarily the one the caller is
@@ -268,6 +268,21 @@ export function resolveTaskWorkerHost(
   if (task.sessionId !== null) {
     const [row] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
     if (row !== undefined) return resolveSessionHostId(app, row);
+  }
+  // When `task.sessionId` was cleared (e.g. `enqueueRetry` resets it before
+  // `dispatchQueuedRetry` runs), resolve from the task's most recent worker
+  // session so retry still targets the host that holds the preserved branch.
+  if (task.id !== undefined) {
+    const [workerRow] = app.db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.taskId, task.id), like(sessions.name, "%· worker")))
+      .orderBy(desc(sessions.id))
+      .limit(1)
+      .all();
+    if (workerRow !== undefined) {
+      return workerRow.hostId ?? project?.hostId ?? resolveProjectHostId(app, task.projectId);
+    }
   }
   return project?.hostId ?? resolveProjectHostId(app, task.projectId);
 }
