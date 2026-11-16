@@ -338,6 +338,8 @@ export interface GithubSlice {
   // Keyed stale-while-revalidate cache for the GitHub views (status, PRs, PR
   // detail, CI jobs, issues), see store/slices/github.ts and githubResources.ts.
   githubCache: Record<string, GithubCacheEntry>;
+  /** The project's GitHub requests currently in flight (settle when each finishes). */
+  githubInFlight: (projectId: number) => Promise<unknown>[];
   // Resolves the cached value when fresh, else fetches (deduped per key).
   // `force` skips the freshness check; a failure keeps the previous data.
   githubFetch: <T>(key: string, fetcher: () => Promise<T>, force?: boolean) => Promise<T>;

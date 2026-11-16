@@ -173,6 +173,21 @@
   color: var(--muted);
   cursor: pointer;
 }
+/* A header action with a request in flight (SidebarToolbarAction.busy). The
+   universal reduced-motion reset in tokens.css already stops the spin; the dim
+   is the cue that remains. */
+.right-sidebar-icon-btn.is-busy {
+  cursor: progress;
+  color: var(--fg);
+}
+.right-sidebar-icon-btn.is-busy svg {
+  animation: cmuxSpin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .right-sidebar-icon-btn.is-busy svg {
+    opacity: 0.5;
+  }
+}
 .right-sidebar-icon-btn:hover,
 .right-sidebar-icon-btn.active {
   color: var(--fg);

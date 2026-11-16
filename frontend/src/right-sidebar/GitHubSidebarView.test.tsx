@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { useDashboardStore } from "../store/index.js";
@@ -245,5 +245,107 @@ describe("GitHubSidebarView", () => {
     const row = (title: string) => rows.find((r) => r.textContent?.includes(title));
     expect(row("PR title 1")?.className).toContain("sb-row--attn");
     expect(row("PR title 2")?.className).toContain("sb-row--tm");
+  });
+});
+
+describe("GitHubSidebarView Refresh feedback", () => {
+  const realRefresh = useDashboardStore.getState().refreshGithubProject;
+  const realInFlight = useDashboardStore.getState().githubInFlight;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useDashboardStore.setState({
+      refreshGithubProject: realRefresh,
+      githubInFlight: realInFlight,
+      githubCache: {},
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const button = () => screen.getByRole("button", { name: "Refresh" });
+  const mount = async () => {
+    renderView(4);
+    await act(async () => {});
+  };
+
+  it("spins until the project's in-flight requests settle, then clears", async () => {
+    let finish: () => void = () => {};
+    const request = new Promise<void>((resolve) => (finish = resolve));
+    let inFlight = [request as Promise<unknown>];
+    useDashboardStore.setState({
+      refreshGithubProject: vi.fn(),
+      githubInFlight: () => inFlight,
+    });
+    await mount();
+    expect(button()).not.toHaveAttribute("aria-busy");
+
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    expect(button()).toHaveAttribute("aria-disabled", "true");
+
+    // Past the minimum but the request is still in flight: stays busy.
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(button()).toHaveAttribute("aria-busy", "true");
+
+    inFlight = [];
+    await act(async () => {
+      finish();
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
+  });
+
+  it("ignores a click while busy and keeps focus on the button", async () => {
+    const refresh = vi.fn();
+    useDashboardStore.setState({
+      refreshGithubProject: refresh,
+      githubInFlight: () => [new Promise<unknown>(() => {})],
+    });
+    await mount();
+    button().focus();
+    fireEvent.click(button());
+    fireEvent.click(button());
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(button()).toBe(document.activeElement);
+  });
+
+  it("is not held by a stale key nothing consumes (a hover-prefetched PR)", async () => {
+    // Real refreshGithubProject marks every key stale; 4:pr:12 has no mounted consumer.
+    useDashboardStore.setState({
+      githubCache: { "4:pr:12": { data: null, fetchedAt: 1, error: null } },
+    });
+    await mount();
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
+  });
+
+  it("never sticks: clears after the cap when a request never settles", async () => {
+    useDashboardStore.setState({
+      refreshGithubProject: vi.fn(),
+      githubInFlight: () => [new Promise<unknown>(() => {})],
+    });
+    await mount();
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    await act(async () => {
+      vi.advanceTimersByTime(5100);
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
+  });
+
+  it("shows busy for a minimum moment even when nothing is in flight", async () => {
+    useDashboardStore.setState({ refreshGithubProject: vi.fn(), githubInFlight: () => [] });
+    await mount();
+    fireEvent.click(button());
+    expect(button()).toHaveAttribute("aria-busy", "true");
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(button()).not.toHaveAttribute("aria-busy");
   });
 });
