@@ -8,11 +8,16 @@ import { HalfHeader } from "./HalfHeader.js";
 // The terminal itself has its own suite; here it only has to show which
 // session it was given and whether it is the active one.
 vi.mock("../TerminalPane.js", () => ({
-  TerminalPane: (p: { params: { sessionId: number }; active?: boolean }) => (
+  TerminalPane: (p: {
+    params: { sessionId: number };
+    active?: boolean;
+    onOpenFile?: (path: string, line?: number) => void;
+  }) => (
     <div
       data-testid="terminal"
       data-session={p.params.sessionId}
       data-active={String(!!p.active)}
+      onClick={() => p.onOpenFile?.("src/a.ts", 3)}
     />
   ),
 }));
@@ -27,6 +32,7 @@ describe("RightHalfPane", () => {
       onMoveLeft: vi.fn(),
       onClose: vi.fn(),
       onUse: vi.fn(),
+      onOpenFile: vi.fn(),
     };
     render(<RightHalfPane {...props} />);
     return props;
@@ -50,6 +56,13 @@ describe("RightHalfPane", () => {
     expect(props.onClose).toHaveBeenCalledTimes(1);
     fireEvent.pointerDown(screen.getByTestId("terminal"));
     expect(props.onUse).toHaveBeenCalled();
+  });
+
+  // #3034 — the terminal's path links reach the caller, which opens the editor.
+  it("hands a path clicked in its terminal to onOpenFile", () => {
+    const props = renderPane();
+    fireEvent.click(screen.getByTestId("terminal"));
+    expect(props.onOpenFile).toHaveBeenCalledWith("src/a.ts", 3);
   });
 });
 

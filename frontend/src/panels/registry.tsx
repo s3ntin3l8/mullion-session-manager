@@ -24,7 +24,8 @@ import { Spinner } from "../ui/Spinner.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Session } from "../api/index.js";
 import { formatPaneTitle } from "../paneTitle.js";
-import { openExternalFilePanel, openFileEditorPanel, openSessionPanel } from "../panelUtils.js";
+import { openSessionPanel } from "../panelUtils.js";
+import { openTerminalPath } from "../lib/openTerminalPath.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
 import { useRetriableLazy } from "../lib/retriableLazy.js";
 
@@ -237,35 +238,12 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // comment), so this wrapper is where the dockview panel API lives and
   // where the resulting plain boolean gets threaded down.
   const layout = useLayoutContext();
-  // Ctrl/Cmd-click on a path in the terminal -> the project's file editor,
-  // rooted at this session's cwd (an agent prints paths relative to where it
-  // runs, which for a worktree session is the worktree). Reads the store at
-  // call time like applyTitle above.
+  // Ctrl/Cmd-click on a path in the terminal -> the project's file editor
+  // (lib/openTerminalPath.ts, shared with the fold's right half).
   const { containerApi } = props;
   const onOpenFile = useCallback(
-    (rawPath: string, line?: number) => {
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      const project = session && projects.find((p) => p.id === session.projectId);
-      if (!session || !project) return;
-      const root = (session.cwd ?? project.cwd).replace(/\/+$/, "");
-      let rel = rawPath;
-      // `~/x`, or an absolute path outside this session's root: not a project
-      // file — open the read-only external viewer, whose backend allowlist
-      // (Settings -> Readable paths) decides whether it's actually openable.
-      if (rel.startsWith("~/") || (rel.startsWith("/") && !rel.startsWith(`${root}/`))) {
-        openExternalFilePanel(containerApi, project.id, projects, layout, { path: rel, line });
-        return;
-      }
-      if (rel.startsWith("/")) rel = rel.slice(root.length + 1);
-      rel = rel.replace(/^(\.\/)+/, "");
-      if (rel === "" || rel.startsWith("../")) return;
-      openFileEditorPanel(containerApi, project.id, projects, layout, {
-        path: rel,
-        sessionId: session.cwd && session.cwd !== project.cwd ? session.id : undefined,
-        line,
-      });
-    },
+    (rawPath: string, line?: number) =>
+      openTerminalPath(containerApi, sessionId, layout, rawPath, line),
     [sessionId, containerApi, layout],
   );
   const [isActive, setIsActive] = useState(props.api.isActive);

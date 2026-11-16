@@ -16,6 +16,7 @@ import { RailWorkspaceSection } from "./rail/RailWorkspaceSection.js";
 import { RailPanes } from "./rail/RailPaneList.js";
 import { HalfHeader } from "./fold/HalfHeader.js";
 import { RightHalfPane } from "./fold/RightHalfPane.js";
+import { openTerminalPath } from "./lib/openTerminalPath.js";
 import { preferredPaneFor, useFoldHalves } from "./hooks/useFoldHalves.js";
 import { canGoRight, EMPTY_FOLD_HALVES, halfOf, splitByHalf } from "./lib/foldHalves.js";
 import type { Half } from "./lib/foldHalves.js";
@@ -948,6 +949,17 @@ export function App() {
   }, [dockviewApi, railSplit.left]);
   const { moveToHalf, toggleRightRailPane, renderHalfActions, renameHalfPane, halfMenuItems } =
     useHalfActions(dockviewApi, layoutTier, tiledLeftCount);
+  // #3034 — a path clicked in the right half's terminal opens the editor in
+  // the grid, which on the halves is the left half; the left half now has
+  // the user's attention.
+  const openRightHalfPath = useCallback(
+    (sessionId: number, path: string, line?: number) => {
+      if (!dockviewApi) return;
+      openTerminalPath(dockviewApi, sessionId, layout, path, line);
+      useDashboardStore.getState().setFocusedHalf("left");
+    },
+    [dockviewApi, layout],
+  );
   // Projects with a session open in the active workspace, derived from the
   // live dockview panels (panel.params.sessionId -> session.projectId) —
   // reactive via panelsVersion, bumped on every ordinary dockview layout
@@ -1630,6 +1642,7 @@ export function App() {
                   store.setFocusedHalf("right");
                   store.noteHalfUsed({ kind: "pane", panelId: rightHalfPanelId });
                 }}
+                onOpenFile={(path, line) => openRightHalfPath(rightHalfSession.id, path, line)}
                 renderActions={renderHalfActions(rightHalfPanelId)}
                 onRenameCommit={(value) => renameHalfPane(rightHalfPanelId, value)}
               />
