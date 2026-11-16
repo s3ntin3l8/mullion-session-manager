@@ -2897,7 +2897,8 @@ describe("sessions route", () => {
       // (B6) isn't the only thing this catch block needs to undo —
       // PtyManager.getOrCreate() (called internally by LocalBackend.spawn()
       // before the spawn it awaits) already inserted a Session into its own
-      // in-memory `sessions`/`hookTokens` maps by the time spawn() rejects.
+      // in-memory `sessions` map and hook-token registry by the time spawn()
+      // rejects.
       // Without an explicit eviction, that Session object (and its
       // hookToken -> id entry, which resolveToken() could still match
       // against) leaks for the lifetime of the process — the DB row is gone

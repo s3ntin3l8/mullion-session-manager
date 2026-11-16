@@ -13,6 +13,33 @@ export function hookTokenPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.token`);
 }
 
+/**
+ * Reads a persisted hook token WITHOUT minting one and WITHOUT writing
+ * anything.
+ *
+ * Issue #3166 — the counterpart to `loadOrCreateHookToken` below for the
+ * READ-ONLY side: a process that did not create the session (an agent host
+ * re-registering a session that survived its restart) must be able to learn
+ * what token that session's agent is holding, without touching the file and
+ * without ever inventing a token for a session it does not own.
+ *
+ * Returns `null` for every "there is no usable token here" case: the file is
+ * missing, unreadable, or its content is not a well-formed token (a
+ * truncated write, a corruption, a stray newline). The caller must treat that
+ * as "this session has no token to adopt" — never as "mint one" and never as
+ * "any token will do".
+ */
+export function readPersistedHookToken(tokenPath: string): string | null {
+  try {
+    const raw = readFileSync(tokenPath, "utf8").trim();
+    return HOOK_TOKEN_RE.test(raw) ? raw : null;
+  } catch {
+    // ENOENT, a permission problem, a directory in the token file's place —
+    // all of them mean the same thing here: there is no usable token.
+    return null;
+  }
+}
+
 // Issue: worktree/branch detection — a session's hookToken used to be
 // minted fresh on every `Session` construction and never persisted, which
 // is fine for a brand-new session but wrong for the getOrCreate() reattach
