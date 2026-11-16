@@ -163,6 +163,12 @@ export interface DockerStorageStatus {
   totalSizeBytes: number;
   reclaimableBytes: number;
   estimates: { safeBytes: number | null; aggressiveBytes: number };
+  /** Absent when Docker's verbose usage could not be read ("unknown", not "none"). */
+  volumes?: {
+    anonymousUnused: { count: number; bytes: number };
+    named: { count: number; bytes: number };
+    inUse: { count: number; bytes: number };
+  };
   error?: string;
 }
 

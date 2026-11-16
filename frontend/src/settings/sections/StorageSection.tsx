@@ -522,6 +522,14 @@ export function StorageSection() {
         </div>
       )}
 
+      {docker?.available && (
+        <div className="settings-footer-note" data-testid="docker-volumes">
+          {docker.volumes
+            ? `Volumes: ${docker.volumes.anonymousUnused.count} unused anonymous (${formatBytes(docker.volumes.anonymousUnused.bytes)}) · ${docker.volumes.named.count} named (${formatBytes(docker.volumes.named.bytes)}), never removed by cleanup`
+            : "Volumes: unknown (Docker's detailed usage could not be read)"}
+        </div>
+      )}
+
       <div className="storage-tiers">
         <TierCard
           title="Safe"

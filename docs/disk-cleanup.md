@@ -69,6 +69,13 @@ containers and unused networks older than 7 days, and build cache older than
 24 hours. Aggressive drops the windows and also removes unused tagged images
 (`docker system prune --all`). Volumes are never touched.
 
+The status also splits the volumes (parsed from the same `docker system df -v`
+call, no extra docker invocation): **anonymous** volumes have a name of exactly
+64 lowercase hex characters and are reported as unused (link count 0) or in
+use; every other volume is **named** and counted as one total, in use or not.
+Named volumes are never cleanup candidates. `volumes` is omitted from the
+status when the verbose call fails, so "none" and "unknown" differ.
+
 The aggressive estimate is the larger of the summary rows' `Reclaimable` and
 the sum of the per-entry sizes in `docker system df -v` (unused images,
 stopped containers, unused build cache of every type). On the containerd image
