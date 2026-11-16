@@ -1989,18 +1989,24 @@ describeIfBwrap(
       // orphan under whatever reparented it (e.g. pid 1). SIGTERM delivery
       // and process teardown aren't instantaneous, so poll briefly rather
       // than asserting immediately after the outer promise settles.
-      const deadlineMs = Date.now() + 3000;
-      let stillAlive = true;
-      while (Date.now() < deadlineMs) {
+      // A killed-but-unreaped process (state Z) still answers kill(pid, 0), so
+      // read its state: a zombie is dead, merely waiting for its reaper, which
+      // can be slow on a CI runner. The state is also the failure message.
+      const stateOf = () => {
         try {
           process.kill(innerPid, 0);
-          await new Promise((r) => setTimeout(r, 50));
+          return fs.readFileSync(`/proc/${innerPid}/stat`, "utf8").replace(/^.*\) /, "")[0];
         } catch {
-          stillAlive = false;
-          break;
+          return "gone";
         }
+      };
+      const deadlineMs = Date.now() + 3000;
+      let state = stateOf();
+      while (state !== "gone" && state !== "Z" && Date.now() < deadlineMs) {
+        await new Promise((r) => setTimeout(r, 50));
+        state = stateOf();
       }
-      expect(stillAlive).toBe(false);
+      expect(["gone", "Z"], `inner process state: ${state}`).toContain(state);
     });
   },
 );
