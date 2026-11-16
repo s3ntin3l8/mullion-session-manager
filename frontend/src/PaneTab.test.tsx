@@ -1313,7 +1313,7 @@ describe("new-pane mark (#3122)", () => {
       activeChangeHandler?.({ isActive: false });
     });
     act(() => activeChangeHandler?.({ isActive: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
     expect(clearPanelNew).not.toHaveBeenCalled();
   });
 

@@ -232,14 +232,17 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     if (!isNew) return;
     const clear = () => useDashboardStore.getState().clearPanelNew(panelId);
     if (isActive) {
-      // Checked again a tick later: a click on another tab in this group
-      // first activates the group, and with it this (its current) panel,
-      // for an instant before the clicked tab takes over. That is not this
-      // pane being shown, so it must not clear the mark.
-      const timer = setTimeout(() => {
+      // Checked again on the next frame: a click on another tab in this
+      // group activates the group, and with it this (its current) panel, on
+      // pointerdown, but dockview opens the clicked tab only in a
+      // requestAnimationFrame it schedules then (_activateOnPointerDown).
+      // This frame callback is scheduled after that one, so it runs after the
+      // switch. A momentary activation is not this pane being shown, so it
+      // must not clear the mark.
+      const frame = requestAnimationFrame(() => {
         if (props.api.isActive) clear();
-      }, 0);
-      return () => clearTimeout(timer);
+      });
+      return () => cancelAnimationFrame(frame);
     }
     const disposable = props.api.onDidVisibilityChange((e) => {
       if (e.isVisible) clear();
@@ -255,9 +258,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const title = props.api.title;
   useEffect(() => {
     const tab = tabRef.current?.closest(".dv-tab");
-    if (!tab || title === undefined) return;
-    tab.setAttribute("aria-label", isNew ? `${title}, new` : title);
-  }, [isNew, title]);
+    if (!isNew || !tab || title === undefined) return;
+    tab.setAttribute("aria-label", `${title}, new`);
+    return () => tab.setAttribute("aria-label", props.api.title ?? title);
+  }, [isNew, title, props.api]);
 
   // Clears the unread badge by advancing the read cursor (store.ts's
   // markEventSeen, which updates the local lastSeenSeq and sends the "seen"

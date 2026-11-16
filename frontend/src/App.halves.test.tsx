@@ -44,6 +44,7 @@ describe("App two halves", () => {
       exitMaximizedGroup: vi.fn(),
       onDidActivePanelChange: () => ({ dispose: vi.fn() }),
       onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onDidRemovePanel: () => ({ dispose: vi.fn() }),
       onWillMutateLayout: () => ({ dispose: vi.fn() }),
       onDidMutateLayout: () => ({ dispose: vi.fn() }),
     };
