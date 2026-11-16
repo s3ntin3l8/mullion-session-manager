@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
+import { WorkflowChangeApproval } from "../WorkflowChangeApproval.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
@@ -355,6 +356,8 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
           )}
         </SidebarSection>
       )}
+
+      <WorkflowChangeApproval task={task} />
 
       <div className="sb-actions-block">
         <TaskActions task={task} />

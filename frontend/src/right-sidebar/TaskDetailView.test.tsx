@@ -7,6 +7,7 @@ import { useDashboardStore } from "../store/index.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 import { RightSidebar } from "./RightSidebar.js";
 import { TaskDetailView } from "./TaskDetailView.js";
+import kitCss from "../styles/sidebar-kit.css?raw";
 
 vi.mock("../SessionTimeline.js", () => ({ SessionTimeline: () => <div data-testid="timeline" /> }));
 
@@ -510,5 +511,37 @@ describe("TaskDetailView", () => {
       "step",
     );
     expect(screen.getByText("IN PROGRESS")).toBeTruthy();
+  });
+});
+
+describe("TaskDetailView workflow-change approval", () => {
+  const SHA = "f4f7354f4c66b4cd2da3a3bb02564f909f509da4"; // pragma: allowlist secret
+  const held = JSON.stringify({ sha: SHA, files: [".github/workflows/ci-cd.yml"] });
+
+  it("shows the held files and approves that exact sha", async () => {
+    const user = userEvent.setup();
+    const approveWorkflowChange = vi.fn().mockResolvedValue(undefined);
+    const t = task({ status: "reviewing", workflowChange: held } as Partial<Task>);
+    setTasks([t], { approveWorkflowChange });
+    renderDetail(t.id);
+    const group = screen.getByRole("group", { name: "Workflow change" });
+    expect(within(group).getByText(".github/workflows/ci-cd.yml")).toBeTruthy();
+    await user.click(within(group).getByRole("button", { name: "Approve workflow change" }));
+    expect(approveWorkflowChange).toHaveBeenCalledWith(t.id, SHA);
+  });
+
+  it("renders nothing when no workflow change is held", () => {
+    const t = task({ status: "reviewing", workflowChange: null } as Partial<Task>);
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+  });
+});
+
+describe("TaskDetailView workflow-change inset", () => {
+  it("insets the shared panel like the sibling blocks (it is edge-to-edge in the docked view)", () => {
+    expect(kitCss).toMatch(
+      /\.sb-detail \.task-detail-workflow-change\s*\{[^}]*margin:\s*0 var\(--sb-inset\)/,
+    );
   });
 });
