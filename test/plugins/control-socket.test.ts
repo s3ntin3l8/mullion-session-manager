@@ -4177,11 +4177,8 @@ describe("controlSocketPlugin (issue #185)", () => {
             text: "draft",
             submit: false,
           });
-          expect(reply.result).toEqual({
-            delivered: true,
-            submitted: false,
-            outputOffset: expect.any(Number),
-          });
+          expect(reply.result).toMatchObject({ delivered: true, submitted: false });
+          expect(reply.result).toHaveProperty("afterSeq");
           expect(writes(pty)).toEqual([`${PASTE}draft${PASTE_END}`]);
           socket.destroy();
         });
