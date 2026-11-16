@@ -45,3 +45,27 @@ jobs:
       branch: bot/refresh-baselines
       title: "chore(uiux): refresh visual baselines"
       allow-json: true
+
+  # The shared workflow rewrites each PR body on every refresh and has no input for extra text, so this job appends
+  # the command hint afterwards (once per body), to make `/refresh-screenshots` easy to remember.
+  hint:
+    needs: [refresh, baselines]
+    if: ${{ !cancelled() && !github.event.repository.fork && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/refresh-screenshots') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Add the command hint to the refresh pull requests
+        run: |
+          set -euo pipefail
+          for branch in bot/refresh-screenshots bot/refresh-baselines; do
+            number=$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')
+            [ -n "$number" ] || continue
+            body=$(gh pr view "$number" --repo "$REPO" --json body --jq .body)
+            case "$body" in *"/refresh-screenshots"*) continue ;; esac
+            printf '%s\n\n---\nOut of date? Comment `/refresh-screenshots` on this pull request to regenerate it now (repository writers only).\n' "$body" > "$RUNNER_TEMP/body.md"
+            gh pr edit "$number" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md"
+          done
