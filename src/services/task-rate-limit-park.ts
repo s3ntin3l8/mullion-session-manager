@@ -9,6 +9,8 @@ import { resolveSessionHostId } from "./session-host.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { isTaskInRateLimitGrace } from "./task-rate-limit-grace.js";
 import { recordTaskTransition } from "./task-state.js";
+import { syncTaskTransition } from "./task-github-sync.js";
+import { getProjectById } from "./project-store.js";
 
 const PARK_REASON = "rate limited; held until the provider reset";
 
@@ -104,6 +106,25 @@ export async function parkRateLimitedTask(
     via: "rate-limit-park",
     context: { sessionId, rateLimitUntil: reset.toISOString() },
   });
+
+  // Tell the issue why the task went quiet. Best-effort and never throws
+  // (syncTaskTransition swallows GitHub failures), so it cannot undo the park.
+  const project = getProjectById(app, projectId);
+  if (project) {
+    await syncTaskTransition(
+      app,
+      {
+        ...task,
+        status: "ready",
+        sessionId: null,
+        failureReason: PARK_REASON,
+        rateLimitUntil: reset,
+      },
+      project,
+      "rate_limited",
+      { resumeAt: reset },
+    );
+  }
   return true;
 }
 

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Task } from "./api/types.js";
 import {
   TASK_STEPS,
+  isRateLimitParked,
+  rateLimitResumeText,
   reviewRunState,
   blockerIsTask,
   findTaskForIssue,
@@ -186,4 +188,40 @@ describe("reviewRunState", () => {
     expect(run({ reviewRunId: "a", reviewRunIngestedId: "a" })).toBe("finished"));
   it("is unsent when dispatch gave up, even if ids differ", () =>
     expect(run({ reviewRunId: "a", reviewRunUnsent: true })).toBe("unsent"));
+});
+
+describe("rate-limit park (#2940)", () => {
+  const soon = () => new Date(Date.now() + 90 * 60_000).toISOString();
+  const parked = (over: Partial<Task> = {}) =>
+    task({
+      status: "ready",
+      failureReason: "rate limited; held until the provider reset",
+      rateLimitUntil: soon(),
+      ...over,
+    });
+
+  it("reads as parked only while the reset is ahead", () => {
+    expect(isRateLimitParked(parked())).toBe(true);
+    expect(
+      isRateLimitParked(parked({ rateLimitUntil: new Date(Date.now() - 1000).toISOString() })),
+    ).toBe(false);
+    expect(isRateLimitParked(parked({ failureReason: null }))).toBe(false);
+    expect(isRateLimitParked(parked({ rateLimitUntil: null }))).toBe(false);
+    expect(isRateLimitParked(parked({ status: "failed" }))).toBe(false);
+  });
+
+  it("badges and explains a parked task instead of calling it plain READY", () => {
+    const t = parked();
+    expect(taskStatusBadge(t)).toEqual({ label: "RATE LIMITED", tone: "warn" });
+    expect(taskNextStep(t).lead).toMatch(/usage limit\. Resumes automatically in /);
+    // After the reset it falls back to the ordinary ready copy.
+    const stale = parked({ rateLimitUntil: new Date(Date.now() - 1000).toISOString() });
+    expect(taskStatusBadge(stale).label).toBe("READY");
+    expect(taskNextStep(stale).lead).toMatch(/^Queued\./);
+  });
+
+  it("words the resume time relative to now", () => {
+    expect(rateLimitResumeText(new Date(Date.now() + 125 * 60_000).toISOString())).toBe("in 2h");
+    expect(rateLimitResumeText(new Date(Date.now() - 1000).toISOString())).toBe("any moment");
+  });
 });

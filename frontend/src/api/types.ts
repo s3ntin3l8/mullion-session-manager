@@ -2295,6 +2295,12 @@ export interface Task {
   // While status is "claimed", `failureReason` is the LAST dispatch error
   // (the task is still queued and being retried), not a terminal failure.
   dispatchFailingSince: string | null;
+  // #2940 — set while a rate-limited worker is parked: the task sits `ready`
+  // until this provider reset, then is claimed again automatically.
+  rateLimitUntil?: string | null;
+  // The task's recent worker sessions, newest first — what the task timeline
+  // shows once a park/return has cleared `sessionId`.
+  workerSessionIds?: number[];
   // #485 — the most recent GitHub sync or promotion failure (e.g. an
   // under-scoped token's 403), independent of task status and cleared the
   // next time any sync for this task succeeds. Null means no known problem,

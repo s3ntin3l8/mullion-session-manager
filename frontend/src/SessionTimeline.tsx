@@ -573,7 +573,11 @@ export function SessionTimeline({
   if (sessionIds.length === 0) {
     return <div className="session-timeline-empty">No session yet.</div>;
   }
-  if (sessions.length === 0) {
+  // A park/return ends the worker's session (it leaves the live store) but its
+  // persisted history is still worth showing, so only a session with neither a
+  // store row nor any history is "not found".
+  const hasHistory = sessionIds.some((id) => (historyBySession[id]?.rows.length ?? 0) > 0);
+  if (sessions.length === 0 && !hasHistory) {
     return <div className="session-timeline-empty">Session not found.</div>;
   }
 

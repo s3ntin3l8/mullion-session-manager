@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
+import { isRateLimitParked, rateLimitResumeText } from "./taskStatusModel.js";
 import { api, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
@@ -566,6 +567,15 @@ export function TaskDetail({
       {/* #1997 — a queued task's last dispatch error: it is still being
           retried, so this reads as waiting, not as the terminal failure
           below. */}
+      {isRateLimitParked(task) && task.rateLimitUntil && (
+        <div className="task-detail-dispatch">
+          <ClockIcon size={12} />
+          <span>
+            Rate limited: resumes automatically {rateLimitResumeText(task.rateLimitUntil)}
+          </span>
+        </div>
+      )}
+
       {task.status === "claimed" && task.failureReason && (
         <div className="task-detail-dispatch">
           <ClockIcon size={12} />
@@ -716,7 +726,13 @@ export function TaskDetail({
         )}
         <SessionTimeline
           surface="task"
-          params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }}
+          params={{
+            // A park or return clears `sessionId`; the last worker sessions keep the history visible.
+            sessionIds:
+              task.sessionId !== null
+                ? [task.sessionId]
+                : (task.workerSessionIds ?? []).slice(0, 1),
+          }}
         />
       </div>
 

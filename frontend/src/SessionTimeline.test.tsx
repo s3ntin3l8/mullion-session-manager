@@ -276,6 +276,28 @@ describe("SessionTimeline (issue #212)", () => {
     expect(screen.getByText("Session not found.")).toBeInTheDocument();
   });
 
+  it("still renders persisted history for a session that has left the live store", async () => {
+    // A rate-limit park ends the worker's session; the task timeline keeps showing it.
+    sessions = [];
+    fetchImpl = () => ({
+      persistenceEnabled: true,
+      events: [
+        {
+          id: 1,
+          sessionId: 1,
+          seq: 1,
+          kind: "attention",
+          ts: Date.now(),
+          payload: { attention: true, signal: "bell" },
+        },
+      ],
+      nextCursor: null,
+    });
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    expect(await screen.findByText(/\(session removed\)/)).toBeInTheDocument();
+    expect(screen.queryByText("Session not found.")).not.toBeInTheDocument();
+  });
+
   it("shows an empty state when the session has no events", async () => {
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
     // async: the history fetch's own "loading" state renders first (see
