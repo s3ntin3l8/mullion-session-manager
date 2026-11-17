@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.3.64](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.63...v0.3.64) (2026-11-17)
+
+
+### Features
+
+* **hosts:** offer to remove hosts that have been offline for a long time ([6c9c843](https://github.com/s3ntin3l8/mullion-session-manager/commit/6c9c84395359c2a07e731c692087494239d02472))
+* **hosts:** pull a project's checkout on any host it lives on, not only the primary one ([b271673](https://github.com/s3ntin3l8/mullion-session-manager/commit/b271673a1ea1d4f9b5403ecd264d5116bb0ff2f4))
+* **hosts:** show the session environment an agent host gives its sessions ([120d9db](https://github.com/s3ntin3l8/mullion-session-manager/commit/120d9db80fd8e5624b052937d8ad2830cece1cfb))
+* **sessions:** coordinator projects get a read-only, opt-in-respecting view of other projects' sessions and tasks ([4a17593](https://github.com/s3ntin3l8/mullion-session-manager/commit/4a175937b1f31ad5acca4772aac6c3c75b6dcdbc))
+* **sessions:** mullion task CLI/MCP list and get ([eab396f](https://github.com/s3ntin3l8/mullion-session-manager/commit/eab396f158bf52e5aca3eb15cc4f28bb7f9fef16))
+* **sessions:** mullion task CLI/MCP retry, start, close and archive ([abc3e10](https://github.com/s3ntin3l8/mullion-session-manager/commit/abc3e10e6e41f301b052914c38bfab7ebcd0eaa9))
+* **storage:** opt-in cleanup of old agent CLI versions ([2e436a8](https://github.com/s3ntin3l8/mullion-session-manager/commit/2e436a8d3ad172a0b2f0a749e2df473a333ab21f))
+* **storage:** opt-in cleanup of unused anonymous Docker volumes ([b6d8eab](https://github.com/s3ntin3l8/mullion-session-manager/commit/b6d8eabfca98d6e029b63274713fc314b07d847b))
+* **storage:** opt-in removal of unused Android system images ([c46dc22](https://github.com/s3ntin3l8/mullion-session-manager/commit/c46dc227cc26aa84ec10f4457f9ba24b76d5430b))
+* **storage:** report Docker volumes as anonymous and named in the Docker status ([9bf51af](https://github.com/s3ntin3l8/mullion-session-manager/commit/9bf51afa8e9f71c320e53fa0ed649f646e55343f))
+* **storage:** tag every "Where the space is" bucket as covered or not covered by cleanup ([51fada4](https://github.com/s3ntin3l8/mullion-session-manager/commit/51fada467895e353975aae3232ca0a7b62bb3dae))
+* **tasks:** adopt model prompting-guide advice in worker prompts ([#3146](https://github.com/s3ntin3l8/mullion-session-manager/issues/3146)) ([4eaf8d5](https://github.com/s3ntin3l8/mullion-session-manager/commit/4eaf8d54f2bfd085e5a45cd0d2e5e66204e9a0f7))
+* **tasks:** Capability: directive so a task can require a host capability ([1242357](https://github.com/s3ntin3l8/mullion-session-manager/commit/1242357b7a06d6b963f0c4d67e92d80590f2390b))
+* **tasks:** carry the delegation clause into follow-up worker rounds ([9ac36f2](https://github.com/s3ntin3l8/mullion-session-manager/commit/9ac36f28df79b71571ed1806cef06aad6e97f295))
+* **tasks:** filter the tasks board by host ([ae747b9](https://github.com/s3ntin3l8/mullion-session-manager/commit/ae747b9bb829e8cf2c19cc072e879cd178f24c0e))
+* **tasks:** nudge an unattended worker that ends its turn with open work ([#3147](https://github.com/s3ntin3l8/mullion-session-manager/issues/3147)) ([adb89eb](https://github.com/s3ntin3l8/mullion-session-manager/commit/adb89ebec48d8b073571ab41edf59bc4d371fa1f))
+* **tasks:** retry re-places onto a matching host when the original is offline ([8504567](https://github.com/s3ntin3l8/mullion-session-manager/commit/8504567915cafb554b47b77df2c0754d54515e17))
+* **tasks:** show a worker nudge on the task card ([7829081](https://github.com/s3ntin3l8/mullion-session-manager/commit/78290811aaab55ebb5c8800b8dda4df37c3f65e6))
+* **tasks:** show the task's host in the Task Details panel ([c8a897e](https://github.com/s3ntin3l8/mullion-session-manager/commit/c8a897e488b55dcefb63ed6cab79077f876967a9))
+
+
+### Bug Fixes
+
+* **dock:** stopping a dev server resets its branch selector to the main checkout ([#3231](https://github.com/s3ntin3l8/mullion-session-manager/issues/3231)) ([2b74607](https://github.com/s3ntin3l8/mullion-session-manager/commit/2b74607f59dc0a6ef1126fcff85a9764b648a681))
+* **hooks:** agy quota exhaustion is reported as a rate limit ([#3250](https://github.com/s3ntin3l8/mullion-session-manager/issues/3250)) ([105fde4](https://github.com/s3ntin3l8/mullion-session-manager/commit/105fde49a0fcc81f75507e804e11d0f1c974d1c8))
+* **hooks:** retry a refused Stop in the forwarder so a restart window does not lose it ([636200d](https://github.com/s3ntin3l8/mullion-session-manager/commit/636200d24c904cc0d7b4568cd36d04fd8dcdb977))
+* **hosts:** an agent host re-registers surviving sessions' hook tokens at boot ([5b5bb2d](https://github.com/s3ntin3l8/mullion-session-manager/commit/5b5bb2d44783e0a9ec2eb2e714f7390dfa6245e0))
+* **hosts:** an agent whose bind address disappears falls back to loopback instead of crash-looping ([6c2458a](https://github.com/s3ntin3l8/mullion-session-manager/commit/6c2458aa4a6103e9d56ae4a39c4297b29084cc26))
+* **hosts:** deleting a host leaves its id in projects' hostCwds ([ce22ae8](https://github.com/s3ntin3l8/mullion-session-manager/commit/ce22ae8c3119ce9acdfeaa9ea05dc8d381a50fbe))
+* **hosts:** explain leak rotation and a rejected bootstrap token ([3d0da41](https://github.com/s3ntin3l8/mullion-session-manager/commit/3d0da41a81e3c2e79f69537f5f02a76134300b33))
+* **hosts:** recover SDK environment variables from the user shell for agent-host sessions ([ea1c34e](https://github.com/s3ntin3l8/mullion-session-manager/commit/ea1c34eb9d2e2d1b0ca3549d4e939dc0b209f3b0))
+* **hosts:** refuse an agent update while Task Master workers run on that host unless forced ([3da1097](https://github.com/s3ntin3l8/mullion-session-manager/commit/3da10977f81568d406416b3769cbd7564da3f876))
+* **hosts:** rotating a host token says the agent is locked out when it isn't ([2f52c24](https://github.com/s3ntin3l8/mullion-session-manager/commit/2f52c242e89000413b5e2ba790a4c5b713003567))
+* **hosts:** xcode capability must prove the toolchain is ready, not just that simctl resolves ([7e17149](https://github.com/s3ntin3l8/mullion-session-manager/commit/7e1714913d9f5a9f7eaf3fa33a3b1ff8c5ca9197))
+* **sessions:** real output arriving during a redraw-nudge window is never stored in scrollback ([4f804dc](https://github.com/s3ntin3l8/mullion-session-manager/commit/4f804dc06318b10b243c845df2ace93a8ad30c94))
+* **sessions:** record the model a command already names, not the install default ([#3263](https://github.com/s3ntin3l8/mullion-session-manager/issues/3263)) ([1727f46](https://github.com/s3ntin3l8/mullion-session-manager/commit/1727f467b3408fecea00e271238faacd34b1a22d))
+* **sessions:** wait_for_output can still match the prompt's redrawn echo ([bf289d0](https://github.com/s3ntin3l8/mullion-session-manager/commit/bf289d068d25c061e93a76e90431eb6f3531e0b5))
+* **sessions:** wait_for_output returns repaint noise — match and return text from a rendered view ([999ecd1](https://github.com/s3ntin3l8/mullion-session-manager/commit/999ecd14a338b827ddc10061ea400c3cbc9736fa))
+* **storage:** compact Mullion's own SQLite database after the retention sweep ([3adf43e](https://github.com/s3ntin3l8/mullion-session-manager/commit/3adf43ea70aa8b22f5d830acb9c615c49accdad3))
+* **tasks:** a failed fetch at claim must not silently cut a task's worktree from a stale base ([247066c](https://github.com/s3ntin3l8/mullion-session-manager/commit/247066cea59bda2b4bd2e51d43a9c0817774fb22))
+* **tasks:** a re-armed Hermes review reuses its session and repeats an unparseable reply ([7159c6e](https://github.com/s3ntin3l8/mullion-session-manager/commit/7159c6e82630ed73b3ddf5064bdf019120b65c14))
+* **tasks:** a re-seeded or rebase worker keeps the task's model ([#3241](https://github.com/s3ntin3l8/mullion-session-manager/issues/3241)) ([31b000f](https://github.com/s3ntin3l8/mullion-session-manager/commit/31b000f317634e7939a9f814158562a8a07eaf4e))
+* **tasks:** clean up a failed task's worktree with the worker host's project path ([0dc4cc9](https://github.com/s3ntin3l8/mullion-session-manager/commit/0dc4cc951d2d23e668cc13c27c11eddc5cf307cd))
+* **tasks:** keep GitHub's workflow-permission refusal instead of blaming the host agent ([#3247](https://github.com/s3ntin3l8/mullion-session-manager/issues/3247)) ([5f535c8](https://github.com/s3ntin3l8/mullion-session-manager/commit/5f535c8ac552037a747be4fc849efdf51814b689)), closes [#3236](https://github.com/s3ntin3l8/mullion-session-manager/issues/3236)
+* **tasks:** keep the worker's scrollback tail when a task fails on its budget ([9fac2a7](https://github.com/s3ntin3l8/mullion-session-manager/commit/9fac2a7241d9ebbab9f4901440bfb64a0cc29f22))
+* **tasks:** nudge a no-commit worker stuck behind a background shell job ([b337099](https://github.com/s3ntin3l8/mullion-session-manager/commit/b3370997220b70eb8d63753ce5a7f85be0275eb2))
+* **tasks:** retry resumes the worktree on the worker's host, not the project's ([a647366](https://github.com/s3ntin3l8/mullion-session-manager/commit/a647366343cf7fa7cec9b433c331c58a4cde8441))
+* **tasks:** say why a zero-commit worker behind a shell tail hit the budget ([#3148](https://github.com/s3ntin3l8/mullion-session-manager/issues/3148)) ([3a1689b](https://github.com/s3ntin3l8/mullion-session-manager/commit/3a1689b5a5e7d473dfe349dea0c2b4c116b20a06))
+* **tasks:** show rate-limit parks on the card, the issue and the timeline ([#3198](https://github.com/s3ntin3l8/mullion-session-manager/issues/3198)) ([aa910e1](https://github.com/s3ntin3l8/mullion-session-manager/commit/aa910e1ddad701ee62a3e7762ba29fe9da15d15c))
+* **tasks:** use agentTurnInFlight instead of a 5 s tolerance in the continuation nudge ([33d2b5f](https://github.com/s3ntin3l8/mullion-session-manager/commit/33d2b5f180f5c16586a0d980000f0f130fbef545))
+* **uiux:** give the remaining Refresh and Retry controls a busy state ([c3f93eb](https://github.com/s3ntin3l8/mullion-session-manager/commit/c3f93eb4ed465cd57e37718381fea0e3d4763edb))
+* **uiux:** hide removed hosts from the launcher's host picker ([#3172](https://github.com/s3ntin3l8/mullion-session-manager/issues/3172)) ([2550c08](https://github.com/s3ntin3l8/mullion-session-manager/commit/2550c086a84c1bef8573032e0497ebf51d6fb2c3))
+* **uiux:** make Abandon/Delete reachable from the sidebar task detail ([f06cecf](https://github.com/s3ntin3l8/mullion-session-manager/commit/f06cecfaf8ea6d0780db43c0901da873e7114d51))
+* **uiux:** show a busy state on the GitHub sidebar Refresh button ([#3125](https://github.com/s3ntin3l8/mullion-session-manager/issues/3125)) ([a63f535](https://github.com/s3ntin3l8/mullion-session-manager/commit/a63f53544f7b094a268afed4dc313f5e7cf3841e))
+* **uiux:** tasks sidebar open shows a double vertical scrollbar ([2862a65](https://github.com/s3ntin3l8/mullion-session-manager/commit/2862a651af23ccda3730c73199f5a3686b774628))
+
 ## [0.3.63](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.62...v0.3.63) (2026-11-16)
 
 
