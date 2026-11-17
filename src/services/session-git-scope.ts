@@ -46,17 +46,17 @@ export async function loadScopedProject(
 }
 
 /**
- * A mutation on a session's remote checkout whose agent predates the route
+ * A mutation on an explicitly targeted remote checkout whose agent predates the route
  * (a 404) is `unsupported` (501), not "unreachable", and never run elsewhere.
- * Only for a session-scoped request; returns whether it replied.
+ * Only for a session- or host-scoped request; returns whether it replied.
  */
 export function replyUnsupportedOnAgent(
   err: unknown,
-  sessionIdRaw: string | undefined,
+  targetIdRaw: string | undefined,
   hostId: string,
   reply: FastifyReply,
 ): boolean {
-  if (sessionIdRaw === undefined) return false;
+  if (targetIdRaw === undefined) return false;
   if (!(err instanceof HostRequestError) || err.statusCode !== 404) return false;
   reply.code(501).send({
     statusCode: 501,

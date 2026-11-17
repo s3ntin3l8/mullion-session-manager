@@ -14,6 +14,19 @@ function stubFetch() {
 }
 
 describe("session-scoped git requests", () => {
+  it("pulls an explicit host checkout and rejects ambiguous targets", async () => {
+    const last = stubFetch();
+    await gitApi.postProjectGitPull(4, undefined, "host / two");
+    expect(last()).toEqual({
+      url: "/api/projects/4/git-pull?hostId=host%20%2F%20two",
+      method: "POST",
+    });
+    expect(() => gitApi.postProjectGitPull(4, 9, "host-two")).toThrow(
+      "either a session checkout or a host checkout",
+    );
+    await gitApi.postProjectGitPull(4);
+    expect(last().url).toBe("/api/projects/4/git-pull");
+  });
   it("adds sessionId only when a session checkout is named", async () => {
     const last = stubFetch();
     await gitApi.getProjectGitStatus(4);

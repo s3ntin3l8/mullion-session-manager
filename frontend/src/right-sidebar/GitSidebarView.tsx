@@ -3,6 +3,7 @@ import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { api } from "../api/index.js";
 import { BranchDetail } from "../git/BranchDetail.js";
 import { BranchesSection } from "../git/BranchesSection.js";
+import { HostPullControls } from "../git/HostPullControls.js";
 import { ChangesSection } from "../git/ChangesSection.js";
 import { isDefaultBranchName, pullReasonMessage } from "../git/gitReasons.js";
 import { PruneView } from "../git/PruneView.js";
@@ -265,10 +266,11 @@ export function GitSidebarView({
       />
       <CheckoutChip projectId={projectId} sessionId={checkoutSessionId} choice={checkoutChoice} />
       <div className="sc-scroll">
+        <HostPullControls project={project} />
         {sessionId !== undefined && (
           <div className="sc-note">
-            Changes, fetch and pull are this session&apos;s checkout. Branches, worktrees and
-            auto-fetch below are the project&apos;s repository.
+            Changes and the toolbar fetch/pull use this session&apos;s checkout. Branches, worktrees
+            and auto-fetch below are the project&apos;s repository.
           </div>
         )}
         <div className="sc-autofetch">

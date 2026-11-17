@@ -60,6 +60,7 @@ import { runGitFetch } from "../services/git-fetch.js";
 import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doctor.js";
 import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
 import { runGitPull } from "../services/git-pull.js";
+import { parseHostCwds, projectCwdOnHost } from "../services/placement.js";
 import {
   isWithinAnyWorktree,
   listWorktrees,
@@ -341,42 +342,59 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
   // runs `git merge --ff-only @{u}` after fetching for this project.
   // Returns GitPullResult ({ pulled: boolean, reason?, detail? }).
   const gitPullParamsSchema = {
+    querystring: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        hostId: { type: "string", minLength: 1 },
+      },
+    },
     params: {
       type: "object",
       required: ["id"],
       properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
     },
   };
-  app.post<{ Params: { id: string }; Querystring: { sessionId?: string } }>(
+  app.post<{ Params: { id: string }; Querystring: { sessionId?: string; hostId?: string } }>(
     "/api/projects/:id/git-pull",
     { schema: gitPullParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
+      const { hostId, sessionId } = request.query;
+      if (hostId !== undefined && sessionId !== undefined) {
+        return reply.badRequest("Specify either hostId or sessionId, not both");
+      }
       const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
       if (!project) return reply;
 
+      const targetHostId = hostId ?? project.hostId;
+      const targetCwd =
+        hostId === undefined
+          ? project.cwd
+          : projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds));
+      if (!targetCwd) return reply.badRequest("Host is not a checkout of this project");
+
       // The clone is claimed for the pull: it fetches and merges, and the
       // merge writes the index the repair rewrites (issue #1896).
-      if (isCloneBusy(project.hostId, project.cwd)) {
+      if (isCloneBusy(targetHostId, targetCwd)) {
         return reply.conflict("A git operation is already running for this repository.");
       }
-      markCloneBusy(project.hostId, project.cwd);
+      markCloneBusy(targetHostId, targetCwd);
       try {
-        if (project.hostId === LOCAL_HOST_ID) {
-          return await runGitPull(project.cwd);
+        if (targetHostId === LOCAL_HOST_ID) {
+          return await runGitPull(targetCwd);
         }
 
         try {
-          return await getRemoteHostClient(app, project.hostId).resolveGitPull(project.cwd);
+          return await getRemoteHostClient(app, targetHostId).resolveGitPull(targetCwd);
         } catch (err) {
-          if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
-            return reply;
-          return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "git pull"));
+          if (replyUnsupportedOnAgent(err, sessionId ?? hostId, targetHostId, reply)) return reply;
+          return reply.serviceUnavailable(hostFailMsg(app, targetHostId, err, "git pull"));
         }
       } finally {
-        releaseClone(project.hostId, project.cwd);
+        releaseClone(targetHostId, targetCwd);
       }
     },
   );
