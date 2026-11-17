@@ -113,16 +113,23 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
 
   it("is null on a local-only install, whatever the task says", () => {
     expect(
-      describeTaskHost({ placementRequirement: '{"platform":"darwin"}' }, null, "x", [local]),
+      describeTaskHost(
+        { sessionId: null, placementRequirement: '{"platform":"darwin"}' },
+        null,
+        "x",
+        [local],
+        true,
+      ),
     ).toBeNull();
   });
 
   it("prefers the worker session's host", () => {
     const chip = describeTaskHost(
-      { placementRequirement: '{"platform":"darwin"}' },
+      { sessionId: null, placementRequirement: '{"platform":"darwin"}' },
       { resolvedHostId: "mac-mini", placementReason: null },
       "local",
       [local, mini],
+      true,
     );
     expect(chip?.label).toBe("on Mac mini");
   });
@@ -130,10 +137,11 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
   it("says 'on this machine' for a worker session on the local host", () => {
     expect(
       describeTaskHost(
-        { placementRequirement: null },
+        { sessionId: null, placementRequirement: null },
         { resolvedHostId: "local", placementReason: null },
         "local",
         [local, mini],
+        true,
       )?.label,
     ).toBe("on this machine");
   });
@@ -144,6 +152,7 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
       undefined,
       "mac-mini",
       [local, mini],
+      true,
     );
     expect(chip?.label).toBe("unknown (session ended)");
     expect(chip?.title).toBe("The worker session is no longer known");
@@ -151,17 +160,24 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
 
   it("describes a combined requirement, falling back to the raw host id", () => {
     const chip = describeTaskHost(
-      { placementRequirement: '{"hostId":"gone","platform":"linux"}' },
+      { sessionId: null, placementRequirement: '{"hostId":"gone","platform":"linux"}' },
       null,
       "local",
       [local, mini],
+      true,
     );
     expect(chip?.label).toBe("needs linux · gone");
   });
 
   it("shows required capabilities, alone or with a platform", () => {
     const label = (raw: string) =>
-      describeTaskHost({ placementRequirement: raw }, null, "local", [local, mini])?.label;
+      describeTaskHost(
+        { sessionId: null, placementRequirement: raw },
+        null,
+        "local",
+        [local, mini],
+        true,
+      )?.label;
     expect(label('{"capabilities":["xcode"]}')).toBe("needs xcode");
     expect(label('{"platform":"darwin","capabilities":["xcode"]}')).toBe("needs darwin · xcode");
   });
@@ -169,17 +185,35 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
   it("ignores a corrupt or empty requirement", () => {
     for (const raw of ["{nope", "[]", '"x"', "{}", "null"]) {
       expect(
-        describeTaskHost({ placementRequirement: raw }, null, "local", [local, mini])?.label,
+        describeTaskHost(
+          { sessionId: null, placementRequirement: raw },
+          null,
+          "local",
+          [local, mini],
+          true,
+        )?.label,
       ).toBe("auto");
     }
   });
 
   it("pins to a remote project host, else auto", () => {
     expect(
-      describeTaskHost({ placementRequirement: null }, null, "mac-mini", [local, mini])?.label,
+      describeTaskHost(
+        { sessionId: null, placementRequirement: null },
+        null,
+        "mac-mini",
+        [local, mini],
+        true,
+      )?.label,
     ).toBe("pinned · Mac mini");
     expect(
-      describeTaskHost({ placementRequirement: null }, null, undefined, [local, mini])?.label,
+      describeTaskHost(
+        { sessionId: null, placementRequirement: null },
+        null,
+        undefined,
+        [local, mini],
+        true,
+      )?.label,
     ).toBe("auto");
   });
 });

@@ -11,6 +11,7 @@ let settings: unknown;
 let projects: Project[];
 let hosts: Host[];
 let sessions: Session[];
+let sessionsLoaded: boolean;
 const { updateTask, listProjectActions } = vi.hoisted(() => ({
   updateTask: vi.fn(async (..._a: unknown[]) => ({})),
   listProjectActions: vi.fn(async (_id: number) => [
@@ -26,6 +27,7 @@ vi.mock("../store/index.js", () => ({
       projects,
       hosts,
       sessions,
+      sessionsLoaded,
       updateTask,
     }),
 }));
@@ -44,6 +46,7 @@ beforeEach(() => {
     makeHost({ id: "remote-macbook", name: "macbook" }),
   ];
   sessions = [];
+  sessionsLoaded = true;
   updateTask.mockClear();
   listProjectActions.mockClear();
 });
@@ -104,6 +107,18 @@ describe("TaskAgents", () => {
     expect(screen.getByText("unknown (session ended)")).toBeInTheDocument();
     expect(screen.queryByText("needs darwin")).toBeNull();
     expect(screen.queryByText("pinned · macbook")).toBeNull();
+  });
+
+  it("waits for sessions to load before reporting a missing worker", () => {
+    sessionsLoaded = false;
+    const claimedTask = task({ sessionId: 7, placementRequirement: '{"platform":"darwin"}' });
+    const { rerender } = render(<TaskAgents task={claimedTask} />);
+    expect(screen.getByText("needs darwin")).toBeInTheDocument();
+    expect(screen.queryByText("unknown (session ended)")).toBeNull();
+
+    sessionsLoaded = true;
+    rerender(<TaskAgents task={claimedTask} />);
+    expect(screen.getByText("unknown (session ended)")).toBeInTheDocument();
   });
 
   it("keeps the host visible on an installation without remote hosts", () => {

@@ -88,9 +88,16 @@ export function TaskCard({
   const [startFreshError, setStartFreshError] = useState<string | null>(null);
   const epicColour = epicColourVar(task);
   const hosts = useDashboardStore((s) => s.hosts);
+  const sessionsLoaded = useDashboardStore((s) => s.sessionsLoaded);
   // #3194 — "Start fresh" on a card whose retry waits for its original host.
   const startFreshTask = useDashboardStore((s) => s.startFreshTask);
-  const hostChip = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []);
+  const hostChip = describeTaskHost(
+    task,
+    workerSession,
+    project?.hostId,
+    hosts ?? [],
+    sessionsLoaded,
+  );
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
 
   // Matched client-side against the project's unfiltered PR list, same

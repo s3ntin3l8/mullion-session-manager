@@ -134,6 +134,8 @@ export interface TaskHostChip {
   /** Visible text. */
   label: string;
   title: string;
+  /** Alternate wording for the task details row, when needed. */
+  detailsLabel?: string;
 }
 
 /**
@@ -144,10 +146,11 @@ export interface TaskHostChip {
  * Null on an install with no remote hosts.
  */
 export function describeTaskHost(
-  task: { placementRequirement: string | null; sessionId?: number | null },
+  task: { placementRequirement: string | null; sessionId: number | null },
   workerSession: { resolvedHostId: string; placementReason: string | null } | null | undefined,
   projectHostId: string | null | undefined,
   hosts: readonly Host[],
+  sessionsLoaded: boolean,
 ): TaskHostChip | null {
   if (!hasRemoteHosts(hosts)) return null;
   const nameOf = (id: string) => hosts.find((h) => h.id === id)?.name ?? id;
@@ -159,12 +162,12 @@ export function describeTaskHost(
     // install with remote hosts "it ran here" is worth saying after claim.
     return badge
       ? { label: `on ${badge.name}`, title: badge.title }
-      : { label: "on this machine", title: "Runs on this machine" };
+      : { label: "on this machine", detailsLabel: "this machine", title: "Runs on this machine" };
   }
 
   // A claimed task's missing session cannot tell us where it ran. Do not
   // present the pre-claim plan as its actual host after the session is reaped.
-  if (task.sessionId != null) {
+  if (task.sessionId != null && sessionsLoaded) {
     return { label: "unknown (session ended)", title: "The worker session is no longer known" };
   }
 

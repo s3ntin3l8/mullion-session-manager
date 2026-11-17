@@ -53,6 +53,7 @@ export function TaskAgents({ task }: { task: Task }) {
   const settings = useDashboardStore((s) => s.settings);
   const projects = useDashboardStore((s) => s.projects);
   const hosts = useDashboardStore((s) => s.hosts);
+  const sessionsLoaded = useDashboardStore((s) => s.sessionsLoaded);
   const workerSession = useDashboardStore((s) =>
     s.sessions.find((session) => session.id === task.sessionId),
   );
@@ -88,8 +89,15 @@ export function TaskAgents({ task }: { task: Task }) {
   );
 
   const project = projects?.find((p) => p.id === task.projectId);
-  const host = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []) ?? {
+  const host = describeTaskHost(
+    task,
+    workerSession,
+    project?.hostId,
+    hosts ?? [],
+    sessionsLoaded,
+  ) ?? {
     label: "this machine",
+    detailsLabel: "this machine",
     title: "Runs on this machine",
   };
   const projectDefaultAgent =
@@ -171,9 +179,7 @@ export function TaskAgents({ task }: { task: Task }) {
             <SourceTag source={sourceOf(task.reviewAgent, task.issueReviewAgent)} />
           </dd>
           <dt>Host</dt>
-          <dd title={host.title}>
-            {host.label === "on this machine" ? "this machine" : host.label}
-          </dd>
+          <dd title={host.title}>{host.detailsLabel ?? host.label}</dd>
         </dl>
       )}
       {!editable && (
