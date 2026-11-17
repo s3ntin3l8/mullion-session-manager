@@ -408,7 +408,7 @@ describe("SessionLauncher — skip permissions", () => {
     const control = toggle.parentElement!;
     expect(control).toHaveClass("launcher-form-control");
     expect(control.firstElementChild).toBe(toggle);
-    expect(control).toHaveTextContent("Skip prompts");
+    expect(control).toHaveTextContent("Skip permissions");
   });
 
   it("off in settings: the switch starts off, launches off, and the override turns it on", async () => {

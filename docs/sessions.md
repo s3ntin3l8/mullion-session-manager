@@ -57,7 +57,7 @@ or moves when a switch is flipped or a menu opened, so the rows below stay put.
 3. **Options** — the selected agent's:
    - **Model** — this session's model; "Default (…)" leaves it to Settings →
      Models. Not shown for a command that already passes its own `--model`.
-   - **Permissions** — the **Skip prompts** switch (skip permission prompts)
+   - **Permissions** — the **Skip permissions** switch (skip permission prompts)
      starts at the agent's configured value and overrides it for this launch
      only; the text beside it says which applies.
 4. **Shells and scripts** — shells, `package.json` scripts, `tasks.json` tasks

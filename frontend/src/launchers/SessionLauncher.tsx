@@ -884,7 +884,7 @@ function AgentOptions({
             <span className="settings-toggle-knob" />
           </button>
           <span className="launcher-form-switch-text">
-            <span aria-hidden="true">Skip prompts</span>{" "}
+            <span aria-hidden="true">Skip permissions</span>{" "}
             <span id={`${idPrefix}-skip-hint`} className="session-launcher-hint launcher-form-hint">
               {skipHint}
             </span>
