@@ -10,6 +10,7 @@ import type { Device, SystemImage } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";
+import * as dd from "../../test/dropdown.js";
 
 // Issue #1326 — same fake-in-memory-backend shape as Settings.bridges.test.tsx:
 // exercises Settings -> Devices against a fake GET/POST/DELETE /api/devices
@@ -364,7 +365,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("Create an emulator"));
-    await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
+    await dd.findDropdownByLabel("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(
@@ -386,7 +387,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("Create an emulator"));
-    await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
+    await dd.findDropdownByLabel("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await screen.findByTestId("device-row-1");
@@ -577,7 +578,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("Create an emulator"));
-    await screen.findByDisplayValue("pixel_7");
+    await dd.findDropdownByLabel("pixel_7");
     expect(screen.queryByRole("button", { name: "Physical" })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("192.168.1.23:41234")).not.toBeInTheDocument();
   });
@@ -650,8 +651,8 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("Create an emulator"));
-    const picker = await screen.findByDisplayValue("pixel_7");
-    expect(within(picker).getByText("pixel_6_tablet")).toBeInTheDocument();
+    const picker = await dd.findDropdownByLabel("pixel_7");
+    expect(dd.dropdownOptions(picker).map((o) => o.label)).toContain("pixel_6_tablet");
   });
 
   it("shows an empty-AVDs message and no picker when the host has no AVDs", async () => {
@@ -661,7 +662,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     expect(await screen.findByText(/No virtual devices on this machine yet/)).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
+    expect(dd.queryDropdownByLabel("pixel_7")).not.toBeInTheDocument();
   });
 
   // Hermes review (round 1) — a load failure used to leave `avds` empty
@@ -688,8 +689,8 @@ describe("Settings -> Devices (issue #1326)", () => {
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
-    expect(await screen.findByDisplayValue("API 35 — Google APIs (x86_64)")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("pixel_6")).toBeInTheDocument();
+    expect(await dd.findDropdownByLabel("API 35 — Google APIs (x86_64)")).toBeInTheDocument();
+    expect(dd.getDropdownByLabel("pixel_6")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Pixel_8_API_35")).toBeInTheDocument();
   });
 
@@ -699,7 +700,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6"); // wait for device profiles to load
+    await dd.findDropdownByLabel("pixel_6"); // wait for device profiles to load
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
     await user.click(screen.getByRole("button", { name: "Create AVD" }));
 
@@ -709,7 +710,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Create AVD" })).not.toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue("pixel_9_new")).toBeInTheDocument();
+    expect(dd.getDropdownByLabel("pixel_9_new")).toBeInTheDocument();
     expect(avdCreateCalls).toEqual([
       {
         name: "pixel_9_new",
@@ -725,7 +726,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_hw");
     await user.type(screen.getByLabelText("SD card size"), "2048M");
     await user.type(screen.getByLabelText("RAM"), "2G");
@@ -750,7 +751,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_bad");
     await user.type(screen.getByLabelText("SD card size"), "512");
     await user.click(screen.getByRole("button", { name: "Create AVD" }));
@@ -765,7 +766,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_small");
     await user.type(screen.getByLabelText("RAM"), "64");
     await user.click(screen.getByRole("button", { name: "Create AVD" }));
@@ -782,7 +783,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_hw");
     await user.type(screen.getByLabelText("RAM"), "2048");
     await user.click(screen.getByRole("button", { name: "Create AVD" }));
@@ -791,7 +792,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Create AVD" })).not.toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue("pixel_9_hw")).toBeInTheDocument();
+    expect(dd.getDropdownByLabel("pixel_9_hw")).toBeInTheDocument();
   });
 
   // Hermes review — a failure of the post-create picker refresh used to be
@@ -807,7 +808,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
     await user.click(screen.getByRole("button", { name: "Create AVD" }));
 
@@ -1161,7 +1162,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByDisplayValue("All variants"), "google_apis_playstore");
+    dd.pickDropdownOption(dd.getDropdownByLabel("All variants"), "google_apis_playstore");
     await waitFor(() => {
       expect(
         screen.getByText("system-images;android-36;google_apis_playstore;x86_64"),
@@ -1172,7 +1173,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     });
 
     // Back to all — both rows return.
-    await user.selectOptions(screen.getByDisplayValue("Google Play"), "");
+    dd.pickDropdownOption(dd.getDropdownByLabel("Google Play"), "");
     await waitFor(() => {
       expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
     });
@@ -1184,7 +1185,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     await loadAvailableImages(user);
 
     // Options are sorted newest-first, so API 36 precedes API 35.
-    await user.selectOptions(screen.getByDisplayValue("All APIs"), "35");
+    dd.pickDropdownOption(dd.getDropdownByLabel("All APIs"), "35");
     await waitFor(() => {
       expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
       expect(
@@ -1340,7 +1341,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("API 35 — Google APIs (x86_64)"); // form loaded, selection = android-35
+    await dd.findDropdownByLabel("API 35 — Google APIs (x86_64)"); // form loaded, selection = android-35
 
     await user.click(screen.getByRole("button", { name: "Load available images" }));
     await user.click(await screen.findByRole("button", { name: "Install" }));
@@ -1364,12 +1365,9 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(await screen.findByText("Operation complete.")).toBeInTheDocument();
     // Selection kept (still present), new image now offered in the dropdown.
     await waitFor(() => {
-      const select = screen.getByDisplayValue("API 35 — Google APIs (x86_64)");
-      expect(
-        within(select).getByRole("option", {
-          name: /API 36 — Google Play Store \(x86_64\)/,
-        }),
-      ).toBeInTheDocument();
+      const select = dd.getDropdownByLabel("API 35 — Google APIs (x86_64)");
+      const labels = dd.dropdownOptions(select).map((o) => o.label);
+      expect(labels).toContainEqual(expect.stringMatching(/API 36 — Google Play Store \(x86_64\)/));
     });
   });
 
@@ -1389,7 +1387,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("API 35 — Google APIs (x86_64)");
+    await dd.findDropdownByLabel("API 35 — Google APIs (x86_64)");
 
     await user.click(screen.getByRole("button", { name: "Load available images" }));
     await user.click(await screen.findByRole("button", { name: "Install" }));
@@ -1410,7 +1408,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     act(() => installWs.triggerMessage(JSON.stringify({ type: "done" })));
 
     expect(await screen.findByText("Operation complete.")).toBeInTheDocument();
-    expect(await screen.findByDisplayValue("API 36 — Google APIs (x86_64)")).toBeInTheDocument();
+    expect(await dd.findDropdownByLabel("API 36 — Google APIs (x86_64)")).toBeInTheDocument();
   });
 
   it("empty-state copy points at the SDK system images section when none are installed", async () => {
@@ -1424,7 +1422,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(
       await screen.findByText(/Install one under "SDK system images" below/),
     ).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("API 35 — Google APIs (x86_64)")).not.toBeInTheDocument();
+    expect(dd.queryDropdownByLabel("API 35 — Google APIs (x86_64)")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create AVD" })).toBeDisabled();
   });
 
@@ -1437,7 +1435,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
 
     const nameInput = screen.getByPlaceholderText("Pixel_8_API_35");
     await user.type(nameInput, "Pixel 10 Pro XL");
@@ -1461,7 +1459,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
 
     // "___" passes AVD_NAME_PATTERN but fails AVD_NAME_HAS_ALPHANUMERIC.
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "___");
@@ -1489,7 +1487,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
 
     const nameInput = screen.getByPlaceholderText("Pixel_8_API_35");
     // Spaces only: trim().length === 0, but the field is non-empty — the
@@ -1506,7 +1504,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
 
     // U+00A0 fails AVD_NAME_PATTERN; `ch === " "` is false, and HTML would
     // collapse the raw NBSP to a blank — must name it as U+00A0 instead.
@@ -1522,7 +1520,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
 
     // U+200B is Cf, not WhiteSpace: `ch.trim() === ""` is false, so only
     // the `\p{Cf}` arm labels it — without it the message loses its subject.
@@ -1537,7 +1535,7 @@ describe("Settings -> Devices (issue #1326)", () => {
 
     await user.click(await screen.findByText("Create an emulator"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
-    await screen.findByDisplayValue("pixel_6");
+    await dd.findDropdownByLabel("pixel_6");
 
     expect(
       screen.queryByText(/contains|needs at least one|is only whitespace/),

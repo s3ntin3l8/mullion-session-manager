@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DiscoveredProject } from "../api/index.js";
 import { DEFAULT_SETTINGS } from "../api/index.js";
@@ -8,8 +8,10 @@ import { useDashboardStore } from "../store/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { mockFetch } from "../test/mockFetch.js";
 import { resetStore } from "../test/resetStore.js";
+import { dropdownOptions, pickDropdownOption } from "../test/dropdown.js";
+import { makeProject } from "../test/fixtures.js";
 import launcherProjectsCss from "../styles/launcher-projects.css?raw";
-import { LauncherProjectView } from "./LauncherProjects.js";
+import { LauncherProjectPicker, LauncherProjectView } from "./LauncherProjects.js";
 
 // The rule body of the first `selector {…}` block in a stylesheet.
 function rule(css: string, selector: string): string {
@@ -49,6 +51,142 @@ function repo(name: string, extra: Partial<DiscoveredProject> = {}): DiscoveredP
 
 // #3244 — the Add project view leads with one row that opens the discovered
 // repositories as their own view.
+// The Project dropdown's "Add project…" (#3245): an action row at the end of
+// the styled list, reached by the pointer and the keyboard, never by
+// typeahead. A coarse pointer keeps the native entry and its key guard
+// (SessionLauncher.test.tsx covers the guard).
+describe("LauncherProjectPicker: Add project… (#3245)", () => {
+  const ALPHA = makeProject({ id: 7, name: "alpha" });
+  const ATLAS = makeProject({ id: 8, name: "atlas" });
+  const MULL = makeProject({ id: 9, name: "mull" });
+
+  function renderPicker(projectId: number | null = MULL.id, coarse = false) {
+    const onChange = vi.fn();
+    const onAddProject = vi.fn();
+    render(
+      <LauncherProjectPicker
+        projectId={projectId}
+        onChange={onChange}
+        coarse={coarse}
+        labelId="where-project"
+        onAddProject={onAddProject}
+        onEditProject={vi.fn()}
+      />,
+    );
+    return { onChange, onAddProject, field: screen.getByRole("combobox", { name: "Project" }) };
+  }
+
+  beforeEach(() => {
+    resetStore({ projects: [ALPHA, ATLAS, MULL], settings: DEFAULT_SETTINGS });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is an action row after the projects, set apart from them", async () => {
+    const user = userEvent.setup();
+    const { field } = renderPicker();
+    await user.click(field);
+    const listbox = screen.getByRole("listbox", { name: "Project" });
+    const rows = within(listbox).getAllByRole("option");
+    expect(rows.map((o) => o.textContent)).toEqual(["alpha", "atlas", "mull", "Add project…"]);
+    const action = rows.at(-1)!;
+    expect(action).toHaveClass("custom-select-action");
+    expect(action).toHaveAttribute("aria-selected", "false");
+    // Not one of the dropdown's values.
+    expect(dropdownOptions(field).map((o) => o.label)).toEqual(["alpha", "atlas", "mull"]);
+  });
+
+  it("opens the Add view by pointer and leaves the selection alone", async () => {
+    const user = userEvent.setup();
+    const { field, onChange, onAddProject } = renderPicker();
+    await user.click(field);
+    await user.click(screen.getByRole("option", { name: "Add project…" }));
+    expect(onAddProject).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("opens the Add view by keyboard from the styled list", async () => {
+    const user = userEvent.setup();
+    const { field, onChange, onAddProject } = renderPicker();
+    field.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(field).toHaveAttribute("aria-expanded", "true");
+    // From the last project, ArrowDown moves onto the action row: the list
+    // is open, so nothing happens until Enter.
+    await user.keyboard("{ArrowDown}");
+    const action = screen.getByRole("option", { name: "Add project…" });
+    expect(field).toHaveAttribute("aria-activedescendant", action.id);
+    expect(onAddProject).not.toHaveBeenCalled();
+    await user.keyboard("{Enter}");
+    expect(onAddProject).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("typeahead never lands on Add project…", () => {
+    const { field, onChange, onAddProject } = renderPicker();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    // "a" opens the list on the first a-project; "a" again cycles to the
+    // next one, then back: never to Add project….
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    const active = () => document.getElementById(field.getAttribute("aria-activedescendant")!);
+    expect(active()).toHaveTextContent("alpha");
+    now.mockReturnValue(1_100);
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    expect(active()).toHaveTextContent("atlas");
+    now.mockReturnValue(1_200);
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    expect(active()).toHaveTextContent("alpha");
+    // "ad" matches only Add project…, so the highlight stays on the
+    // a-project the fresh "a" moved to.
+    now.mockReturnValue(5_000);
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    expect(active()).toHaveTextContent("atlas");
+    now.mockReturnValue(5_100);
+    act(() => {
+      fireEvent.keyDown(field, { key: "d" });
+    });
+    expect(active()).toHaveTextContent("atlas");
+    now.mockRestore();
+    act(() => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(onAddProject).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledWith(ATLAS.id);
+  });
+
+  it("a coarse pointer keeps the native select, whose last entry opens the Add view", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const { field, onChange, onAddProject } = renderPicker(MULL.id, true);
+    expect(field).toBeInstanceOf(HTMLSelectElement);
+    expect([...(field as HTMLSelectElement).options].map((o) => o.textContent)).toEqual([
+      "alpha",
+      "atlas",
+      "mull",
+      "Add project…",
+    ]);
+    pickDropdownOption(field, "Add project…");
+    expect(onAddProject).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    expect((field as HTMLSelectElement).value).toBe(String(MULL.id));
+  });
+});
+
 describe("LauncherProjectView: discovered repositories (#3244)", () => {
   let unexpectedCalls: string[] = [];
   let discoverCalls = 0;
@@ -273,8 +411,8 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
     expect(within(view).getByText("No repository matches “zz”.")).toBeInTheDocument();
 
     const picker = within(view).getByRole("combobox");
-    await user.selectOptions(picker, "builder");
-    await user.selectOptions(picker, "runner");
+    pickDropdownOption(picker, "builder");
+    pickDropdownOption(picker, "runner");
     pending["remote-2"]!(
       jsonResponse(
         200,

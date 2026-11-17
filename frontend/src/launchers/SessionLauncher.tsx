@@ -505,7 +505,8 @@ function LauncherNewSession({
     if (coarse || !filterRef?.current) return;
     const el = e.target as HTMLElement;
     // The project menu is portaled, but its keys still bubble through here.
-    if (el.closest('input, select, textarea, [role="menu"]')) return;
+    // A styled dropdown is a combobox button with its own typeahead (#3245).
+    if (el.closest('input, select, textarea, [role="menu"], [role="combobox"]')) return;
     if (e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
       filterRef.current.focus();
     }

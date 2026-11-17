@@ -17,6 +17,7 @@ import {
   describeAutoPreview,
   withoutAutoChoices,
 } from "./hostTarget.js";
+import { dropdownOptions, dropdownValue, pickDropdownOption } from "../test/dropdown.js";
 
 const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
 const MAC = makeHost({ id: "mac", name: "Mac mini", health: "online" });
@@ -93,9 +94,9 @@ describe("New session launcher -> host target (#2237)", () => {
     useDashboardStore.setState({ projects: [AUTO], hosts: [MAC] });
     const user = userEvent.setup();
     renderLauncher(AUTO.id);
-    const select = (await screen.findByLabelText("Host")) as HTMLSelectElement;
-    expect(select.value).toBe("auto");
-    await user.selectOptions(select, "__own__");
+    const select = await screen.findByLabelText("Host");
+    expect(dropdownValue(select)).toBe("auto");
+    pickDropdownOption(select, "__own__");
     await user.click((await screen.findAllByText("bash"))[0]);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ targetHostId: "local" });
@@ -110,8 +111,8 @@ describe("New session launcher -> host target (#2237)", () => {
 
   it("lists this server, each host and Auto, with unavailable hosts disabled", async () => {
     renderLauncher(MULTI.id);
-    const select = (await screen.findByLabelText("Host")) as HTMLSelectElement;
-    const opts = Array.from(select.options).map((o) => [o.textContent, o.disabled]);
+    const select = await screen.findByLabelText("Host");
+    const opts = dropdownOptions(select).map((o) => [o.label, o.disabled]);
     expect(opts).toEqual([
       ["this server", false],
       ["Mac mini", false],
@@ -119,7 +120,7 @@ describe("New session launcher -> host target (#2237)", () => {
       ["Parked box (parked)", true],
       ["Auto", false],
     ]);
-    expect(select.value).toBe("__own__");
+    expect(dropdownValue(select)).toBe("__own__");
   });
 
   it("a no-interaction launch sends no host fields", async () => {
@@ -134,7 +135,7 @@ describe("New session launcher -> host target (#2237)", () => {
   it("choosing a host sends targetHostId, and the worktree toggle becomes isolate", async () => {
     const user = userEvent.setup();
     renderLauncher(MULTI.id);
-    await user.selectOptions(await screen.findByLabelText("Host"), "mac");
+    pickDropdownOption(await screen.findByLabelText("Host"), "mac");
     await user.click(screen.getByRole("switch", { name: /isolate in a new worktree/i }));
     expect(screen.getByText(/the host's default branch/)).toBeInTheDocument();
     await user.click((await screen.findAllByText("bash"))[0]);
@@ -147,7 +148,7 @@ describe("New session launcher -> host target (#2237)", () => {
   it("Auto sends placement and shows the preview with excluded hosts", async () => {
     const user = userEvent.setup();
     renderLauncher(MULTI.id);
-    await user.selectOptions(await screen.findByLabelText("Host"), "auto");
+    pickDropdownOption(await screen.findByLabelText("Host"), "auto");
     expect(await screen.findByText(/Mac mini: lowest load/)).toHaveTextContent(
       /not considered: Old box \(offline\)/,
     );
@@ -162,22 +163,21 @@ describe("New session launcher -> host target (#2237)", () => {
   });
 
   it("remembers the choice per project across a remount", async () => {
-    const user = userEvent.setup();
     const first = renderLauncher(MULTI.id);
-    await user.selectOptions(await screen.findByLabelText("Host"), "mac");
+    pickDropdownOption(await screen.findByLabelText("Host"), "mac");
     expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.lastLaunchHostByProject) ?? "{}")).toEqual({
       "5": "mac",
     });
     first.unmount();
     renderLauncher(MULTI.id);
-    expect(((await screen.findByLabelText("Host")) as HTMLSelectElement).value).toBe("mac");
+    expect(dropdownValue(await screen.findByLabelText("Host"))).toBe("mac");
   });
 
   it("ignores an Auto left in storage by an older build for a pinned project", async () => {
     localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "auto" }));
     const user = userEvent.setup();
     renderLauncher(MULTI.id);
-    expect(((await screen.findByLabelText("Host")) as HTMLSelectElement).value).toBe("__own__");
+    expect(dropdownValue(await screen.findByLabelText("Host"))).toBe("__own__");
     await user.click((await screen.findAllByText("bash"))[0]);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).not.toHaveProperty("placement");
@@ -194,7 +194,7 @@ describe("New session launcher -> host target (#2237)", () => {
     localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "mac" }));
     const user = userEvent.setup();
     renderLauncher(OTHER.id);
-    expect(((await screen.findByLabelText("Host")) as HTMLSelectElement).value).toBe("__own__");
+    expect(dropdownValue(await screen.findByLabelText("Host"))).toBe("__own__");
     await user.click((await screen.findAllByText("bash"))[0]);
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).not.toHaveProperty("targetHostId");

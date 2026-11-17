@@ -579,7 +579,7 @@ button.dock-group-empty:hover {
 }
 .preview-targets-editor .ui-input,
 .preview-targets-editor .settings-dropdown,
-.preview-targets-editor .settings-dropdown select {
+.preview-targets-editor .settings-dropdown .ui-dropdown-field {
   width: 100%;
   min-width: 0;
 }
@@ -606,7 +606,7 @@ button.dock-group-empty:hover {
 }
 @media (pointer: coarse) {
   .preview-targets-editor input,
-  .preview-targets-editor select,
+  .preview-targets-editor .ui-dropdown-field,
   .preview-targets-editor button {
     min-height: 44px;
     font-size: 1rem;

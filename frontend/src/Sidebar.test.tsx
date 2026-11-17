@@ -1484,10 +1484,11 @@ describe("DiscoverProjects — the disclosure header (issue #1893)", () => {
       }),
     ];
     const { header } = await renderWithCandidate();
-    const select = header.parentElement!.querySelector("select") as HTMLSelectElement;
+    const select = header.parentElement!.querySelector<HTMLElement>(".ui-dropdown-field")!;
     expect(select).not.toBeNull();
 
     // The picker is outside the button, so it is still a combobox.
+    expect(select).toHaveAttribute("role", "combobox");
     expect(select.closest('[role="button"]')).toBeNull();
 
     fireEvent.keyDown(select, { key: "Enter" });

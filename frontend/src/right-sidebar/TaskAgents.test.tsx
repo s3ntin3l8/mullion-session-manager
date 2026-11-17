@@ -6,6 +6,7 @@ import type * as ApiModule from "../api/index.js";
 import type { Task } from "../api/index.js";
 import { makeProject, makeTask } from "../test/fixtures.js";
 import { TaskAgents } from "./TaskAgents.js";
+import { findDropdownsWithOption, pickDropdownOption } from "../test/dropdown.js";
 
 let settings: unknown;
 const { updateTask, listProjectActions } = vi.hoisted(() => ({
@@ -78,12 +79,12 @@ describe("TaskAgents", () => {
     const user = userEvent.setup();
     render(<TaskAgents task={task({})} />);
     await user.click(screen.getByRole("button", { name: "Edit" }));
-    await screen.findAllByRole("option", { name: "Claude Code" });
+    await findDropdownsWithOption("Claude Code");
     const agent = screen.getByRole("combobox", { name: "Worker agent" });
     const review = screen.getByRole("combobox", { name: "Review agent" });
-    await user.selectOptions(agent, "claude");
+    pickDropdownOption(agent, "claude");
     expect(updateTask).toHaveBeenCalledWith(1, { agent: "claude" });
-    await user.selectOptions(review, "none");
+    pickDropdownOption(review, "none");
     expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
   });
 
@@ -127,8 +128,8 @@ describe("TaskAgents", () => {
     const user = userEvent.setup();
     render(<TaskAgents task={task({})} />);
     await user.click(screen.getByRole("button", { name: "Edit" }));
-    await screen.findAllByRole("option", { name: "Claude Code" });
-    await user.selectOptions(screen.getAllByRole("combobox")[0], "claude");
+    await findDropdownsWithOption("Claude Code");
+    pickDropdownOption(screen.getAllByRole("combobox")[0], "claude");
     expect(await screen.findByText("agent rejected")).toBeInTheDocument();
   });
 

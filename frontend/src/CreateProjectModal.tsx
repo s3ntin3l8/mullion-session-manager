@@ -938,18 +938,16 @@ export function CreateProjectModal({
           <label className="create-modal-field-hint" htmlFor="pre-provision-mode">
             Pre-provision checkouts
           </label>
-          <select
+          <Dropdown
             id="pre-provision-mode"
             value={Array.isArray(preProvision) ? "some" : preProvision}
-            onChange={(e) => {
-              const v = e.target.value;
-              setPreProvision(v === "some" ? [] : (v as "none" | "all"));
-            }}
-          >
-            <option value="none">None — clone on first use</option>
-            <option value="all">All eligible hosts</option>
-            <option value="some">Selected hosts</option>
-          </select>
+            onChange={(v) => setPreProvision(v === "some" ? [] : v)}
+            options={[
+              { value: "none", label: "None — clone on first use" },
+              { value: "all", label: "All eligible hosts" },
+              { value: "some", label: "Selected hosts" },
+            ]}
+          />
           {Array.isArray(preProvision) &&
             hosts
               .filter((h) => h.id !== projectHostId)

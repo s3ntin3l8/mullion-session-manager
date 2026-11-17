@@ -7,6 +7,7 @@ import { Settings } from "../../Settings.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
+import { dropdownOptions, dropdownValue, pickDropdownOption } from "../../test/dropdown.js";
 
 // Same fake-server-over-global-fetch pattern as Settings.integrations.test.tsx.
 // The key is write-only: nothing here may ever read it back from the server.
@@ -395,25 +396,26 @@ describe("Settings -> Review relay", () => {
       configure();
       modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
       await renderCard();
-      expect(
-        await within(picker()).findByRole("option", { name: "claude-sonnet-5-5 (Anthropic)" }),
-      ).toBeInTheDocument();
-      expect(
-        within(picker()).getByRole("option", { name: "llama3:8b (OpenRouter)" }),
-      ).toBeInTheDocument();
-      expect(picker()).toHaveValue("");
-      expect(
-        within(picker()).getByRole("option", { name: "Profile default (hermes-agent)" }),
-      ).toBeInTheDocument();
+      await waitFor(() =>
+        expect(dropdownOptions(picker()).map((o) => o.label)).toContain(
+          "claude-sonnet-5-5 (Anthropic)",
+        ),
+      );
+      expect(dropdownOptions(picker()).map((o) => o.label)).toContain("llama3:8b (OpenRouter)");
+      expect(dropdownValue(picker())).toBe("");
+      expect(dropdownOptions(picker()).map((o) => o.label)).toContain(
+        "Profile default (hermes-agent)",
+      );
     });
 
     it("stores the model with its provider, splitting only on the first colon", async () => {
       configure();
       modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
-      const user = userEvent.setup();
       await renderCard();
-      await within(picker()).findByRole("option", { name: "llama3:8b (OpenRouter)" });
-      await user.selectOptions(picker(), "llama3:8b (OpenRouter)");
+      await waitFor(() =>
+        expect(dropdownOptions(picker()).map((o) => o.label)).toContain("llama3:8b (OpenRouter)"),
+      );
+      pickDropdownOption(picker(), "llama3:8b (OpenRouter)");
       await waitFor(() =>
         expect(settingsPatches).toContainEqual({
           reviewRelay: { model: "llama3:8b", modelProvider: "openrouter" },
@@ -424,11 +426,14 @@ describe("Settings -> Review relay", () => {
     it("goes back to the profile default with the alias and no provider", async () => {
       configure({ model: "claude-sonnet-5-5", modelProvider: "anthropic" });
       modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
-      const user = userEvent.setup();
       await renderCard();
-      await within(picker()).findByRole("option", { name: "claude-sonnet-5-5 (Anthropic)" });
-      expect(picker()).toHaveValue("anthropic:claude-sonnet-5-5");
-      await user.selectOptions(picker(), "Profile default (hermes-agent)");
+      await waitFor(() =>
+        expect(dropdownOptions(picker()).map((o) => o.label)).toContain(
+          "claude-sonnet-5-5 (Anthropic)",
+        ),
+      );
+      expect(dropdownValue(picker())).toBe("anthropic:claude-sonnet-5-5");
+      pickDropdownOption(picker(), "Profile default (hermes-agent)");
       await waitFor(() =>
         expect(settingsPatches).toContainEqual({
           reviewRelay: { model: "hermes-agent", modelProvider: "" },
@@ -443,7 +448,7 @@ describe("Settings -> Review relay", () => {
       expect(
         await screen.findByText(/Couldn't load the model list from Hermes/),
       ).toBeInTheDocument();
-      await user.selectOptions(picker(), "Custom…");
+      pickDropdownOption(picker(), "Custom…");
       await user.type(screen.getByLabelText("Review relay model (custom model ID)"), "my-model");
       await user.tab();
       await waitFor(() =>
@@ -489,7 +494,7 @@ describe("Settings -> Review relay", () => {
       modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
       await renderCard();
       expect(await screen.findByDisplayValue("review-bot")).toBeInTheDocument();
-      expect(picker()).toHaveValue("__custom__");
+      expect(dropdownValue(picker())).toBe("__custom__");
     });
 
     it("asks Hermes nothing until a URL and key are set", async () => {

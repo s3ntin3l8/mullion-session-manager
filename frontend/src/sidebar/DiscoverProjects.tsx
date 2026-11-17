@@ -21,6 +21,7 @@ export function DiscoverHostPicker({ discovery }: { discovery: DiscoveredProject
   return (
     <Dropdown
       small
+      ariaLabel="Discover on host"
       value={selectedHostId}
       onChange={setHostId}
       options={[
