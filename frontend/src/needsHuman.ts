@@ -11,7 +11,8 @@ export type NeedsHumanReason =
   | "blocked-threads"
   | "review-post-failed"
   | "pr-closed"
-  | "ci-status-stalled";
+  | "ci-status-stalled"
+  | "rate-limited";
 
 /** The reasons tied to a merge that cannot proceed. Unlike the review-loop
  * reasons they do not depend on the round cap or its announce stamp. */
@@ -46,6 +47,10 @@ export function needsHumanText(reason: NeedsHumanReason | null | undefined): str
     // it: the provider itself is the one that stopped reporting.
     case "ci-status-stalled":
       return "a CI status stayed pending after green CI — a Codecov-side stall; re-run the coverage upload";
+    // #3234 — the provider quota resets beyond the park limit, so the worker
+    // was stopped rather than held for days; the card adds the reset time.
+    case "rate-limited":
+      return "provider quota exhausted";
     default:
       return "round cap reached";
   }

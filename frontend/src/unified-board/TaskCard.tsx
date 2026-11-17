@@ -24,7 +24,13 @@ import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { epicColourVar, epicUrl } from "./taskLanes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
-import { isRateLimitParked, rateLimitResumeText, reviewRunState } from "../taskStatusModel.js";
+import {
+  isQuotaExhausted,
+  isRateLimitParked,
+  quotaExhaustedText,
+  rateLimitResumeText,
+  reviewRunState,
+} from "../taskStatusModel.js";
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
 // (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
@@ -539,9 +545,21 @@ export function TaskCard({
           terminal failure above. Cleared when the task dispatches. */}
       {/* #2940 — parked until the provider's usage limit resets; resumes by itself. */}
       {isRateLimitParked(task) && task.rateLimitUntil && (
-        <div className="task-card-dispatch-reason" title={task.failureReason ?? undefined}>
+        <div
+          className="task-card-dispatch-reason"
+          title={task.rateLimitMessage ?? task.failureReason ?? undefined}
+        >
           <ClockIcon size={11} />
           Rate limited · resumes {rateLimitResumeText(task.rateLimitUntil)}
+          {task.rateLimitMessage && `: ${task.rateLimitMessage}`}
+        </div>
+      )}
+      {/* #3234 — the quota resets beyond the park limit: failed, with the reset. */}
+      {isQuotaExhausted(task) && (
+        <div className="task-card-dispatch-reason" title={task.failureReason ?? undefined}>
+          <ClockIcon size={11} />
+          {quotaExhaustedText(task)}
+          {task.rateLimitMessage && `: ${task.rateLimitMessage}`}
         </div>
       )}
       {task.status === "claimed" && task.failureReason && (

@@ -661,6 +661,8 @@ export interface AppSettings {
     budgetMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
+    // #3234 — longest park for a provider reset; -1 inherits the env default.
+    rateLimitMaxParkHours: number;
     // #741 — Task Master's own install-wide worker-agent default, split out
     // of settings.launchers.defaultAgent (which only drives the terminal
     // launcher) so terminal and Task Master agent defaults are independent.

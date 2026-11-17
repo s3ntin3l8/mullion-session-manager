@@ -307,6 +307,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     budgetMinutes: -1,
     progressCommentMinutes: -1,
     rateLimitGraceMinutes: -1,
+    rateLimitMaxParkHours: -1,
     skipPermissions: "inherit",
     trustedLogins: [],
     reviewCiWaitMinutes: 15,

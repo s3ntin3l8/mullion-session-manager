@@ -18,6 +18,7 @@ export interface TaskMasterEnvDefaults {
   budgetMinutes: number;
   progressCommentMinutes: number;
   rateLimitGraceMinutes: number;
+  rateLimitMaxParkHours: number;
   skipPermissions: boolean;
 }
 
@@ -28,6 +29,7 @@ export interface ResolvedTaskMasterConfig {
   budgetMinutes: number;
   progressCommentMinutes: number;
   rateLimitGraceMinutes: number;
+  rateLimitMaxParkHours: number;
   skipPermissions: boolean;
   reviewCiWaitMinutes: number;
   /** Install-wide round cap; 0 = unlimited. See settings.ts. */
@@ -57,6 +59,10 @@ export function resolveTaskMaster(
       taskMaster.rateLimitGraceMinutes === -1
         ? envDefaults.rateLimitGraceMinutes
         : taskMaster.rateLimitGraceMinutes,
+    rateLimitMaxParkHours:
+      taskMaster.rateLimitMaxParkHours === -1
+        ? envDefaults.rateLimitMaxParkHours
+        : taskMaster.rateLimitMaxParkHours,
     skipPermissions:
       taskMaster.skipPermissions === "inherit"
         ? envDefaults.skipPermissions
@@ -75,6 +81,7 @@ function envDefaultsFromConfig(app: FastifyInstance): TaskMasterEnvDefaults {
     budgetMinutes: app.config.MULLION_TASK_BUDGET_MINUTES,
     progressCommentMinutes: app.config.MULLION_TASK_PROGRESS_COMMENT_MINUTES,
     rateLimitGraceMinutes: app.config.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES,
+    rateLimitMaxParkHours: app.config.MULLION_TASK_RATE_LIMIT_MAX_PARK_HOURS,
     skipPermissions: app.config.MULLION_TASK_SKIP_PERMISSIONS,
   };
 }

@@ -101,6 +101,7 @@ export async function serverInfoRoute(app: FastifyInstance) {
         budgetMinutes: app.config.MULLION_TASK_BUDGET_MINUTES,
         progressCommentMinutes: app.config.MULLION_TASK_PROGRESS_COMMENT_MINUTES,
         rateLimitGraceMinutes: app.config.MULLION_TASK_RATE_LIMIT_GRACE_MINUTES,
+        rateLimitMaxParkHours: app.config.MULLION_TASK_RATE_LIMIT_MAX_PARK_HOURS,
         skipPermissions: app.config.MULLION_TASK_SKIP_PERMISSIONS,
         issueLabel: app.config.MULLION_TASK_LABEL,
         pollIntervalSeconds: app.config.MULLION_TASK_POLL_INTERVAL,

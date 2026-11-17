@@ -46,6 +46,7 @@ import type {
   ReviewSummary,
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
+import type { NeedsHumanReason } from "../needsHuman.js";
 import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
 import type { HostSettings } from "./host-types.js";
 import type { UpdateStatus } from "./update-types.js";
@@ -2028,6 +2029,8 @@ export interface ServerInfo {
     budgetMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
+    // Optional: an older server's payload lacks it (#3234).
+    rateLimitMaxParkHours?: number;
     skipPermissions: boolean;
     issueLabel: string;
     pollIntervalSeconds: number;
@@ -2202,16 +2205,7 @@ export interface Task {
   // stamp above is set; the merge-tied ones ("rebase-exhausted",
   // "blocked-threads", "pr-closed", "ci-status-stalled") are set with mergeError and stand on their own; "review-post-failed" is set without the announce stamp.
   // See needsHuman.ts.
-  needsHumanReason:
-    | "cap"
-    | "no-progress"
-    | "finding-persisted"
-    | "rebase-exhausted"
-    | "blocked-threads"
-    | "review-post-failed"
-    | "pr-closed"
-    | "ci-status-stalled"
-    | null;
+  needsHumanReason: NeedsHumanReason | null;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned
@@ -2311,6 +2305,9 @@ export interface Task {
   // #2940 — set while a rate-limited worker is parked: the task sits `ready`
   // until this provider reset, then is claimed again automatically.
   rateLimitUntil?: string | null;
+  // #3234 — the provider's own text for the latest rate limit (agy: "... Resets in
+  // 102h16m12s."), shown with a park or a quota give-up.
+  rateLimitMessage?: string | null;
   // The task's latest worker session (an array of at most one) — what the task
   // timeline shows once a park/return has cleared `sessionId`.
   workerSessionIds?: number[];
@@ -2716,6 +2713,7 @@ export interface AppSettings {
     budgetMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
+    rateLimitMaxParkHours?: number;
     skipPermissions: "inherit" | "on" | "off";
     // GitHub logins trusted in addition to repo owners/members/collaborators
     // — mirrors settings.ts's AppSettings.taskMaster.trustedLogins.

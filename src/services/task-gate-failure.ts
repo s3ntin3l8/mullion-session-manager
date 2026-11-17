@@ -155,6 +155,9 @@ export async function failReviewingGate(
   failureReason: string,
   now: Date,
   info: SessionInfo | null = null,
+  // #3234 — extra columns written with the failure (a rate-limit give-up sets
+  // its needs-human reason and the reset).
+  extraFields: Partial<typeof tasks.$inferInsert> = {},
 ): Promise<void> {
   // A worker that ended its turn with nothing committed gets a continuation
   // before the task fails (task-nudge.ts); only an unattended in_progress spell.
@@ -241,7 +244,7 @@ export async function failReviewingGate(
 
   const updated = app.db
     .update(tasks)
-    .set({ status: "failed", failureReason, failureDiagnostics, completedAt: now })
+    .set({ status: "failed", failureReason, failureDiagnostics, completedAt: now, ...extraFields })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, fromStatus)))
     .run();
   if (updated.changes === 0) return;
@@ -268,7 +271,14 @@ export async function failReviewingGate(
   });
   await syncTaskTransition(
     app,
-    { ...task, status: "failed", failureReason, failureDiagnostics, completedAt: now },
+    {
+      ...task,
+      ...extraFields,
+      status: "failed",
+      failureReason,
+      failureDiagnostics,
+      completedAt: now,
+    },
     project,
     "failed",
   );
