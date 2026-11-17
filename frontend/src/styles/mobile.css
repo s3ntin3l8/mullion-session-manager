@@ -518,10 +518,17 @@
    It owns the bottom safe-area inset while it shows, so the key bar and the
    grid body drop theirs (tablet.css gives them one under a coarse pointer).
    While the on-screen keyboard is up the bar is not rendered
-   (useKeyboardUp) and they keep their own. */
+   (useKeyboardUp) and they keep their own. Its height is a property, so a
+   right-sidebar view can end exactly above it (#3216): the 48px buttons, 6px
+   of padding each side and the 1px top border, plus the inset. */
+.app.mode-bar {
+  --phone-mode-bar-h: calc(61px + env(safe-area-inset-bottom));
+}
 .phone-mode-bar {
   display: flex;
   flex: none;
+  box-sizing: border-box;
+  height: var(--phone-mode-bar-h);
   gap: 4px;
   padding: 6px max(8px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom))
     max(8px, env(safe-area-inset-right));
@@ -623,8 +630,10 @@
   background: var(--r);
 }
 
-/* A right-sidebar view opened from the sheet: full screen, over the top bar
-   and the mode bar, with a header row that names it and a back control. */
+/* A right-sidebar view opened from the sheet: from the top bar down to the
+   mode bar, which stays visible and is the way out (#3216); the view has a
+   header row that names it. The bar owns the bottom safe-area inset, so the
+   view takes it only while the keyboard is up and the bar is gone. */
 .right-sidebar-panel.phone {
   position: fixed;
   top: var(--shell-top, 0px);
@@ -636,30 +645,26 @@
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
 }
+:root:not([data-keyboard="up"]) .app.mode-bar .right-sidebar-panel.phone {
+  bottom: calc(var(--kb-inset, 0px) + var(--phone-mode-bar-h));
+  padding-bottom: 0;
+}
 .right-sidebar-phone-head {
   display: flex;
   align-items: center;
-  gap: 4px;
   min-height: 52px;
-  padding: 0 8px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--border);
-}
-.right-sidebar-phone-back {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--fg);
-  cursor: pointer;
 }
 .right-sidebar-phone-title {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
+}
+/* Focused from script as the view opens; no ring for that, only for a
+   keyboard user's focus. */
+.right-sidebar-phone-title:focus:not(:focus-visible) {
+  outline: none;
 }
 /* A detail's own header (with its back arrow) takes the row's place: the
    phone head sits in the panel DetailHeader marks (#2979). */

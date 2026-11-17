@@ -763,7 +763,9 @@ describe("RightSidebar in the two halves", () => {
 });
 
 // #3014 — the phone has no rail: the mode bar's "more" sheet opens a view,
-// which shows full screen with a header naming it and a back control.
+// which fills the screen above the mode bar with a header naming it. #3216 —
+// the bar (PhoneModeBar.test.tsx) and the back gesture leave it; it has no
+// back control of its own.
 describe("RightSidebar on the phone", () => {
   const popBack = () => act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
   const open = (view: string) => act(() => useDashboardStore.getState().openRightSidebarView(view));
@@ -786,17 +788,17 @@ describe("RightSidebar on the phone", () => {
     useDashboardStore.setState({ rightSidebarOpen: false, selectedTaskId: null, tasks: [] });
   });
 
-  it("shows an opened view full screen, named, with a back control that closes it", async () => {
+  it("shows an opened view full screen and named, with no back or close control", () => {
     const { container } = renderSidebar("phone");
     open("git");
     const panel = container.querySelector(".right-sidebar-panel.phone");
     expect(panel).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Source Control" })).toBeInTheDocument();
-    // No rail and no close button on the phone; back is the way out.
+    // No rail, no close button and no back control: the mode bar is the way out.
     expect(container.querySelector(".right-rail")).toBeNull();
     expect(screen.queryByRole("button", { name: "Close sidebar" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    act(() => useDashboardStore.getState().closeRightSidebar());
     expect(container.firstChild).toBeNull();
   });
 
@@ -805,12 +807,13 @@ describe("RightSidebar on the phone", () => {
     open("devices");
     expect(screen.getByRole("heading", { name: "Devices" })).toBeInTheDocument();
     const dialog = screen.getByRole("dialog", { name: "Devices view" });
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    // Focus moves into it, on its back control.
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Back" }));
+    // Not modal: the mode bar under it stays reachable.
+    expect(dialog).not.toHaveAttribute("aria-modal");
+    // Focus moves into it, on its title (no on-screen keyboard).
+    expect(document.activeElement).toBe(within(dialog).getByRole("heading", { name: "Devices" }));
   });
 
-  it("keeps Tab inside the full screen and returns focus on close", async () => {
+  it("lets Tab leave the view for the mode bar, and returns focus on close", () => {
     const outside = document.createElement("button");
     outside.textContent = "outside";
     document.body.appendChild(outside);
@@ -818,14 +821,33 @@ describe("RightSidebar on the phone", () => {
     renderSidebar("phone");
     open("git");
     const dialog = screen.getByRole("dialog", { name: "Git view" });
-    const back = within(dialog).getByRole("button", { name: "Back" });
-    expect(document.activeElement).toBe(back);
-    // Shift+Tab from the first control wraps to the last one, inside.
-    await userEvent.tab({ shift: true });
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole("heading", { name: "Source Control" }),
+    );
+    // No trap: Tab from the view's last control is not turned back into it.
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const last = focusable[focusable.length - 1]!;
+    last.focus();
+    expect(fireEvent.keyDown(last, { key: "Tab" })).toBe(true);
     act(() => useDashboardStore.getState().closeRightSidebar());
     expect(document.activeElement).toBe(outside);
     outside.remove();
+  });
+
+  it("leaves focus on the mode bar's button when that is what closed the view", () => {
+    const opener = document.createElement("button");
+    const modeButton = document.createElement("button");
+    document.body.append(opener, modeButton);
+    opener.focus();
+    renderSidebar("phone");
+    open("git");
+    modeButton.focus();
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    expect(document.activeElement).toBe(modeButton);
+    opener.remove();
+    modeButton.remove();
   });
 
   it("moves focus to the detail's back control on a drill-in, and back on leaving it", () => {
@@ -835,7 +857,15 @@ describe("RightSidebar on the phone", () => {
     const slot = container.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
     expect(slot.contains(document.activeElement)).toBe(true);
     act(() => useDashboardStore.getState().selectTask(null));
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back" }));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Tasks" }));
+  });
+
+  it("focuses the detail's back control when the view opens at one", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    const { container } = renderSidebar("phone");
+    act(() => useDashboardStore.getState().openRightSidebarTask(7));
+    const slot = container.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    expect(document.activeElement).toBe(within(slot).getByRole("button", { name: "Back" }));
   });
 
   it("a view reached with no way back is a fresh entry point", () => {

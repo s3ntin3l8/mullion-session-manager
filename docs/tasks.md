@@ -387,7 +387,8 @@ on-screen keyboard is up, switches modes. Its board shows one lane at a time
 swipe between lanes. "Needs you" is a filter chip there, a dot marks each lane
 holding such a task, and the board opens on the first of them. A task opens
 full screen with its actions at the bottom. "⋯" lists the right sidebar's
-views, each opening full screen, then Settings. The back gesture closes a
+views, then Settings; a view opens above the mode bar, which stays visible:
+Workspace or Tasks closes it, and another view from "⋯" replaces it. The back gesture closes a
 sheet, then a detail inside a view, then the view; it switches mode only to
 return to Tasks after a task's session pill took you to Workspace. Task
 status columns are the board; a task with a linked

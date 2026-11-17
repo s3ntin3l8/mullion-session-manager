@@ -1066,6 +1066,7 @@ export function App() {
     ? sessions.find((s) => `session-${s.id}` === rightHalfPanelId)
     : undefined;
   const rightHalfOnScreen = !!rightHalfSession && !rightSidebarOpen;
+  const phoneViewCovering = isMobile && rightSidebarOpen;
   // The left half's pane, for its header.
   const leftHalfPane = (() => {
     // Only a left-half pane: the active panel can be a right-half one for a
@@ -1382,6 +1383,7 @@ export function App() {
           onOpenBrowser={onOpenBrowser}
           onOpenLauncher={openGlobalLauncher}
           mobileSessionSlot={mobileSessionSwitcher}
+          inert={phoneViewCovering}
         />
       )}
       <div className={`app-body${halvesBand ? " app-body--halves" : ""}`}>
@@ -1440,6 +1442,10 @@ export function App() {
         )}
         {halvesBand && <div className="shell-banners">{shellBanners}</div>}
         <div
+          // #3216 — a phone sidebar view covers the grid (and the top bar,
+          // above) but is not modal, so the mode bar under it stays reachable:
+          // what it covers leaves the tab order and the accessibility tree.
+          inert={phoneViewCovering}
           className={`grid-area${foldHalves ? " fold-half fold-half-left" : ""}${
             foldHalves && rightHalfOnScreen && focusedHalf === "left" ? " focused" : ""
           }`}

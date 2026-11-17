@@ -99,6 +99,15 @@ function drillKey(drill: SidebarBack | null): string | null {
     : `${drill.kind}:${drill.projectId}:${drill.number}`;
 }
 
+// Where focus goes in the phone's view: a detail's back control while one is
+// open, else the view's title (focusable from script only, so no keyboard).
+function phoneEntryFocus(root: HTMLElement | null, key: string | null): HTMLElement | null {
+  if (!root) return null;
+  return key !== null
+    ? root.querySelector<HTMLElement>(".right-sidebar-detail-slot button")
+    : root.querySelector<HTMLElement>(".right-sidebar-phone-title");
+}
+
 // Back from a drill-in: the sidebar history's step back, else the view's list.
 function leaveDrillIn(drill: SidebarBack): void {
   goSidebarBack(drill, () => {
@@ -117,9 +126,10 @@ function leaveDrillIn(drill: SidebarBack): void {
 // siblings of `.grid-area` inside `.app-body`.
 //
 // On the phone (#3014) there is no rail: the "more" sheet (PhoneMoreSheet)
-// opens a view, and an open view is a full screen with a back control. The
-// back gesture closes a drill-in inside it first (a task's detail, a PR), then
-// the view. A view opened straight at a detail (a task from the board) has no
+// opens a view, which fills the screen above the mode bar (#3216). The bar is
+// the way out (Workspace, Tasks, or another view from "more"); the view has no
+// back control of its own, only a pushed detail does. The back gesture closes
+// a drill-in inside it first (a task's detail, a PR), then the view. A view opened straight at a detail (a task from the board) has no
 // list behind it, so back from that detail closes the view.
 export function RightSidebar({
   tier,
@@ -312,17 +322,46 @@ export function RightSidebar({
     if (phoneOpen && enteredAtDetail && key === null) close();
   }, [phoneOpen, enteredAtDetail, key, close]);
 
-  // The full screen covers everything else, so it is a modal dialog: focus
-  // moves into it as it opens (its first control, the back arrow), Tab wraps
-  // inside it, and closing it returns focus to where it was (useFocusTrap).
+  // The view covers the screen down to the mode bar (#3216), which stays
+  // usable, so it is not modal: no Tab trap, no aria-modal. Focus still moves
+  // into it as it opens (its title, or a detail's back control when it opens
+  // at one) and returns to where it was on close (useFocusTrap).
   const phoneRef = useRef<HTMLElement>(null);
-  const { onKeyDown: onPhoneKeyDown, suppressRestore } = useFocusTrap({
+  // Updated before the trap's own effect runs (declared first), so the
+  // initial focus reads this commit's drill-in.
+  const keyRef = useRef(key);
+  useEffect(() => {
+    keyRef.current = key;
+  });
+  const phoneFocusTarget = useMemo(
+    () => ({
+      get current(): HTMLElement | null {
+        return phoneEntryFocus(phoneRef.current, keyRef.current);
+      },
+    }),
+    [],
+  );
+  // Leaving through the mode bar moved focus there on purpose (the tapped
+  // mode button): restoring it to the opener would take it away again. This
+  // cleanup runs before the trap's (declared first), so it can opt out.
+  const suppressRestoreRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!phoneOpen) return;
+    const panel = phoneRef.current;
+    return () => {
+      const focused = document.activeElement;
+      if (focused && focused !== document.body && !panel?.contains(focused)) {
+        suppressRestoreRef.current();
+      }
+    };
+  }, [phoneOpen]);
+  const { suppressRestore } = useFocusTrap({
     active: phoneOpen,
     containerRef: phoneRef,
+    initialFocusRef: phoneFocusTarget,
   });
   // suppressRestore is a fresh closure each render; the actions below read it
   // through a ref so they are not rebuilt every render.
-  const suppressRestoreRef = useRef(suppressRestore);
   useEffect(() => {
     suppressRestoreRef.current = suppressRestore;
   });
@@ -345,9 +384,9 @@ export function RightSidebar({
     [actions, close],
   );
 
-  // A drill-in swaps the header: the view's back row steps aside for the
+  // A drill-in swaps the header: the view's title row steps aside for the
   // detail's own header (mobile.css), so focus would fall to <body>. Move it to
-  // the back control that is showing now. The first run is the trap's.
+  // what is showing now. The first run is the trap's.
   const focusedKey = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     if (!phoneOpen) {
@@ -360,12 +399,7 @@ export function RightSidebar({
     }
     if (focusedKey.current === key) return;
     focusedKey.current = key;
-    const root = phoneRef.current;
-    const target =
-      key !== null
-        ? root?.querySelector<HTMLElement>(".right-sidebar-detail-slot button")
-        : root?.querySelector<HTMLElement>(".right-sidebar-phone-back");
-    target?.focus();
+    phoneEntryFocus(phoneRef.current, key)?.focus();
   }, [phoneOpen, key]);
 
   if (phone) {
@@ -375,9 +409,7 @@ export function RightSidebar({
         ref={phoneRef}
         className="right-sidebar-panel phone"
         role="dialog"
-        aria-modal="true"
         aria-label={`${view.label} view`}
-        onKeyDown={onPhoneKeyDown}
       >
         {/* Registered before the drill-in below, so a view opened straight at
             a detail is under it on the stack. */}

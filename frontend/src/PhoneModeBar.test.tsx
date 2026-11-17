@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PhoneModeBar } from "./PhoneModeBar.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
@@ -108,6 +108,78 @@ describe("PhoneModeBar", () => {
   it("carries the class the safe-area rule targets", () => {
     render(<Harness />);
     expect(screen.getByRole("navigation", { name: "Mode" })).toHaveClass("phone-mode-bar");
+  });
+});
+
+// #3216 — a right-sidebar view ends above the bar, and the bar is the way out.
+describe("PhoneModeBar with a sidebar view open", () => {
+  const openView = (view: string) =>
+    act(() => useDashboardStore.getState().openRightSidebarView(view));
+
+  it("marks More as the active entry, not the mode under the view", () => {
+    render(<Harness />);
+    openView("git");
+    const bar = screen.getByRole("navigation", { name: "Mode" });
+    const more = within(bar).getByRole("button", { name: "More" });
+    expect(more).toHaveClass("active");
+    expect(more).toHaveAttribute("aria-current", "true");
+    expect(within(bar).getByRole("button", { name: "Workspace" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(within(bar).getByRole("button", { name: "Tasks" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    expect(more).not.toHaveClass("active");
+    expect(more).not.toHaveAttribute("aria-current");
+  });
+
+  it("Workspace closes the view, also when Workspace is already the mode", async () => {
+    render(<Harness />);
+    openView("git");
+    await userEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(false);
+    expect(state.viewMode).toBe("list");
+    expect(screen.getByRole("button", { name: "Workspace" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("focuses the tapped mode button, which iOS does not do by itself", () => {
+    render(<Harness />);
+    openView("git");
+    const tasks = screen.getByRole("button", { name: "Tasks" });
+    // fireEvent: a click with no focus change, as on iOS.
+    fireEvent.click(tasks);
+    expect(document.activeElement).toBe(tasks);
+  });
+
+  it("Tasks closes the view and shows Tasks mode, also when it is already the mode", async () => {
+    render(<Harness />);
+    openView("files");
+    await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().viewMode).toBe("kanban");
+    openView("github");
+    await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().viewMode).toBe("kanban");
+  });
+
+  it("More opens the sheet, and another view from it replaces the open one", async () => {
+    render(<Harness />);
+    openView("git");
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
+    const sheet = screen.getByRole("dialog", { name: "More" });
+    await userEvent.click(within(sheet).getByRole("button", { name: /^GitHub/ }));
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.rightSidebarView).toBe("github");
+    expect(screen.queryByRole("dialog", { name: "More" })).toBeNull();
   });
 });
 

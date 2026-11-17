@@ -81,8 +81,16 @@ vi.mock("../WorkspaceSwitcher.js", () => ({
   ),
 }));
 vi.mock("../Toolbar.js", () => ({
-  Toolbar: ({ mobileSessionSlot }: { mobileSessionSlot?: React.ReactNode }) => (
-    <div data-testid="toolbar">{mobileSessionSlot}</div>
+  Toolbar: ({
+    mobileSessionSlot,
+    inert,
+  }: {
+    mobileSessionSlot?: React.ReactNode;
+    inert?: boolean;
+  }) => (
+    <div data-testid="toolbar" inert={inert}>
+      {mobileSessionSlot}
+    </div>
   ),
 }));
 // From 700px the left rail holds the sidebar toggle the top bar used to (#3009).

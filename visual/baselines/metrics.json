@@ -10,12 +10,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 4
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 8
+        "nodes": 5
       },
       {
         "id": "nested-interactive",
@@ -41,12 +41,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 4
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 8
+        "nodes": 5
       },
       {
         "id": "nested-interactive",
@@ -70,11 +70,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 8
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 3
@@ -90,11 +85,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 8
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -114,12 +104,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 4
       },
       {
         "id": "nested-interactive",
@@ -145,12 +135,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 4
       },
       {
         "id": "nested-interactive",
@@ -176,12 +166,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 4
       },
       {
         "id": "nested-interactive",
@@ -207,12 +197,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 4
       },
       {
         "id": "nested-interactive",
@@ -238,12 +228,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 4
       },
       {
         "id": "nested-interactive",
@@ -269,12 +259,12 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 1
       },
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 4
       },
       {
         "id": "nested-interactive",
@@ -298,11 +288,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 1
@@ -318,11 +303,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 1
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -340,11 +320,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 1
@@ -361,10 +336,37 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
+        "id": "region",
+        "impact": "moderate",
         "nodes": 1
-      },
+      }
+    ],
+    "console": []
+  },
+  "phone-sidebar-view.phone.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 1
+      }
+    ],
+    "console": []
+  },
+  "phone-sidebar-view.phone.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
       {
         "id": "region",
         "impact": "moderate",
@@ -382,16 +384,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 1
@@ -407,16 +399,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 1
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -434,11 +416,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 2
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 2
@@ -454,11 +431,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 2
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -476,11 +448,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 2
@@ -496,11 +463,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -518,11 +480,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 2
@@ -538,11 +495,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -560,11 +512,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 2
@@ -580,11 +527,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -602,11 +544,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 2
@@ -622,11 +559,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -644,11 +576,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 8
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 2
@@ -664,11 +591,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 8
-      },
       {
         "id": "region",
         "impact": "moderate",
@@ -686,11 +608,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 8
-      },
-      {
         "id": "region",
         "impact": "moderate",
         "nodes": 2
@@ -706,11 +623,6 @@
     "offscreen": 0,
     "offscreenSample": [],
     "axe": [
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 8
-      },
       {
         "id": "region",
         "impact": "moderate",
