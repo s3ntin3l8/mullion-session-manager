@@ -30,6 +30,7 @@ export interface HostSummary {
   isLocal: boolean;
   hasToken: boolean;
   createdAt: Date;
+  lastSeenAt: Date | null;
   // Issue #245 / roadmap 7.1 — "manual" (created via Settings -> Add host,
   // including every pre-#245 row, which has origin === null in the DB) vs
   // "enrolled" (auto-created by an agent's own registration call against
@@ -162,6 +163,7 @@ function toSummary(row: HostRow): HostSummary {
     isLocal: row.id === LOCAL_HOST_ID,
     hasToken: row.authTokenEnc !== null && row.authTokenEnc !== "",
     createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
     origin: row.origin === "enrolled" ? "enrolled" : "manual",
     platform: row.platform,
     drained: row.drained,
@@ -228,6 +230,24 @@ function reportedHostname(row: HostRow): string | null {
   }
 }
 
+/** Hosts with an active session, including sessions inheriting their project's host. */
+export function activeSessionHostIds(app: FastifyInstance): Set<string> {
+  // A session runs on its own host when it has one, else its project's.
+  const busy = new Set<string>();
+  const active = app.db
+    .select({ sessionHost: sessions.hostId, projectHost: projects.hostId })
+    .from(sessions)
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
+    .where(eq(sessions.status, "active"))
+    .all();
+  for (const a of active) {
+    const id = a.sessionHost ?? a.projectHost;
+    if (id) busy.add(id);
+  }
+
+  return busy;
+}
+
 /**
  * Issue #2582 — flags probable duplicate rows left by an agent that lost its
  * identity (its state file did not survive a restart) and so re-enrolled as a
@@ -241,6 +261,7 @@ function reportedHostname(row: HostRow): string | null {
 export function findPossibleDuplicates(
   app: FastifyInstance,
   healthOf: (hostId: string) => string,
+  busy: ReadonlySet<string> = activeSessionHostIds(app),
 ): Map<string, string[]> {
   const enrolled = app.db
     .select()
@@ -250,19 +271,6 @@ export function findPossibleDuplicates(
     .filter((r) => r.id !== LOCAL_HOST_ID);
   const result = new Map<string, string[]>();
   if (enrolled.length < 2) return result;
-
-  // A session runs on its own host when it has one, else its project's.
-  const busy = new Set<string>();
-  const active = app.db
-    .select({ sessionHost: sessions.hostId, projectHost: projects.hostId })
-    .from(sessions)
-    .leftJoin(projects, eq(sessions.projectId, projects.id))
-    .where(eq(sessions.status, "active"))
-    .all();
-  for (const a of active) {
-    const id = a.sessionHost ?? a.projectHost;
-    if (id) busy.add(id);
-  }
 
   const stale = enrolled.filter((r) => healthOf(r.id) === "offline" && !busy.has(r.id));
   for (const newer of enrolled) {

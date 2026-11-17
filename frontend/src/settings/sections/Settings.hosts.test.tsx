@@ -46,6 +46,7 @@ describe("Settings -> Hosts", () => {
         hasToken: true,
         createdAt: "2026-01-01T00:00:00.000Z",
         health: "pending",
+        stale: false,
         lastSeenAt: null,
         lastCheckedAt: null,
         // Issue #1725 — the drain flag: every host carries it.
@@ -295,6 +296,103 @@ describe("Settings -> Hosts", () => {
 
     await waitFor(() => expect(screen.queryByTestId("host-row-remote-1")).not.toBeInTheDocument());
     expect(screen.queryByText(/pass \?cascade=true/)).not.toBeInTheDocument();
+  });
+
+  describe("stale hosts", () => {
+    function markStale() {
+      hostsDb[0].stale = true;
+      hostsDb[0].health = "offline";
+      hostsDb[0].lastSeenAt = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    }
+
+    it("shows the elapsed-days badge only for a stale host", async () => {
+      markStale();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      const row = await screen.findByTestId("host-row-remote-1");
+      expect(within(row).getByText("Not seen for 45 days")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove selected hosts" })).toBeDisabled();
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+    });
+
+    it("does not offer cleanup or a badge for a host not marked stale", async () => {
+      hostsDb[0].lastSeenAt = new Date(Date.now() - 45 * 86_400_000).toISOString();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await screen.findByTestId("host-row-remote-1");
+      expect(screen.queryByText(/Not seen for/)).not.toBeInTheDocument();
+      expect(screen.queryByText("Remove stale hosts")).not.toBeInTheDocument();
+    });
+
+    it("removes only selected hosts, leaving another stale host untouched", async () => {
+      markStale();
+      hostsDb[0].hasProjects = false;
+      hostsDb.push({ ...hostsDb[0], id: "remote-2", name: "other-server" });
+      updateInfoDb["remote-2"] = updateInfoDb["remote-1"];
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      await waitFor(() => expect(hostsDb.map((host) => host.id)).toEqual(["remote-2"]));
+      const deletes = fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE");
+      expect(deletes).toEqual([
+        ["/api/hosts/remote-1", expect.objectContaining({ method: "DELETE" })],
+      ]);
+    });
+
+    it("uses the existing cascade prompt and resumes the selected queue after confirmation", async () => {
+      markStale();
+      hostsDb.push({ ...hostsDb[0], id: "remote-2", name: "other-server", hasProjects: false });
+      updateInfoDb["remote-2"] = updateInfoDb["remote-1"];
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("checkbox", { name: "other-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      expect(await screen.findByText(/host still has 2 project\(s\)/)).toBeInTheDocument();
+      expect(hostsDb).toHaveLength(2);
+      await user.click(screen.getByRole("button", { name: "Delete host and its projects" }));
+      await waitFor(() => expect(hostsDb).toHaveLength(0));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/hosts/remote-1?cascade=true",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
+    it("stops the removal queue and surfaces an ordinary delete failure", async () => {
+      markStale();
+      hostsDb.push({ ...hostsDb[0], id: "remote-2", name: "other-server" });
+      updateInfoDb["remote-2"] = updateInfoDb["remote-1"];
+      ({ fetchMock, unexpectedCalls } = mockFetch({
+        ...baseRoutes(),
+        "DELETE /api/hosts/:id": () => jsonResponse(500, { message: "Could not remove host" }),
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("checkbox", { name: "other-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      expect(await screen.findByText("Could not remove host")).toBeInTheDocument();
+      expect(hostsDb).toHaveLength(2);
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+      expect(
+        screen.queryByRole("button", { name: "Delete host and its projects" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("cancelling a cascade prompt leaves all selected hosts in place", async () => {
+      markStale();
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      await screen.findByText(/host still has 2 project\(s\)/);
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(hostsDb).toHaveLength(1);
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/hosts/remote-1?cascade=true",
+        expect.anything(),
+      );
+    });
   });
 
   // Issue #247 / roadmap 7.4.

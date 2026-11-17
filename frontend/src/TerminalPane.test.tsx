@@ -617,7 +617,7 @@ function renderPane(
         autoAttachDockerLogs: false,
       },
       github: { pollActiveSeconds: -1, pollQuietSeconds: -1, pollStaleThresholdSeconds: -1 },
-      hosts: { heartbeatSeconds: -1 },
+      hosts: { heartbeatSeconds: -1, staleAfterDays: 30 },
       reviewRelay: {
         provider: "none",
         apiUrl: "",

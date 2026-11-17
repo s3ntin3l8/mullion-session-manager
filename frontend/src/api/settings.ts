@@ -248,6 +248,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   hosts: {
     heartbeatSeconds: -1,
+    staleAfterDays: 30,
   },
   reviewRelay: {
     provider: "none",

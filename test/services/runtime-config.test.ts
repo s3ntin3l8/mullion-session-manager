@@ -65,7 +65,7 @@ describe("runtime-config", () => {
   it("lets a settings value win over env", () => {
     const s = withOverrides({
       github: { pollActiveSeconds: 20, pollQuietSeconds: 120, pollStaleThresholdSeconds: 600 },
-      hosts: { heartbeatSeconds: 0 },
+      hosts: { heartbeatSeconds: 0, staleAfterDays: 30 },
       browser: { ...DEFAULT_SETTINGS.browser, framerate: 24, maxInstances: 8 },
       devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "off" },
       server: { logLevel: "debug" },

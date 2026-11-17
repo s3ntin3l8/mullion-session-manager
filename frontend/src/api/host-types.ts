@@ -5,8 +5,8 @@ import type {
 } from "../../../src/shared/constants.js";
 import type { HostProtocolStatus } from "../../../src/shared/agent-protocol.js";
 
-// #246) — health/lastSeenAt are never persisted, just the primary's
-// in-memory view of "is it actually up right now" as of the last sweep.
+// Health is the primary's in-memory view as of the last sweep; lastSeenAt
+// falls back to the persisted time when no successful sweep is in memory.
 // Never carries a token, just whether one is set (hasToken), same
 // "no secrets over the API" rule AppSettings/ServerInfo above already follow.
 export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
@@ -60,10 +60,10 @@ export interface Host {
   health: HostHealthStatus;
   // Why the host is degraded when the primary knows ("channel saturated"). Absent from an older primary.
   healthReason?: string | null;
-  // Not currently rendered anywhere — kept for a future "last seen Nm ago"
-  // affordance (would make a "degraded" host more actionable than a bare
-  // color). Deliberate forward-plumbing, not dead code: it's the one field
-  // in this merge the backend computes but the UI doesn't consume yet.
+  // Offline beyond the configured threshold, with no active session.
+  // Absent from an older primary.
+  stale?: boolean;
+  // Last successful contact, preserved across primary restarts.
   lastSeenAt: string | null;
   // Distinct from lastSeenAt (last successful contact): advances on every
   // sweep result, success or failure. Settings.tsx uses this to tell "a
@@ -158,4 +158,9 @@ export interface PlacementPreview {
    * would refuse the launch (409) rather than use `hostId`.
    */
   refusal?: { detail: string; transient: boolean; unreadable?: boolean };
+}
+
+export interface HostSettings {
+  heartbeatSeconds: number;
+  staleAfterDays: number;
 }

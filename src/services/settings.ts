@@ -112,6 +112,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   hosts: {
     heartbeatSeconds: -1,
+    staleAfterDays: 30,
   },
   reviewRelay: {
     provider: "none",
@@ -657,6 +658,13 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
     },
     // -1 = inherit; 0 is a real "heartbeat off" value, matching the env var.
     hosts: {
+      staleAfterDays: Number.isInteger(settings.hosts.staleAfterDays)
+        ? safeNumber(settings.hosts.staleAfterDays, {
+            min: 0,
+            max: 36500,
+            fallback: DEFAULT_SETTINGS.hosts.staleAfterDays,
+          })
+        : DEFAULT_SETTINGS.hosts.staleAfterDays,
       heartbeatSeconds: safeSentinelNumber(settings.hosts.heartbeatSeconds, {
         sentinel: -1,
         min: 0,
