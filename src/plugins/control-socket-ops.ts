@@ -30,6 +30,7 @@ import {
 import type { OpContext, OpSpec, ReplyPayload, Route, Scope } from "./control-socket-core.js";
 import { findRunningDockSession } from "../services/dock-control.js";
 import { dockConfigOps } from "./control-socket-dock-config.js";
+import { taskOps } from "./control-socket-tasks.js";
 import {
   STREAM_UNAVAILABLE,
   bad,
@@ -281,6 +282,7 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
 
 export const OPS: Record<string, OpSpec> = {
   ...dockConfigOps,
+  ...taskOps,
   ping: {
     scopes: ["full", "session"],
     handler: ({ reply }) => {
@@ -950,17 +952,6 @@ export const OPS: Record<string, OpSpec> = {
   "tasks.push": routeOp(
     ["full", "session"],
     onSession((id) => ({ method: "POST", url: `/api/sessions/${enc(id)}/task-push` })),
-  ),
-  // #3165 — read-only Task Master ops, full-scope only (matching sessions.list
-  // and projects.list): a session-scoped connection cannot enumerate or read
-  // arbitrary tasks across the instance.
-  "tasks.list": routeOp(["full"], ({ body }) => ({
-    method: "GET",
-    url: buildQueryUrl("/api/tasks", body),
-  })),
-  "tasks.get": routeOp(
-    ["full"],
-    onField("taskId", (id) => ({ method: "GET", url: `/api/tasks/${enc(id)}` })),
   ),
   // Status of the latest review run for the caller's PR, and stopping a run the
   // caller's own session dispatched (routes/review-relay.ts enforces that).

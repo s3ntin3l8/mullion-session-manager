@@ -9,6 +9,7 @@
 
 import { createDockTools } from "./dock-tools.mjs";
 import { getDockConfig, setDockConfig } from "./dock-config-tools.mjs";
+import { listTasks, getTask, retryTask, startTask, closeTask, archiveTask } from "./task-tools.mjs";
 import { browserToolResult } from "./browser-screenshot.mjs";
 import { useDevice } from "./device-use.mjs";
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
@@ -862,47 +863,6 @@ const pushTaskBranch = {
   },
 };
 
-const listTasks = {
-  name: "list_tasks",
-  description:
-    "List Task Master tasks, optionally filtered by status or projectId. Requires full scope " +
-    "(MULLION_AUTH_TOKEN) — 403s from inside a normal agent session when authentication is " +
-    "enabled (unrestricted if it's disabled entirely).",
-  inputSchema: {
-    type: "object",
-    properties: {
-      status: { type: "string", description: "Filter to tasks with this status." },
-      projectId: { type: "string", description: "Filter to tasks of this project." },
-    },
-  },
-  async handler(args, client) {
-    const result = await client.listTasks({
-      status: args?.status,
-      projectId: args?.projectId,
-    });
-    return JSON.stringify(result);
-  },
-};
-
-const getTask = {
-  name: "get_task",
-  description:
-    "Get a single Task Master task by id. Requires full scope (MULLION_AUTH_TOKEN) — 403s " +
-    "from inside a normal agent session when authentication is enabled (unrestricted if it's " +
-    "disabled entirely).",
-  inputSchema: {
-    type: "object",
-    required: ["taskId"],
-    properties: {
-      taskId: { type: "string", description: "The task id to fetch." },
-    },
-  },
-  async handler(args, client) {
-    const result = await client.getTask(args.taskId);
-    return JSON.stringify(result);
-  },
-};
-
 const requestReview = {
   name: "request_review",
   description:
@@ -1403,6 +1363,10 @@ export const TOOLS = [
   pushTaskBranch,
   listTasks,
   getTask,
+  retryTask,
+  startTask,
+  closeTask,
+  archiveTask,
   requestReview,
   reviewStatus,
   stopReview,

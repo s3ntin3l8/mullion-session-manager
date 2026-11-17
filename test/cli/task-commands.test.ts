@@ -87,3 +87,88 @@ describe("mullion task list / get (issue #3165)", () => {
     expect(notFoundIo.stderr.write).toHaveBeenCalledWith(expect.stringContaining("Not Found"));
   });
 });
+
+describe("mullion task retry / start / close / archive / unarchive (issue #3173)", () => {
+  it("task retry sends tasks.retry, prints id and status, and supports --agent/--review-agent/--json", async () => {
+    const task = { id: 42, status: "ready" };
+    const client = fakeClient({ request: vi.fn(async () => task) });
+    const io = fakeIo();
+    const code = await runCommand(["task", "retry", "42"], { client, io });
+    expect(code).toBe(0);
+    expect(client.request).toHaveBeenCalledWith("tasks.retry", { taskId: "42" });
+    expect(io.written.join("")).toBe("42\tready\n");
+
+    const jsonIo = fakeIo();
+    const jsonCode = await runCommand(
+      ["task", "retry", "42", "--agent", "codex", "--review-agent", "hermes", "--json"],
+      { client, io: jsonIo },
+    );
+    expect(jsonCode).toBe(0);
+    expect(client.request).toHaveBeenLastCalledWith("tasks.retry", {
+      taskId: "42",
+      agent: "codex",
+      reviewAgent: "hermes",
+    });
+    expect(JSON.parse(jsonIo.written.join(""))).toEqual(task);
+  });
+
+  it("task start sends tasks.start and prints resulting status", async () => {
+    const task = { id: 10, status: "claimed" };
+    const client = fakeClient({ request: vi.fn(async () => task) });
+    const io = fakeIo();
+    const code = await runCommand(["task", "start", "10", "--agent", "claude"], { client, io });
+    expect(code).toBe(0);
+    expect(client.request).toHaveBeenCalledWith("tasks.start", { taskId: "10", agent: "claude" });
+    expect(io.written.join("")).toBe("10\tclaimed\n");
+  });
+
+  it("task close sends tasks.close with optional --reason and prints resulting status", async () => {
+    const task = { id: 11, status: "failed", failureReason: "superseded" };
+    const client = fakeClient({ request: vi.fn(async () => task) });
+    const io = fakeIo();
+    const code = await runCommand(["task", "close", "11", "--reason", "superseded"], {
+      client,
+      io,
+    });
+    expect(code).toBe(0);
+    expect(client.request).toHaveBeenCalledWith("tasks.close", {
+      taskId: "11",
+      reason: "superseded",
+    });
+    expect(io.written.join("")).toBe("11\tfailed\n");
+  });
+
+  it("task archive and unarchive send tasks.archive / tasks.unarchive and print status", async () => {
+    const archivedTask = { id: 12, status: "done", archivedAt: "2026-11-17T00:00:00.000Z" };
+    const unarchivedTask = { id: 12, status: "done", archivedAt: null };
+    const client = fakeClient({
+      request: vi.fn().mockResolvedValueOnce(archivedTask).mockResolvedValueOnce(unarchivedTask),
+    });
+
+    const archIo = fakeIo();
+    expect(await runCommand(["task", "archive", "12"], { client, io: archIo })).toBe(0);
+    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.archive", { taskId: "12" });
+    expect(archIo.written.join("")).toBe("12\tdone\tarchived\n");
+
+    const unarchIo = fakeIo();
+    expect(await runCommand(["task", "unarchive", "12"], { client, io: unarchIo })).toBe(0);
+    expect(client.request).toHaveBeenNthCalledWith(2, "tasks.unarchive", { taskId: "12" });
+    expect(unarchIo.written.join("")).toBe("12\tdone\tunarchived\n");
+  });
+
+  it("exits 2 when id is missing and exits 1 with route message on refused transition", async () => {
+    for (const verb of ["retry", "start", "close", "archive", "unarchive"]) {
+      const io = fakeIo();
+      expect(await runCommand(["task", verb], { client: fakeClient(), io })).toBe(2);
+    }
+
+    const err = Object.assign(new Error("Task is not failed (status: ready)"), { status: 409 });
+    const client = fakeClient({ request: vi.fn().mockRejectedValue(err) });
+    const io = fakeIo();
+    const code = await runCommand(["task", "retry", "99"], { client, io });
+    expect(code).toBe(1);
+    expect(io.stderr.write).toHaveBeenCalledWith(
+      expect.stringContaining("Task is not failed (status: ready)"),
+    );
+  });
+});

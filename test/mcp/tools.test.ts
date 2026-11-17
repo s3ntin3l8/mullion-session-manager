@@ -79,6 +79,10 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "push_task_branch",
       "list_tasks",
       "get_task",
+      "retry_task",
+      "start_task",
+      "close_task",
+      "archive_task",
       "request_review",
       "review_status",
       "stop_review",
@@ -617,6 +621,37 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const text = await tool.handler({ taskId: "42" }, { getTask });
     expect(getTask).toHaveBeenCalledWith("42");
     expect(JSON.parse(text)).toEqual({ id: 42, status: "done", title: "D" });
+  });
+
+  it("retry_task, start_task, close_task, and archive_task forward arguments to client", async () => {
+    const retry = TOOLS.find((t) => t.name === "retry_task")!;
+    const retryTask = vi.fn().mockResolvedValue({ id: 1, status: "ready" });
+    expect(JSON.parse(await retry.handler({ taskId: "1", agent: "codex" }, { retryTask }))).toEqual(
+      { id: 1, status: "ready" },
+    );
+    expect(retryTask).toHaveBeenCalledWith("1", { agent: "codex", reviewAgent: undefined });
+
+    const start = TOOLS.find((t) => t.name === "start_task")!;
+    const startTask = vi.fn().mockResolvedValue({ id: 2, status: "claimed" });
+    expect(JSON.parse(await start.handler({ taskId: "2" }, { startTask }))).toEqual({
+      id: 2,
+      status: "claimed",
+    });
+    expect(startTask).toHaveBeenCalledWith("2", { agent: undefined, reviewAgent: undefined });
+
+    const close = TOOLS.find((t) => t.name === "close_task")!;
+    const closeTask = vi.fn().mockResolvedValue({ id: 3, status: "failed" });
+    expect(
+      JSON.parse(await close.handler({ taskId: "3", reason: "wontfix" }, { closeTask })),
+    ).toEqual({ id: 3, status: "failed" });
+    expect(closeTask).toHaveBeenCalledWith("3", { reason: "wontfix" });
+
+    const archive = TOOLS.find((t) => t.name === "archive_task")!;
+    const archiveTask = vi.fn().mockResolvedValue({ id: 4, status: "done", archivedAt: null });
+    expect(
+      JSON.parse(await archive.handler({ taskId: "4", unarchive: true }, { archiveTask })),
+    ).toEqual({ id: 4, status: "done", archivedAt: null });
+    expect(archiveTask).toHaveBeenCalledWith("4", { unarchive: true });
   });
 
   it("request_review passes pr_number to client.requestReview and returns the result", async () => {

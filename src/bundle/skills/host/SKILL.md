@@ -71,7 +71,8 @@ the same way `--mcp-config` is for Claude Code.
 Full-scope-only MCP tools (`list_sessions`, `start_dock_session`,
 `stop_dock_session`, `list_projects`, `create_preview`, `delete_preview`,
 `list_previews`, `set_project_tooling`, `delete_device`, `list_tasks`,
-`get_task`) reply with a scope
+`get_task`, `retry_task`, `start_task`, `close_task`, `archive_task`) reply
+with a scope
 error from inside a session, same as the CLI's own — they're for an
 operator running `mullion mcp` directly, not for you.
 

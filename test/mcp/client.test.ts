@@ -720,6 +720,63 @@ describe("MullionClient (issue #271)", () => {
       });
     });
 
+    describe("retryTask, startTask, closeTask, and archiveTask (#3173)", () => {
+      it("retryTask sends tasks.retry with taskId and optional agent overrides", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("tasks.retry");
+          expect(msg.body).toEqual({ taskId: "42", agent: "codex" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, result: { id: 42, status: "ready" } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.retryTask("42", { agent: "codex" })).toEqual({
+          id: 42,
+          status: "ready",
+        });
+      });
+
+      it("startTask sends tasks.start with taskId", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("tasks.start");
+          expect(msg.body).toEqual({ taskId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, result: { id: 42, status: "claimed" } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.startTask("42")).toEqual({ id: 42, status: "claimed" });
+      });
+
+      it("closeTask sends tasks.close with taskId and optional reason", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("tasks.close");
+          expect(msg.body).toEqual({ taskId: "42", reason: "wontfix" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, result: { id: 42, status: "failed" } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.closeTask("42", { reason: "wontfix" })).toEqual({
+          id: 42,
+          status: "failed",
+        });
+      });
+
+      it("archiveTask sends tasks.archive or tasks.unarchive based on unarchive flag", async () => {
+        const ops: string[] = [];
+        const socketPath = await startControlServer((msg, socket) => {
+          ops.push(msg.op);
+          expect(msg.body).toEqual({ taskId: "42" });
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, result: { id: 42 } })}\n`);
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        await client.archiveTask("42");
+        await client.archiveTask("42", { unarchive: true });
+        expect(ops).toEqual(["tasks.archive", "tasks.unarchive"]);
+      });
+    });
+
     describe("requestReview", () => {
       it("sends reviews.request with no body fields by default", async () => {
         const socketPath = await startControlServer((msg, socket) => {
