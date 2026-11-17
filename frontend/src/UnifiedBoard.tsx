@@ -623,7 +623,6 @@ export function UnifiedBoard({
             {facetsShown && <TaskFacetsPanel api={filterApi} projects={projects} />}
             {stacked ? (
               <div className="task-board-lanes task-board-lanes--stacked">
-                {boardNote}
                 <StackedBoard
                   sections={stackedSections}
                   selectedTaskId={selectedTaskId}
@@ -653,6 +652,9 @@ export function UnifiedBoard({
                     />
                   )}
                 />
+                {/* After the sections, not over them: the stacked rows fill
+                    the lanes' width, so the note takes the space below them. */}
+                {boardNote}
               </div>
             ) : (
               <div className="task-board-lanes">

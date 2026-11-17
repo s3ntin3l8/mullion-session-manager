@@ -8,35 +8,61 @@
 // the strip stays at the end of the page; it is never pinned over the lanes.
 //
 // jsdom does no layout, so this pins the contract against the stylesheets as
-// written, parsed with postcss (which keeps the phone tier's nested rules).
+// written. A small brace parser keeps the phone tier's nested rules (no CSS
+// library: the stylesheets are plain rules, at-rules and one level of nesting).
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import postcss from "postcss";
-import type { Rule, Root } from "postcss";
 
 const STYLES_DIR = fileURLToPath(new URL("../../frontend/src/styles/", import.meta.url));
 const PHONE_TIER = ':where(.app[data-tier="phone"])';
 
-function parse(name: string): Root {
-  return postcss.parse(fs.readFileSync(path.join(STYLES_DIR, name), "utf8"));
+interface CssRule {
+  selector: string;
+  parent: CssRule | null;
+  decls: Array<[string, string]>;
 }
 
-// Every declaration of `prop` on a rule whose selector list contains
-// `selector`, optionally only inside the phone tier's block.
-function declsFor(root: Root, selector: string, prop: string, phoneOnly: boolean): string[] {
-  const out: string[] = [];
-  root.walkRules((rule: Rule) => {
-    if (!rule.selectors.map((s) => s.trim()).includes(selector)) return;
-    const parent = rule.parent as Rule | undefined;
-    const inPhone = parent?.type === "rule" && parent.selector.trim() === PHONE_TIER;
-    if (phoneOnly && !inPhone) return;
-    rule.walkDecls(prop, (d) => {
-      if (d.parent === rule) out.push(d.value.trim());
-    });
-  });
-  return out;
+function parse(name: string): CssRule[] {
+  const css = fs.readFileSync(path.join(STYLES_DIR, name), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules: CssRule[] = [];
+  const stack: CssRule[] = [];
+  let buf = "";
+  for (const ch of css) {
+    if (ch === "{") {
+      const rule: CssRule = { selector: buf.trim(), parent: stack.at(-1) ?? null, decls: [] };
+      rules.push(rule);
+      stack.push(rule);
+      buf = "";
+    } else if (ch === "}" || ch === ";") {
+      const text = buf.trim();
+      const colon = text.indexOf(":");
+      const owner = stack.at(-1);
+      if (owner && colon > 0 && !text.startsWith("@")) {
+        owner.decls.push([text.slice(0, colon).trim(), text.slice(colon + 1).trim()]);
+      }
+      buf = "";
+      if (ch === "}") stack.pop();
+    } else {
+      buf += ch;
+    }
+  }
+  return rules;
+}
+
+// Every value of `prop` declared directly on a rule whose selector list
+// contains `selector`, optionally only inside the phone tier's block.
+function declsFor(rules: CssRule[], selector: string, prop: string, phoneOnly: boolean): string[] {
+  return rules
+    .filter((r) =>
+      r.selector
+        .split(",")
+        .map((s) => s.trim())
+        .includes(selector),
+    )
+    .filter((r) => !phoneOnly || r.parent?.selector === PHONE_TIER)
+    .flatMap((r) => r.decls.filter(([p]) => p === prop).map(([, v]) => v));
 }
 
 describe("phone Tasks screen: the ad-hoc strip sits at the bottom (#3243)", () => {

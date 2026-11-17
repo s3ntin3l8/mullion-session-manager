@@ -295,6 +295,13 @@
 .task-board-lanes--stacked {
   overflow-x: hidden;
 }
+/* The stacked sections are full-width rows the centred note would lie on,
+   so here the note is in the flow after them (UnifiedBoard.tsx) and centred
+   in the space left below them. */
+.task-board-lanes--stacked > .task-board-empty {
+  position: static;
+  flex: 1 0 auto;
+}
 .stacked-board {
   display: flex;
   flex-direction: column;
