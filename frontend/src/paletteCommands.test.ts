@@ -232,6 +232,20 @@ describe("buildPaletteCommands", () => {
     expect(agentBrowser).toHaveBeenCalledWith(session);
   });
 
+  it("names the session in the Agent Browser and timeline rows by its pane title", () => {
+    const { context } = ctx();
+    const session = makeSession({ id: 9, projectId: 5, name: "hotfix", lastTitle: "vim" });
+    const byId = Object.fromEntries(
+      buildPaletteCommands({
+        ...context,
+        activeSession: session,
+        open: { ...context.open, agentBrowser: vi.fn(), timeline: vi.fn() },
+      }).map((c) => [c.id, c]),
+    );
+    expect(byId["agent-browser"].title).toBe("Open Agent Browser: vim");
+    expect(byId["session-timeline"].subtitle).toBe("vim");
+  });
+
   it("labels every embedded-browser entry as a preview (#3215)", () => {
     const commands = buildPaletteCommands(
       ctx({ favoriteUrls: [{ id: 1, url: "http://localhost:3000", label: "App" }] }).context,

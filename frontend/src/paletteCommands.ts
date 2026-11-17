@@ -19,7 +19,7 @@ import {
 } from "./ui/icons.js";
 import { DOCK_UNAVAILABLE, type DockUnavailableReason } from "./lib/dockAvailability.js";
 import type { Session } from "./api/index.js";
-import { sessionDisplayTitle } from "./lib/sessionDisplay.js";
+import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 
 type CommandIcon = ComponentType<{ size?: number; style?: CSSProperties }>;
 
@@ -469,7 +469,7 @@ export function buildPaletteCommands({
   if (open.timeline && activeSession) {
     const openTimeline = open.timeline;
     const session = activeSession;
-    const label = session.name || session.lastTitle || session.command;
+    const label = sessionPaneTitle(session);
     commands.push({
       id: "session-timeline",
       title: "Session timeline",
@@ -484,7 +484,9 @@ export function buildPaletteCommands({
   if (open.agentBrowser && activeSession) {
     const openAgentBrowser = open.agentBrowser;
     const session = activeSession;
-    const label = sessionDisplayTitle(session);
+    // The same rule as the pane it opens (openBrowserPanePanel) and the
+    // timeline row above: a session's tab title.
+    const label = sessionPaneTitle(session);
     commands.push({
       id: "agent-browser",
       title: `Open Agent Browser: ${label}`,

@@ -11,6 +11,7 @@ import type { Task, Workspace, CodexHookTrust } from "./api/index.js";
 import { positionToDirection } from "dockview";
 import type { Session, Device } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
+import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 import type { ProjectHubTab } from "./ProjectHubPanel.js";
 
@@ -1031,7 +1032,7 @@ export function openBrowserPanePanel(
     `browserPane-${session.id}`,
     {
       component: "browserPane",
-      title: `Agent Browser: ${session.name || session.command}`,
+      title: `Agent Browser: ${sessionPaneTitle(session)}`,
       params: { sessionId: session.id },
     },
     layout,

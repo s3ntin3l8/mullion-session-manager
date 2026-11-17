@@ -28,15 +28,17 @@ There are two kinds of preview, in either mode:
 - **Project preview** — one per project (opening it again reuses the same
   slug in proxy mode). Resolves to the project's configured dev-server
   URL/port.
-- **External preview** — any URL you paste via "New preview tab", validated
+- **External preview** — any URL you paste via "New preview tab" (the
+  palette's "New blank preview browser"), validated
   against SSRF guards at creation time in proxy mode (see Security below);
   direct-embed mode has no server-side fetch, so there's nothing to
   validate — the guard simply doesn't apply.
 
 Open a preview using **Preview ▾** in a project's Dock header (see [`dock.md`](dock.md)'s UI reference), the command palette
-("Preview: `<project>`" for the project preview, or "New preview tab" for
-an empty pane with the address bar focused, for typing an arbitrary URL
-directly).
+("Open preview browser" to choose a preview target for the project,
+"New blank preview browser" for an empty pane with the address bar focused,
+for typing an arbitrary URL directly, or "Preview: `<label>`" for a saved
+URL).
 
 ## The Browser view in the right sidebar (below 1100px)
 
