@@ -105,7 +105,7 @@ export function buildSessionTitleContexts(
 
   const groups = new Map<string, Session[]>();
   for (const s of sessions) {
-    if (s.kind !== "terminal" || s.status === "killed") continue;
+    if (!canBeListed(s)) continue;
     const { title, fromLaunch } = unnumberedTitle(s, taskTitleBySession.get(s.id));
     if (!fromLaunch) continue;
     const key = `${s.projectId}\u0000${title}`;
@@ -183,10 +183,16 @@ export interface ListedSessionOptions {
 // showTaskSessions), extracted so the phone session picker lists precisely
 // the same sessions as the sidebar instead of growing a second copy that
 // could drift. Project membership stays with the caller.
+// Whether any view can list the session at all: a terminal that was not
+// killed. isListedSession adds each view's own filters on top; numbering
+// (#3285) counts over this set so it cannot drift from the views.
+export function canBeListed(session: Session): boolean {
+  return session.kind === "terminal" && session.status !== "killed";
+}
+
 export function isListedSession(session: Session, opts: ListedSessionOptions): boolean {
   return (
-    session.kind === "terminal" &&
-    session.status !== "killed" &&
+    canBeListed(session) &&
     (!opts.hideEndedSessions || session.status === "active" || opts.includeExited === true) &&
     (opts.showTaskSessions || !opts.taskSessionIds.has(session.id))
   );
