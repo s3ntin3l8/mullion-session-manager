@@ -1401,9 +1401,11 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
   "lacks": the previous reading is kept (and a warning logged), while a clean
   non-zero exit is a real "lacks". The agent logs at info, once per change,
   which step failed (`simctl missing`, `first launch incomplete`,
-  `no simulator runtime`). It does **not** promise swiftlint, xcbeautify,
-  fastlane, CocoaPods or an Android SDK, or that Homebrew tools are on a
-  session's `PATH`, so a task on an `xcode` host can still fail in a build.
+  `no simulator runtime`); Settings → Hosts shows the `Xcode` chip when present
+  (and does not show the failing-step reason). It does **not** promise
+  swiftlint, xcbeautify, fastlane, CocoaPods or an Android SDK, or that
+  Homebrew tools are on a session's `PATH`, so a task on an `xcode` host can
+  still fail in a build.
   Nothing is spawned on any other platform. The checklist is in
   [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 - `android-emulator`: the device panel's emulator support is enabled and
@@ -1435,8 +1437,8 @@ re-running the shell, and never with a variable's value:
 `interactiveResolve` is `ok` or `fallback`; the `reason` for a fallback is one of
 `disabled` (`MULLION_RESOLVE_INTERACTIVE_ENV=0`), `unsupported-shell`, `timeout`,
 `spawn-failed`, `unparseable` or `pending` (not resolved yet). `path` is the PATH
-a new session gets. `recoveredKeys` lists names only and stays empty until the
-SDK-environment recovery config (#3152) lands.
+a new session gets. `recoveredKeys` lists the recovered variable names (never
+their values) configured by `SESSION_ENV_RECOVER_KEYS`.
 
 The primary reads it beside the capabilities (same TTL) and `GET /api/hosts`
 returns it as `sessionEnv`. As with capabilities, a 404 (an older agent) means
