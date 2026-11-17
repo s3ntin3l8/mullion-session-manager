@@ -82,6 +82,8 @@ describe("Dropdown under a fine pointer: roles and names", () => {
     expect(combo).toHaveAttribute("aria-haspopup", "listbox");
     expect(combo).toHaveAttribute("aria-expanded", "false");
     expect(combo).not.toHaveAttribute("aria-activedescendant");
+    // The listbox exists only while open, so nothing is pointed at before.
+    expect(combo).not.toHaveAttribute("aria-controls");
     expect(dropdownLabel(combo)).toBe("Apple");
 
     await user.click(combo);
@@ -288,6 +290,19 @@ describe("Dropdown under a fine pointer: keyboard", () => {
     act(() => {
       fireEvent.keyDown(field(), { key: "r" });
     });
+    expect(activeOption()).toHaveTextContent("Apricot");
+    // Letters 800ms apart still add to one search, as a browser's does:
+    // "a", "p", "r" narrows to Apricot rather than restarting at each.
+    for (const [at, key] of [
+      [30_000, "a"],
+      [30_800, "p"],
+      [31_600, "r"],
+    ] as const) {
+      now.mockReturnValue(at);
+      act(() => {
+        fireEvent.keyDown(field(), { key });
+      });
+    }
     expect(activeOption()).toHaveTextContent("Apricot");
     // A disabled option is never a match.
     now.mockReturnValue(20_000);

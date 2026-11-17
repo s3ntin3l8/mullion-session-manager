@@ -9,13 +9,7 @@ import { jsonResponse } from "../test/jsonResponse.js";
 import { mockFetch } from "../test/mockFetch.js";
 import { makeSession, makeWorkspace } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
-import {
-  dropdownLabel,
-  dropdownOptions,
-  dropdownValue,
-  openDropdown,
-  pickDropdownOption,
-} from "../test/dropdown.js";
+import { dropdownOptions, dropdownValue, pickDropdownOption } from "../test/dropdown.js";
 import { useDashboardStore } from "../store/index.js";
 import launcherCss from "../styles/session-launcher.css?raw";
 
@@ -308,7 +302,7 @@ describe("SessionLauncher — desktop dialog", () => {
 
     await user.click(await screen.findByRole("switch", { name: /Isolate in a new worktree/ }));
     const base = await screen.findByRole("combobox", { name: "Base branch" });
-    await waitFor(() => expect(dropdownLabel(base)).toMatch(/main/));
+    await waitFor(() => expect(dropdownValue(base)).toMatch(/main/));
     pickDropdownOption(base, "feature/x");
     await user.click(screen.getByRole("button", { name: "Launch claude" }));
 
@@ -1141,20 +1135,6 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     expect(screen.queryByRole("group", { name: "Add project" })).toBeNull();
   });
 
-  it("a letter on the styled project dropdown is its typeahead, not the launcher's filter", async () => {
-    stubFetch();
-    renderHost();
-    act(() => useDashboardStore.getState().openLauncher({ projectId: PROJECT.id }));
-
-    const project = await screen.findByRole("combobox", { name: "Project" });
-    act(() => project.focus());
-    fireEvent.keyDown(project, { key: "r" });
-    expect(project).toHaveFocus();
-    expect(project).toHaveAttribute("aria-expanded", "true");
-    const active = document.getElementById(project.getAttribute("aria-activedescendant")!);
-    expect(active).toHaveTextContent("runway");
-  });
-
   it("typeahead on a letter a project shares with Add project… cycles the projects only", async () => {
     // The native select a coarse pointer keeps (#3245): the guard is its.
     stubCoarsePointer();
@@ -1252,13 +1232,21 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     );
   });
 
-  it("Add project… in the dropdown opens the form view, and Back returns", async () => {
+  it("the styled project dropdown: a letter is its typeahead, and Add project… opens the form view", async () => {
     stubFetch();
     const user = userEvent.setup();
     renderHost();
     openLauncher();
 
     const project = await screen.findByRole("combobox", { name: "Project" });
+    // A letter is the dropdown's typeahead, not the launcher's type-to-filter.
+    act(() => project.focus());
+    fireEvent.keyDown(project, { key: "r" });
+    expect(project).toHaveFocus();
+    expect(screen.getByRole("option", { name: "runway" }).id).toBe(
+      project.getAttribute("aria-activedescendant"),
+    );
+    fireEvent.keyDown(project, { key: "Escape" });
     await screen.findByRole("radio", { name: "codex" });
     await user.click(screen.getByRole("radio", { name: "codex" }));
     pickDropdownOption(project, "Add project…");
@@ -1304,11 +1292,8 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     openLauncher();
 
     const project = await screen.findByRole("combobox", { name: "Project" });
-    expect(
-      within(openDropdown(project))
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["No projects yet", "Add project…"]);
+    // Add project… is the action row after the placeholder (picking throws if absent).
+    expect(dropdownOptions(project).map((o) => o.label)).toEqual(["No projects yet"]);
     pickDropdownOption(project, "Add project…");
     expect(screen.getByRole("group", { name: "Add project" })).toBeInTheDocument();
   });

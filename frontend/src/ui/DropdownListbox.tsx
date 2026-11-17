@@ -22,9 +22,10 @@ export interface DropdownAction {
   onSelect: () => void;
 }
 
-// How long typed characters keep adding to one typeahead search, as a native
-// select's typeahead does.
-const TYPEAHEAD_MS = 500;
+// How long typed characters keep adding to one typeahead search. Browsers
+// use about a second (LauncherProjects.tsx's native-select guard uses the
+// same window), so a normally paced second letter narrows the search.
+const TYPEAHEAD_MS = 1000;
 const PAGE_STEP = 10;
 // The typeahead's clock. Only ever read from a key handler.
 const clock = () => Date.now();
@@ -259,7 +260,8 @@ export function DropdownListbox<T extends string>({
         className="ui-dropdown-field ui-dropdown-trigger"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-controls={listboxId}
+        // The listbox exists only while the list is open.
+        aria-controls={open ? listboxId : undefined}
         aria-activedescendant={open && activeIndex >= 0 ? optionId(activeIndex) : undefined}
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
