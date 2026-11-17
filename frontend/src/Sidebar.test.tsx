@@ -31,7 +31,7 @@ import { useDashboardStore } from "./store/index.js";
 // selector(state), .getState() -> whole state, plus setState so a test can
 // publish a host-health change) since Sidebar reads the store the same ways
 // across its own body and the child components it mounts (ProjectHeader,
-// SessionRow, HierarchyToggle).
+// SessionRow).
 let workspaceCounter = 0;
 let projects: Project[];
 let sessions: Session[];

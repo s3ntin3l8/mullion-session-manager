@@ -212,9 +212,14 @@ export function useLayoutBand(layoutMode: LayoutMode): LayoutBand {
  */
 export type LayoutPresentation = "phone" | "halves" | "grid";
 
+/** The one rule from tier and band to presentation; every caller composes it. */
+export function presentationFor(tier: LayoutTier, band: LayoutBand): LayoutPresentation {
+  if (tier === "phone") return "phone";
+  return band === "rails-halves" ? "halves" : "grid";
+}
+
 export function resolveLayoutPresentation(layoutMode: LayoutMode): LayoutPresentation {
-  if (resolveLayoutTier(layoutMode) === "phone") return "phone";
-  return resolveLayoutBand(layoutMode) === "rails-halves" ? "halves" : "grid";
+  return presentationFor(resolveLayoutTier(layoutMode), resolveLayoutBand(layoutMode));
 }
 
 /**
@@ -226,8 +231,5 @@ export function resolveLayoutPresentation(layoutMode: LayoutMode): LayoutPresent
  */
 export function useLayoutPresentationMode(): LayoutPresentation {
   const layoutMode = useDashboardStore((s) => s.settings.layoutMode);
-  const tier = useLayoutTier(layoutMode);
-  const band = useLayoutBand(layoutMode);
-  if (tier === "phone") return "phone";
-  return band === "rails-halves" ? "halves" : "grid";
+  return presentationFor(useLayoutTier(layoutMode), useLayoutBand(layoutMode));
 }
