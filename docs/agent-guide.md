@@ -123,7 +123,7 @@ MCP tools. It is **never** enough for **full-scope** ops:
 | `project get_tooling`                                                                                    | full or session                                                           |
 | `project set_tooling`                                                                                    | **full only**                                                             |
 | `preview create/get/delete/list`                                                                         | **full only**                                                             |
-| `task list/get` / `list_tasks` / `get_task`                                                              | full or session; coordinator + consent                                    |
+| `task list/get` / `list_tasks` / `get_task`                                                              | full or session; other projects only for a coordinator the target accepts |
 | `task retry/start/close/archive/unarchive` / `retry_task` / `start_task` / `close_task` / `archive_task` | **full only**                                                             |
 | `task push` / `push_task_branch`                                                                         | full or session; own task only                                            |
 | `dock start/stop/list` (`docks.*`)                                                                       | full or session; own project only                                         |

@@ -534,6 +534,14 @@ export function formatError(err, client) {
   if (err instanceof MullionSocketError) {
     if (err.status === 403 && /scope/.test(err.message)) {
       const via = client?.tokenSource ?? "no token";
+      if (
+        via === "MULLION_HOOK_TOKEN" &&
+        !/not permitted for this connection's scope/.test(err.message)
+      ) {
+        // A policy refusal of an op a session may run (wrong target), not an
+        // operator-only op: say what was refused and nothing more.
+        return `${err.message} (connected via ${via}).`;
+      }
       if (via === "MULLION_HOOK_TOKEN") {
         // A session cannot hold MULLION_AUTH_TOKEN, so "set it" is not advice it can follow.
         return (

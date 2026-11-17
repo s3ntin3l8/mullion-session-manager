@@ -206,13 +206,12 @@ describe("session-scope reads of sessions and tasks", () => {
       .where(eq(projects.id, w.own))
       .run();
     for (const [op, body] of [
-      ["sessions.kill", { id: w.sOpen }],
+      ["sessions.kill", { sessionId: String(w.sOpen) }],
       ["docks.start", { projectId: w.open, dockControlId: "x" }],
       ["docks.stop", { projectId: w.open, dockControlId: "x" }],
     ] as const) {
       const r = await call(w.sOwn, op, body);
-      expect(r, op).toMatchObject({ ok: false });
-      expect([400, 403, 404], op).toContain((r as { status: number }).status);
+      expect(r, op).toMatchObject({ ok: false, status: 403 });
     }
   });
 });
