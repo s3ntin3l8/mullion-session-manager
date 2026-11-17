@@ -74,10 +74,19 @@ or moves when a switch is flipped or a menu opened, so the rows below stay put.
 5. **Launch** — starts the selected agent.
 
 **Add project** and **Edit project** replace the launcher's body with the
-project form and a **Back** control, rather than opening a dialog over it. The
-Add view also lists the discovered repositories. Back, Escape, Cancel or a
-successful save return to the launcher, with the choices made there kept, a
-new project selected, and focus on the control that opened the form.
+project form and a **Back** control, rather than opening a dialog over it.
+Back, Escape, Cancel or a successful save return to the launcher, with the
+choices made there kept, a new project selected, and focus on the control that
+opened the form.
+
+The Add view starts with a **Choose from N discovered repositories** row: the
+repositories Mullion found under the project roots (Settings → Projects) that
+are not projects yet. It opens them as their own view, with a search field when
+there are more than eight; **Add** on one adds it, selects it and returns to the
+launcher, and Back returns to the form with what was typed in it kept. While
+the scan runs the row says so; when it finds nothing, or no project roots are
+set, a hint links to Settings → Projects instead. The scan runs only while the
+Add view is open.
 
 Selecting an agent and launching are two steps, so its model and permission
 override can be changed first. A double click on a tile launches it directly.
