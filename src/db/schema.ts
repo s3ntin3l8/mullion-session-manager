@@ -850,9 +850,20 @@ export const devices = sqliteTable(
     // Cosmetic label the user can rename; falls back to `avdName`/`serial`
     // when unset.
     name: text("name"),
+    // Which platform's engine runs this device (#1943). `kind`, `avdName`,
+    // `serial` and `port` below stay Android-shaped (adb + scrcpy); an iOS
+    // Simulator is identified by `udid` instead. Every row that predates this
+    // column is an Android one, which is the default it reads back as.
+    platform: text("platform", { enum: ["android", "ios"] })
+      .notNull()
+      .default("android"),
     kind: text("kind", { enum: ["emulator", "physical"] })
       .notNull()
       .default("emulator"),
+    // The Simulator's UDID (`xcrun simctl list`), set only for `platform:
+    // "ios"` — null for an Android device, which is identified by `avdName` or
+    // `serial`.
+    udid: text("udid"),
     // The AVD name passed to `emulator -avd <avdName>`. Only set for
     // `kind: "emulator"` — null for a physical device.
     avdName: text("avd_name"),

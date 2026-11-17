@@ -12,7 +12,7 @@ import {
 import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
 import { isDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
-import type { DeviceAction } from "../services/device-drivers/types.js";
+import type { DeviceAction, DevicePlatform } from "../services/device-drivers/types.js";
 import { getDeviceHost, liveInfoForRows, type DeviceHost } from "../services/device-host.js";
 import { getHostRow, LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveProjectHostId } from "../services/session-host.js";
@@ -43,9 +43,12 @@ interface DeviceListItem {
   hostId: string;
   projectId: number | null;
   name: string | null;
+  platform: DevicePlatform;
   kind: DeviceKind;
   avdName: string | null;
   serial: string | null;
+  /** The iOS Simulator's UDID; null for an Android device. */
+  udid: string | null;
   status: "active" | "killed";
   createdAt: string;
   live: DeviceInfo | null;
@@ -64,9 +67,11 @@ function toListItem(
     hostId: row.hostId,
     projectId: row.projectId,
     name: row.name,
+    platform: row.platform,
     kind: row.kind,
     avdName: row.avdName,
     serial: row.serial,
+    udid: row.udid,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     live: live ?? null,
@@ -148,6 +153,10 @@ interface CreateDeviceBody {
   name?: string;
   /** The host to run the device on (#3200); defaults to the project's host. */
   hostId?: string;
+  /** Which platform runs the device (#3202); defaults to "android". */
+  platform?: DevicePlatform;
+  /** An iOS Simulator's UDID; only for `platform: "ios"`. */
+  udid?: string;
 }
 
 export async function devicesRoute(app: FastifyInstance): Promise<void> {
@@ -159,11 +168,34 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       projectId,
       name,
       hostId: requestedHostId,
+      platform = "android",
+      udid,
     } = request.body ?? {};
     // Validate before gating: an unknown kind would pass the physical-level
     // gate below and then fall through to the emulator path (and its row).
     if (kind !== "emulator" && kind !== "physical") {
       return reply.badRequest('kind must be "emulator" or "physical"');
+    }
+    if (platform !== "android" && platform !== "ios") {
+      return reply.badRequest('platform must be "android" or "ios"');
+    }
+    // `kind`, `avdName` and `address` are adb concepts and `udid` is a
+    // Simulator's: each platform takes only its own (#3202). A null `udid` is
+    // not a value: the list item always returns `udid: null` for an Android
+    // device, so a client re-posting a GET body must not be refused for it.
+    if (platform === "android" && udid !== undefined && udid !== null) {
+      return reply.badRequest("udid must not be set for an android device");
+    }
+    if (platform === "ios") {
+      if (kind === "physical") {
+        return reply.badRequest('kind "physical" is not valid for an ios device');
+      }
+      if (avdName !== undefined)
+        return reply.badRequest("avdName must not be set for an ios device");
+      if (address !== undefined)
+        return reply.badRequest("address must not be set for an ios device");
+      // The shape is right; there is no driver behind it yet (#1943).
+      return reply.badRequest("iOS Simulator devices are not supported yet");
     }
     const hostId = resolvePlacementHostId(app, requestedHostId, projectId);
     if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);

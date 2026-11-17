@@ -13,7 +13,7 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 export type DeviceRow = typeof devices.$inferSelect;
 export type NewDevice = Pick<
   typeof devices.$inferInsert,
-  "kind" | "serial" | "avdName" | "projectId" | "name" | "hostId"
+  "kind" | "serial" | "avdName" | "projectId" | "name" | "hostId" | "platform" | "udid"
 >;
 
 export function getDeviceRow(app: FastifyInstance, id: number): DeviceRow | undefined {

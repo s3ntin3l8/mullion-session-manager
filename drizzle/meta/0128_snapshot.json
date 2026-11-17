@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f9206d69-27bd-4077-848c-77e64363bf6a",
+  "id": "6e8601b2-16e0-4790-b14a-4a05769abcb1",
   "prevId": "0260fbbe-6060-4884-a8c8-f5b1e95bbf7c",
   "tables": {
     "bridges": {
@@ -339,6 +339,14 @@
           "notNull": false,
           "autoincrement": false
         },
+        "platform": {
+          "name": "platform",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'android'"
+        },
         "kind": {
           "name": "kind",
           "type": "text",
@@ -346,6 +354,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'emulator'"
+        },
+        "udid": {
+          "name": "udid",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "avd_name": {
           "name": "avd_name",
@@ -2320,20 +2335,6 @@
         },
         "needs_human_reason": {
           "name": "needs_human_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "ci_hold_note": {
-          "name": "ci_hold_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "merge_override_head_sha": {
-          "name": "merge_override_head_sha",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

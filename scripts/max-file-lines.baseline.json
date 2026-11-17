@@ -10,7 +10,7 @@
     "total": 54
   },
   "files": {
-    "frontend/src/api/types.ts": 1507,
+    "frontend/src/api/types.ts": 1467,
     "frontend/src/BrowserPanel.test.tsx": 1290,
     "frontend/src/CommandPalette.test.tsx": 2822,
     "frontend/src/CommandPalette.tsx": 1242,

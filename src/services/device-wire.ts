@@ -1,4 +1,4 @@
-import type { DeviceInfo, DeviceKind } from "./device-drivers/types.js";
+import type { DeviceInfo, DeviceKind, DevicePlatform } from "./device-drivers/types.js";
 
 // The request/response shapes of the agent's `/internal/devices*` routes
 // (routes/internal-devices.ts), shared by the agent that serves them and the
@@ -19,6 +19,12 @@ export interface DeviceSpawnSpec {
   /** The emulator port the row already persists (reattach after an agent or
    * primary restart); null for a first spawn and for a physical device. */
   port: number | null;
+  /** Which platform runs the device. Absent means "android": an agent that
+   * predates the field only knows Android, and the primary sends it only for a
+   * device that is not one (#3202). */
+  platform?: DevicePlatform;
+  /** An iOS Simulator's UDID; only with `platform: "ios"`. */
+  udid?: string | null;
   /** The ports of this host's OTHER active devices. The agent keeps no record
    * of them across a restart, so without this a fresh emulator could be
    * handed a port a still-running one holds. */

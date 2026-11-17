@@ -72,6 +72,8 @@ export const DEVICE_SPAWN_SCHEMA = {
     serial: { type: ["string", "null"], maxLength: 256 },
     label: { type: ["string", "null"], maxLength: 256 },
     port: { type: ["integer", "null"], minimum: 1, maximum: 65535 },
+    platform: { type: "string", enum: ["android", "ios"] },
+    udid: { type: ["string", "null"], maxLength: 256 },
     reservedPorts: {
       type: "array",
       maxItems: 1024,

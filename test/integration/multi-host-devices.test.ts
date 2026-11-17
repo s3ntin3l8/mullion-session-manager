@@ -243,6 +243,27 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(ok.json().deviceKinds).toEqual(expect.arrayContaining(["emulator", "physical"]));
     });
 
+    it("refuses a spawn for an iOS device: there is no iOS engine on an agent yet (#3202)", async () => {
+      const res = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices",
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        payload: {
+          id: "9",
+          kind: "emulator",
+          avdName: null,
+          serial: null,
+          label: null,
+          port: null,
+          reservedPorts: [],
+          platform: "ios",
+          udid: "0F4A9B7E-1111-2222-3333-444455556666",
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/iOS devices are not supported on this agent/);
+    });
+
     it("refuses a device socket whose port is outside 1-65535 or whose kind is unknown", async () => {
       const headers = { authorization: `Bearer ${AGENT_TOKEN}` };
       for (const query of ["kind=emulator&port=0", "kind=emulator&port=65536", "kind=tablet"]) {

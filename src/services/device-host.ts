@@ -121,6 +121,9 @@ class RemoteDeviceHost implements DeviceHost {
       label: row.name,
       port: row.kind === "emulator" ? row.port : null,
       reservedPorts: reservedPortsOnHost(this.app, this.hostId, row.id),
+      // Sent only for a non-Android device, so a request for an Android one is
+      // byte-for-byte what an agent that predates the field already accepts.
+      ...(row.platform !== "android" ? { platform: row.platform, udid: row.udid } : {}),
     };
     const res = await this.client.spawnDevice(spec);
     // The agent has no database: the port its emulator holds is persisted here,
