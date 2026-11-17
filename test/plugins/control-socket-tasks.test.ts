@@ -92,7 +92,7 @@ describe("tasks.list and tasks.get control-socket ops (#3165)", () => {
     expect(filtered[0]).toMatchObject({ id: t1.id, status: "ready", title: "Ready A" });
   });
 
-  it("tasks.list session scope: rejects out-of-scope caller with 403", async () => {
+  it("tasks.list session scope: a caller whose session is not active gets 403", async () => {
     app = await buildTestApp();
     await app.ready();
     const { conn, frames } = makeConn("session", "1");

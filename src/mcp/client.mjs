@@ -28,7 +28,7 @@ import {
 // long-lived connection open for the MCP server's whole lifetime.
 //
 // Scope note (see docs/socket-api.md's per-scope op allowlist): most of the
-// tools built on controlRequest below (list_sessions, start_dock_session,
+// tools built on controlRequest below (start_dock_session,
 // stop_dock_session, list_projects, create_preview, delete_preview,
 // list_previews) call full-scope-only ops. A Claude Code session's
 // auto-injected MCP config (buildClaudeMcpConfig, claude-code.ts) only ever

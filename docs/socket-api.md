@@ -101,7 +101,7 @@ token at all.
 Note: an OIDC-only deployment (OIDC configured, no `MULLION_AUTH_TOKEN`) has
 no static full-scope secret to present here — only session-scoped
 connections work. Set `MULLION_AUTH_TOKEN` (it can coexist with OIDC) to use
-full-scope ops like `sessions.list` from a bare shell.
+full-scope ops like `projects.list` from a bare shell.
 
 A failed handshake (malformed JSON, or a token matching neither principal)
 closes the connection with no reply.
@@ -151,7 +151,7 @@ split across two cells.
 | Op                         | Scope           | REST equivalent                                                                       | CLI                                                                 | MCP                                                   |
 | -------------------------- | --------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
 | `ping`                     | full, session   | — (answered in-process, no REST call)                                                 | `config` (reachability probe)                                       | —                                                     |
-| `sessions.list`            | full            | `GET /api/sessions`                                                                   | `session list` (alias `ps`)                                         | `list_sessions`                                       |
+| `sessions.list`            | full, session   | `GET /api/sessions`                                                                   | `session list` (alias `ps`)                                         | `list_sessions`                                       |
 | `sessions.get`             | full, session   | `GET /api/sessions/:id`                                                               | `session get`                                                       | —                                                     |
 | `sessions.children`        | full, session   | `GET /api/sessions?parentSessionId=:id`                                               | `session children`                                                  | `list_child_sessions`                                 |
 | `sessions.create`          | full            | `POST /api/sessions`                                                                  | `session create`; `dock start`†                                     | `start_dock_session`†                                 |
@@ -214,14 +214,31 @@ split across two cells.
 | `bundle.status`            | full            | `GET /api/bundle-sync/status`                                                         | `bundle status`                                                     | — (no MCP wrapper)                                    |
 | `bundle.resync`            | full            | `POST /api/bundle-sync/resync`                                                        | `bundle resync`                                                     | — (no MCP wrapper)                                    |
 | `bundle.remove`            | full            | `POST /api/bundle-sync/remove`                                                        | `bundle remove`                                                     | — (no MCP wrapper)                                    |
-| `tasks.list`               | full            | `GET /api/tasks`                                                                      | `task list [--status <s>] [--project <id>]`                         | `list_tasks`                                          |
-| `tasks.get`                | full            | `GET /api/tasks/:id`                                                                  | `task get <id>`                                                     | `get_task`                                            |
+| `tasks.list`               | full, session   | `GET /api/tasks`                                                                      | `task list [--status <s>] [--project <id>]`                         | `list_tasks`                                          |
+| `tasks.get`                | full, session   | `GET /api/tasks/:id`                                                                  | `task get <id>`                                                     | `get_task`                                            |
 | `tasks.retry`              | full            | `POST /api/tasks/:id/retry`                                                           | `task retry <id> [--agent <a>] [--review-agent <r>]`                | `retry_task`                                          |
 | `tasks.start`              | full            | `POST /api/tasks/:id/claim`                                                           | `task start <id> [--agent <a>] [--review-agent <r>]`                | `start_task`                                          |
 | `tasks.close`              | full            | `POST /api/tasks/:id/give-up`                                                         | `task close <id> [--reason <text>]`                                 | `close_task`                                          |
 | `tasks.archive`            | full            | `POST /api/tasks/:id/archive`                                                         | `task archive <id>`                                                 | `archive_task`                                        |
 | `tasks.unarchive`          | full            | `DELETE /api/tasks/:id/archive`                                                       | `task unarchive <id>`                                               | `archive_task` (`unarchive: true`)                    |
 | `tasks.push`               | full, session   | `POST /api/sessions/:id/task-push`                                                    | `task push`                                                         | `push_task_branch`                                    |
+
+**Session-scope reads (`sessions.list`, `tasks.list`, `tasks.get`).** Read-only, and
+decided per row with `crossProjectAllowed(callerProject, rowProject)` (the rule that
+gates cross-project children, `src/services/cross-project.ts`): the caller's own project
+is always visible; another project's rows only when the caller's project is a
+coordinator ("This project coordinates", `allowCrossProjectSpawn`) that reaches it
+(`crossProjectTargets`, unset = every project) **and** the target accepts that caller
+(`acceptsChildrenFrom`, the same consent as cross-project children). A project that is
+out of reach or refuses is indistinguishable from one that does not exist: its rows are
+omitted from lists (a `projectId` filter on it returns `[]`), and `tasks.get` answers
+the same `404 Not Found` as a missing id. A caller whose own session is no longer
+active gets `403`. Replies at session scope omit the fields that can carry credentials:
+a session's `command` and `env`, and a task's `agentCommand`; full scope is unchanged.
+Every write op (`tasks.retry/start/close/archive/unarchive`, `sessions.create/kill` of
+anyone but your own child, `preview *`, another project's dock) stays full scope or
+narrower. The `mullion` on a session's PATH is the deployed release, so
+`task list/get` from a session need a release that contains them.
 
 † **`dock start`/`start_dock_session`** call `docks.start` (#2494): the server
 resolves the control from the project's `.crs/dock.json`, launches it through

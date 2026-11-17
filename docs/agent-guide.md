@@ -206,11 +206,16 @@ session exec`), or for `device create`/`device pair`/`device
 pair-and-connect`, the three ops above with no MCP tool at all.
 
 **From inside a session, the full-scope-only MCP tools
-(`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
+(`start_dock_session`/`stop_dock_session`/`list_projects`/
 `create_preview`/`delete_preview`/`list_previews`/`set_project_tooling`/
-`delete_device`/`list_tasks`/`get_task`/`retry_task`/`start_task`/`close_task`/`archive_task`) reply with a scope error, same as the CLI's own** — they're
+`delete_device`/`retry_task`/`start_task`/`close_task`/`archive_task`) reply with a scope error, same as the CLI's own** — they're
 there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
-set, not for you. `get_scrollback` and `get_session_transcript` (both default to your own session),
+set, not for you. The read-only `list_sessions`, `list_tasks` and `get_task`
+(CLI `session list`, `task list`, `task get`) DO work at session scope: your own
+project's rows always, and another project's only when your project is a coordinator
+("This project coordinates") that reaches it and that project accepts it — anything
+else is absent, exactly as if it did not exist. `command`, `env` and `agentCommand`
+are omitted from those replies. `get_scrollback` and `get_session_transcript` (both default to your own session),
 `list_actions` (defaults to your own project), `get_project_tooling`
 (defaults to your own project), and `request_review` / `review_status` / `stop_review` (your own session's
 PR and runs; pass `repo` for a PR in another registered project's repository)

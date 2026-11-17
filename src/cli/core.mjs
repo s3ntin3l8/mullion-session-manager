@@ -534,6 +534,17 @@ export function formatError(err, client) {
   if (err instanceof MullionSocketError) {
     if (err.status === 403 && /scope/.test(err.message)) {
       const via = client?.tokenSource ?? "no token";
+      if (via === "MULLION_HOOK_TOKEN") {
+        // A session cannot hold MULLION_AUTH_TOKEN, so "set it" is not advice it can follow.
+        return (
+          `${err.message} (connected via ${via}). ` +
+          "This operation is operator-only: a session never holds full scope. " +
+          "Only the read-only `session list`, `task list` and `task get` work from a " +
+          "session; they cover other projects only when this project is a coordinator " +
+          "and the target project accepts it, and a project that is out of reach looks " +
+          "like one that does not exist."
+        );
+      }
       return (
         `${err.message} (connected via ${via}). ` +
         "This command needs full scope — set MULLION_AUTH_TOKEN, or run it " +

@@ -93,7 +93,7 @@ Aliases: `ps` → `session list`, `kill` → `session kill`, `logs` → `session
 
 ### session
 
-- `session list [--project <id>] [--kind terminal|dock]`
+- `session list [--project <id>] [--kind terminal|dock]` — read-only; at session scope shows your own project's sessions, plus other projects' only when yours is a coordinator they accept (`command`/`env` omitted).
 - `session get [<id>]` — omit `<id>` to inspect the session you're running
   inside (or pass `--session <id>`).
 - `session create --project <id> --command <cmd> [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]`
@@ -248,9 +248,9 @@ $M browser screenshot $S --out /tmp/shot.png
 ### task
 
 - `task list [--status <s>] [--project <id>]` — lists Task Master tasks, one
-  line per task (`id`, `status`, `title`). Full-scope only.
+  line per task (`id`, `status`, `title`). Read-only; works from a session for your own project, and for other projects only when yours is a coordinator they accept (`agentCommand` omitted).
 - `task get <id>` — fetches one task by id; default rendering is the task
-  JSON (identical with or without `--json`). Full-scope only.
+  JSON (identical with or without `--json`). Same visibility as `task list`; an unreachable task answers like a missing one.
 - `task retry <id> [--agent <a>] [--review-agent <r>]` — retries a `failed`
   task (re-queues a resume, which syncs the GitHub label, or resets a
   branchless task to `ready`). Prints `<id>\t<status>`, or the full task with
@@ -651,7 +651,7 @@ which field rejected (the per-field `ok`/`status`/`error`).
 per [Authentication and scope](#authentication-and-scope) below: writing the
 full-scope `MULLION_AUTH_TOKEN` into a per-session config file would let any
 agent read its own operator credential straight off disk. So from inside a
-normal agent session **when authentication is enabled**, `list_sessions`/
+normal agent session **when authentication is enabled**,
 `start_dock_session`/`stop_dock_session`/`list_projects`/`create_preview`/
 `delete_preview`/`list_previews`/`set_project_tooling` reply with a scope
 error (same message as the CLI's own, above) rather than succeeding —

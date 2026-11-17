@@ -676,9 +676,17 @@ describe("formatBrowserResult", () => {
 describe("formatError", () => {
   it("enriches a 403 scope error with the connected token source and a fix", () => {
     const err = new MullionSocketError(403, "not permitted for this connection's scope");
+    const msg = formatError(err, { tokenSource: "MULLION_AUTH_TOKEN_FILE" });
+    expect(msg).toContain("MULLION_AUTH_TOKEN_FILE");
+    expect(msg).toContain("set MULLION_AUTH_TOKEN");
+  });
+
+  it("tells a session its 403 is operator-only instead of to set MULLION_AUTH_TOKEN", () => {
+    const err = new MullionSocketError(403, "not permitted for this connection's scope");
     const msg = formatError(err, { tokenSource: "MULLION_HOOK_TOKEN" });
-    expect(msg).toContain("MULLION_HOOK_TOKEN");
-    expect(msg).toContain("MULLION_AUTH_TOKEN");
+    expect(msg).toContain("operator-only");
+    expect(msg).toContain("coordinator");
+    expect(msg).not.toContain("set MULLION_AUTH_TOKEN");
   });
 
   it("renders a non-scope MullionSocketError with its status", () => {

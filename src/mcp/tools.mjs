@@ -204,7 +204,8 @@ const browserAction = {
 // #134 part 2 — session/project/preview/dock management, over the control
 // socket (MullionClient.controlRequest, client.mjs) rather than the hook
 // socket use_browser/promote_to_worktree speak. See client.mjs's own header
-// comment for the scope caveat: list_sessions, start_dock_session,
+// comment for the scope caveat (list_sessions, like list_tasks/get_task, is
+// also session-reachable as a read-only, opt-in-respecting view): start_dock_session,
 // stop_dock_session, list_projects, create_preview, delete_preview and
 // list_previews call full-scope-only control-socket ops, so they return a
 // clear "not permitted for this connection's scope" error (not a crash) when
@@ -220,9 +221,10 @@ const browserAction = {
 const listSessions = {
   name: "list_sessions",
   description:
-    "List Mullion sessions, optionally filtered by project or kind. Requires full scope " +
-    "(MULLION_AUTH_TOKEN) — 403s from inside a normal agent session when authentication is " +
-    "enabled (unrestricted if it's disabled entirely).",
+    "List Mullion sessions, optionally filtered by project or kind. Read-only. From inside a " +
+    "session it shows your own project's sessions, plus another project's only when your " +
+    "project is a coordinator ('This project coordinates') that reaches it and that project " +
+    "accepts it; other projects are simply absent. `command` and `env` are omitted there.",
   inputSchema: {
     type: "object",
     properties: {
