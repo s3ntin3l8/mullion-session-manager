@@ -35,16 +35,11 @@ export function useHostPull(project: Project | undefined, hosts: Host[]) {
       const result = await useDashboardStore
         .getState()
         .pullProjectGit(project.id, undefined, hostId);
-      const message = result.pulled
-        ? "Pulled successfully."
-        : pullReasonMessage(result.reason, result.detail);
-      setMessages((m) => ({
-        ...m,
-        [key]:
-          result.detail && !message.includes(result.detail)
-            ? `${message} ${result.detail}`
-            : message,
-      }));
+      const message =
+        result.pulled && result.reason !== "already-up-to-date"
+          ? "Pulled successfully."
+          : pullReasonMessage(result.reason, result.detail);
+      setMessages((m) => ({ ...m, [key]: message }));
     } catch (err) {
       setMessages((m) => ({ ...m, [key]: describeError(err, "Pull failed — try again.") }));
     } finally {

@@ -57,17 +57,30 @@ describe("extra-host checkout pulls", () => {
     expect(screen.getByText("— Host information unavailable")).toBeInTheDocument();
   });
 
-  it("shows both refusal reason and detail", async () => {
+  it("shows a refusal without repeating its detail", async () => {
     vi.spyOn(api, "postProjectGitPull").mockResolvedValue({
       pulled: false,
       reason: "dirty-tree",
-      detail: "staged config.ts",
+      detail: "Worktree has uncommitted changes",
     });
     render(<HostPullControls project={project} />);
     fireEvent.click(screen.getByRole("button", { name: "Pull on Build box" }));
     const result = await screen.findByRole("status");
-    expect(result).toHaveTextContent("uncommitted changes");
-    expect(result).toHaveTextContent("staged config.ts");
+    expect(result).toHaveTextContent(
+      "Build box: Working tree has uncommitted changes or conflicts.",
+    );
+    expect(result).not.toHaveTextContent("Worktree has uncommitted changes");
+  });
+
+  it("reports an already current checkout", async () => {
+    vi.spyOn(api, "postProjectGitPull").mockResolvedValue({
+      pulled: true,
+      reason: "already-up-to-date",
+    });
+    render(<HostPullControls project={project} />);
+    expect(screen.getByRole("group", { name: "Pull other host checkouts" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Pull on Build box" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Build box: Already up to date.");
   });
 
   it("shows request failures and allows retry", async () => {

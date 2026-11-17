@@ -7,7 +7,7 @@ export function HostPullControls({ project }: { project: Project | undefined }) 
   const { targets, pull, messages } = useHostPull(project, hosts);
   if (targets.length === 0) return null;
   return (
-    <div className="github-panel-section" aria-label="Pull other host checkouts">
+    <div className="github-panel-section" role="group" aria-label="Pull other host checkouts">
       {targets.map((target) => (
         <div key={target.id} className="github-panel-empty-row">
           <button

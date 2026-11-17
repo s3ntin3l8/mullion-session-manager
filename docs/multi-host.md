@@ -1709,6 +1709,16 @@ applies: the project's host and `projects.cwd`. The batch routes
 (`git-statuses?sessionIds=`, `git-diff-stats`) and `git-file-diff?sessionId=`
 use the same resolver, so they agree with the single-session routes.
 
+`git-pull` also accepts `?hostId=<id>` when the caller wants a project's
+registered checkout on a particular host without selecting a session. The
+host must be the project's primary host or have a checkout recorded in
+`hostCwds`; otherwise the route returns 400. This option
+cannot be combined with `sessionId`. The selected checkout is pulled locally
+or through that host's agent, as appropriate. With neither query parameter,
+the project's default host and `projects.cwd` are used.
+The Git view, Source Control and project menu offer per-host Pull controls
+for extra checkouts and show the host's result or refusal.
+
 The batch routes ask a remote agent **once per `(host, cwd[, base])`**, not once
 per id: ten sessions on one checkout cost one `git-status` and one `git-diff`
 round trip, and a host that is not `offline` but does not answer is tried once per batch (every id still
