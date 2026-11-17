@@ -111,9 +111,13 @@ button.launcher-discovered-row {
   color: var(--fg);
   cursor: pointer;
 }
-button.launcher-discovered-row:hover {
-  border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
-  background: var(--seg);
+/* Only where hover is real: on touch it sticks after the tap that opened the
+   discovered view, and Back would find the row still looking hovered. */
+@media (hover: hover) {
+  button.launcher-discovered-row:hover {
+    border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
+    background: var(--seg);
+  }
 }
 button.launcher-discovered-row:focus-visible {
   outline: 2px solid var(--accent);
