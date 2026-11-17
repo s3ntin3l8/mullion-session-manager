@@ -177,8 +177,9 @@ export interface DeviceDriver {
   key(androidKeyCode: number): Promise<void>;
   logs(options: { lines?: number; filter?: string }): Promise<string>;
   clipboard: {
-    /** Last-known device clipboard (a cache, never a live round-trip). */
-    get(): string | null;
+    /** Android: last-known device clipboard (a cache, never a live
+     * round-trip). iOS Simulator: a live `simctl pbpaste`, hence async. */
+    get(): string | null | Promise<string | null>;
     set(text: string, paste: boolean): Promise<void>;
   };
 

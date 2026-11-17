@@ -115,7 +115,7 @@ export async function performDeviceAction(
     case "logcat":
       return { logcat: await driver.logs({ lines: action.lines, filter: action.filter }) };
     case "clipboard":
-      if (action.op === "get") return { text: driver.clipboard.get() };
+      if (action.op === "get") return { text: await driver.clipboard.get() };
       await driver.clipboard.set(action.text, action.paste ?? false);
       return { ok: true };
   }

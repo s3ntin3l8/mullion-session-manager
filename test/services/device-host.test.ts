@@ -118,15 +118,15 @@ describe("DeviceHost", () => {
     const app = await buildTestAppOnPlatform("linux");
     const mac = host(app, "mac");
     const row = emulator(app, mac);
-    client.spawnDevice.mockResolvedValue({ info: info(row.id), port: null });
+    client.devices.spawn.mockResolvedValue({ info: info(row.id), port: null });
     const remote = getDeviceHost(app, mac);
 
     await remote.getOrCreate(row);
-    expect(client.spawnDevice.mock.calls[0][0]).not.toHaveProperty("platform");
-    expect(client.spawnDevice.mock.calls[0][0]).not.toHaveProperty("udid");
+    expect(client.devices.spawn.mock.calls[0][0]).not.toHaveProperty("platform");
+    expect(client.devices.spawn.mock.calls[0][0]).not.toHaveProperty("udid");
 
     await remote.getOrCreate({ ...row, platform: "ios", udid: "UDID-1" });
-    expect(client.spawnDevice.mock.calls[1][0]).toMatchObject({ platform: "ios", udid: "UDID-1" });
+    expect(client.devices.spawn.mock.calls[1][0]).toMatchObject({ platform: "ios", udid: "UDID-1" });
   });
 
   it("persists the port a remote emulator reports, and not an unchanged one", async () => {
