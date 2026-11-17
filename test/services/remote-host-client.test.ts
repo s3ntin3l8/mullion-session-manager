@@ -1000,7 +1000,7 @@ describe("RemoteHostClient", () => {
       );
     });
 
-    it("resolveResumeTaskWorktree POSTs {cwd, branchName} to /internal/git-worktree/resume", async () => {
+    it("resolveResumeTaskWorktree POSTs {cwd, branchName, fromOrigin} to /internal/git-worktree/resume", async () => {
       fetchMock.mockResolvedValue(
         jsonResponse(200, {
           path: "/x/y/.mullion-worktrees/mullion-task-1",
@@ -1015,7 +1015,11 @@ describe("RemoteHostClient", () => {
         "http://example.invalid:1234/internal/git-worktree/resume",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ cwd: "/x/y", branchName: "mullion/task-1" }),
+          // Issue #3194 — `fromOrigin` is always on the wire: `false` for the
+          // ordinary resume (the branch is on the host already) and `true`
+          // for a retry that was re-placed onto this host. The `true` half
+          // lives in remote-host-client-from-origin.test.ts.
+          body: JSON.stringify({ cwd: "/x/y", branchName: "mullion/task-1", fromOrigin: false }),
         }),
       );
     });

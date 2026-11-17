@@ -100,6 +100,12 @@ export async function enqueueRetry(
       // Issue #1997 — a retry starts a fresh queue spell.
       dispatchFailingSince: null,
       dispatchHeld: false,
+      // Issue #3194 — and a fresh spell starts with no wait marker: a leftover
+      // "waiting for a host" (and, worse, a leftover "the branch is stranded
+      // there") would carry the previous attempt's exemption into this one,
+      // and would offer "Start fresh" for a task that is not waiting.
+      retryHostId: null,
+      retryStrandedOnHost: false,
       completedAt: null,
       claimedAt: null,
       startedAt: null,

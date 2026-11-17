@@ -1120,10 +1120,22 @@ export async function clearOrphanedTaskWorktree(
  * a task-shaped path. Returns `null` when `cwd` isn't a git repo, the
  * branch name doesn't match that namespace, or the git call fails; never
  * throws.
+ *
+ * Issue #3194 — `opts.fromOrigin`: the branch is fetched from `origin` and
+ * checked out at ORIGIN's tip, so a retry re-placed onto a host that never
+ * saw the branch resumes the confirmed work. Off by default: the ordinary
+ * resume must fail when the branch is missing locally, because there the
+ * branch really is gone.
+ *
+ * The fetch happens BEFORE the worktree is touched, and a refused fetch is a
+ * refusal to resume — see `fetchBranchFromOrigin` below. Stale worktree
+ * registrations are pruned first, so a registration whose directory was
+ * removed out of band cannot refuse the fetch on its own.
  */
 export async function resumeTaskWorktree(
   cwd: string,
   branchName: string,
+  opts: { fromOrigin?: boolean } = {},
 ): Promise<WorktreeResult | null> {
   if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) return null;
   if (!TASK_BRANCH_NAME_RE.test(branchName)) return null;
@@ -1133,6 +1145,41 @@ export async function resumeTaskWorktree(
 
   const baseDir = path.join(projectRoot, ".mullion-worktrees");
   ensureExcluded(projectRoot, baseDir);
+
+  // Issue #3194 — `fromOrigin`: this host resumes the ORIGIN tip, never
+  // whatever ref it happens to hold.
+  //
+  // A branch ref outlives the worktree it was checked out in
+  // (`removeWorktreeIfClean` removes the directory, never the branch), so a
+  // host that ran this task at some earlier point still has
+  // `refs/heads/mullion/task-<id>-<slug>` sitting behind origin. Resuming
+  // THAT would continue the task from an older commit while the transition
+  // context says the branch is on origin — the one promise the re-placement
+  // makes. So the fetch happens FIRST, before any worktree is touched, and
+  // its refusal is a refusal to resume (below).
+  if (opts.fromOrigin === true) {
+    // Prune BEFORE the fetch, not after it: git refuses to fetch into a
+    // branch that is checked out in a REGISTERED worktree, and it checks the
+    // REGISTRATION, not the directory. A registration whose directory was
+    // removed out of band (a crash mid-cleanup, a manual `rm -rf`, a disk
+    // sweep) therefore refuses the fetch with "refusing to fetch into branch
+    // ... checked out at <missing path>" — even though there is no checkout
+    // left to protect, and the fetch would otherwise succeed. Pruning drops
+    // exactly those registrations (a live checkout still has its directory,
+    // so it survives the prune and still refuses the fetch, correctly).
+    //
+    // The prune below (for the adoption check) stays: it runs for the
+    // ordinary resume too, and a second prune is a no-op.
+    await runGit(projectRoot, ["worktree", "prune"]);
+    const atOrigin = await fetchBranchFromOrigin(projectRoot, branchName);
+    if (!atOrigin) {
+      // This host cannot resume from origin: the branch is gone from origin,
+      // the local ref has commits origin does not, or it is checked out
+      // somewhere. Returning null makes the caller release the retry with
+      // that reason instead of starting it from the wrong commit.
+      return null;
+    }
+  }
 
   // A failed task whose worktree was dirty keeps it (removeWorktreeIfClean
   // never discards work), and `git worktree add` refuses a path that exists
@@ -1145,11 +1192,53 @@ export async function resumeTaskWorktree(
   const existing = (await listWorktrees(projectRoot))?.find(
     (w) => path.resolve(w.path) === worktreePath && w.branch === branchName,
   );
-  if (existing) return { path: worktreePath, branch: branchName, reused: true };
+  if (existing) {
+    // Issue #3194 — under `fromOrigin` the adopted checkout has to BE the
+    // origin tip. The strict fetch above refuses to move a branch that is
+    // checked out in any worktree, so a leftover checkout cannot reach this
+    // point with a stale tip; the explicit refusal keeps it that way if git
+    // ever stops enforcing that, and keeps the "adopt a dirty worktree"
+    // posture where it belongs — the original host's own resume, where the
+    // branch IS local and the worktree IS the worker's.
+    if (opts.fromOrigin === true) return null;
+    return { path: worktreePath, branch: branchName, reused: true };
+  }
 
   const result = await runGit(projectRoot, ["worktree", "add", worktreePath, branchName]);
   if (result.code !== 0) return null;
   return { path: worktreePath, branch: branchName };
+}
+
+/**
+ * Issue #3194 — makes `refs/heads/<branch>` on this host hold EXACTLY the tip
+ * `origin` has, and reports whether it could.
+ *
+ * Deliberately NOT `ensureLocalBranch`: that helper leaves an existing local
+ * branch alone (it exists to make a branch PRESENT, not to make it current),
+ * so it would happily report success on a local ref that is behind origin —
+ * the case this has to catch.
+ *
+ * `git fetch origin refs/heads/<b>:refs/heads/<b>` gives the strict
+ * semantics this needs:
+ *
+ *   - the branch is missing locally → it is created at origin's tip;
+ *   - the local branch is behind origin → it is fast-forwarded to origin's tip;
+ *   - the local branch has commits origin does not (or has diverged) → git
+ *     REFUSES the non-fast-forward and leaves the ref untouched;
+ *   - the branch is checked out in a worktree → git REFUSES to move it;
+ *   - origin does not have the branch (or there is no origin) → git fails.
+ *
+ * Both refusals are the point: this host cannot resume from origin, and the
+ * caller has to hear so rather than continue from a stale ref.
+ */
+async function fetchBranchFromOrigin(cwd: string, branch: string): Promise<boolean> {
+  const fetched = await runGit(cwd, [
+    "fetch",
+    "--quiet",
+    "origin",
+    `refs/heads/${branch}:refs/heads/${branch}`,
+  ]);
+  return fetched.code === 0;
 }
 
 /**

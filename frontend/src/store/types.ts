@@ -457,6 +457,10 @@ export interface TasksSlice {
     id: number,
     opts?: { agent?: string | null; reviewAgent?: string | null },
   ) => Promise<Task>;
+  // #3194 — abandons a retry that is waiting for its original host (the
+  // preserved branch is there and not on origin) and re-queues the task as a
+  // new claim. The branch stays on that host, with its commits.
+  startFreshTask: (id: number) => Promise<Task>;
   // #483 — reviewing -> failed: the other resolver of a reviewing task.
   giveUpTask: (id: number, reason?: string) => Promise<Task>;
   // Issue #1345 — reviewing -> reviewing: re-arms a task stuck on

@@ -26,6 +26,13 @@ const REVIEW_HINT =
 const GIVE_UP_HINT =
   "Stop the task. It is marked Failed, its sessions stop and any draft pull request closes. You can Retry it later from the branch.";
 
+// #3194 — what "Start fresh" does, said where the button is: the preserved
+// branch stays on the host that holds it (with its commits), and the task
+// runs again from scratch somewhere else.
+function startFreshHint(hostId: string): string {
+  return `Start fresh: abandon the branch on ${hostId} (its commits stay there) and run the task from scratch.`;
+}
+
 // Shared by the task drawer (TaskDetail.tsx) and the GitHub PR sidebar
 // (github/PrDetailView.tsx) so both offer the same per-status task actions.
 // GateActions' own pattern (NotificationBell.tsx) — no optimistic state; the
@@ -61,6 +68,7 @@ export function TaskActions({
     approveTask,
     rejectTask,
     retryTask,
+    startFreshTask,
     giveUpTask,
     reReviewTask,
     updateTask,
@@ -238,6 +246,39 @@ export function TaskActions({
           Retry
         </button>
         {archive}
+        {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
+        {error && <span className="task-detail-error">{error}</span>}
+      </div>
+    );
+  }
+
+  // #3194 — a retry that is WAITING for its original host. "Start fresh" is
+  // offered for ANY such wait, because the operator is the only one who can
+  // abandon the preserved branch (it stays on that host, with its commits)
+  // and run the task from scratch. Only a wait whose branch is CONFIRMED
+  // stranded on that host — not on origin — is deliberately never failed for
+  // waiting; every other wait keeps the dispatch give-up.
+  if (task.status === "claimed" && Boolean(task.retryHostId)) {
+    return (
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn notif-gate-deny"
+          disabled={submitting || !taskMasterEnabled}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await startFreshTask(task.id);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to start the task fresh");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          Start fresh
+        </button>
+        <span className="task-detail-hint">{startFreshHint(task.retryHostId ?? "its host")}</span>
         {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
         {error && <span className="task-detail-error">{error}</span>}
       </div>

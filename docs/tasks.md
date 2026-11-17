@@ -353,6 +353,65 @@ waiting for a free concurrency slot. It never holds a session; see the
   task copy that a
   project merge superseded is refused with a 409 instead of retried
   (`#2292` — see "Merging two projects" below).
+- **Where a retry runs** (`#3194`) — the preserved branch normally lives on
+  the host the task's worker ran on, so that is where the retry resumes it.
+  When that host is **offline** (or parked), the retry cannot start there —
+  and the branch is usually only there (a budget failure or a rate-limit
+  park happens before the worker's commits are pushed). The retry then
+  decides, in this order:
+  1. **the original host**, if it is up and still satisfies the task's
+     `Platform:` / `Host:` / `Capability:` requirement — the preserved branch
+     is resumed there, exactly as before;
+  2. **another eligible host** that satisfies the requirement — but **only if
+     the task's branch is on `origin`**, confirmed through the project's
+     GitHub helpers and never assumed. The replacement host checks the
+     branch out from `origin` (it needs the project mapped there, or a
+     checkout cloned for it — the same `needsCheckout` placement computes),
+     the agent CLI and the required capability, the task's `worktreePath`
+     moves to that host, and the new worker session decides the host from
+     then on (the reviewer and the rebase worker follow it). The checkout is
+     taken at **`origin`'s tip**, not at whatever the host happens to hold: a
+     branch ref outlives the worktree it was checked out in, so the host
+     fetches the branch first (after pruning any stale worktree registration
+     it left behind, which would otherwise refuse the fetch on its own) and
+     refuses the resume when it cannot take `origin`'s tip — it may no
+     longer be on `origin`, this host may hold commits `origin` does not
+     have, or it may already have a checkout of that branch. It never
+     continues the task from an older commit;
+
+     a checkout that cannot be prepared on the replacement host (the clone
+     fails) leaves the retry **queued**, with the reason on the card, and
+     the clone is tried again until the ordinary 6-hour give-up ends it
+     (see [A queued task that cannot
+     dispatch](#a-queued-task-that-cannot-dispatch)). Nothing is stranded
+     on the original host in that wait — the branch is on `origin`, which
+     is the only reason the retry may leave it — so failing the task frees
+     something, and the wait offers no **Start fresh**: the retry is not
+     waiting for a host, and the branch it resumes is the one on `origin`;
+
+  3. **otherwise the retry waits** for its original host: the card and the
+     task sidebar show the reason (naming the host and its real state —
+     offline, parked, or no longer eligible for the task's requirement — and
+     whether the branch is on `origin`). When the branch is **confirmed to
+     be only on that host**, the task is **not** failed after 6 hours: the
+     branch is there, so failing it would free nothing. A wait whose branch
+     is safely on `origin` — or whose `origin` state could not be confirmed
+     at all (no repository, no token, a rate limit) — is an ordinary
+     placement wait and keeps the 6-hour give-up (see
+     [A queued task that cannot dispatch](#a-queued-task-that-cannot-dispatch)).
+     A task with no placement requirement follows the same order.
+
+     **Start fresh** (`POST /api/tasks/:id/start-fresh`, offered on the card
+     and in the task sidebar) is the operator's way out of a wait that never
+     ends: it abandons the preserved branch — it stays on that host, with its
+     commits — and re-queues the task as a new claim that starts from
+     scratch. It is offered for **every** wait of this kind, whatever the
+     `origin` state is: a project whose `origin` can never be confirmed (a
+     local-only repository, a project with no GitHub token) is exactly the
+     one whose wait would otherwise never end, and the give-up would fail it
+     without the branch ever being abandoned. Only the **give-up
+     exemption** is narrower — it applies to a wait whose branch is
+     _confirmed_ to be on that host and nowhere else.
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same
@@ -965,6 +1024,19 @@ The reason is not hidden:
   recovery (`failed → ready`) applies. Retry has nothing to resume at that
   point, since no worktree was ever cut, so it does exactly that: it resets
   the task to `ready`.
+- **One wait is exempt from the 6-hour give-up**: a _retry_ waiting for its
+  original host because the preserved branch is **confirmed to be on that
+  host and not on `origin`** (`#3194` — there is nowhere else to run it).
+  Failing it would throw the work away without freeing anything. Such a wait
+  shows the same "Not dispatched yet: …" notice, names the host it waits for,
+  and offers **Start fresh** (see the `failed → in_progress` bullet above).
+  The exemption is narrower than that affordance: **Start fresh** is offered
+  for every wait of that kind, but only a wait whose branch is _confirmed_ to
+  be on that host is exempt from the give-up — a wait whose branch is safely
+  on `origin`, or whose `origin` state could not be confirmed at all, is an
+  ordinary placement wait: the 6-hour give-up applies to it, and it keeps the
+  preserved branch (a later **Retry** resumes that branch instead of cutting
+  a new one).
 
 ## Where a task runs: `Platform:`, `Host:` and `Capability:`
 

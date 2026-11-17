@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { TaskActions } from "./TaskActions.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeTask } from "./test/fixtures.js";
+import { ApiError } from "./api/client.js";
 
 const rejectTask = vi.fn();
 const giveUpTask = vi.fn();
@@ -128,5 +129,53 @@ describe("TaskActions' Archive", () => {
     await user.click(screen.getByRole("button", { name: "Archive" }));
     expect(archiveTask).toHaveBeenCalledWith(9);
     expect(await screen.findByText(/Failed to update archive state/)).toBeInTheDocument();
+  });
+});
+
+// Issue #3194 — a retry waiting for its original host: the operator's way out
+// is "Start fresh" (abandon the preserved branch — it stays on that host —
+// and run the task from scratch).
+describe("TaskActions' Start fresh on a waiting retry", () => {
+  const startFreshTask = vi.fn();
+
+  beforeEach(() => {
+    startFreshTask.mockReset();
+    useDashboardStore.setState({ startFreshTask });
+  });
+
+  it("offers it, saying that the commits stay on the host it waits for", () => {
+    render(<TaskActions task={makeTask({ id: 7, status: "claimed", retryHostId: "macbook" })} />);
+    expect(screen.getByRole("button", { name: "Start fresh" })).toBeInTheDocument();
+    expect(screen.getByText(/commits stay there/)).toBeInTheDocument();
+  });
+
+  it("starts the task fresh when clicked", async () => {
+    const user = userEvent.setup();
+    startFreshTask.mockResolvedValue(undefined);
+    render(<TaskActions task={makeTask({ id: 7, status: "claimed", retryHostId: "macbook" })} />);
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(startFreshTask).toHaveBeenCalledWith(7);
+  });
+
+  it("is not offered for a task that is not waiting for a host", () => {
+    render(<TaskActions task={makeTask({ id: 7, status: "claimed" })} />);
+    expect(screen.queryByRole("button", { name: "Start fresh" })).toBeNull();
+  });
+
+  it("reports the API's own reason and re-enables the button", async () => {
+    const user = userEvent.setup();
+    startFreshTask.mockRejectedValueOnce(new ApiError("This task is not waiting for a host", 409));
+    render(<TaskActions task={makeTask({ id: 7, status: "claimed", retryHostId: "macbook" })} />);
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(await screen.findByText(/not waiting for a host/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start fresh" })).not.toBeDisabled();
+  });
+
+  it("falls back to a generic message when the failure is not an API error", async () => {
+    const user = userEvent.setup();
+    startFreshTask.mockRejectedValueOnce(new Error("network down"));
+    render(<TaskActions task={makeTask({ id: 7, status: "claimed", retryHostId: "macbook" })} />);
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(await screen.findByText("Failed to start the task fresh")).toBeInTheDocument();
   });
 });

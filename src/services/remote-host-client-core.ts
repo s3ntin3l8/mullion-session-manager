@@ -1263,14 +1263,22 @@ export class RemoteHostClient {
    * remote-hosted task. Mirrors /internal/git-worktree/resume's
    * `WorktreeResult | null` shape; `null` (not thrown) means the resume
    * failed for a git-level reason, same "not applicable, not unreachable"
-   * posture as resolveCreateWorktree above. */
-  resolveResumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
+   * posture as resolveCreateWorktree above.
+   *
+   * Issue #3194 — `opts.fromOrigin` asks the agent to fetch the branch from
+   * `origin` when it does not have it locally: a retry re-placed onto this
+   * host resumes the branch FROM origin there. */
+  resolveResumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null> {
     return this.request(
       "/internal/git-worktree/resume",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cwd, branchName }),
+        body: JSON.stringify({ cwd, branchName, fromOrigin: opts?.fromOrigin === true }),
       },
       GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS,
     );

@@ -82,8 +82,14 @@ export function TaskCard({
   inStack?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
+  // #3194 — a "Start fresh" that the server refused (409: the task is not
+  // waiting for a host any more) has to say so on the card; the promise is
+  // not dropped silently.
+  const [startFreshError, setStartFreshError] = useState<string | null>(null);
   const epicColour = epicColourVar(task);
   const hosts = useDashboardStore((s) => s.hosts);
+  // #3194 — "Start fresh" on a card whose retry waits for its original host.
+  const startFreshTask = useDashboardStore((s) => s.startFreshTask);
   const hostChip = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []);
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
 
@@ -645,9 +651,58 @@ export function TaskCard({
           with no session strip above (sessionId is null until dispatch),
           which otherwise looks identical to a genuinely stuck claimed task
           whose session was reaped. This is the "waiting for a slot" tell,
-          following the same hint pattern as the ready/disabled case above. */}
-      {task.status === "claimed" && task.sessionId === null && (
-        <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
+          following the same hint pattern as the ready/disabled case above.
+
+          Issue #3194 — the hint is for a task that is genuinely QUEUED, so
+          it is suppressed as soon as the card has something more to say:
+          a retry waiting for its original host (which shows the "Start
+          fresh" action instead, below) and any task with a dispatch reason
+          (whose "Not dispatched yet: …" notice above already says why it
+          has not started — the two together read as two contradictory
+          statements about the same card). */}
+      {task.status === "claimed" &&
+        task.sessionId === null &&
+        !task.retryHostId &&
+        !task.failureReason && (
+          <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
+        )}
+      {/* #3194 — a retry waiting for its ORIGINAL host: the card offers
+          "Start fresh" for ANY wait for that host, because the operator is
+          the only one who can abandon the preserved branch (it stays on that
+          host, with its commits) and start over. Only a wait whose branch is
+          CONFIRMED stranded on that host — not on origin — is never failed
+          for waiting; every other wait keeps the dispatch give-up. The reason
+          is on the card above (the dispatch notice). */}
+      {task.status === "claimed" && Boolean(task.retryHostId) && (
+        <button
+          type="button"
+          className="task-card-hint task-card-start-fresh"
+          disabled={!taskMasterEnabled}
+          title={`Abandon the branch on ${task.retryHostId} (its commits stay there) and run the task from scratch`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setStartFreshError(null);
+            // The store action rethrows the API's error (api/client.ts throws
+            // ApiError on any non-2xx), and the app has no unhandledrejection
+            // handler: a dropped promise would put a 409 in the console and
+            // NOTHING on screen — a stale card (two quick clicks, or the
+            // original host coming back between the poll and the click) would
+            // fail silently. Report it on the card instead, the way the
+            // sidebar's own "Start fresh" does.
+            void startFreshTask(task.id).catch((err: unknown) => {
+              setStartFreshError(
+                err instanceof Error ? err.message : "Could not start the task fresh",
+              );
+            });
+          }}
+        >
+          Start fresh
+        </button>
+      )}
+      {startFreshError !== null && (
+        <div className="task-card-hint task-card-start-fresh-error" role="status">
+          {startFreshError}
+        </div>
       )}
       {/* Issue #1038 — once a round badge is showing above (autoReturnRounds
           > 0), it already covers "still working" (capped-but-not-announced)

@@ -169,6 +169,33 @@
   background: var(--status-warn-bg);
   color: var(--status-warn-fg);
 }
+/* #3194 — the card's "Start fresh" action for a retry that waits for its
+   original host. A real button (it is an action, not a label), so it is
+   focusable and keyboard-operable — and it stops the card's own click from
+   opening the task detail behind it. */
+.task-card-start-fresh {
+  align-self: flex-start;
+  padding: 0 7px;
+  border: 1px solid var(--status-warn-border);
+  border-radius: 999px;
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  font: inherit;
+  cursor: pointer;
+}
+.task-card-start-fresh:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+/* #3194 — the reason a "Start fresh" was refused (the server answered 409:
+   the task is not waiting for a host any more). The sidebar's own action
+   shows the API's reason; the card has to as well, or the click fails
+   silently. */
+.task-card-start-fresh-error {
+  align-self: flex-start;
+  color: var(--status-warn-fg);
+  font-size: 0.85em;
+}
 
 /* ───────── Density ───────── */
 .task-density-compact .task-card {

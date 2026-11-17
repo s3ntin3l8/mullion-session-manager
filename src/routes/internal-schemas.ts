@@ -422,6 +422,11 @@ const GIT_FIELD_DEFS = {
   // Managed clones are https-only (git-clone.ts); the service re-checks.
   url: { type: "string", minLength: 1, maxLength: 2048 },
   force: { type: "boolean" },
+  // Issue #3194 — the worktree-resume route's "fetch the branch from origin
+  // when this host does not have it" flag (a task retry re-placed onto this
+  // host). A boolean like `force` above, and optional everywhere it is not
+  // listed as required.
+  fromOrigin: { type: "boolean" },
   orphanPaths: {
     type: "array",
     items: { type: "string", minLength: 1 },
@@ -751,12 +756,16 @@ export const gitCloneSchema = schemaFor({
 export interface GitWorktreeResumeBody {
   cwd: string;
   branchName: string;
+  // Issue #3194 — fetch the branch from origin when this host does not have
+  // it: a retry re-placed onto this host resumes the branch FROM origin.
+  fromOrigin?: boolean;
 }
 
 // #484 — the agent-side counterpart of resumeTaskWorktree, for Retry
 // (#483) on a remote-hosted task.
 export const gitWorktreeResumeSchema = schemaFor({
   required: ["cwd", "branchName"],
+  optional: ["fromOrigin"],
 });
 
 export interface ReadFilesBody {

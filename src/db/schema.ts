@@ -1711,6 +1711,35 @@ export const tasks = sqliteTable(
     // auto-claim pacing (a held task is waiting for a HOST, not a slot), the
     // give-up's worktree clear, and dropping a stale hold.
     dispatchHeld: integer("dispatch_held", { mode: "boolean" }).notNull().default(false),
+    // Issue #3194 — the host a QUEUED RETRY is waiting for: the host its
+    // worker ran on, whose preserved branch the retry resumes. Set while the
+    // retry waits for that host (the original is offline and the branch is not
+    // on origin, so there is nowhere else to run it); null whenever the task
+    // is not waiting for a host.
+    //
+    // It says WHICH host the retry waits for — and that is all it says. The
+    // board card and the task sidebar offer the "Start fresh" action against
+    // it (the operator's way out of a wait that never ends), and the task
+    // records which host owns it now.
+    retryHostId: text("retry_host_id"),
+    // Issue #3194 — the preserved branch is CONFIRMED to be only on the host
+    // `retryHostId` names: GitHub's 404 for the branch's ref, so the work
+    // exists nowhere else. THAT is what exempts the wait from the
+    // dispatcher's 6-hour give-up (task-dispatch.ts): failing the task would
+    // free nothing — the commits stay on that host, with the work.
+    //
+    // A SEPARATE flag from `retryHostId` on purpose: the two answer different
+    // questions. `retryHostId` says where the retry waits (and so whether
+    // "Start fresh" is offered); this says whether the branch is provably
+    // stranded there (and so whether the wait may run past the give-up). A
+    // wait whose origin state could NOT be confirmed waits for a host too —
+    // it offers "Start fresh" — but its branch may well be on origin, so the
+    // give-up still applies to it. Folding the two into one column took that
+    // escape away from exactly the projects whose origin can never be
+    // confirmed (a local-only repository, a project with no GitHub token).
+    retryStrandedOnHost: integer("retry_stranded_on_host", { mode: "boolean" })
+      .notNull()
+      .default(false),
     // Workflow-change approval gate: a task whose branch edits
     // `.github/workflows/` is not pushed under the App's ordinary token.
     // `workflowChange` is JSON `{ sha, files }` — the head commit and the

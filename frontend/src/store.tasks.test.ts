@@ -89,6 +89,11 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
       if (url === "/api/tasks/1/give-up") {
         return jsonResponse(200, { ...TASK, status: "failed" });
       }
+      if (url === "/api/tasks/1/start-fresh") {
+        // #3194 — the task is re-queued as a new claim; only the task list
+        // changes now.
+        return jsonResponse(202, { ...TASK, status: "claimed", retryHostId: null });
+      }
       if (url === "/api/sessions") {
         return jsonResponse(200, []);
       }
@@ -226,6 +231,18 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
     expect(task).toMatchObject({ id: 1, status: "claimed" });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/tasks/1/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
+    await vi.waitFor(() => expect(useDashboardStore.getState().tasks).toEqual([]));
+  });
+
+  // #3194 — "Start fresh" on a retry that is waiting for its original host.
+  it("startFreshTask re-queues the task and refreshes the task list", async () => {
+    tasksResponse = []; // the re-queued task is a new claim, not a failed one
+    const task = await useDashboardStore.getState().startFreshTask(1);
+    expect(task).toMatchObject({ id: 1, status: "claimed" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/1/start-fresh",
       expect.objectContaining({ method: "POST" }),
     );
     await vi.waitFor(() => expect(useDashboardStore.getState().tasks).toEqual([]));
