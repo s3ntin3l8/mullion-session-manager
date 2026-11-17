@@ -243,6 +243,17 @@ export function withLiveInfo(
 // re-exported so every importer keeps this path.
 export { resolveProjectHostId, resolveSessionHostId };
 
+export const TASK_WORKER_NAME_SUFFIX = "· worker";
+
+/**
+ * Returns the canonical session name for a Task Master worker session.
+ * Shared by every worker spawn site and by `resolveTaskWorkerHost` so the
+ * `· worker` suffix cannot drift.
+ */
+export function taskWorkerSessionName(taskId: number): string {
+  return `Task #${taskId} ${TASK_WORKER_NAME_SUFFIX}`;
+}
+
 /**
  * The host a task's WORKER session runs on — and therefore the host its
  * worktree is on.
@@ -284,7 +295,7 @@ export function resolveTaskWorkerHost(
     const [workerRow] = app.db
       .select()
       .from(sessions)
-      .where(and(eq(sessions.taskId, task.id), like(sessions.name, "%· worker")))
+      .where(and(eq(sessions.taskId, task.id), like(sessions.name, `%${TASK_WORKER_NAME_SUFFIX}`)))
       .orderBy(desc(sessions.id))
       .limit(1)
       .all();

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { sessions, tasks } from "../../src/db/schema.js";
@@ -80,6 +80,8 @@ describe("POST /api/tasks/:id/retry worker host resolution (#3192)", () => {
   afterAll(async () => {
     await closeDb();
     fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+    delete process.env.MULLION_TASK_MASTER_ENABLED;
   });
 
   it("resumes on the worker's remote host (with its host_cwds path) rather than the project's local host", async () => {
@@ -167,6 +169,15 @@ describe("POST /api/tasks/:id/retry worker host resolution (#3192)", () => {
 
       expect(remoteBackend.resumeTaskWorktree).toHaveBeenCalledWith(REMOTE_CWD, BRANCH);
       expect(localBackend.resumeTaskWorktree).not.toHaveBeenCalled();
+
+      const taskSessions = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.taskId, task.id))
+        .orderBy(desc(sessions.id))
+        .all();
+      expect(taskSessions[0]?.id).not.toBe(workerSession.id);
+      expect(taskSessions[0]?.hostId).toBe(remoteHostId);
     } finally {
       resolveBackendSpy?.mockRestore();
       await app.close();

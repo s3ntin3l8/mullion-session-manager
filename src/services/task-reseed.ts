@@ -27,6 +27,7 @@ import {
   readSessionLiveInfo,
   resolveSessionHostId,
   resolveTaskWorkerHost,
+  taskWorkerSessionName,
   withLiveInfo,
 } from "./session-live-info.js";
 import { getStoredSettings } from "./settings.js";
@@ -284,7 +285,7 @@ export async function reseedTaskIfSessionExited(
     skipPermissions: taskMasterConfig.skipPermissions,
     // Named like every other worker spawn site (task-claim.ts), so the re-seeded
     // worker reads as task #N's worker in the UI.
-    name: `Task #${task.id} · worker`,
+    name: taskWorkerSessionName(task.id),
     nameLocked: true,
     // Mark this session as an unattended Task Master worker so the
     // opencode and codex adapters deny brainstorming / writing-plans /

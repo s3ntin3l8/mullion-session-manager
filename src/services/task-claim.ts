@@ -16,6 +16,7 @@ import { modelFamily, resolveTaskModelPatch } from "./task-model-patch.js";
 import {
   resolveSessionHostId,
   resolveTaskWorkerHost,
+  taskWorkerSessionName,
   withLiveStatus,
 } from "./session-live-info.js";
 import {
@@ -989,7 +990,7 @@ export async function dispatchClaimedTask(
       // update can still override it, but a task session's whole point is
       // a name that reliably identifies which task it belongs to, which an
       // OSC update would defeat.
-      name: `Task #${task.id} · worker`,
+      name: taskWorkerSessionName(task.id),
       nameLocked: true,
       model,
       smallModel,
@@ -1532,7 +1533,7 @@ export async function dispatchQueuedRetry(
       initialPrompt: seedCapable ? prompt : undefined,
       skipPermissions: taskMasterConfig.skipPermissions,
       // #9 — see the claim spawn's own comment (above, in this same file).
-      name: `Task #${task.id} · worker`,
+      name: taskWorkerSessionName(task.id),
       nameLocked: true,
       // Same "this is an unattended Task Master worker" marker as
       // dispatchClaimedTask's claim spawn above — see that block's own
