@@ -117,6 +117,11 @@ describe("App tier wiring", () => {
     act(() => useDashboardStore.getState().openRightSidebarView("git"));
     expect(grid.hasAttribute("inert")).toBe(true);
     expect(screen.getByTestId("toolbar").hasAttribute("inert")).toBe(true);
+    // The other half of the contract: the mode bar and the view stay live.
+    expect(screen.getByTestId("mode-bar").closest("[inert]")).toBeNull();
+    const panel = container.querySelector(".right-sidebar-panel.phone")!;
+    expect(panel).toBeTruthy();
+    expect(panel.closest("[inert]")).toBeNull();
     act(() => useDashboardStore.getState().closeRightSidebar());
     expect(grid.hasAttribute("inert")).toBe(false);
   });
