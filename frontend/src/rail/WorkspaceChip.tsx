@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Workspace } from "../api/index.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { usePointerReorder } from "../hooks/usePointerReorder.js";
 import { usePresence } from "../hooks/usePresence.js";
 import { useVisualViewportChange } from "../hooks/useVisualViewportChange.js";
 import { groupColor, useWorkspaceTree } from "../hooks/useWorkspaceTree.js";
@@ -12,10 +13,10 @@ import { useDashboardStore } from "../store/index.js";
 import { themeClassName } from "../store/theme.js";
 import { BottomSheet } from "../ui/BottomSheet.js";
 import {
-  ChevronDownIcon,
   CloseIcon,
   FolderIcon,
   GridIcon,
+  GripIcon,
   OverflowIcon,
   PlusIcon,
   RenameIcon,
@@ -296,7 +297,7 @@ export function WorkspaceListContent({
   // focusing the field would raise the keyboard) "New workspace". Only when
   // focus has fallen, a frame later: a rename ended by clicking elsewhere
   // leaves focus where that click put it.
-  const [focusRequest, setFocusRequest] = useState<{ key: string } | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ key: string; control: string } | null>(null);
   useEffect(() => {
     if (focusRequest === null) return;
     const frame = requestAnimationFrame(() => {
@@ -313,14 +314,16 @@ export function WorkspaceListContent({
       const row =
         focusRequest.key === DELETED
           ? null
-          : list?.querySelector<HTMLElement>(`[data-manage="${focusRequest.key}"] .rail-ws-more`);
+          : list?.querySelector<HTMLElement>(
+              `[data-manage="${focusRequest.key}"] ${focusRequest.control}`,
+            );
       const target =
         row ?? list?.querySelector<HTMLElement>(touch ? ".rail-ws-new-btn" : ".rail-ws-search");
       target?.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [focusRequest, touch]);
-  const focusAfter = (key: string) => setFocusRequest({ key });
+  const focusAfter = (key: string, control = ".rail-ws-more") => setFocusRequest({ key, control });
 
   const deleteArmLabel = touch ? "Tap again to delete" : "Click again to delete";
 
@@ -332,11 +335,57 @@ export function WorkspaceListContent({
     .filter((section) => section.items.length > 0 || !query.trim());
   const ungrouped = matching(tree.ungrouped, null);
   const nothing = query.trim() !== "" && groupSections.length === 0 && ungrouped.length === 0;
+  const hasGroups = tree.sortedGroups.length > 0;
+
+  // #3217 — reorder by dragging a row's handle (hooks/usePointerReorder.ts),
+  // or with Arrow Up / Arrow Down on it. Not while a search filters the list:
+  // the rows shown are then not the groups' real order.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const reorderable = query.trim() === "";
+  const bucketOf = (groupId: number | null) =>
+    groupId === null ? tree.ungrouped : tree.groupWorkspaces(groupId);
+  const bucketName = (groupId: number | null) =>
+    groupId === null
+      ? "No group"
+      : (tree.sortedGroups.find((g) => g.id === groupId)?.name ?? "No group");
+  const [announcement, setAnnouncement] = useState("");
+  const announceMove = (w: Workspace, groupId: number | null, index: number, size: number) =>
+    setAnnouncement(
+      `${w.name} moved to position ${index + 1} of ${size} in ${bucketName(groupId)}`,
+    );
+  const { dragging, onPointerDown } = usePointerReorder({
+    scrollRef,
+    enabled: reorderable,
+    onDrop: (id, target) => {
+      const w = tree.workspaces.find((x) => x.id === id);
+      if (!w) return;
+      const others = bucketOf(target.groupId).filter((x) => x.id !== id);
+      const index = Math.min(target.index, others.length);
+      const from = bucketOf(w.groupId).findIndex((x) => x.id === id);
+      if (target.groupId === w.groupId && index === from) return;
+      moveWorkspace(tree.workspaces, id, target.groupId, index);
+      announceMove(w, target.groupId, index, others.length + 1);
+    },
+  });
+  const keyboardMove = (w: Workspace, delta: -1 | 1) => {
+    const bucket = bucketOf(w.groupId);
+    const from = bucket.findIndex((x) => x.id === w.id);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= bucket.length) {
+      setAnnouncement(
+        `${w.name} is already ${delta < 0 ? "first" : "last"} in ${bucketName(w.groupId)}`,
+      );
+      return;
+    }
+    moveWorkspace(tree.workspaces, w.id, w.groupId, to);
+    announceMove(w, w.groupId, to, bucket.length);
+    // React may re-insert the row's node to reorder it, which drops focus.
+    focusAfter(`workspace-${w.id}`, ".rail-ws-grip");
+  };
+  const hintId = useId();
 
   const workspaceItems = (w: Workspace): KebabMenuItem[] => {
     const key = `workspace-${w.id}`;
-    const bucket = w.groupId !== null ? tree.groupWorkspaces(w.groupId) : tree.ungrouped;
-    const index = bucket.findIndex((x) => x.id === w.id);
     const bucketSize = (groupId: number | null) =>
       groupId === null ? tree.ungrouped.length : tree.groupWorkspaces(groupId).length;
     const move = (groupId: number | null, toIndex: number) => {
@@ -344,7 +393,9 @@ export function WorkspaceListContent({
       focusAfter(key);
     };
     // One item per group the workspace can move to (to the end of it), the
-    // menu having no submenus; "No group" for a grouped one.
+    // menu having no submenus; "No group" for a grouped one. These are the
+    // keyboard and screen-reader path between groups; order within a group
+    // is the handle's (drag, or Arrow Up / Arrow Down), #3217.
     const groupMoves: KebabMenuItem[] = [
       ...tree.sortedGroups
         .filter((g) => g.id !== w.groupId)
@@ -375,22 +426,6 @@ export function WorkspaceListContent({
         // The rename field takes focus: the menu must not pull it back.
         opensOverlay: true,
         onClick: () => setRenaming({ kind: "workspace", id: w.id }),
-      },
-      {
-        key: "up",
-        label: "Move up",
-        icon: <ChevronDownIcon size={14} aria-hidden="true" style={{ rotate: "180deg" }} />,
-        disabled: index <= 0,
-        opensOverlay: true,
-        onClick: () => move(w.groupId, index - 1),
-      },
-      {
-        key: "down",
-        label: "Move down",
-        icon: <ChevronDownIcon size={14} aria-hidden="true" />,
-        disabled: index < 0 || index >= bucket.length - 1,
-        opensOverlay: true,
-        onClick: () => move(w.groupId, index + 1),
       },
       ...groupMoves,
       {
@@ -455,8 +490,30 @@ export function WorkspaceListContent({
 
   const row = (w: Workspace) => {
     const key = `workspace-${w.id}`;
+    const isDragged = dragging?.id === w.id;
     return (
-      <div key={w.id} className="rail-ws-item" data-manage={key}>
+      <div
+        key={w.id}
+        className={`rail-ws-item${isDragged ? " dragging" : ""}`}
+        data-manage={key}
+        data-drag-id={w.id}
+      >
+        <button
+          type="button"
+          className="rail-ws-grip"
+          aria-label={`Reorder ${w.name}`}
+          aria-describedby={reorderable ? hintId : undefined}
+          title={reorderable ? "Drag to reorder" : "Clear the search to reorder"}
+          disabled={!reorderable}
+          onPointerDown={(e) => onPointerDown(w.id, e)}
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            e.preventDefault();
+            keyboardMove(w, e.key === "ArrowUp" ? -1 : 1);
+          }}
+        >
+          <GripIcon size={14} aria-hidden="true" />
+        </button>
         {isRenaming("workspace", w.id) ? (
           <div className="rail-ws-row rail-ws-renaming">
             <GridIcon size={14} aria-hidden="true" />
@@ -484,6 +541,38 @@ export function WorkspaceListContent({
     );
   };
 
+  // A section's rows, with the drop indicator where the dragged row would
+  // land (indices count the other rows only, the drop's own rule).
+  const rows = (groupId: number | null, items: Workspace[], emptyHint: string | null) => {
+    const target = dragging?.target;
+    const at = target && target.groupId === groupId ? target.index : -1;
+    const out: ReactNode[] = [];
+    let index = 0;
+    for (const w of items) {
+      if (w.id !== dragging?.id) {
+        if (index === at) out.push(<div key="drop" className="rail-ws-drop-indicator" />);
+        index += 1;
+      }
+      out.push(row(w));
+    }
+    // An empty section's own box lights up instead (.drop-target).
+    if (at >= index && items.length > 0)
+      out.push(<div key="drop" className="rail-ws-drop-indicator" />);
+    if (items.length === 0 && emptyHint)
+      out.push(
+        <div key="empty" className="rail-ws-drop-empty">
+          {emptyHint}
+        </div>,
+      );
+    return out;
+  };
+  const zoneClass = (groupId: number | null, extra: string) =>
+    `rail-ws-group ${extra}${dragging?.target?.groupId === groupId ? " drop-target" : ""}`;
+
+  // Groups read as a hierarchy (#3217): a header in the group's colour (a
+  // label, not a row), its workspaces indented under it, and the ungrouped
+  // ones in a "No group" section of their own once any group exists. Each
+  // section is a drop zone, an empty one included.
   return (
     <div ref={listRef} className={`rail-ws-list${touch ? " touch" : ""}`}>
       <SearchInput
@@ -495,11 +584,17 @@ export function WorkspaceListContent({
         autoFocus={!touch}
         onChange={(e) => setQuery(e.target.value)}
       />
-      <div className="rail-ws-scroll">
+      <div ref={scrollRef} className={`rail-ws-scroll${dragging ? " reordering" : ""}`}>
         {groupSections.map(({ group, items }) => {
           const key = `group-${group.id}`;
           return (
-            <div key={group.id} className="rail-ws-group" role="group" aria-label={group.name}>
+            <div
+              key={group.id}
+              className={zoneClass(group.id, "grouped")}
+              role="group"
+              aria-label={group.name}
+              data-drop-zone={group.id}
+            >
               <div className="rail-ws-group-header" data-manage={key}>
                 <span className="rail-ws-group-color" style={{ background: groupColor(group) }} />
                 {isRenaming("group", group.id) ? (
@@ -514,14 +609,41 @@ export function WorkspaceListContent({
                     {group.name}
                   </span>
                 )}
+                <span className="rail-ws-group-count" aria-hidden="true">
+                  {tree.groupWorkspaces(group.id).length}
+                </span>
                 {more(`Manage group ${group.name}`, group.name, groupItems(group))}
               </div>
-              {items.map(row)}
+              <div className="rail-ws-group-body">
+                {rows(group.id, items, reorderable ? "No workspaces: drag one here" : null)}
+              </div>
             </div>
           );
         })}
-        {ungrouped.length > 0 && <div className="rail-ws-group">{ungrouped.map(row)}</div>}
+        {(ungrouped.length > 0 || (dragging && hasGroups)) && (
+          <div
+            className={zoneClass(null, hasGroups ? "ungrouped" : "")}
+            role="group"
+            aria-label={hasGroups ? "No group" : "Workspaces"}
+            data-drop-zone="none"
+          >
+            {hasGroups && (
+              <div className="rail-ws-group-header rail-ws-ungrouped-header" aria-hidden="true">
+                <span className="rail-ws-group-name">No group</span>
+              </div>
+            )}
+            <div className="rail-ws-group-body">
+              {rows(null, ungrouped, "Drop here to take it out of its group")}
+            </div>
+          </div>
+        )}
         {nothing && <div className="rail-ws-empty">No matching workspace</div>}
+      </div>
+      <span id={hintId} className="visually-hidden">
+        Drag, or press Arrow Up or Arrow Down, to reorder within the group.
+      </span>
+      <div className="visually-hidden" role="status" aria-live="polite">
+        {announcement}
       </div>
       <div className="rail-ws-new">
         {creating ? (

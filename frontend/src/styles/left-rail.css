@@ -324,30 +324,113 @@
   overflow-y: auto;
 }
 .rail-ws-group + .rail-ws-group {
-  margin-top: 6px;
+  margin-top: 8px;
 }
-/* The header lines up with the rows under it (#3072): its colour square sits
-   in a 14px slot like a row's icon and the name follows at the same 8px gap,
-   so group and workspace names start on one indent; no right padding, so its
-   "⋯" sits on the same vertical line as every row's "⋯" (.rail-ws-item has
-   none either). */
+/* #3217 — a group reads as a hierarchy: a header that is a label (the name in
+   the text colour, the group's colour square, a count; no hover, no row
+   padding) and its workspaces indented under it along a guide line. The
+   header's colour square sits in the handle column (a 20px slot) and it has
+   no right padding, so its "⋯" sits on the same vertical line as every row's
+   "⋯" (#3072; .rail-ws-item has none either). */
 .rail-ws-group-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 0 2px 8px;
-  color: var(--muted);
-  font-size: 0.6875rem;
+  min-height: 28px;
+  padding: 2px 0;
+  color: var(--fg);
+  font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 .rail-ws-group-color {
-  width: 8px;
-  height: 8px;
-  margin: 0 3px;
-  border-radius: 2px;
+  width: 10px;
+  height: 10px;
+  margin: 0 5px;
+  border-radius: 3px;
   flex-shrink: 0;
+}
+.rail-ws-group-count {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+/* "No group": the section label, quieter than a group's name, in the same
+   slot so the rows under it share the groups' indent. */
+.rail-ws-ungrouped-header {
+  padding-left: 28px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.rail-ws-group.grouped > .rail-ws-group-body,
+.rail-ws-group.ungrouped > .rail-ws-group-body {
+  margin-left: 9px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+.rail-ws-group.drop-target > .rail-ws-group-body {
+  border-left-color: var(--accent-solid);
+}
+/* The handle that drags a row (#3217): only it starts a drag, so it alone
+   gives up the browser's touch scrolling; a finger on a row still scrolls. */
+.rail-ws-grip {
+  flex-shrink: 0;
+  width: 20px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: grab;
+  touch-action: none;
+}
+.rail-ws-grip:hover,
+.rail-ws-grip:focus-visible {
+  opacity: 1;
+  background: var(--seg);
+}
+.rail-ws-grip:disabled {
+  opacity: 0.2;
+  cursor: default;
+  background: transparent;
+}
+.rail-ws-scroll.reordering {
+  cursor: grabbing;
+  user-select: none;
+}
+.rail-ws-item.dragging {
+  opacity: 0.45;
+}
+/* Where the dragged row will land: a line between two rows, taking no
+   height, so showing it does not move the rows it is measured against. */
+.rail-ws-drop-indicator {
+  position: relative;
+  z-index: 1;
+  height: 2px;
+  margin: -1px 0 -1px 20px;
+  border-radius: 2px;
+  background: var(--accent-solid);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-solid) 60%, transparent);
+}
+/* An empty group, and "No group" while dragging with nothing ungrouped,
+   still give the drag somewhere to land. */
+.rail-ws-drop-empty {
+  margin: 2px 0 2px 20px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.rail-ws-group.drop-target .rail-ws-drop-empty {
+  border-color: var(--accent-solid);
+  color: var(--fg);
 }
 .rail-ws-row {
   width: 100%;
@@ -464,9 +547,27 @@
   min-height: 48px;
   font-size: 0.9375rem;
 }
-.rail-ws-list.touch .rail-ws-more {
+.rail-ws-list.touch .rail-ws-more,
+.rail-ws-list.touch .rail-ws-grip {
   width: 44px;
   height: 44px;
+}
+.rail-ws-list.touch .rail-ws-group-header {
+  min-height: 44px;
+  font-size: 0.9375rem;
+}
+.rail-ws-list.touch .rail-ws-group-color {
+  margin: 0 17px;
+}
+.rail-ws-list.touch .rail-ws-ungrouped-header {
+  padding-left: 52px;
+}
+.rail-ws-list.touch .rail-ws-drop-indicator {
+  margin-left: 44px;
+}
+.rail-ws-list.touch .rail-ws-drop-empty {
+  margin-left: 44px;
+  padding-block: 12px;
 }
 .rail-ws-list.touch .workspace-rename-input {
   min-height: 44px;
