@@ -1133,7 +1133,7 @@ The live mcode processes were unaffected.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
-`terminationReason === "error"`), `PreToolUse`
+`terminationReason` is `"error"`, compared case-insensitively: agy sends `"ERROR"`), `PreToolUse`
 on `run_command`
 (observational only — `git_branch`/`cwd_changed` for worktree/branch
 detection; issue #264 removed the `review_gate` it used to also emit, since
@@ -1179,8 +1179,16 @@ back to `null` unconditionally to restore that invariant — a no-op for
 every other adapter, since none of them set it before their own
 `stop_failure`/equivalent fires.
 
+Captured live (2026-11-17, issue #3233): a quota-exhausted turn does fire `Stop`,
+with `terminationReason: "ERROR"` (upper case, which the original exact-match
+check missed, so quota exhaustion looked like a clean finish) and
+`error: "generating and executing: RESOURCE_EXHAUSTED (code 429): Individual
+quota reached. … Resets in 102h16m12s."`. `agy --print` also writes
+`AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","error_code":429,"retryable":true,…}`
+to its output. The reset is a relative duration inside `error`.
+
 This still only covers the case where agy's Stop hook actually fires with
-`terminationReason === "error"`. Whether a genuinely different agy
+`terminationReason` `"error"` (any case). Whether a genuinely different agy
 termination path can also occur during quota exhaustion is tracked
 separately as issue #1363 — which does **not** claim agy blocks on a
 `NEEDS INPUT`/"continue" prompt during quota exhaustion; an earlier draft
