@@ -313,7 +313,11 @@ export interface GitSlice {
   // action's own implementation in slices/git.ts for why.
   refreshGitRefs: (projectIds?: number[]) => Promise<void>;
   fetchProjectGit: (projectId: number, sessionId?: number) => Promise<void>;
-  pullProjectGit: (projectId: number, sessionId?: number) => Promise<GitPullResult>;
+  pullProjectGit: (
+    projectId: number,
+    sessionId?: number,
+    hostId?: string,
+  ) => Promise<GitPullResult>;
   // Issue #1851 — the read-only clone health check.
   checkProjectGitHealth: (projectId: number) => Promise<CloneHealth>;
   // Issue #1896 — the read-only PLAN of what the repair would do, and the

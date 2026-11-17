@@ -3,6 +3,7 @@ import { api, LOCAL_HOST_ID } from "./api/index.js";
 import type { GitFileStatus, GitStatus } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { pullReasonMessage } from "./git/gitReasons.js";
+import { HostPullControls } from "./git/HostPullControls.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
@@ -334,6 +335,7 @@ function SourceControlView({
             </div>
           )}
 
+          <HostPullControls project={effectiveProject} />
           {/* Same last-known-good convention as the store's batched
               gitStatuses map elsewhere (ProjectSection's own gitDotClass,
               Source Control's pre-first-poll state): "not fetched yet" and

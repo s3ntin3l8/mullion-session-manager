@@ -339,8 +339,10 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   },
 
   // Issue #745 — Manual fast-forward git pull for a project.
-  pullProjectGit: async (projectId: number, sessionId?: number) => {
-    const res = await api.postProjectGitPull(projectId, sessionId);
+  pullProjectGit: async (projectId: number, sessionId?: number, hostId?: string) => {
+    const res = await (hostId === undefined
+      ? api.postProjectGitPull(projectId, sessionId)
+      : api.postProjectGitPull(projectId, sessionId, hostId));
     get().bumpGitRefreshTrigger();
     return res;
   },

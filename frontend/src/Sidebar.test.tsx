@@ -848,6 +848,31 @@ describe("Sidebar P9 — inline error on a failed delete", () => {
 // (only enabled when behind > 0), and a refused pull surfaces an inline
 // error rather than failing silently — same P9 posture deleteProject uses.
 describe("Sidebar git pull kebab entry", () => {
+  it("offers a named extra-host pull even when the primary checkout has no status", async () => {
+    projects = [makeProject({ id: PROJECT.id, hostCwds: { box: "/checkout" } })];
+    hosts = [makeHost({ id: "box", name: "Build box", health: "online" })];
+    gitStatuses = { [PROJECT.id]: null };
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Git pull on Build box"));
+    expect(pullProjectGit).toHaveBeenCalledWith(PROJECT.id, undefined, "box");
+    expect(await screen.findByRole("status")).toHaveTextContent("Build box: Pulled successfully.");
+  });
+
+  it("explains why an extra-host menu entry cannot pull while drained", async () => {
+    projects = [makeProject({ id: PROJECT.id, hostCwds: { box: "/checkout" } })];
+    hosts = [makeHost({ id: "box", name: "Build box", health: "online", drained: true })];
+    renderSidebar();
+    const user = userEvent.setup();
+    await user.click(screen.getByTitle("More…"));
+    const item = await screen.findByText("Git pull on Build box");
+    expect(item.closest("button")).toHaveAttribute("aria-disabled", "true");
+    expect(item.closest("button")).toHaveAttribute("title", "Host is drained");
+    await user.click(item);
+    expect(pullProjectGit).not.toHaveBeenCalled();
+  });
+
   function makeGitStatus(overrides: Partial<GitStatus> = {}): GitStatus {
     return {
       branch: "main",
