@@ -504,6 +504,65 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
   });
 });
 
+// #3243 — the board's empty states sit centred over the lanes area (icon above
+// text) rather than in the board's top-left corner. Each renders through the
+// one centred container, inside the lanes container it is centred over.
+describe("UnifiedBoard empty states are centred over the lanes (#3243)", () => {
+  const centredNote = (text: string) =>
+    screen
+      .getByText(text)
+      .closest(".task-board-lanes > .task-board-empty > .task-board-empty-note");
+
+  it("renders 'No tasks yet.' through the centred container", () => {
+    tasks = [];
+    tasksError = null;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(centredNote("No tasks yet.")).not.toBeNull();
+  });
+
+  it("renders the load-error state and its Retry through the centred container", () => {
+    tasks = [];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const note = centredNote("Couldn't load tasks.");
+    expect(note).not.toBeNull();
+    expect(note).toContainElement(screen.getByRole("button", { name: "Retry" }));
+  });
+
+  it("renders the filter-matches-nothing state through the centred container", async () => {
+    tasks = [makeTask({ id: 1, status: "ready", blockedState: "clear" })];
+    tasksError = null;
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /^Blocked/ }));
+    const note = centredNote("No blocked tasks.");
+    expect(note).not.toBeNull();
+    expect(note).toContainElement(screen.getByRole("button", { name: "Show every task" }));
+  });
+
+  it("renders through the centred container on the phone too", () => {
+    tasks = [];
+    tasksError = null;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} phone />);
+    expect(centredNote("No tasks yet.")).not.toBeNull();
+  });
+
+  // A refresh that fails with tasks on screen does not cover those cards: it
+  // stays a line above the columns, and no centred note shows.
+  it("keeps the stale-list error above the columns, not over the cards", () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Still here" })];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(
+      screen
+        .getByText("Could not refresh tasks — showing the last known list.")
+        .closest(".task-board-stale-note"),
+    ).not.toBeNull();
+    expect(document.querySelector(".task-board-empty")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+});
+
 describe("UnifiedBoard phone lanes", () => {
   const shownTitles = () =>
     Array.from(document.querySelectorAll(".kanban-column-title")).map((el) => el.textContent);

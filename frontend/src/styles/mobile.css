@@ -98,6 +98,31 @@
     --kanban-board-pad: 10px;
     padding: var(--kanban-board-pad);
   }
+  /* The ad-hoc sessions strip sits at the bottom of the Tasks screen, right
+     above the mode bar, when the board is shorter than the screen (#3243).
+     The board is at least as tall as the overlay that scrolls it, and the
+     task area grows into the spare height, so the strip (the board's last
+     child) lands at the bottom. A longer board just grows past that minimum
+     and the strip stays at the end of the page: it never floats over the
+     lanes, and an expanded strip scrolls the page like any other content. */
+  .kanban-unified {
+    min-height: 100%;
+  }
+  .kanban-unified-tasks {
+    flex: 1 0 auto;
+  }
+  /* The lanes keep their own height, so the spare space sits under the
+     cards rather than between the columns; only an empty board's lanes take
+     it, so the centred empty-state note (task-board.css) is centred in the
+     whole area, with a floor that keeps it off the filter row and the strip
+     on a short screen. */
+  .kanban-unified-tasks .task-board-lanes {
+    flex: 0 0 auto;
+  }
+  .kanban-unified-tasks .task-board-lanes:has(> .task-board-empty) {
+    flex: 1 0 auto;
+    min-height: 14rem;
+  }
   .kanban-unified-tasks .tasks-board {
     overflow: visible;
   }

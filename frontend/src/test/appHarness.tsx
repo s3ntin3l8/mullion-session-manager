@@ -158,7 +158,11 @@ const foldHarness = vi.hoisted(() => ({
     onOpenFile?: (path: string, line?: number) => void;
   },
   launcher: null as null | {
-    onLaunched: (session: unknown, target: LauncherTarget | null) => void;
+    onLaunched: (
+      session: unknown,
+      target: LauncherTarget | null,
+      workspaceId?: number | null,
+    ) => void;
     onOpenSession: (session: unknown, target: LauncherTarget | null) => void;
   },
   onOpenSession: (() => {}) as (session: unknown) => void,
