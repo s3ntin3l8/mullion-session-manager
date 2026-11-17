@@ -3,7 +3,13 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Session } from "../api/index.js";
 import { CreateProjectModal } from "../CreateProjectModal.js";
-import { DiscoverProjects } from "../sidebar/DiscoverProjects.js";
+import {
+  DiscoverEmptyState,
+  DiscoverHostPicker,
+  DiscoverItem,
+} from "../sidebar/DiscoverProjects.js";
+import { useDiscoveredProjects } from "../sidebar/useDiscoveredProjects.js";
+import type { DiscoveredProjects } from "../sidebar/useDiscoveredProjects.js";
 import {
   deleteProjectAndEndSessions,
   gitPullState,
@@ -11,10 +17,20 @@ import {
 } from "../sidebar/projectActions.js";
 import { ProjectEditModal } from "../sidebar/ProjectEditModal.js";
 import { useDashboardStore } from "../store/index.js";
-import { CloseIcon, OverflowIcon, PlusIcon, PullIcon, RenameIcon } from "../ui/icons.js";
+import {
+  ChevronRightIcon,
+  CloseIcon,
+  FolderIcon,
+  OverflowIcon,
+  PlusIcon,
+  PullIcon,
+  RenameIcon,
+  SearchIcon,
+} from "../ui/icons.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
 import type { KebabMenuItem } from "../ui/KebabMenu.js";
-import { Dropdown } from "../ui/primitives.js";
+import { Modal } from "../ui/Modal.js";
+import { Dropdown, TextInput } from "../ui/primitives.js";
 import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
 
 const NO_SESSIONS: Session[] = [];
@@ -25,6 +41,8 @@ const ADD_PROJECT = "__add-project__";
 const ADD_PROJECT_LABEL = "Add project…";
 // How long a typeahead search keeps adding letters (browsers use about 1s).
 const TYPEAHEAD_MS = 1000;
+// The Discovered repositories view offers a search field above this many.
+const DISCOVERED_SEARCH_MIN = 8;
 
 // The Where section's Project row (#3048, #3071): the project dropdown, whose
 // last entry is "Add project…", and a "⋯" menu with the chosen project's
@@ -232,16 +250,9 @@ export function LauncherProjectView({
   onBack: () => void;
   onAdded: (projectId: number) => void;
 }) {
-  const { projects, hosts, settings, settingsLoaded } = useDashboardStore(
-    useShallow((s) => ({
-      projects: s.projects,
-      hosts: s.hosts,
-      settings: s.settings,
-      settingsLoaded: s.settingsLoaded,
-    })),
+  const { projects, hosts } = useDashboardStore(
+    useShallow((s) => ({ projects: s.projects, hosts: s.hosts })),
   );
-  const actions = useContext(LauncherProjectActionsContext);
-  const [discoverCollapsed, setDiscoverCollapsed] = useState(false);
   // A project deleted elsewhere while its Edit view is open: nothing left to
   // edit, so go back rather than show an empty body.
   const editGone = view.kind === "edit" && !projects.some((p) => p.id === view.projectId);
@@ -258,46 +269,196 @@ export function LauncherProjectView({
       </div>
     );
   }
+  return <LauncherAddProject onBack={onBack} onAdded={onAdded} />;
+}
+
+// The Add project view (#3244): the form, led by one row that opens the
+// discovered repositories as their own view. The scan runs while this view
+// is mounted (the Add view or the discovered view over it) and both read
+// the same one. The form stays mounted, hidden, under the discovered view,
+// so Back finds what was typed into it.
+function LauncherAddProject({
+  onBack,
+  onAdded,
+}: {
+  onBack: () => void;
+  onAdded: (projectId: number) => void;
+}) {
+  const { hosts, settings, settingsLoaded } = useDashboardStore(
+    useShallow((s) => ({
+      hosts: s.hosts,
+      settings: s.settings,
+      settingsLoaded: s.settingsLoaded,
+    })),
+  );
+  const actions = useContext(LauncherProjectActionsContext);
+  const [discoveredOpen, setDiscoveredOpen] = useState(false);
+  const rowRef = useRef<HTMLButtonElement>(null);
+  // Back from the discovered view: focus the row that opened it.
+  const refocusRow = useRef(false);
+  useEffect(() => {
+    if (discoveredOpen || !refocusRow.current) return;
+    refocusRow.current = false;
+    rowRef.current?.focus();
+  }, [discoveredOpen]);
+  const discovery = useDiscoveredProjects({
+    hosts,
+    onAdded: (added) => {
+      onAdded(added.id);
+      onBack();
+    },
+  });
+
+  const openSettingsProjects = () => {
+    useDashboardStore.getState().closeLauncher();
+    actions.onOpenSettingsProjects();
+  };
+  const closeDiscovered = () => {
+    refocusRow.current = true;
+    setDiscoveredOpen(false);
+  };
+
+  const { remaining } = discovery;
+  const lead =
+    remaining === null ? (
+      <div className="launcher-discovered-row" aria-busy="true">
+        <FolderIcon size={15} aria-hidden="true" />
+        <span className="launcher-discovered-row-label">Looking for repositories…</span>
+      </div>
+    ) : remaining.length === 0 ? (
+      <div className="launcher-discovered-hint">
+        <DiscoverEmptyState discovery={discovery} onOpenSettingsProjects={openSettingsProjects} />
+      </div>
+    ) : (
+      <button
+        ref={rowRef}
+        type="button"
+        className="launcher-discovered-row"
+        onClick={() => setDiscoveredOpen(true)}
+      >
+        <FolderIcon size={15} aria-hidden="true" />
+        <span className="launcher-discovered-row-label">
+          Choose from {remaining.length} discovered{" "}
+          {remaining.length === 1 ? "repository" : "repositories"}
+        </span>
+        <ChevronRightIcon size={15} aria-hidden="true" />
+      </button>
+    );
+
   return (
     <div className="launcher-project-view">
-      <CreateProjectModal
-        surface="embedded"
-        hosts={hosts}
-        initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
-        // The form closes itself after a create: that is the way back.
-        onClose={onBack}
-        onCreate={async ({ name, cwd, hostId, createDir, gitInit, placement, allowDuplicate }) => {
-          const store = useDashboardStore.getState();
-          const created = await store.createProject(name, cwd, hostId, {
+      <div className="launcher-project-form" hidden={discoveredOpen}>
+        <CreateProjectModal
+          surface="embedded"
+          hosts={hosts}
+          lead={lead}
+          initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
+          // The form closes itself after a create: that is the way back.
+          onClose={onBack}
+          onCreate={async ({
+            name,
+            cwd,
+            hostId,
             createDir,
             gitInit,
             placement,
             allowDuplicate,
-          });
-          // createProject only starts the refresh; wait for it so the
-          // dropdown has the new project to show as selected.
-          await store.refreshProjects().catch(() => {});
-          onAdded(created.id);
-          return created;
-        }}
-      />
-      <div className="launcher-project-discover">
-        {/* Scans on mount: only while the Add project view is open. */}
-        <DiscoverProjects
-          collapsed={discoverCollapsed}
-          onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
-          onOpenSettingsProjects={() => {
-            useDashboardStore.getState().closeLauncher();
-            actions.onOpenSettingsProjects();
-          }}
-          hosts={hosts}
-          bodyId="launcher-discover-projects"
-          onAdded={(added) => {
-            onAdded(added.id);
-            onBack();
+          }) => {
+            const store = useDashboardStore.getState();
+            const created = await store.createProject(name, cwd, hostId, {
+              createDir,
+              gitInit,
+              placement,
+              allowDuplicate,
+            });
+            // createProject only starts the refresh; wait for it so the
+            // dropdown has the new project to show as selected.
+            await store.refreshProjects().catch(() => {});
+            onAdded(created.id);
+            return created;
           }}
         />
       </div>
+      {discoveredOpen && (
+        <LauncherDiscoveredView
+          discovery={discovery}
+          onBack={closeDiscovered}
+          onOpenSettingsProjects={openSettingsProjects}
+        />
+      )}
     </div>
+  );
+}
+
+// The Discovered repositories view (#3244): the repositories the scan found,
+// each with its Add action, in the same shell as the project form (Back,
+// title; Escape goes back). Above DISCOVERED_SEARCH_MIN of them a search
+// field filters them by name.
+function LauncherDiscoveredView({
+  discovery,
+  onBack,
+  onOpenSettingsProjects,
+}: {
+  discovery: DiscoveredProjects;
+  onBack: () => void;
+  onOpenSettingsProjects: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const remaining = discovery.remaining ?? [];
+  // Decided on the whole list, so the field does not vanish while typing.
+  const searchable = remaining.length > DISCOVERED_SEARCH_MIN;
+  const needle = query.trim().toLowerCase();
+  const shown =
+    searchable && needle !== ""
+      ? remaining.filter((c) => c.name.toLowerCase().includes(needle))
+      : remaining;
+  const hostPicker = discovery.remoteHosts.length > 0;
+
+  return (
+    <Modal
+      surface="embedded"
+      onClose={onBack}
+      icon={<FolderIcon size={16} />}
+      title="Discovered repositories"
+      subtitle="Repositories Mullion found under your project roots."
+      initialFocusRef={searchable ? searchRef : undefined}
+    >
+      {remaining.length === 0 ? (
+        // Everything was added as a checkout, or a host switch found nothing.
+        <DiscoverEmptyState discovery={discovery} onOpenSettingsProjects={onOpenSettingsProjects} />
+      ) : (
+        <>
+          {(searchable || hostPicker) && (
+            <div className="launcher-discovered-tools">
+              {searchable && (
+                <div className="launcher-discovered-search">
+                  <SearchIcon size={15} strokeWidth={1.9} aria-hidden="true" />
+                  <TextInput
+                    ref={searchRef}
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search repositories"
+                    aria-label="Search repositories"
+                  />
+                </div>
+              )}
+              <DiscoverHostPicker discovery={discovery} />
+            </div>
+          )}
+          <div className="discover-body launcher-discovered-list" role="list">
+            {shown.map((c) => (
+              <div key={c.cwd} role="listitem">
+                <DiscoverItem candidate={c} discovery={discovery} />
+              </div>
+            ))}
+          </div>
+          {shown.length === 0 && (
+            <p className="launcher-discovered-none">No repository matches “{query.trim()}”.</p>
+          )}
+        </>
+      )}
+    </Modal>
   );
 }

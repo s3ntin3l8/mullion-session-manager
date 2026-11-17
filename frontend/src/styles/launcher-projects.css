@@ -31,8 +31,7 @@
 }
 
 /* The Add/Edit project view: the project form (CreateProjectModal.tsx's
-   embedded shell) in the launcher's body, the discovered repositories under
-   it. The launcher's body is a flex column that scrolls (modals.css's
+   embedded shell) in the launcher's body. The launcher's body is a flex column that scrolls (modals.css's
    .create-modal-body), so a flex child with min-height: 0 would shrink to fit
    it: the form collapsed to nothing and the Discover list was drawn over its
    fields (#3212). The view, the form and the form's own body keep their
@@ -41,6 +40,17 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+}
+/* The Add view's form, kept mounted under the Discovered repositories view
+   (#3244) so Back finds what was typed. Its display: flex would beat the
+   browser's own [hidden] rule. */
+.launcher-project-form {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.launcher-project-form[hidden] {
+  display: none;
 }
 .embedded-form {
   display: flex;
@@ -80,13 +90,82 @@
   flex: none;
   overflow-y: visible;
 }
-.launcher-project-discover {
-  padding: 14px 18px;
-  border-top: 1px solid var(--border-soft);
+/* #3244 — the row at the top of the Add view that opens the discovered
+   repositories, and the hint that replaces it when there are none. */
+.launcher-discovered-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
 }
-.session-launcher-sheet .embedded-form-back {
+button.launcher-discovered-row {
+  color: var(--fg);
+  cursor: pointer;
+}
+button.launcher-discovered-row:hover {
+  border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
+  background: var(--seg);
+}
+button.launcher-discovered-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.launcher-discovered-row svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.launcher-discovered-row-label {
+  flex: 1;
+  min-width: 0;
+}
+.launcher-discovered-hint .discover-block {
+  padding: 0;
+}
+/* The Discovered repositories view: search (and the host picker when there
+   are remote hosts) over the list; the launcher's body scrolls the list. */
+.launcher-discovered-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.launcher-discovered-search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+}
+.launcher-discovered-search input {
+  flex: 1;
+  min-width: 0;
+}
+.launcher-discovered-list {
+  padding: 0;
+}
+.launcher-discovered-none {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.session-launcher-sheet .embedded-form-back,
+.session-launcher-sheet .launcher-discovered-row {
   min-height: 44px;
 }
-.session-launcher-sheet .launcher-project-discover .discover-add {
+.session-launcher-sheet .launcher-discovered-list .discover-item {
   min-height: 44px;
+  padding-block: 0;
+}
+.session-launcher-sheet .launcher-discovered-list .discover-add {
+  min-height: 44px;
+  padding: 0 10px;
 }
