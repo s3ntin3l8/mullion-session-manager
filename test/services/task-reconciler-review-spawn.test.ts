@@ -37,7 +37,6 @@ vi.mock("../../src/services/github-write.js", (io) => mockGithubWriteFactory(io)
 vi.mock("../../src/services/github.js", (io) => mockGithubFactory(io));
 
 const { buildApp } = await import("../../src/app.js");
-const { getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
@@ -450,19 +449,8 @@ describe("reconcileTasks — CI-gated review spawn", () => {
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
-      // This test file shares one DB across every test (by design — see its
-      // own module-level comment) and doesn't reset tasks between tests, so
-      // an EARLIER test's own task can still be sitting in "reviewing" with
-      // reviewSessionId null (e.g. "logs and swallows a review agent spawn
-      // failure..." above, whose whole point is that its own failure is
-      // never retried within its own single tick — but processPendingReviewSpawns
-      // now retries it on every LATER test's tick too). A plain
-      // `.mockResolvedValueOnce` on createSessionRecord would fail
-      // whichever task's spawn call happens to run first in that pass's
-      // `Promise.all`, not necessarily this test's own — so this scopes the
-      // one-time failure to THIS test's own project id and delegates every
-      // other call (including any leftover task's real retry) to the real
-      // implementation.
+      // Scope the one-time failure to this test's project id and delegate
+      // every other call to the real implementation.
       const projectId = (await getTask(app, taskId)).projectId;
       const sessionsModule = await import("../../src/services/session-lifecycle.js");
       const actualCreateSessionRecord = sessionsModule.createSessionRecord;
@@ -499,9 +487,8 @@ describe("reconcileTasks — CI-gated review spawn", () => {
     // retry while Task Master is disabled" test above.
     it("does not spawn a review agent while Task Master is disabled, even for a task already in 'reviewing'", async () => {
       const app = await buildApp();
-      let taskId: number | undefined;
+      const { taskId } = await claimWithPR(app);
       try {
-        ({ taskId } = await claimWithPR(app));
         mockFetchRunsForHead.mockResolvedValueOnce([
           {
             name: "CI",
@@ -537,17 +524,6 @@ describe("reconcileTasks — CI-gated review spawn", () => {
           url: "/api/settings",
           payload: { taskMaster: { enabled: "inherit" } },
         });
-        // This task is deliberately left "reviewing" with reviewSessionId
-        // still null by design (the whole point of this test) — unlike the
-        // beforeEach sweep above (scoped to `prNumber IS NULL`), it has a
-        // real prNumber and would otherwise survive into every later test's
-        // shared DB, getting reprocessed by their own processPendingReviewSpawns
-        // pass and consuming THEIR single-shot mockFetchRunsForHead queue
-        // entries out from under them (see the module-level sharedDB
-        // comment). Delete it rather than let it outlive this test.
-        if (taskId !== undefined) {
-          getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
-        }
         await app.close();
       }
     });
@@ -650,10 +626,6 @@ describe("reconcileTasks — CI-gated review spawn", () => {
         expect(orphanedSession?.status).toBe("killed");
       } finally {
         resolveSeedDeliveredSpy.mockRestore();
-        // This task is deliberately left "reviewing" + reviewSessionId null
-        // with a real prNumber — same shared-DB leak hazard as the
-        // "disabled" test's own cleanup above.
-        getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
         await app.close();
       }
     });
@@ -728,13 +700,6 @@ describe("reconcileTasks — CI-gated review spawn", () => {
       expect(row.status).toBe("reviewing");
       expect(row.reviewSessionId).toBeNull();
 
-      // Same reasoning as the "disabled" test's own cleanup above: this
-      // task is deliberately left "reviewing" + reviewSessionId null with a
-      // real prNumber, which the beforeEach sweep (scoped to `prNumber IS
-      // NULL`) won't catch — left behind, it'd be reprocessed by whichever
-      // later test's reconcileTasks() call runs next, consuming THAT test's
-      // own single-shot mockFetchRunsForHead queue entry out from under it.
-      getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
       await app.close();
     });
   });

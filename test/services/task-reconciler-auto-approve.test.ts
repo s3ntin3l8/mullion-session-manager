@@ -76,7 +76,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
     });
 
     describe("a reviewing task whose PR ended (#2103)", () => {
-      it("fails a task whose PR was closed without merging clears its rebase bookkeeping", async () => {
+      it("fails a task whose PR was closed without merging, and clears its rebase bookkeeping", async () => {
         const app = await buildApp();
         const { taskId } = await createAutoApproveCandidate(app);
         app.db
@@ -429,7 +429,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
     // #2369 — the auto-approve gate must see an external reviewer's run as an
     // ingested review (or it never reaches the conflict branch at all) the
     // rebase must clear the whole run handle so the next round dispatches fresh.
-    it("auto-rebases a reviewing task whose approved review is an external run clears the run (#2369)", async () => {
+    it("auto-rebases a reviewing task whose approved review is an external run, and clears the run (#2369)", async () => {
       const app = await buildApp();
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createAutoApproveCandidate(app, {

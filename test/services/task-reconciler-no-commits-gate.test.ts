@@ -56,7 +56,7 @@ describe("reconcileTasks — reviewing gate (#722)", () => {
     // 40-char hex string trips detect-secrets' hex-high-entropy heuristic.
     const BASE_SHA = "0000000111122223333444455556666777788889";
 
-    it("fails the task, salvages a WIP commit terminates the session when HEAD is still at baseSha", async () => {
+    it("fails the task, salvages a WIP commit, and terminates the session when HEAD is still at baseSha", async () => {
       const app = await buildApp();
       const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId, sessionId } = await createSessionAndTaskWithBase(app, "in_progress");
@@ -550,7 +550,7 @@ describe("reconcileTasks — reviewing gate (#722)", () => {
       return { hostId, workerSession, taskRow: row, worktreePath: `/remote/project-${name}` };
     }
 
-    it("fails, salvages the WIP commit terminates the session for a remote-hosted task whose commit-wip capability works", async () => {
+    it("fails, salvages the WIP commit, and terminates the session for a remote-hosted task whose commit-wip capability works", async () => {
       const app = await buildApp();
       const { hostId, workerSession, taskRow, worktreePath } = await seedRemoteInProgressTask(
         app,
@@ -682,22 +682,6 @@ describe("reconcileTasks — reviewing gate (#722)", () => {
           .where(eq(sessions.id, workerSession.id))
           .all();
         expect(sessionRow.status).toBe("active");
-
-        // Clean up: same reasoning as the grace-window tests above — this
-        // file shares one DB across its whole run with no per-test reset,
-        // and the worker-path loop processes every in_progress task on
-        // every tick. Left alone, this leftover REMOTE in_progress task
-        // (still carrying baseSha/worktreePath) would reach
-        // checkReviewingGate on a LATER test's own reconcileTasks() call —
-        // and unlike a leftover local-host task, it no longer gets
-        // short-circuited by a host check first (issue #1100 removed that
-        // guard), so it would hit whatever mockResolveHostGitStatus/
-        // mockCommitHostWipChanges happen to be set to by then.
-        app.db
-          .update(tasks)
-          .set({ status: "failed", failureReason: "test cleanup" })
-          .where(eq(tasks.id, taskRow.id))
-          .run();
 
         resolveBackendSpy.mockRestore();
         await app.close();

@@ -69,7 +69,7 @@ describe("reconcileTasks — review-findings loop", () => {
     // change ever narrowed the fallback verdict, this is the test that
     // would catch it — tied here explicitly so a failure points at the
     // right place.
-    it("ingests non-empty freeform findings (parsed as changes-requested via the tolerant fallback), appends them auto-returns to in_progress exactly once", async () => {
+    it("ingests non-empty freeform findings (parsed as changes-requested via the tolerant fallback), appends them, and auto-returns to in_progress exactly once", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(app, taskId, 0, "Fix the null check on line 42.");
@@ -415,7 +415,7 @@ describe("reconcileTasks — review-findings loop", () => {
     // change) would have made a clean review indistinguishable from one
     // requesting changes — auto-returning and burning the task's one round
     // on a worker that has nothing to fix.
-    it("does NOT auto-return stays in reviewing, when the review agent's JSON verdict is clean", async () => {
+    it("does NOT auto-return, and stays in reviewing, when the review agent's JSON verdict is clean", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(
@@ -440,7 +440,7 @@ describe("reconcileTasks — review-findings loop", () => {
       await app.close();
     });
 
-    it("auto-returns exactly once renders anchored findings, when the review agent's JSON verdict is changes-requested", async () => {
+    it("auto-returns exactly once, and renders anchored findings, when the review agent's JSON verdict is changes-requested", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(
@@ -618,7 +618,7 @@ describe("reconcileTasks — review-findings loop", () => {
     // return is already gated on `derived.status === "finished"`
     // independent of the verdict, so this can't currently misfire — this
     // test pins that guarantee explicitly rather than leaving it implicit.
-    it("ingests and comments a JSON 'clean' verdict from an exited review session does not auto-return", async () => {
+    it("ingests and comments a JSON 'clean' verdict from an exited review session, and does not auto-return", async () => {
       const app = await buildApp();
       const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
       writeFindings(

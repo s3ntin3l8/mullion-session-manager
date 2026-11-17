@@ -99,21 +99,6 @@ describe("reconcileTasks — rate-limit grace (#1015)", () => {
       // TTL clear would strand the task in_progress on the next tick.
       expect(row.lastRateLimitAt).not.toBeNull();
 
-      // This test file shares one DB across its whole run with no per-test
-      // reset (module-level comment above) the worker-path loop
-      // processes every in_progress task on every tick — leaving a
-      // task in_progress with `lastRateLimitAt` set means a LATER test
-      // (e.g. the CI-gated review spawn tests below, which don't mock
-      // `resolveHostGitStatus`) would hit a TypeError on its first
-      // reconcile when the leftover task's `checkReviewingGate` calls
-      // the now-unmocked function. Clean up by force-failing the task
-      // so it's outside the worker loop's purview.
-      app.db
-        .update(tasks)
-        .set({ status: "failed", failureReason: "test cleanup" })
-        .where(eq(tasks.id, taskId))
-        .run();
-
       await app.close();
     });
 

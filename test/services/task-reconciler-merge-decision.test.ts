@@ -476,7 +476,7 @@ describe("reconcileTasks — merge blocked review decision (#737)", () => {
       await app.close();
     });
 
-    it("does not re-assert reports the specific message, when no reviewer App is configured", async () => {
+    it("does not re-assert, and reports the specific message, when no reviewer App is configured", async () => {
       const app = await buildApp();
       const { taskId } = await createDoneTaskWithPendingMerge(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "blocked" }));

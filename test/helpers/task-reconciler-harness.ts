@@ -1,3 +1,12 @@
+/**
+ * Shared mock factories, lifecycle hooks, and fixtures for task-reconciler tests.
+ *
+ * Import order constraint: `reconcilerMocks` is a plain module-level object
+ * (not `vi.hoisted`), which works because this file has no runtime `src/`
+ * imports (only `import type` and `./pr-review-defaults.js`). Suites must
+ * import this harness before any `src/` module, and this file must not gain
+ * runtime `src/` imports at module top level.
+ */
 import { vi, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
@@ -96,6 +105,12 @@ export async function mockChildProcessFactory(importOriginal: ImportOriginal) {
       const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
       setImmediate(() => {
         ee.emit("exit", 0);
+        // Issue #1140 — terminate()'s stopScope() issues a list-units
+        // ownership-check spawn FIRST, which (like isMasterAliveBatch)
+        // deliberately waits on 'close', not 'exit' — the stdout-delivery
+        // race their own doc comments describe. A mock that only emits
+        // 'exit' hangs that listing call for the whole test timeout. See
+        // test/helpers/mock-spawn.ts for the full reasoning.
         ee.stdout = new EventEmitter();
         setImmediate(() => ee.emit("close", 0));
       });
@@ -272,6 +287,7 @@ export function setupReconcilerTestLifecycle(suiteSlug: string): void {
   const tmpDb = path.join(os.tmpdir(), `${suiteSlug}-${process.pid}.db`);
   let codexHome = "";
   let fakeHome = "";
+  let dbTablesReady = false;
   const originalCodexHome = process.env.CODEX_HOME;
   const originalHome = process.env.HOME;
 
@@ -311,15 +327,24 @@ export function setupReconcilerTestLifecycle(suiteSlug: string): void {
     reconcilerMocks.mockOpenDraftPRForTask
       .mockReset()
       .mockResolvedValue({ ok: false, reason: "no-token" });
-    try {
-      const { getDb } = await import("../../src/db/client.js");
-      const { tasks, sessions } = await import("../../src/db/schema.js");
-      const db = getDb();
+    const { getDb } = await import("../../src/db/client.js");
+    const { tasks, sessions } = await import("../../src/db/schema.js");
+    const db = getDb();
+    if (!dbTablesReady) {
+      try {
+        db.delete(tasks).run();
+        // sessions.taskId has no FK, so stale session rows would survive the delete above.
+        db.delete(sessions).run();
+        dbTablesReady = true;
+      } catch (err) {
+        // First beforeEach runs before buildApp() migrates tmpDb; any other error is real.
+        if (!(err instanceof Error) || !err.message.includes("no such table")) {
+          throw err;
+        }
+      }
+    } else {
       db.delete(tasks).run();
-      // sessions.taskId has no FK, so stale session rows would survive the delete above.
       db.delete(sessions).run();
-    } catch {
-      // no such table yet — first beforeEach runs before buildApp() migrates tmpDb.
     }
     reconcilerMocks.mockResolveHostGitStatus.mockReset();
     reconcilerMocks.mockCommitHostWipChanges
@@ -416,6 +441,13 @@ export function fakeInfo(overrides: Partial<Record<string, unknown>> = {}) {
     compactState: "idle",
     subagentCount: 0,
     lastTurnEndedAt: null,
+    // Issue #1735 — the reconciler's worker->review gate reads
+    // `workFinishedAt` (the last turn end that meant "the agent's work is
+    // done"), not `lastTurnEndedAt` (when a turn ended at all). Derived
+    // from the same override so the existing fixtures keep their meaning
+    // — "the turn finished → the gate opens" — while a test that is
+    // specifically about the work-finished signal can override it
+    // independently.
     outstandingBackgroundTasks: [],
     ...overrides,
     workFinishedAt:
@@ -503,7 +535,7 @@ export async function createSessionAndTaskWithReviewAgent(
   return { taskId: row.id, sessionId };
 }
 
-export const HARNESS_BASE_SHA = "0000000111122223333444455556666777788889";
+const HARNESS_BASE_SHA = "0000000111122223333444455556666777788889";
 
 export async function createSessionAndTaskWithBase(
   app: TestApp,

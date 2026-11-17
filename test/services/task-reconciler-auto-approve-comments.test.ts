@@ -510,7 +510,7 @@ describe("reconcileTasks — auto-approve new PR review comments (#757)", () => 
       await app.close();
     });
 
-    it("filters a self-authored comment out of a result that also has a genuine human one still returns the task for the human comment", async () => {
+    it("filters a self-authored comment out of a result that also has a genuine human one, and still returns the task for the human comment", async () => {
       const app = await buildApp();
       const { taskId } = await createPrCommentCandidate(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr());

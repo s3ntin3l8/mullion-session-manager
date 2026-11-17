@@ -161,7 +161,7 @@ describe("reconcileTasks — review round cap and re-arm", () => {
       await app.close();
     });
 
-    it("uses the install-wide cap when the project sets none parks at it with reason 'cap'", async () => {
+    it("uses the install-wide cap when the project sets none, and parks at it with reason 'cap'", async () => {
       const app = await buildApp();
       await withInstallCap(app, 1, async () => {
         const task = await seedReviewing(app, {}, { autoReturnRounds: 1 });

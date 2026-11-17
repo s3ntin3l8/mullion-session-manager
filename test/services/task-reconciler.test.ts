@@ -398,7 +398,7 @@ describe("reconcileTasks", () => {
     // longer exists (dispatchClaimedTask now flips claimed -> in_progress
     // BEFORE a session ever spawns), so in_progress -> reviewing is the
     // only edge left to exercise this behavior through.
-    it("calls openDraftPRForTask on the in_progress -> reviewing edge persists its result", async () => {
+    it("calls openDraftPRForTask on the in_progress -> reviewing edge, and persists its result", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -422,7 +422,7 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("never blocks the reviewing transition leaves prUrl/prNumber unset, when openDraftPRForTask fails (best-effort posture)", async () => {
+    it("never blocks the reviewing transition, and leaves prUrl/prNumber unset, when openDraftPRForTask fails (best-effort posture)", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTask(app, "in_progress");
       vi.spyOn(app.pty, "get").mockReturnValue({
@@ -719,7 +719,7 @@ describe("reconcileTasks", () => {
       return row.id;
     }
 
-    it("pushes once per verdict with a generic body again after a new verdict", async () => {
+    it("pushes once per verdict with a generic body, and again after a new verdict", async () => {
       const app = await buildApp();
       const taskId = await createCandidate(app);
       await notifyApprovalsAwaitingHuman(app);
@@ -810,7 +810,7 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("records nothing while the push channel is off announces once it is back on", async () => {
+    it("records nothing while the push channel is off, and announces once it is back on", async () => {
       const app = await buildApp();
       const taskId = await createCandidate(app);
       await app.inject({
@@ -833,7 +833,7 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("does not throw when a send rejects the verdict stays recorded", async () => {
+    it("does not throw when a send rejects, and the verdict stays recorded", async () => {
       const app = await buildApp();
       const taskId = await createCandidate(app);
       mockNotifyTaskNeedsAttention.mockRejectedValueOnce(new Error("push down"));
