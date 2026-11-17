@@ -223,10 +223,71 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
       await within(view).findByText("Every discovered repository has been added."),
     ).toBeInTheDocument();
     expect(within(view).queryByText("No repositories found")).toBeNull();
+    expect(within(view).getByRole("status")).toHaveFocus();
 
     await user.click(within(view).getByRole("button", { name: "Back" }));
     const configure = screen.getByRole("button", { name: "Configure search roots" });
     await waitFor(() => expect(configure).toHaveFocus());
+  });
+
+  it("a host switch drops a late answer from the old host and clears the search", async () => {
+    const names = [
+      "atlas",
+      "beacon",
+      "comet",
+      "delta",
+      "ember",
+      "fjord",
+      "glade",
+      "harbor",
+      "iris",
+    ];
+    const pending: Record<string, (r: Response) => void> = {};
+    stub(() => Promise.resolve(jsonResponse(200, [])));
+    const result = mockFetch({
+      "GET /api/projects/discover": ({ query }) => {
+        discoverCalls++;
+        const host = query.get("hostId") ?? "local";
+        if (discoverCalls === 1)
+          return jsonResponse(
+            200,
+            names.map((n) => repo(n)),
+          );
+        return new Promise<Response>((resolve) => (pending[host] = resolve));
+      },
+      "GET /api/projects/placement-preview": () => jsonResponse(200, null),
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+    useDashboardStore.setState({
+      hosts: [
+        { id: "remote-1", name: "builder" },
+        { id: "remote-2", name: "runner" },
+      ] as never,
+    });
+    const user = userEvent.setup();
+    renderAdd();
+    await user.click(await screen.findByRole("button", { name: /Choose from 9/ }));
+    const view = screen.getByRole("group", { name: "Discovered repositories" });
+    await user.type(within(view).getByRole("searchbox"), "zz");
+    expect(within(view).getByText("No repository matches “zz”.")).toBeInTheDocument();
+
+    const picker = within(view).getByRole("combobox");
+    await user.selectOptions(picker, "builder");
+    await user.selectOptions(picker, "runner");
+    pending["remote-2"]!(
+      jsonResponse(
+        200,
+        names.map((n) => repo(`${n}-r2`, { cwd: `/r2/${n}` })),
+      ),
+    );
+    expect(await within(view).findByText("atlas-r2")).toBeInTheDocument();
+    // The slow answer from the host switched away from changes nothing.
+    pending["remote-1"]!(jsonResponse(200, [repo("stale", { cwd: "/r1/stale" })]));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(within(view).queryByText("stale")).toBeNull();
+    expect(within(view).getByRole("searchbox")).toHaveValue("");
+    expect(within(view).queryByText(/No repository matches/)).toBeNull();
   });
 
   it("Configure search roots closes the launcher and opens Settings → Projects", async () => {

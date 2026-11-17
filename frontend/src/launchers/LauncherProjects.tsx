@@ -408,7 +408,19 @@ function LauncherDiscoveredView({
   onBack: () => void;
   onOpenSettingsProjects: () => void;
 }) {
-  const [query, setQuery] = useState("");
+  // The search belongs to the host it was typed for: switching hosts starts
+  // the new list unfiltered.
+  const [search, setSearch] = useState({ hostId: discovery.selectedHostId, text: "" });
+  const query = search.hostId === discovery.selectedHostId ? search.text : "";
+  const setQuery = (text: string) => setSearch({ hostId: discovery.selectedHostId, text });
+  // Attaching the last one unmounts the focused Add button: the line that
+  // replaces the list takes focus and is announced.
+  const allAddedRef = useRef<HTMLParagraphElement>(null);
+  const allAdded =
+    discovery.remaining?.length === 0 && discovery.addedAny && !discovery.discoverError;
+  useEffect(() => {
+    if (allAdded) allAddedRef.current?.focus();
+  }, [allAdded]);
   const searchRef = useRef<HTMLInputElement>(null);
   const remaining = discovery.remaining ?? [];
   // Decided on the whole list, so the field does not vanish while typing.
@@ -432,9 +444,11 @@ function LauncherDiscoveredView({
       subtitle="Repositories Mullion found under your project roots."
       initialFocusRef={initialFocus}
     >
-      {remaining.length === 0 && discovery.addedAny && !discovery.discoverError ? (
+      {allAdded ? (
         // The last one was attached as a checkout from here.
-        <p className="launcher-discovered-none">Every discovered repository has been added.</p>
+        <p ref={allAddedRef} tabIndex={-1} role="status" className="launcher-discovered-none">
+          Every discovered repository has been added.
+        </p>
       ) : remaining.length === 0 ? (
         // A host switch found nothing, or failed.
         <DiscoverEmptyState discovery={discovery} onOpenSettingsProjects={onOpenSettingsProjects} />

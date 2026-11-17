@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../api/index.js";
 import type { DiscoveredProject, Host, Project } from "../api/index.js";
@@ -54,15 +54,23 @@ export function useDiscoveredProjects({
   // a cwd match is per-(hostId, cwd), same as the backend's own
   // registeredCwds query in routes/projects.ts, so the previous host's
   // "just added" set is meaningless once `forHostId` changes.
+  //
+  // Only the latest request's answer is applied: a slow response from the
+  // host switched away from would otherwise list that host's paths under
+  // the new `selectedHostId`, and Add would send them to the wrong host.
+  const latestRequest = useRef(0);
   const load = (forHostId: string) => {
+    const request = ++latestRequest.current;
     api
       .discoverProjects(forHostId)
       .then((found) => {
+        if (request !== latestRequest.current) return;
         setCandidates(found);
         setAdded(new Set());
         setDiscoverError(false);
       })
       .catch(() => {
+        if (request !== latestRequest.current) return;
         setCandidates([]);
         setAdded(new Set());
         setDiscoverError(true);
