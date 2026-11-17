@@ -371,6 +371,7 @@ export function NotificationBell({
   sheetClassName,
   placement = "below",
   triggerClassName = "toolbar-icon-btn",
+  label,
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -396,8 +397,12 @@ export function NotificationBell({
   // Where the popover opens: under the bell (the phone's top bar) or beside it,
   // growing upward from its bottom edge (the left rail's bottom cluster, #3009).
   placement?: "below" | "beside";
-  // The trigger's class: the top bar's icon button, or the rail's.
+  // The trigger's class: the rail's icon button, or the phone tab bar's entry.
   triggerClassName?: string;
+  // A visible label under the icon, which also names the trigger (the phone
+  // tab bar's "Inbox" entry, #3288). Without one the trigger is icon-only and
+  // named "Notifications".
+  label?: string;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -618,11 +623,12 @@ export function NotificationBell({
         // triggers.
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={
-          unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications, none unread"
-        }
+        aria-label={`${label ?? "Notifications"}, ${unreadCount > 0 ? `${unreadCount} unread` : "none unread"}`}
         onClick={(e) => {
           e.stopPropagation();
+          // iOS does not focus a tapped button, and the sheet returns focus to
+          // what was focused when it opened: this trigger, then (#3288).
+          e.currentTarget.focus();
           if (!open && btnRef.current) {
             reposition();
             openFilter();
@@ -630,7 +636,13 @@ export function NotificationBell({
           setOpen((v) => !v);
         }}
       >
-        <BellIcon size={17} />
+        <BellIcon size={17} aria-hidden="true" />
+        {/* The label before the badge, so "Inbox 3" reads in the name's order. */}
+        {label && (
+          <>
+            <span className="phone-mode-label">{label}</span>{" "}
+          </>
+        )}
         {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}
       </button>
       {sheet && (

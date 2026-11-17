@@ -277,6 +277,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
     crossLinkReturn: null,
+    newTaskFormOpen: false,
     kanbanOrder: {},
     launcherRequest: null,
     openSessionRequest: null,
@@ -610,6 +611,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
     setFoldHalvesActive: (active) => {
       if (get().foldHalvesActive !== active) set({ foldHalvesActive: active });
+    },
+    setNewTaskFormOpen: (open) => {
+      if (get().newTaskFormOpen !== open) set({ newTaskFormOpen: open });
     },
 
     setKanbanColumnOrder: (columnId, order) => {

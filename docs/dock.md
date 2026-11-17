@@ -489,8 +489,8 @@ sessions, and only ever offers a suggestion for the manual `devServerUrl`
 field. If you start a dev server by hand in an ordinary "+ Session"
 terminal instead of a dock control, Mullion separately watches that
 session's output for the same startup banner and, once it appears, raises
-a **"Dev server detected"** notification (bell icon, in the toolbar's
-notification panel) offering **"Use this port"** / **"Ignore port"**.
+a **"Dev server detected"** notification (the bell's notification panel:
+the left rail's bell, or the phone tab bar's Inbox) offering **"Use this port"** / **"Ignore port"**.
 
 Accepting the offer does **not** spawn a second session or a dock
 control — the dev server is already running live in your plain terminal,

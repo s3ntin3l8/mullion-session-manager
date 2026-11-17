@@ -380,15 +380,16 @@ or the Dock. It's an overlay over the dockview grid, not a panel, so switching
 back to Workspace instantly restores whatever was tiled underneath. The last
 mode is remembered per device. A task's worker or reviewer pill in the
 sidebar's task detail opens that session in Workspace mode and keeps the task
-open in the sidebar. The phone (`#3014`) has no drawer: a mode bar at the
-bottom (Workspace, Tasks with the needs-you count, and "⋯"), hidden while the
-on-screen keyboard is up, switches modes. Its board shows one lane at a time
+open in the sidebar. The phone (`#3014`) has no drawer: a tab bar at the
+bottom (Workspace, Tasks with the needs-you count, New, Inbox and More, `#3288`),
+hidden while the on-screen keyboard is up, switches modes; in Tasks mode its
+New opens the new-task form. Its board shows one lane at a time
 (Backlog, Ready, Active, Done) under a strip naming each lane with its count;
 swipe between lanes. "Needs you" is a filter chip there, a dot marks each lane
 holding such a task, and the board opens on the first of them. A task opens
-full screen with its actions at the bottom. "⋯" lists the right sidebar's
-views, then Settings; a view opens above the mode bar, which stays visible:
-Workspace or Tasks closes it, and another view from "⋯" replaces it. The back gesture closes a
+full screen with its actions at the bottom. More lists the right sidebar's
+views, then Settings; a view opens above the tab bar, which stays visible:
+Workspace or Tasks closes it, and another view from More replaces it. The back gesture closes a
 sheet, then a detail inside a view, then the view; it switches mode only to
 return to Tasks after a task's session pill took you to Workspace. Task
 status columns are the board; a task with a linked
@@ -433,8 +434,9 @@ The strip is on every layout, phone included.
   panel** (the left-rail toggle, or Display → Facets panel: Off / On / Auto —
   Auto opens it from a 1440px window or with more than 8 projects) shows the
   same state, project and epic choices with counts; it edits the same filter
-  state as the row. On phone the row collapses to [New task] [Filter] and the
-  same controls live in the filter sheet.
+  state as the row. On phone the row collapses to the "Needs you" chip and an
+  icon-only Filter button carrying the active-filter count, and the same
+  controls live in the filter sheet; New task is the tab bar's New entry.
   All of these are client-side render filters over the full task list, so a
   drag-and-drop reorder stays correct under any combination of them
   (`absoluteDropIndex`, `#610`). Filter state is saved per browser:

@@ -8,7 +8,8 @@ import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 import { RIGHT_SIDEBAR_VIEWS } from "./right-sidebar/views-registry.js";
 import { useDashboardStore } from "./store/index.js";
 import { DEFAULT_SETTINGS } from "./api/index.js";
-import { makeTask } from "./test/fixtures.js";
+import type { NotificationEvent } from "./api/index.js";
+import { makeSession, makeTask } from "./test/fixtures.js";
 import {
   FakeVisualViewport,
   flushRaf,
@@ -17,9 +18,22 @@ import {
 import { expectNameHasVisibleText } from "./test/a11y.js";
 
 // The app shell mounts the keyboard detector once; the bar only reads it.
-function Harness({ onOpenSettings = vi.fn() }: { onOpenSettings?: () => void }) {
+function Harness({
+  onOpenSettings = vi.fn(),
+  onNewSession = vi.fn(),
+}: {
+  onOpenSettings?: () => void;
+  onNewSession?: () => void;
+}) {
   useVisualViewportInset();
-  return <PhoneModeBar onOpenSettings={onOpenSettings} />;
+  return (
+    <PhoneModeBar
+      onOpenSettings={onOpenSettings}
+      onNewSession={onNewSession}
+      onOpenSession={vi.fn()}
+      onOpenBrowser={vi.fn()}
+    />
+  );
 }
 
 function stubClientHeight(value: number) {
@@ -36,6 +50,13 @@ beforeEach(() => {
     rightSidebarOpen: false,
     rightSidebarView: "git",
     crossLinkReturn: null,
+    newTaskFormOpen: false,
+    sessions: [],
+    projects: [],
+    events: {},
+    lastSeenSeq: {},
+    dismissedEventKeys: {},
+    mutedSessionIds: [],
     // The phone band: the sheet lists what the registry enables there.
     settings: { ...DEFAULT_SETTINGS, layoutMode: "phone" },
   });
@@ -49,6 +70,133 @@ afterEach(() => {
 });
 
 describe("PhoneModeBar", () => {
+  it("has five entries, in order, each an icon over its label", () => {
+    render(<Harness />);
+    const bar = screen.getByRole("navigation", { name: "Mode" });
+    const buttons = within(bar).getAllByRole("button");
+    expect(buttons.map((b) => b.querySelector(".phone-mode-label")?.textContent)).toEqual([
+      "Workspace",
+      "Tasks",
+      "New",
+      "Inbox",
+      "More",
+    ]);
+    for (const button of buttons) {
+      expect(button).toHaveClass("phone-mode-btn");
+      expect(button.querySelector("svg")).not.toBeNull();
+      expectNameHasVisibleText(button);
+    }
+  });
+
+  it("New opens the new-session launcher in Workspace mode", async () => {
+    const onNewSession = vi.fn();
+    render(<Harness onNewSession={onNewSession} />);
+    const newBtn = screen.getByRole("button", { name: "New session" });
+    expect(newBtn).toHaveAttribute("aria-haspopup", "dialog");
+    // fireEvent: a click with no focus change, as on iOS; the launcher
+    // returns focus to what was focused when it opened.
+    fireEvent.click(newBtn);
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(newBtn);
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(false);
+  });
+
+  it("New opens the new-task form in Tasks mode, and toggles it", async () => {
+    const onNewSession = vi.fn();
+    useDashboardStore.setState({ viewMode: "kanban" });
+    render(<Harness onNewSession={onNewSession} />);
+    const newBtn = screen.getByRole("button", { name: "New task" });
+    expect(newBtn).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(newBtn);
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(true);
+    expect(newBtn).toHaveAttribute("aria-expanded", "true");
+    expect(onNewSession).not.toHaveBeenCalled();
+    await userEvent.click(newBtn);
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(false);
+  });
+
+  it("New closes an open sidebar view, so what it makes shows", async () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    render(<Harness />);
+    act(() => useDashboardStore.getState().openRightSidebarView("git"));
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(true);
+  });
+
+  it("returns focus to New once the task form it opened closes", async () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    render(
+      <>
+        <Harness />
+        <input aria-label="Task title" />
+      </>,
+    );
+    const newBtn = screen.getByRole("button", { name: "New task" });
+    fireEvent.click(newBtn);
+    // The form's title field takes focus as it opens.
+    screen.getByRole("textbox", { name: "Task title" }).focus();
+    // Created: the board closes the form.
+    act(() => useDashboardStore.getState().setNewTaskFormOpen(false));
+    expect(document.activeElement).toBe(newBtn);
+  });
+
+  it("does not take focus when the form closes without New having opened it", () => {
+    useDashboardStore.setState({ viewMode: "kanban", newTaskFormOpen: true });
+    render(
+      <>
+        <Harness />
+        <input aria-label="Elsewhere" />
+      </>,
+    );
+    const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
+    elsewhere.focus();
+    act(() => useDashboardStore.getState().setNewTaskFormOpen(false));
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("Inbox opens the notification feed as a sheet and returns focus to it", async () => {
+    render(<Harness />);
+    const inbox = screen.getByRole("button", { name: "Inbox, none unread" });
+    expect(inbox).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(inbox);
+    const sheet = screen.getByRole("dialog", { name: "Notifications" });
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+    expect(document.activeElement).toBe(inbox);
+  });
+
+  it("carries the bell's unread count on Inbox", () => {
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 1, name: "one" })],
+      events: {
+        1: [
+          {
+            seq: 1,
+            sessionId: 1,
+            ts: Date.now(),
+            kind: "attention",
+            payload: { attention: true, signal: "bell" },
+          },
+          {
+            seq: 2,
+            sessionId: 1,
+            ts: Date.now(),
+            kind: "status_change",
+            payload: { reason: "exited" },
+          },
+        ] as NotificationEvent[],
+      },
+      lastSeenSeq: {},
+    });
+    render(<Harness />);
+    const inbox = screen.getByRole("button", { name: "Inbox, 2 unread" });
+    expect(inbox.querySelector(".attention-badge")).toHaveTextContent("2");
+    // Exactly one bell: the bar's Inbox is the phone's only notifications trigger.
+    expect(screen.getAllByRole("button", { name: /^(Inbox|Notifications),/ })).toHaveLength(1);
+    expectNameHasVisibleText(inbox);
+  });
+
   it("switches between the two modes", async () => {
     render(<Harness />);
     const bar = screen.getByRole("navigation", { name: "Mode" });
@@ -103,6 +251,47 @@ describe("PhoneModeBar", () => {
     act(() => vv.resizeTo(800, 0));
     await act(flushRaf);
     expect(screen.getByRole("navigation", { name: "Mode" })).toBeInTheDocument();
+  });
+
+  it("keeps Inbox's sheet open while the keyboard is up (the bar hides, it does not unmount)", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(800, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    render(<Harness />);
+    await act(flushRaf);
+    fireEvent.click(screen.getByRole("button", { name: /^Inbox/ }));
+    stubClientHeight(450);
+    act(() => vv.resizeTo(450, 0));
+    await act(flushRaf);
+    expect(screen.queryByRole("navigation", { name: "Mode" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+  });
+
+  it("returns focus to New only once the keyboard is down and the bar shows again", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(800, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    useDashboardStore.setState({ viewMode: "kanban" });
+    render(
+      <>
+        <Harness />
+        <input aria-label="Task title" />
+      </>,
+    );
+    await act(flushRaf);
+    const newBtn = screen.getByRole("button", { name: "New task" });
+    fireEvent.click(newBtn);
+    // The form's title field raises the keyboard; the bar hides.
+    stubClientHeight(450);
+    act(() => vv.resizeTo(450, 0));
+    await act(flushRaf);
+    screen.getByRole("textbox", { name: "Task title" }).focus();
+    act(() => useDashboardStore.getState().setNewTaskFormOpen(false));
+    expect(document.activeElement).not.toBe(newBtn);
+    stubClientHeight(800);
+    act(() => vv.resizeTo(800, 0));
+    await act(flushRaf);
+    expect(document.activeElement).toBe(newBtn);
   });
 
   it("carries the class the safe-area rule targets", () => {
