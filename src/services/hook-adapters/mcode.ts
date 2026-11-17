@@ -415,6 +415,17 @@ function mcodeHookEntry(
         // Fire-and-forget notifications use that 10s ceiling too: nothing
         // downstream waits on them, so the timeout only exists to stop a
         // wedged forwarder lingering.
+        //
+        // Issue #3174 — `Stop` is the one hook the forwarder retries (a
+        // refused Stop is dropped otherwise, and the finished headless
+        // worker it belongs to then looks unfinished until its budget
+        // expires), so mcode's own 10s ceiling also bounds that retry: the
+        // forwarder's attempts inside the first ten seconds still happen
+        // (they are scheduled at 0s, 2s and 7s — see STOP_RETRY_DELAYS_MS in
+        // src/hooks/forwarder-delivery.mjs), but a longer restart window is
+        // cut short here. There is no way around it: mcode's own conversion
+        // caps the wait at 10s, and the ceiling is what every other agent
+        // adapter's Stop timeout was raised above for exactly this reason.
         timeout,
       },
     ],

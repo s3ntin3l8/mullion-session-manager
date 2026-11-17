@@ -112,11 +112,18 @@ describe("mergeAgyHooks (issue #253)", () => {
 
     const written = readHooks();
     // Stop group
+    //
+    // Issue #3174 — `Stop` is the one hook the forwarder retries (a refused
+    // Stop is dropped otherwise, and the finished headless worker it belongs
+    // to then looks unfinished until its budget expires), and the forwarder's
+    // retry sequence takes at most ~97s — so the timeout has to sit ABOVE
+    // that bound, or agy would kill the hook mid-retry and lose the Stop
+    // exactly as before.
     expect(written[MULLION_HOOK_NAME].Stop).toEqual([
       {
         type: "command",
         command: forwarderHookCommand("agy", "Stop"),
-        timeout: 10,
+        timeout: 120,
       },
     ]);
 

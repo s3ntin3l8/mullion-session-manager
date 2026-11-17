@@ -145,9 +145,18 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
         {
           type: "command",
           command: forwarderHookCommand("agy", "Stop"),
-          // agy's Stop has no documented timeout; 10s is generous for a
-          // local socket round trip.
-          timeout: 10,
+          // Issue #3174 — agy's Stop has no documented timeout, and 10s was
+          // chosen as "generous for a local socket round trip". A Stop is
+          // now the one hook the forwarder RETRIES (a refused Stop is
+          // dropped otherwise, and the finished headless worker it belongs
+          // to then looks unfinished until its budget expires), and the
+          // forwarder's retry sequence takes at most ~97s in the worst case
+          // (67s of waiting between its six attempts, plus up to 5s for each
+          // attempt itself — see STOP_RETRY_DELAYS_MS in
+          // src/hooks/forwarder-delivery.mjs). An agent that killed the hook
+          // at 10s would cut that sequence short and lose the Stop exactly as
+          // before, so the timeout has to sit above the retry bound.
+          timeout: 120,
         },
       ],
       // Issue: sidebar worktree detection — PreToolUse for run_command

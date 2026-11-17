@@ -102,7 +102,8 @@ identifying which session you're speaking for:
 ```
 
 An unknown, forged, or malformed token closes the connection immediately —
-there is no error reply for a failed handshake, only a closed socket. A
+there is no error reply for a failed handshake, only a closed socket (the one
+exception is a _delivery_ handshake, below, which is told it was refused). A
 successful handshake attributes every subsequent line on that connection to
 this session; you don't need to repeat the token.
 
@@ -114,6 +115,36 @@ scope is still alive — so a surviving session's hook connections are
 accepted again instead of being refused with "unknown or invalid token". A
 session whose scope is gone (or whose token file is missing or malformed) is
 not re-registered, and its token stays refused.
+
+### Delivery handshakes (a retried `Stop`)
+
+Most hooks are fire-and-forget: connect, write, close, and the socket says
+nothing back. A `Stop` is the one exception (issue #3174), because a lost
+`Stop` leaves a finished headless Task Master worker looking unfinished until
+its budget expires — and a `Stop` is refused whenever Mullion (or an agent
+host) is restarting, or before the session's token has been registered again.
+
+A client that wants its `Stop` to survive that window names the delivery in
+its handshake:
+
+```json
+{ "token": "<the value of $MULLION_HOOK_TOKEN>", "deliveryId": "<an id, stable across retries>" }
+```
+
+and the socket then answers on that connection:
+
+| Reply                  | Meaning                                                             |
+| ---------------------- | ------------------------------------------------------------------- |
+| `{"ack": "accepted"}`  | the handshake resolved — the delivery's messages may follow         |
+| `{"ack": "delivered"}` | one message of this delivery was dispatched — one reply per message |
+| `{"ack": "refused"}`   | the handshake was refused — NOTHING was dispatched                  |
+
+A delivery is delivered **at most once**: the socket remembers the
+`(deliveryId, message index)` pairs it dispatched for the session (see
+`src/services/hook-deliveries.ts`), so a retry of a delivery that already
+landed is acknowledged again but never dispatched a second time. A client
+that gets no reply at all cannot know whether its first attempt landed, so
+it must not retry against a socket that does not answer in this protocol.
 
 Every message after the handshake is validated JSON, one object per line,
 against a `kind`-discriminated shape. This table (rewritten against the
