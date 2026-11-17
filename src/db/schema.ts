@@ -1256,6 +1256,10 @@ export const tasks = sqliteTable(
         "review-post-failed",
         "pr-closed",
         "ci-status-stalled",
+        // #3234 — the provider quota resets beyond `rateLimitMaxParkHours`, so
+        // the worker was not parked; set with the task `failed`, the reset in
+        // `rateLimitUntil` and the provider text in `rateLimitMessage`.
+        "rate-limited",
       ],
     }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
@@ -1616,6 +1620,11 @@ export const tasks = sqliteTable(
     // #2940 — a parked task stays `ready` until this time, then may be claimed.
     // Null means it is not parked. Not `dispatchHeld`: that give-up is hours, and a weekly reset is longer.
     rateLimitUntil: integer("rate_limit_until", { mode: "timestamp" }),
+    // #3234 — the provider's own message for the latest rate_limit stop_failure
+    // (agy: "... Resets in 102h16m12s."), kept beside lastRateLimitAt because the
+    // session's in-memory copy is TTL-cleared. Written by recordRateLimitEvent;
+    // read by parkRateLimitedTask and shown on the card. Cleared on (re)claim.
+    rateLimitMessage: text("rate_limit_message"),
     // #667 — dependency-aware auto-claim. Snapshot of GitHub's
     // `issue_dependencies_summary.total_blocked_by`, written on every
     // ingest (rides the `listLabeledIssues` list response for free — see

@@ -250,6 +250,7 @@ export async function enqueueTask(
       worktreePath: keptBranch !== null ? current.worktreePath : predictedWorktreePath,
       branchName: keptBranch ?? branchName,
       rateLimitUntil: null,
+      rateLimitMessage: null,
       failureReason: null,
       dispatchFailingSince: null,
       dispatchHeld: false,

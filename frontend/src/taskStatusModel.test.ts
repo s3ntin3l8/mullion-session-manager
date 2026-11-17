@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Task } from "./api/types.js";
 import {
   TASK_STEPS,
+  isQuotaExhausted,
   isRateLimitParked,
+  quotaExhaustedText,
   rateLimitResumeText,
   reviewRunState,
   blockerIsTask,
@@ -223,5 +225,26 @@ describe("rate-limit park (#2940)", () => {
   it("words the resume time relative to now", () => {
     expect(rateLimitResumeText(new Date(Date.now() + 125 * 60_000).toISOString())).toBe("in 2h");
     expect(rateLimitResumeText(new Date(Date.now() - 1000).toISOString())).toBe("any moment");
+  });
+});
+
+describe("#3234 quota exhausted", () => {
+  const failed = {
+    status: "failed",
+    needsHumanReason: "rate-limited",
+    rateLimitUntil: new Date(Date.now() + 100 * 3600_000).toISOString(),
+    rateLimitMessage: "Individual quota reached.",
+  } as Pick<Task, "status" | "needsHumanReason" | "rateLimitUntil" | "rateLimitMessage">;
+
+  it("is a failed task with the rate-limited reason and a reset", () => {
+    expect(isQuotaExhausted(failed)).toBe(true);
+    expect(isQuotaExhausted({ ...failed, status: "ready" })).toBe(false);
+    expect(isQuotaExhausted({ ...failed, needsHumanReason: "cap" })).toBe(false);
+    expect(isQuotaExhausted({ ...failed, rateLimitUntil: null })).toBe(false);
+  });
+
+  it("says when the quota resets", () => {
+    expect(quotaExhaustedText(failed)).toBe("Quota exhausted · resets in 4d");
+    expect(quotaExhaustedText({ ...failed, rateLimitUntil: null })).toBe("Quota exhausted");
   });
 });

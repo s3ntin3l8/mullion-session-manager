@@ -66,6 +66,7 @@ export const FALLBACK_TASK_MASTER_ENV: ServerInfo["taskMasterEnv"] = {
   budgetMinutes: 120,
   progressCommentMinutes: 15,
   rateLimitGraceMinutes: 5,
+  rateLimitMaxParkHours: 24,
   skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,

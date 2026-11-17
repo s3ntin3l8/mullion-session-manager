@@ -155,7 +155,13 @@ async function runSync(
   app: FastifyInstance,
   task: TaskRow,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats; resumeAt?: Date },
+  extra: {
+    feedback?: string;
+    prUrl?: string;
+    diffStat?: GitDiffStats;
+    resumeAt?: Date;
+    message?: string;
+  },
 ): Promise<boolean> {
   // Non-null: syncTaskTransition already returned early when
   // task.issueNumber is null.
@@ -258,7 +264,7 @@ async function runSync(
         repo,
         issueNumber,
         extra.resumeAt
-          ? `Paused: the agent hit its provider usage limit. It resumes automatically after ${extra.resumeAt.toISOString().replace(/\.\d{3}Z$/, "Z")}.`
+          ? `Paused: the agent hit its provider usage limit${extra.message ? ` (${extra.message})` : ""}. It resumes automatically after ${extra.resumeAt.toISOString().replace(/\.\d{3}Z$/, "Z")}.`
           : "Paused: the agent hit its provider usage limit. It resumes automatically after the reset.",
       );
       lastProgressCommentAt.delete(task.id);
@@ -344,7 +350,13 @@ export async function syncTaskTransition(
   task: TaskRow,
   project: ProjectRef,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats; resumeAt?: Date } = {},
+  extra: {
+    feedback?: string;
+    prUrl?: string;
+    diffStat?: GitDiffStats;
+    resumeAt?: Date;
+    message?: string;
+  } = {},
 ): Promise<void> {
   if (task.issueNumber === null) return;
   const repoRef = await resolveRepoRef(app, project);
