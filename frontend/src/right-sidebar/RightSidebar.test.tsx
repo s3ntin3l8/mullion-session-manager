@@ -836,6 +836,20 @@ describe("RightSidebar on the phone", () => {
     outside.remove();
   });
 
+  it("leaves focus on the mode bar's button when that is what closed the view", () => {
+    const opener = document.createElement("button");
+    const modeButton = document.createElement("button");
+    document.body.append(opener, modeButton);
+    opener.focus();
+    renderSidebar("phone");
+    open("git");
+    modeButton.focus();
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    expect(document.activeElement).toBe(modeButton);
+    opener.remove();
+    modeButton.remove();
+  });
+
   it("moves focus to the detail's back control on a drill-in, and back on leaving it", () => {
     const { container } = renderSidebar("phone");
     open("tasks");

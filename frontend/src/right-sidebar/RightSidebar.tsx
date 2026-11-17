@@ -341,6 +341,20 @@ export function RightSidebar({
     }),
     [],
   );
+  // Leaving through the mode bar moved focus there on purpose (the tapped
+  // mode button): restoring it to the opener would take it away again. This
+  // cleanup runs before the trap's (declared first), so it can opt out.
+  const suppressRestoreRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!phoneOpen) return;
+    const panel = phoneRef.current;
+    return () => {
+      const focused = document.activeElement;
+      if (focused && focused !== document.body && !panel?.contains(focused)) {
+        suppressRestoreRef.current();
+      }
+    };
+  }, [phoneOpen]);
   const { suppressRestore } = useFocusTrap({
     active: phoneOpen,
     containerRef: phoneRef,
@@ -348,7 +362,6 @@ export function RightSidebar({
   });
   // suppressRestore is a fresh closure each render; the actions below read it
   // through a ref so they are not rebuilt every render.
-  const suppressRestoreRef = useRef(suppressRestore);
   useEffect(() => {
     suppressRestoreRef.current = suppressRestore;
   });

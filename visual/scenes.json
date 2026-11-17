@@ -251,6 +251,34 @@
       "baseline": true
     },
     {
+      "name": "phone-sidebar-view",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": ".phone-mode-more"
+        },
+        {
+          "waitFor": ".phone-more-row"
+        },
+        {
+          "click": ".phone-more-row:has(.phone-more-label:text-is(\"Git\"))"
+        },
+        {
+          "waitFor": ".right-sidebar-panel.phone"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      },
+      "baseline": true
+    },
+    {
       "name": "session-list",
       "path": "/",
       "tags": ["presentation", "check", "audit"],
