@@ -223,6 +223,11 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     });
 
     const app = await buildApp();
+    // One sqlite file serves the whole file and reconcileTasks sweeps every
+    // task in it: without this a sibling test's leftover task (with its own
+    // review-post marker) adds posts to this test's mocks, which made the
+    // backoff test count 5 posts instead of 4 under load.
+    app.db.delete(tasks).run();
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",

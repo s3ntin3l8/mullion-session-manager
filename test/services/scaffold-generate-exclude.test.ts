@@ -2,8 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
-import { gitEnv } from "../../src/services/git-env.js";
+import { initFixtureRepo } from "../helpers/git-fixture-repo.js";
 import { generateScaffoldContent } from "../../src/services/scaffold-generate.js";
 import { LOCAL_HOST_ID } from "../../src/services/host-registry.js";
 
@@ -17,12 +16,7 @@ describe("generateScaffoldContent — excludeSkillAndReviewer (issue #2473)", ()
   let repoDir: string;
   beforeEach(() => {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-exclude-"));
-    const git = (...args: string[]) =>
-      execFileSync("git", args, { cwd: repoDir, stdio: "pipe", env: gitEnv() });
-    git("init", "-b", "main");
-    fs.writeFileSync(path.join(repoDir, "README.md"), "# test repo\n");
-    git("add", "-A");
-    git("commit", "-m", "initial commit", "--no-verify");
+    initFixtureRepo(repoDir);
   });
   afterEach(() => {
     fs.rmSync(repoDir, { recursive: true, force: true });
