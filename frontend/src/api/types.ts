@@ -2229,6 +2229,13 @@ export interface Task {
   // `Platform:` / `Host:` lines, resolved at dispatch. `null` = no requirement.
   // Rendered as the card/drawer host chip when the task has no worker session yet.
   placementRequirement: string | null;
+  // #3194 — the host a QUEUED RETRY is waiting for: its worker's host, whose
+  // preserved branch the retry resumes. Set while the retry waits (the
+  // original host is offline and the branch is not on origin); null when the
+  // task is not waiting for a host. Its presence is what offers the "Start
+  // fresh" action. Optional so the partial task fixtures (which predate the
+  // column) still type-check.
+  retryHostId?: string | null;
   prUrl: string | null;
   // Set alongside prUrl — a draft PR opened at "-> reviewing", or the PR
   // approve creates directly as a fallback for a task that reached

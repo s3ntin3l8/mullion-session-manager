@@ -342,7 +342,15 @@ export interface SessionBackend {
   // git-worktree.ts's resumeTaskWorktree doc comment). #484 — proxied to a
   // remote host via /internal/git-worktree/resume, the same way every
   // other worktree-lifecycle op on this interface already is.
-  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null>;
+  //
+  // Issue #3194 — `opts.fromOrigin` fetches the branch from origin when this
+  // host does not have it: a retry re-placed onto a new host resumes the
+  // branch FROM origin there (it was confirmed to be on origin first).
+  resumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null>;
   // #484 — lists this host's own on-disk task-worktree directories, for the
   // primary's boot-time orphan sweep (plugins/task-watcher.ts). See
   // git-worktree.ts's listTaskWorktreeDirs doc comment for what "task
@@ -651,8 +659,12 @@ class LocalBackend implements SessionBackend {
     return syncWorktree(worktreePath, branch);
   }
 
-  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
-    return resumeTaskWorktree(cwd, branchName);
+  resumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null> {
+    return resumeTaskWorktree(cwd, branchName, opts);
   }
 
   listTaskWorktreeDirs(cwd: string): Promise<string[]> {
@@ -1076,10 +1088,14 @@ class RemoteBackend implements SessionBackend {
     return this.mutating("worktree sync", this.client.resolveSyncWorktree(worktreePath, branch));
   }
 
-  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
+  resumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null> {
     return this.changedWorktrees(
       "worktree resume",
-      this.client.resolveResumeTaskWorktree(cwd, branchName),
+      this.client.resolveResumeTaskWorktree(cwd, branchName, opts),
     );
   }
 

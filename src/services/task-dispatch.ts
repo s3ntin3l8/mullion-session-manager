@@ -188,6 +188,14 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // not this task's fault, and no room left either way.
       return;
     }
+    if (outcome.reason === "retry-waiting") {
+      // Issue #3194 — a retry waiting for its ORIGINAL host: the preserved
+      // branch lives there and is not on origin, so failing the task after
+      // 6h would free nothing — it would only throw the work away. The
+      // give-up is EXEMPT for this wait; every other placement wait keeps
+      // DISPATCH_GIVE_UP_AFTER_MS (see giveUpIfOverdue below).
+      continue;
+    }
     if (resumeQueued && outcome.reason !== "not-queued" && outcome.reason !== "not-found") {
       app.log.info(
         { taskId, reason: outcome.reason, detail: outcome.detail },
@@ -250,11 +258,16 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
       since: tasks.dispatchFailingSince,
       failureReason: tasks.failureReason,
       held: tasks.dispatchHeld,
+      retryHostId: tasks.retryHostId,
     })
     .from(tasks)
     .where(eq(tasks.id, taskId))
     .all();
   if (!row || row.status !== "claimed" || row.since === null) return false;
+  // Issue #3194 — a retry waiting for its original host is NEVER given up on:
+  // the preserved branch is on that host and not on origin, so failing the
+  // task would free nothing. Every other placement wait keeps the 6h bound.
+  if (row.retryHostId !== null) return false;
   if (now - row.since.getTime() < DISPATCH_GIVE_UP_AFTER_MS) return false;
   const hours = DISPATCH_GIVE_UP_AFTER_MS / (60 * 60 * 1000);
   // A held task never failed an attempt, so its own reason ("it will start

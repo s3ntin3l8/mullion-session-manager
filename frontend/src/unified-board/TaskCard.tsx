@@ -84,6 +84,8 @@ export function TaskCard({
   const [dropTarget, setDropTarget] = useState(false);
   const epicColour = epicColourVar(task);
   const hosts = useDashboardStore((s) => s.hosts);
+  // #3194 — "Start fresh" on a card whose retry waits for its original host.
+  const startFreshTask = useDashboardStore((s) => s.startFreshTask);
   const hostChip = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []);
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
 
@@ -639,8 +641,27 @@ export function TaskCard({
           which otherwise looks identical to a genuinely stuck claimed task
           whose session was reaped. This is the "waiting for a slot" tell,
           following the same hint pattern as the ready/disabled case above. */}
-      {task.status === "claimed" && task.sessionId === null && (
+      {task.status === "claimed" && task.sessionId === null && task.retryHostId === null && (
         <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
+      )}
+      {/* #3194 — a retry waiting for its ORIGINAL host: its branch is there
+          and not on origin, so the retry cannot start anywhere else, and it
+          is never failed for waiting. The reason is on the card above (the
+          dispatch notice); this is the operator's way out — abandon that
+          branch (it stays on that host, with its commits) and start over. */}
+      {task.status === "claimed" && task.retryHostId !== null && (
+        <button
+          type="button"
+          className="task-card-hint task-card-start-fresh"
+          disabled={!taskMasterEnabled}
+          title={`Abandon the branch on ${task.retryHostId} (its commits stay there) and run the task from scratch`}
+          onClick={(e) => {
+            e.stopPropagation();
+            void startFreshTask(task.id);
+          }}
+        >
+          Start fresh
+        </button>
       )}
       {/* Issue #1038 — once a round badge is showing above (autoReturnRounds
           > 0), it already covers "still working" (capped-but-not-announced)

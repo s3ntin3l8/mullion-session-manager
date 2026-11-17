@@ -353,6 +353,34 @@ waiting for a free concurrency slot. It never holds a session; see the
   task copy that a
   project merge superseded is refused with a 409 instead of retried
   (`#2292` — see "Merging two projects" below).
+- **Where a retry runs** (`#3194`) — the preserved branch normally lives on
+  the host the task's worker ran on, so that is where the retry resumes it.
+  When that host is **offline** (or parked), the retry cannot start there —
+  and the branch is usually only there (a budget failure or a rate-limit
+  park happens before the worker's commits are pushed). The retry then
+  decides, in this order:
+  1. **the original host**, if it is up and still satisfies the task's
+     `Platform:` / `Host:` / `Capability:` requirement — the preserved branch
+     is resumed there, exactly as before;
+  2. **another eligible host** that satisfies the requirement — but **only if
+     the task's branch is on `origin`**, confirmed through the project's
+     GitHub helpers and never assumed. The replacement host checks the
+     branch out from `origin` (it needs the project mapped there, or a
+     checkout cloned for it — the same `needsCheckout` placement computes),
+     the agent CLI and the required capability, the task's `worktreePath`
+     moves to that host, and the new worker session decides the host from
+     then on (the reviewer and the rebase worker follow it);
+  3. **otherwise the retry waits** for its original host: the card and the
+     task sidebar show the reason (naming the host, and saying the branch is
+     not on `origin`), and the task is **not** failed after 6 hours — the
+     branch is on that host, so failing it would free nothing. Every other
+     placement wait keeps the 6-hour give-up (see
+     [A queued task that cannot dispatch](#a-queued-task-that-cannot-dispatch)).
+     A task with no placement requirement follows the same order. **Start
+     fresh** (`POST /api/tasks/:id/start-fresh`, offered on the card and in the
+     task sidebar while the retry waits) is the operator's way out: it abandons
+     the preserved branch — it stays on that host, with its commits — and
+     re-queues the task as a new claim that starts from scratch.
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same
@@ -965,6 +993,12 @@ The reason is not hidden:
   recovery (`failed → ready`) applies. Retry has nothing to resume at that
   point, since no worktree was ever cut, so it does exactly that: it resets
   the task to `ready`.
+- **One wait is exempt from the 6-hour give-up**: a _retry_ waiting for its
+  original host (`#3194` — the preserved branch is on that host and not on
+  `origin`, so there is nowhere else to run it). Failing it would throw the
+  work away without freeing anything. Such a wait shows the same "Not
+  dispatched yet: …" notice, names the host it waits for, and offers
+  **Start fresh** (see the `failed → in_progress` bullet above).
 
 ## Where a task runs: `Platform:`, `Host:` and `Capability:`
 

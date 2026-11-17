@@ -1120,10 +1120,17 @@ export async function clearOrphanedTaskWorktree(
  * a task-shaped path. Returns `null` when `cwd` isn't a git repo, the
  * branch name doesn't match that namespace, or the git call fails; never
  * throws.
+ *
+ * Issue #3194 — `opts.fromOrigin`: the branch is fetched from `origin` when
+ * this host does not have it (the retry was re-placed onto a host that never
+ * saw the branch, and the branch was CONFIRMED to be on origin first). Off
+ * by default: the ordinary resume must fail when the branch is missing
+ * locally, because there the branch really is gone.
  */
 export async function resumeTaskWorktree(
   cwd: string,
   branchName: string,
+  opts: { fromOrigin?: boolean } = {},
 ): Promise<WorktreeResult | null> {
   if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) return null;
   if (!TASK_BRANCH_NAME_RE.test(branchName)) return null;
@@ -1147,7 +1154,23 @@ export async function resumeTaskWorktree(
   );
   if (existing) return { path: worktreePath, branch: branchName, reused: true };
 
-  const result = await runGit(projectRoot, ["worktree", "add", worktreePath, branchName]);
+  let result = await runGit(projectRoot, ["worktree", "add", worktreePath, branchName]);
+  // Issue #3194 — `fromOrigin`: this host has never seen the branch (the
+  // retry was re-placed onto it, and the branch lives on the task's original
+  // host), so the local add fails with "invalid reference". The branch was
+  // CONFIRMED to be on origin before the retry was moved here, so it is
+  // fetched into a local ref and the add is retried.
+  //
+  // Never done for the ordinary resume: that path resumes the branch where
+  // the worker left it, and a branch that is missing THERE means it is
+  // really gone — fetching it from origin would silently start the task over
+  // from a different commit.
+  if (result.code !== 0 && opts.fromOrigin === true) {
+    const fetched = await ensureLocalBranch(projectRoot, branchName);
+    if (fetched) {
+      result = await runGit(projectRoot, ["worktree", "add", worktreePath, branchName]);
+    }
+  }
   if (result.code !== 0) return null;
   return { path: worktreePath, branch: branchName };
 }

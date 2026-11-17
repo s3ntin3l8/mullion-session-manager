@@ -1709,6 +1709,18 @@ export const tasks = sqliteTable(
     // auto-claim pacing (a held task is waiting for a HOST, not a slot), the
     // give-up's worktree clear, and dropping a stale hold.
     dispatchHeld: integer("dispatch_held", { mode: "boolean" }).notNull().default(false),
+    // Issue #3194 — the host a QUEUED RETRY is waiting for: the host its
+    // worker ran on, whose preserved branch the retry resumes. Set while the
+    // retry waits for that host (the original is offline and the branch is not
+    // on origin, so there is nowhere else to run it); null whenever the task
+    // is not waiting for a host.
+    //
+    // Three things hang off it: the board card and the task sidebar offer the
+    // "Start fresh" action against it (the operator's way out of a wait that
+    // never ends), the dispatcher's 6h give-up is EXEMPT for such a wait (the
+    // branch is on that host — failing the task would free nothing), and the
+    // task records which host owns it now.
+    retryHostId: text("retry_host_id"),
     // Workflow-change approval gate: a task whose branch edits
     // `.github/workflows/` is not pushed under the App's ordinary token.
     // `workflowChange` is JSON `{ sha, files }` — the head commit and the

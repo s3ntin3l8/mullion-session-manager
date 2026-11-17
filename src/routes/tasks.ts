@@ -19,6 +19,7 @@ import {
 import * as mergeHuman from "../services/task-merge-human.js";
 import { enqueueTask } from "../services/task-claim.js";
 import { enqueueRetry } from "../services/task-retry.js";
+import { startFreshTask } from "../services/task-start-fresh.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
@@ -1222,6 +1223,31 @@ export async function tasksRoute(app: FastifyInstance) {
       return selectTaskRow(taskId);
     },
   );
+
+  // Issue #3194 — "Start fresh" for a retry that is waiting for its original
+  // host (the branch is there and not on origin, so the retry cannot start
+  // anywhere else). It abandons the preserved branch — it stays on that
+  // host, with its commits — and re-queues the task as a new claim.
+  //
+  // Gated like the other Task Master actions: it starts a session, so the
+  // Task Master flag has to cover it.
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/start-fresh", async (request, reply) => {
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+      );
+    }
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+
+    const outcome = await startFreshTask(app, taskId);
+    if (!outcome.ok) {
+      if (outcome.reason === "not-found") return reply.notFound();
+      return reply.conflict(outcome.detail ?? "Task is not waiting for a host");
+    }
+    reply.code(202);
+    return selectTaskRow(taskId);
+  });
 
   // Phase 6 (6.2/#215, promotion added in 6.7/#220) — approve acts on a
   // task in "reviewing" (task-state.ts's canTransition table is the single

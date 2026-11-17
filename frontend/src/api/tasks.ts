@@ -151,6 +151,12 @@ export const tasksApi = {
       body: opts ? JSON.stringify(opts) : undefined,
     }),
 
+  // #3194 — abandons a retry that is WAITING for its original host (the
+  // preserved branch is there and not on origin, so the retry cannot start
+  // anywhere else). The branch stays on that host, with its commits; the
+  // task is re-queued as a new claim. Same response shape as claimTask.
+  startFreshTask: (id: number) => request<Task>(`/api/tasks/${id}/start-fresh`, { method: "POST" }),
+
   // #483 — reviewing -> failed: the other resolver of a reviewing task,
   // alongside approve/reject, for when the answer is "give up entirely"
   // rather than "try again."

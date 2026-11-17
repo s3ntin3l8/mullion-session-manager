@@ -217,6 +217,14 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
+    startFreshTask: async (id) => {
+      const task = await api.startFreshTask(id);
+      // The task is re-queued as a new claim (a session spawns when a slot
+      // frees), so only the task list changes now.
+      void get().refreshTasks();
+      return task;
+    },
+
     giveUpTask: async (id, reason) => {
       const task = await api.giveUpTask(id, reason);
       void get().refreshTasks();

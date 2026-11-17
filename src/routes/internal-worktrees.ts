@@ -297,10 +297,14 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     "/internal/git-worktree/resume",
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeResumeSchema },
     async (request, reply) => {
-      const { cwd, branchName } = request.body;
+      const { cwd, branchName, fromOrigin } = request.body;
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      return await resumeTaskWorktree(resolvedCwd, branchName);
+      // Issue #3194 — `fromOrigin`: the branch is fetched from origin when
+      // this agent does not have it (the task's retry was re-placed here).
+      return await resumeTaskWorktree(resolvedCwd, branchName, {
+        fromOrigin: fromOrigin === true,
+      });
     },
   );
 
