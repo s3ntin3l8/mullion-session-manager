@@ -1,4 +1,3 @@
-import { pngDimensions, shapeScreenshot } from "../services/screenshot-image.js";
 import type { FastifyInstance } from "fastify";
 import {
   deleteDeviceRow,
@@ -11,7 +10,12 @@ import {
   type DeviceRow,
 } from "../services/device-store.js";
 import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
-import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
+import { isDeviceAction, performDeviceAction } from "../services/device-drivers/actions.js";
+import { DeviceActionError } from "../services/device-drivers/types.js";
+
+// Re-exported for test/routes/devices-extract-png.test.ts; the implementation
+// moved with the rest of the adb shell code into the Android driver.
+export { extractPng } from "../services/device-drivers/android.js";
 
 // CRUD + one-shot action execution for devices (the `devices` DB table's
 // own route — routes/device.ts, singular, is the separate live WS video/
@@ -21,7 +25,8 @@ import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
 //     control channel while a human/agent is actively watching the stream.
 //   - `mullion device <verb>` (this route, via control-socket.ts's
 //     "device.action" op) is request/response, plain `adb shell` commands
-//     against Device.adbConnection — works whether or not anyone has the
+//     against Device.adbConnection (via the DeviceDriver seam,
+//     services/device-drivers/) — works whether or not anyone has the
 //     panel open, same "CLI doesn't need a live viewer" posture
 //     browser-automation.ts's executeBrowserAction has for the Controllable
 //     Browser feature.
@@ -65,8 +70,9 @@ function toListItem(row: DeviceRow, live: DeviceInfo | undefined): DeviceListIte
 // DeviceManager.pair()/getOrCreate() pass this straight into
 // AdbServerClient.wireless.pair()/connect(), which builds an adb SERVICE
 // STRING (`host:pair:<password>:<address>`), not a shell command — a stray
-// `:` or newline here corrupts that framing, so shellQuoteArg (below, used
-// only for the on-device `adb shell` action route) is the wrong tool for
+// `:` or newline here corrupts that framing, so shellQuoteArg (in
+// services/device-drivers/android.ts, used only for the on-device `adb shell`
+// actions) is the wrong tool for
 // this input.
 const DEVICE_ADDRESS_PATTERN = /^([A-Za-z0-9.-]+):(\d{1,5})$/;
 
@@ -84,111 +90,6 @@ const PAIRING_CODE_PATTERN = /^\d{6}$/;
 
 function isValidPairingCode(code: unknown): code is string {
   return typeof code === "string" && PAIRING_CODE_PATTERN.test(code);
-}
-
-// Hermes review — @yume-chan/adb's `AdbNoneProtocolSubprocessService`
-// builds its `exec:` service string as `command.join(" ")` (see that
-// package's own source: adb's `exec:`/`shell:` transport is inherently a
-// single string the device's OWN shell (`sh -c`) re-tokenizes — there is
-// no argv-array adb service that skips shell interpretation). An
-// argv element containing a space silently re-splits into extra shell
-// words; one containing a shell metacharacter (`;`, `$()`, a backtick, …)
-// EXECUTES on the device. Both `text` and `logcat`'s `filter` are
-// arbitrary, agent-supplied strings reachable at session scope (device.*
-// control-socket ops, control-socket.ts) — on-device command injection,
-// not just a formatting bug. Standard POSIX single-quote escaping closes
-// this for every spawnWaitText/spawnWait call in this file, numeric args
-// included (quoting a digit string is a no-op, so applying it uniformly
-// is simpler and safer than remembering which individual call sites carry
-// untrusted content).
-function shellQuoteArg(arg: string): string {
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
-
-function shellExecArgv(argv: string[]): string[] {
-  return argv.map(shellQuoteArg);
-}
-
-const PNG_IEND = Buffer.from("IEND");
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-
-/** `screencap -p` on a multi-display device writes a "[Warning] Multiple
- * displays were found…" line to the same stream before the PNG, so the raw
- * output is not a valid image. Returns the bytes from the PNG signature on,
- * or null when the output holds no complete PNG (no signature, or no IEND). */
-export function extractPng(bytes: Uint8Array): Uint8Array | null {
-  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const at = buf.indexOf(PNG_SIGNATURE);
-  if (at < 0) return null;
-  // A truncated write has the signature but no closing IEND chunk (+ 4-byte CRC).
-  if (buf.indexOf(PNG_IEND, at) < 0) return null;
-  return bytes.subarray(at);
-}
-
-type DeviceAction =
-  | { action: "screenshot"; maxWidth?: number }
-  | { action: "tap"; x: number; y: number }
-  | { action: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs?: number }
-  | { action: "text"; text: string }
-  | { action: "key"; androidKeyCode: number }
-  | { action: "logcat"; lines?: number; filter?: string }
-  | { action: "clipboard"; op: "get" }
-  | { action: "clipboard"; op: "set"; text: string; paste?: boolean };
-
-function isDeviceAction(value: unknown): value is DeviceAction {
-  const v = value as Partial<DeviceAction> | null;
-  if (typeof v !== "object" || v === null || typeof v.action !== "string") return false;
-  switch (v.action) {
-    case "screenshot":
-      return (
-        v.maxWidth === undefined ||
-        (typeof v.maxWidth === "number" && Number.isFinite(v.maxWidth) && v.maxWidth >= 0)
-      );
-    case "tap":
-      return typeof v.x === "number" && typeof v.y === "number";
-    case "swipe":
-      return (
-        typeof v.x1 === "number" &&
-        typeof v.y1 === "number" &&
-        typeof v.x2 === "number" &&
-        typeof v.y2 === "number"
-      );
-    case "text":
-      return typeof v.text === "string";
-    case "key":
-      return typeof v.androidKeyCode === "number";
-    case "logcat":
-      // Unlike screenshot, logcat has two OPTIONAL fields — both must be
-      // the right type when present, not just "any object passes" the way
-      // this branch used to (Hermes review): a stray non-number `lines` or
-      // non-string `filter` must 400 here, not surface as a confusing
-      // downstream error once it reaches the shell-escaping in the
-      // handler below.
-      return (
-        (v.lines === undefined || typeof v.lines === "number") &&
-        (v.filter === undefined || typeof v.filter === "string")
-      );
-    case "clipboard": {
-      // `op` is itself a sub-discriminant — narrow on it before touching
-      // `text`/`paste`, same reasoning logcat's own comment gives for
-      // typing optional fields strictly rather than letting a malformed
-      // body slip through to the handler below.
-      const c = v as Partial<{ op: "get" | "set"; text: string; paste: boolean }>;
-      // `get` takes no fields of its own — same strict "reject anything
-      // that doesn't belong" posture as logcat's own optional-field
-      // checks above, even though a stray `text`/`paste` alongside
-      // `op: "get"` would otherwise be harmlessly ignored by the handler.
-      if (c.op === "get") return c.text === undefined && c.paste === undefined;
-      if (c.op === "set") {
-        return (
-          typeof c.text === "string" && (c.paste === undefined || typeof c.paste === "boolean")
-        );
-      }
-      return false;
-    }
-    default:
-      return false;
-  }
 }
 
 interface CreateDeviceBody {
@@ -834,129 +735,23 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       if (!row) return reply.notFound(`No device ${id}`);
       if (!isDeviceAction(request.body)) return reply.badRequest("invalid action body");
 
-      const device = app.device.get(String(id));
-      const adb = device?.adbConnection;
-      if (!adb) {
-        return reply.badRequest(
-          `device ${id} has no live adb connection (status: ${device?.toInfo().status ?? "not running"})`,
-        );
+      const driver = app.device.getDriver(String(id));
+      if (!driver) {
+        return reply.badRequest(`device ${id} has no live adb connection (status: not running)`);
       }
 
-      const shell = adb.subprocess.noneProtocol;
-      const action = request.body;
-      switch (action.action) {
-        case "screenshot": {
-          const png = await shell.spawnWait(shellExecArgv(["screencap", "-p"]));
-          const image = extractPng(png);
-          if (!image) {
-            const head = Buffer.from(png.subarray(0, 200))
-              .toString("utf8")
-              // eslint-disable-next-line no-control-regex
-              .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
-            return reply.badGateway(`screencap did not return a PNG: ${head}`);
-          }
-          // No maxWidth (CLI, dashboard) keeps the native PNG; the MCP tool
-          // supplies a default. tap/swipe always take native pixels.
-          if (!pngDimensions(image)) {
-            return reply.badGateway("screencap returned a PNG with no readable header");
-          }
-          const shaped = shapeScreenshot(image, action.maxWidth);
-          return {
-            screenshot: Buffer.from(shaped.data).toString("base64"),
-            mimeType: shaped.mimeType,
-            width: shaped.width,
-            height: shaped.height,
-            nativeWidth: shaped.nativeWidth,
-            nativeHeight: shaped.nativeHeight,
-          };
+      try {
+        return await performDeviceAction(driver, request.body);
+      } catch (err) {
+        // A driver's own "clear status" failures (no live connection, bad
+        // screenshot, unsupported action) answer as that status; anything
+        // else is unexpected and stays a 500.
+        if (err instanceof DeviceActionError) {
+          return err.statusCode === 502
+            ? reply.badGateway(err.message)
+            : reply.badRequest(err.message);
         }
-        case "tap": {
-          await shell.spawnWaitText(
-            shellExecArgv(["input", "tap", String(action.x), String(action.y)]),
-          );
-          return { ok: true };
-        }
-        case "swipe": {
-          const args = [
-            "input",
-            "swipe",
-            String(action.x1),
-            String(action.y1),
-            String(action.x2),
-            String(action.y2),
-          ];
-          if (action.durationMs !== undefined) args.push(String(action.durationMs));
-          await shell.spawnWaitText(shellExecArgv(args));
-          return { ok: true };
-        }
-        case "text": {
-          // Routed through the scrcpy control channel (same as the live WS
-          // panel's own "text" input — routes/device.ts's dispatchInput),
-          // NOT `adb shell input text`: that path re-tokenizes through the
-          // device's own shell (see this file's shellQuoteArg comment) for
-          // no reason — injectText needs no shell at all. Requires the
-          // scrcpy connection specifically (not just adb), which can lag
-          // adbConnection briefly during boot (device-manager.ts's spawn()
-          // establishes adb, then pushes+starts scrcpy) — a clear 400 in
-          // that narrow window rather than falling back to the shell.
-          if (!device.controller) {
-            return reply.badRequest(
-              `device ${id} has no live scrcpy control connection yet (status: ${device.toInfo().status})`,
-            );
-          }
-          await device.controller.injectText(action.text);
-          return { ok: true };
-        }
-        case "key": {
-          await shell.spawnWaitText(
-            shellExecArgv(["input", "keyevent", String(action.androidKeyCode)]),
-          );
-          return { ok: true };
-        }
-        case "logcat": {
-          const args = ["logcat", "-d", "-t", String(action.lines ?? 200)];
-          if (action.filter) args.push(action.filter);
-          const output = await shell.spawnWaitText(shellExecArgv(args));
-          return { logcat: output };
-        }
-        case "clipboard": {
-          // Same "requires the scrcpy connection specifically, not just
-          // adb" reasoning as `text` above, for BOTH sub-ops — including
-          // `get`, even though it only ever reads a local cache: this
-          // action family is scoped to "while a live scrcpy session for
-          // this device exists," matching `text`'s own 400 window rather
-          // than letting `get` answer from a stale cache after that
-          // session has gone away.
-          if (!device.controller) {
-            return reply.badRequest(
-              `device ${id} has no live scrcpy control connection yet (status: ${device.toInfo().status})`,
-            );
-          }
-          if (action.op === "get") {
-            // Reads the last-known-clipboard CACHE (Device.lastClipboard),
-            // never a live GET_CLIPBOARD round-trip — see that getter's own
-            // doc comment for why: scrcpy only replies to GET_CLIPBOARD
-            // when clipboardAutosync is disabled, and Mullion runs with it
-            // enabled (the AVD panel's own clipboard-sync feature, #1436,
-            // depends on it). `null` — not a 404 — is the correct answer
-            // for "nothing copied or set yet this session"; a `get` is a
-            // query, not an assertion that something exists.
-            return { text: device.lastClipboard };
-          }
-          // op === "set" — routed through Device.setClipboard
-          // (device-manager.ts) rather than calling
-          // device.controller.setClipboard directly, so this verb and the
-          // live WS panel's own clipboard paste (routes/device.ts) share one
-          // code path and keep the SAME cache up to date — see that
-          // method's own comment.
-          if (Buffer.byteLength(action.text, "utf8") > CLIPBOARD_MAX_BYTES) {
-            return reply.badRequest(
-              `clipboard text exceeds scrcpy's ${CLIPBOARD_MAX_BYTES}-byte limit`,
-            );
-          }
-          await device.setClipboard(action.text, action.paste ?? false);
-          return { ok: true };
-        }
+        throw err;
       }
     },
   );
