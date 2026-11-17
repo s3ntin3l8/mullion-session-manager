@@ -344,6 +344,9 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       expect(row.status).toBe("claimed");
       expect(row.failureReason).toContain("not on origin");
       expect(row.failureReason).toContain(mac);
+      // The host is OFFLINE, and the reason says so — a parked host is a
+      // different thing with a different fix.
+      expect(row.failureReason).toContain("offline");
       expect(macBackend.resumeTaskWorktree).not.toHaveBeenCalled();
       expect(linuxBackend.resumeTaskWorktree).not.toHaveBeenCalled();
       expect(row.sessionId).toBeNull();
@@ -361,12 +364,49 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
     try {
       await retryTask(app, task.id);
       await vi.waitFor(() => {
-        expect(getTask(app, task.id).retryHostId).toBe(mac);
+        expect(getTask(app, task.id).failureReason).toContain("no other host");
       });
 
       const row = getTask(app, task.id);
       expect(row.status).toBe("claimed");
       expect(row.failureReason).toContain("no other host");
+      // The branch IS on origin, so nothing is stranded on the original host:
+      // this wait is not exempt from the 6-hour give-up (it frees the task
+      // slot, and the work is safe on origin) and it is not a "Start fresh"
+      // candidate — nothing is stranded to abandon.
+      expect(row.retryHostId).toBeNull();
+      expect(mac).toBeTruthy();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("gives up an on-origin retry wait after 6 hours, keeping the preserved branch", async () => {
+    const { app, task } = await setup("retry-on-origin-give-up", {
+      originalOnline: false,
+      replacementOnline: false,
+      branchOnOrigin: true,
+    });
+    try {
+      await retryTask(app, task.id);
+      await vi.waitFor(() => {
+        expect(getTask(app, task.id).failureReason).toContain("no other host");
+      });
+      // The wait has been running for more than 6 hours.
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000) })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await dispatchQueuedTasks(app);
+
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("gave up after 6h");
+      // The retry's branch is the PRESERVED one: a later Retry resumes it
+      // instead of cutting a brand-new branch.
+      expect(row.branchName).toBe(BRANCH);
     } finally {
       await app.close();
     }
@@ -381,7 +421,7 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
     try {
       await retryTask(app, task.id);
       await vi.waitFor(() => {
-        expect(getTask(app, task.id).retryHostId).toBe(mac);
+        expect(getTask(app, task.id).failureReason).toContain("no other host");
       });
 
       const row = getTask(app, task.id);
@@ -391,6 +431,10 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       expect(row.worktreePath).toBe(
         `${MAC_CWD}/.mullion-worktrees/mullion-task-9001-retry-replaces`,
       );
+      // The branch is on origin, so the wait is not stranded on the Mac: no
+      // "Start fresh" is offered for it.
+      expect(row.retryHostId).toBeNull();
+      expect(mac).toBeTruthy();
     } finally {
       await app.close();
     }

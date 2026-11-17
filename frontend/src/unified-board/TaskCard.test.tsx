@@ -25,6 +25,7 @@ import type {
   Task,
 } from "../api/index.js";
 import { makeHost, makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import { ApiError } from "../api/client.js";
 
 let sessions: Session[];
 let hosts: Host[];
@@ -1369,6 +1370,15 @@ describe("a card for a retry waiting for its host (#3194)", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Start fresh" }));
     expect(startFreshTask).toHaveBeenCalledWith(1);
+  });
+
+  it("reports a refused 'Start fresh' on the card instead of failing silently", async () => {
+    const user = userEvent.setup();
+    startFreshTask.mockRejectedValueOnce(new ApiError("This task is not waiting for a host", 409));
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: null, retryHostId: "macbook" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(await screen.findByText("This task is not waiting for a host")).toBeInTheDocument();
   });
 
   it("does not offer it for a task that is not waiting for a host", () => {

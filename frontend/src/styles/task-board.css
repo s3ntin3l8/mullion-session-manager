@@ -187,6 +187,15 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+/* #3194 — the reason a "Start fresh" was refused (the server answered 409:
+   the task is not waiting for a host any more). The sidebar's own action
+   shows the API's reason; the card has to as well, or the click fails
+   silently. */
+.task-card-start-fresh-error {
+  align-self: flex-start;
+  color: var(--status-warn-fg);
+  font-size: 0.85em;
+}
 
 /* ───────── Density ───────── */
 .task-density-compact .task-card {

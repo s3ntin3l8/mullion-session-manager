@@ -68,7 +68,11 @@ export async function startFreshTask(
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
-    return { reset: true as const, abandonedHost: current.retryHostId };
+    return {
+      reset: true as const,
+      abandonedHost: current.retryHostId,
+      abandonedBranch: current.branchName,
+    };
   });
 
   if (!reset.reset) {
@@ -86,8 +90,13 @@ export async function startFreshTask(
     to: "ready",
     via: "start-fresh",
     // The host the preserved branch was abandoned on — the operator needs to
-    // know where those commits are.
-    context: { abandonedHost: reset.abandonedHost },
+    // know where those commits are — and the branch's NAME, because that is
+    // what a human needs to clear it (or to find it) on that host: nothing
+    // else keeps it, and the row moves on to a fresh branch.
+    context: {
+      abandonedHost: reset.abandonedHost,
+      abandonedBranch: reset.abandonedBranch,
+    },
   });
 
   // Re-queue it as a NEW claim (the same path a manual claim takes): it

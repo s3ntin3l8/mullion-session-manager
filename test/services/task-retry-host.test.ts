@@ -245,6 +245,11 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
       expect(decision.kind).toBe("wait");
       expect(decision.kind === "wait" && decision.hostId).toBe(mac);
       expect(decision.kind === "wait" && decision.detail).toContain("not on origin");
+      // The reason names the host's REAL state — a parked host is not an
+      // offline one (it comes back when the operator un-parks it).
+      expect(decision.kind === "wait" && decision.detail).toContain("parked");
+      expect(decision.kind === "wait" && decision.detail).not.toContain("offline");
+      expect(decision.kind === "wait" && decision.strandedOnHost).toBe(true);
     } finally {
       await app.close();
     }
@@ -274,6 +279,10 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
       expect(decision.kind).toBe("wait");
       expect(decision.kind === "wait" && decision.hostId).toBe(mac);
       expect(decision.kind === "wait" && decision.detail).toContain("not on origin");
+      // The branch is CONFIRMED to be only on that host: the wait is
+      // stranded there, so it is exempt from the 6-hour give-up and offers
+      // "Start fresh".
+      expect(decision.kind === "wait" && decision.strandedOnHost).toBe(true);
     } finally {
       await app.close();
     }
@@ -287,7 +296,14 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
     try {
       const decision = await decide(app, task, project, { originalHostId: mac });
       expect(decision.kind).toBe("wait");
-      expect(decision.kind === "wait" && decision.detail).toContain("not on origin");
+      // The lookup did not happen, so the branch's whereabouts are UNKNOWN:
+      // the wait says so instead of claiming the branch is not on origin
+      // (which would send the operator looking in the wrong place).
+      expect(decision.kind === "wait" && decision.detail).toContain("could not confirm");
+      expect(decision.kind === "wait" && decision.detail).not.toContain("not on origin");
+      // Nothing is proven to be stranded on the host, so this is an ordinary
+      // wait: the 6-hour give-up applies to it.
+      expect(decision.kind === "wait" && decision.strandedOnHost).toBe(false);
     } finally {
       await app.close();
     }
@@ -301,7 +317,14 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
     try {
       const decision = await decide(app, task, project, { originalHostId: mac });
       expect(decision.kind).toBe("wait");
-      expect(decision.kind === "wait" && decision.detail).toContain("not on origin");
+      // The lookup did not happen, so the branch's whereabouts are UNKNOWN:
+      // the wait says so instead of claiming the branch is not on origin
+      // (which would send the operator looking in the wrong place).
+      expect(decision.kind === "wait" && decision.detail).toContain("could not confirm");
+      expect(decision.kind === "wait" && decision.detail).not.toContain("not on origin");
+      // Nothing is proven to be stranded on the host, so this is an ordinary
+      // wait: the 6-hour give-up applies to it.
+      expect(decision.kind === "wait" && decision.strandedOnHost).toBe(false);
     } finally {
       await app.close();
     }
@@ -315,7 +338,14 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
     try {
       const decision = await decide(app, task, project, { originalHostId: mac });
       expect(decision.kind).toBe("wait");
-      expect(decision.kind === "wait" && decision.detail).toContain("not on origin");
+      // The lookup did not happen, so the branch's whereabouts are UNKNOWN:
+      // the wait says so instead of claiming the branch is not on origin
+      // (which would send the operator looking in the wrong place).
+      expect(decision.kind === "wait" && decision.detail).toContain("could not confirm");
+      expect(decision.kind === "wait" && decision.detail).not.toContain("not on origin");
+      // Nothing is proven to be stranded on the host, so this is an ordinary
+      // wait: the 6-hour give-up applies to it.
+      expect(decision.kind === "wait" && decision.strandedOnHost).toBe(false);
     } finally {
       await app.close();
     }
@@ -331,6 +361,9 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
       const decision = await decide(app, task, project, { originalHostId: mac });
       expect(decision.kind).toBe("wait");
       expect(decision.kind === "wait" && decision.detail).toContain("no other host");
+      // The branch IS on origin, so nothing is stranded on the original host:
+      // this is an ordinary placement wait and the 6-hour give-up applies.
+      expect(decision.kind === "wait" && decision.strandedOnHost).toBe(false);
     } finally {
       await app.close();
     }
@@ -397,21 +430,36 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
     }
   });
 
-  it("branchOnOrigin is false for an empty branch name", async () => {
+  it("branchOnOrigin cannot confirm an empty branch name", async () => {
     const { app, project } = await setup("host-empty-branch", { origin: "yes" });
     try {
-      expect(await branchOnOrigin(app, project, "")).toBe(false);
+      expect(await branchOnOrigin(app, project, "")).toBe("unknown");
     } finally {
       await app.close();
     }
   });
 
-  it("branchOnOrigin is false when the project has no GitHub remote at all", async () => {
+  it("branchOnOrigin cannot confirm when the project has no GitHub remote at all", async () => {
     const { app, project } = await setup("host-remote", { origin: "no-repo" });
     try {
-      expect(await branchOnOrigin(app, project, BRANCH)).toBe(false);
+      expect(await branchOnOrigin(app, project, BRANCH)).toBe("unknown");
     } finally {
       await app.close();
+    }
+  });
+
+  it("branchOnOrigin reports a 404 as absent and a positive lookup as present", async () => {
+    const { app, project } = await setup("host-origin-absent", { origin: "no" });
+    try {
+      expect(await branchOnOrigin(app, project, BRANCH)).toBe("absent");
+    } finally {
+      await app.close();
+    }
+    const { app: app2, project: project2 } = await setup("host-origin-present", { origin: "yes" });
+    try {
+      expect(await branchOnOrigin(app2, project2, BRANCH)).toBe("present");
+    } finally {
+      await app2.close();
     }
   });
 });

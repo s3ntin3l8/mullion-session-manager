@@ -16,9 +16,12 @@
 //      project's GitHub helpers (never assumed: an unconfirmed branch stays
 //      where it is);
 //   3. otherwise the task WAITS for its original host, with the reason on the
-//      card. It is deliberately NOT failed after 6h (the give-up in
+//      card. A wait whose branch is CONFIRMED to be only on that host (a 404
+//      from origin) is deliberately NOT failed after 6h (the give-up in
 //      task-dispatch.ts): the branch is on that host, so failing the task
-//      would free nothing and would throw away the work.
+//      would free nothing and would throw away the work. A wait whose branch
+//      is safely on origin — or whose origin state could not be confirmed —
+//      is an ordinary placement wait and keeps the 6-hour give-up.
 //
 // The placement decision itself is NOT re-implemented here: the same
 // `resolveTargetHost`/`resolvePlacement` calls a fresh claim makes decide
@@ -58,8 +61,16 @@ export type RetryHostDecision =
   /**
    * The retry waits for its original host. `detail` is the reason shown on the
    * card; `hostId` is the host it waits for.
+   *
+   * `strandedOnHost` says whether the preserved branch is CONFIRMED to be
+   * only on that host (it is not on origin): that is the one wait where
+   * failing the task frees nothing — the work is on the host, and it is there
+   * for good — so it is exempt from the 6-hour give-up and offers the
+   * operator "Start fresh". A wait whose branch is safely on origin, or whose
+   * origin state could not be confirmed, is an ordinary wait: the give-up
+   * applies to it like to every other placement wait.
    */
-  | { kind: "wait"; hostId: string; detail: string };
+  | { kind: "wait"; hostId: string; detail: string; strandedOnHost: boolean };
 
 /** The project's placement inputs, in the shape the placement code wants. */
 function placementProjectOf(project: typeof projects.$inferSelect) {
@@ -73,14 +84,35 @@ function placementProjectOf(project: typeof projects.$inferSelect) {
 }
 
 /**
+ * Where the task's branch is, as far as origin can tell us.
+ *
+ *   - "present" — the ref exists on origin: the branch's work is safe there,
+ *     and a retry may be re-placed onto another host.
+ *   - "absent" — GitHub's 404: the branch is CONFIRMED not to be on origin,
+ *     so it exists only on its original host.
+ *   - "unknown" — the lookup could not be made (no repository, no token, a
+ *     rate limit, a network error). Not a confirmation either way.
+ *
+ * The distinction between "absent" and "unknown" is what keeps the wait
+ * reason honest: only "absent" proves the branch is stranded on its host.
+ */
+export type BranchOriginState = "present" | "absent" | "unknown";
+
+/**
  * Is the task's branch on `origin`?
  *
  * CONFIRMED, never assumed: the branch is looked up in the project's GitHub
- * repository, and anything that is not a positive answer (no repository, no
- * token, a 404, a rate limit, a network error) counts as "not on origin".
- * That is the safe direction — re-placing a task onto another host starts it
- * from origin, so a branch that is really only on the original host would
- * silently lose its commits.
+ * repository, and anything that is not a positive answer counts as "not on
+ * origin" — the safe direction, because re-placing a task onto another host
+ * starts it from origin, so a branch that is really only on the original host
+ * would silently lose its commits.
+ *
+ * The three states keep the two failures apart: a 404 is GitHub saying "no
+ * such ref" (the branch is confirmed NOT on origin), while a missing token, a
+ * rate limit or a network error means the lookup never happened (the branch's
+ * whereabouts are UNKNOWN). A wait that says "it is not on origin" when the
+ * lookup merely failed sends the operator after the wrong thing — they would
+ * go looking for a branch that may well be on origin.
  *
  * Only GitHub remotes can be confirmed: the project's own remote is resolved
  * through `resolveRepoRef`, which recognises a GitHub origin. A repository
@@ -91,13 +123,14 @@ export async function branchOnOrigin(
   app: FastifyInstance,
   project: { cwd: string; hostId: string },
   branchName: string,
-): Promise<boolean> {
-  if (branchName.length === 0) return false;
+): Promise<BranchOriginState> {
+  // No branch to look up: nothing can be confirmed about it.
+  if (branchName.length === 0) return "unknown";
   try {
     const repoRef = await resolveRepoRef(app, project);
-    if (repoRef === null) return false;
+    if (repoRef === null) return "unknown";
     const token = await resolveGitHubToken(app, repoRef);
-    if (token === null || token === undefined) return false;
+    if (token === null || token === undefined) return "unknown";
     // A 404 is GitHub's "no such ref" — the branch is not on origin.
     await githubRequest<unknown>(
       token,
@@ -106,16 +139,17 @@ export async function branchOnOrigin(
       "GET",
       `/git/ref/heads/${encodeURIComponent(branchName)}`,
     );
-    return true;
+    return "present";
   } catch (err) {
-    if (err instanceof GitHubApiError && err.statusCode === 404) return false;
+    if (err instanceof GitHubApiError && err.statusCode === 404) return "absent";
     // Anything else (rate limit, network, missing permission) is NOT a
-    // confirmation — the branch stays where it is.
+    // confirmation — the branch stays where it is, and the wait says the
+    // lookup failed rather than claiming the branch is elsewhere.
     app.log.warn(
       { err, branchName },
       "task retry: could not confirm the branch on origin — not re-placing",
     );
-    return false;
+    return "unknown";
   }
 }
 
@@ -156,14 +190,26 @@ export async function decideRetryHost(
   // that table picks a host for a NEW session, while this host already holds
   // the worktree the retry resumes. What matters is that the machine is
   // there and that the task's requirement still allows it.
+  //
+  // WHY the original host cannot take it is kept: it is what the wait reason
+  // on the card has to say, and "offline" is not the same as "parked" — the
+  // operator's next move differs.
+  let originalHostUnavailable: string;
   if (satisfiesRequirement(app, originalHostId, requirement)) {
     const availability = originalHostAvailability(app, originalHostId);
     if (availability.available) {
       return { kind: "resume", hostId: originalHostId };
     }
+    originalHostUnavailable = availability.reason;
     app.log.info(
       { taskId: task.id, hostId: originalHostId, reason: availability.reason },
       "task retry: the original host cannot take the retry right now",
+    );
+  } else {
+    originalHostUnavailable = "it no longer matches the task's Platform:/Host: requirement";
+    app.log.info(
+      { taskId: task.id, hostId: originalHostId },
+      "task retry: the original host no longer satisfies the task's placement requirement",
     );
   }
 
@@ -176,26 +222,81 @@ export async function decideRetryHost(
     launchNeeds,
   });
 
-  const onOrigin = await branchOnOrigin(app, project, task.branchName ?? "");
+  const origin = await branchOnOrigin(app, project, task.branchName ?? "");
   if (candidate === null) {
+    // No other host can take the retry right now.
+    if (origin === "present") {
+      // The branch is on origin, so nothing is stranded on the original host:
+      // this is an ordinary placement wait, and the 6-hour give-up applies to
+      // it like to every other placement wait.
+      return {
+        kind: "wait",
+        hostId: originalHostId,
+        strandedOnHost: false,
+        detail: `the task's branch is on origin, but no other host can take this retry right now (offline, parked, or no capacity reading yet) — waiting for ${originalHostId} to come back`,
+      };
+    }
     return {
       kind: "wait",
       hostId: originalHostId,
-      detail: onOrigin
-        ? `the task's branch is on origin, but no other host can take this retry right now (offline, parked, or no capacity reading yet) — waiting for ${originalHostId} to come back`
-        : `the task's branch is only on ${originalHostId} (it is not on origin), and ${originalHostId} is offline — the retry waits for it to come back`,
+      // Only a CONFIRMED 404 proves the branch is on the original host alone;
+      // an unconfirmed lookup must not claim the work is stranded there.
+      strandedOnHost: origin === "absent",
+      detail: waitDetail({
+        origin,
+        originalHostId,
+        unavailable: originalHostUnavailable,
+        candidateHostId: null,
+      }),
     };
   }
-  if (!onOrigin) {
+  if (origin !== "present") {
     // Re-placing would start the task from scratch and abandon the original
     // host's commits, so the retry waits instead.
     return {
       kind: "wait",
       hostId: originalHostId,
-      detail: `the task's branch is only on ${originalHostId} (it is not on origin), so it cannot be moved to ${candidate.hostId} — the retry waits for ${originalHostId} to come back`,
+      strandedOnHost: origin === "absent",
+      detail: waitDetail({
+        origin,
+        originalHostId,
+        unavailable: originalHostUnavailable,
+        candidateHostId: candidate.hostId,
+      }),
     };
   }
   return { kind: "replace", hostId: candidate.hostId, placement: candidate };
+}
+
+/**
+ * The reason a retry is waiting, in the words the card shows.
+ *
+ * It says what is actually known:
+ *   - "it is not on origin" only when GitHub CONFIRMED the ref is missing
+ *     (a 404) — the branch really is only on the original host;
+ *   - "could not confirm" when the lookup itself failed, so the operator does
+ *     not go hunting for a branch that may well be on origin;
+ *   - the original host's REAL state (offline, parked, no longer eligible)
+ *     rather than a blanket "is offline".
+ */
+function waitDetail(opts: {
+  origin: BranchOriginState;
+  originalHostId: string;
+  unavailable: string;
+  candidateHostId: string | null;
+}): string {
+  const { origin, originalHostId, unavailable, candidateHostId } = opts;
+  const state = `${originalHostId} is ${unavailable}`;
+  if (origin === "absent") {
+    const stranded = `the task's branch is only on ${originalHostId} (it is not on origin)`;
+    return candidateHostId === null
+      ? `${stranded}, and ${state} — the retry waits for it to come back`
+      : `${stranded}, so it cannot be moved to ${candidateHostId} — the retry waits for ${originalHostId} to come back; ${state}`;
+  }
+  const unconfirmed = `could not confirm that the task's branch is on origin`;
+  return candidateHostId === null
+    ? `${unconfirmed}, and ${state} — the retry waits for it to come back`
+    : `${unconfirmed}, so it cannot be moved to ${candidateHostId} — the retry waits for ${originalHostId} to come back; ${state}`;
 }
 
 /**
@@ -241,6 +342,10 @@ function hostPlatform(app: FastifyInstance, hostId: string): string | null {
  * unavailable: the resume attempt itself is the honest test of it, and a
  * host that has never been seen is not the same as a host that has been
  * reported down.
+ *
+ * The reason names the state, not just "it is offline": a PARKED host comes
+ * back on the operator's say-so, an offline one on its own — the wait reason
+ * on the card has to send the operator to the right place.
  */
 function originalHostAvailability(
   app: FastifyInstance,
@@ -248,9 +353,9 @@ function originalHostAvailability(
 ): { available: boolean; reason: string } {
   const host = listHosts(app).find((h) => h.id === hostId);
   if (host === undefined) return { available: true, reason: "" };
-  if (host.drained) return { available: false, reason: "it is parked" };
+  if (host.drained) return { available: false, reason: "parked" };
   const health = app.hostHeartbeatTracker?.getHealth(hostId);
-  if (health?.status === "offline") return { available: false, reason: "it is offline" };
+  if (health?.status === "offline") return { available: false, reason: "offline" };
   return { available: true, reason: "" };
 }
 

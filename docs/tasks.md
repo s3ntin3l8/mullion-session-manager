@@ -369,12 +369,22 @@ waiting for a free concurrency slot. It never holds a session; see the
      checkout cloned for it — the same `needsCheckout` placement computes),
      the agent CLI and the required capability, the task's `worktreePath`
      moves to that host, and the new worker session decides the host from
-     then on (the reviewer and the rebase worker follow it);
+     then on (the reviewer and the rebase worker follow it). The checkout is
+     taken at **`origin`'s tip**, not at whatever the host happens to hold: a
+     branch ref outlives the worktree it was checked out in, so the host
+     fetches the branch first and refuses the resume when it cannot take
+     `origin`'s tip (a local ref with commits `origin` does not have, or a
+     checkout of that branch it already has) — it never continues the task
+     from an older commit;
   3. **otherwise the retry waits** for its original host: the card and the
-     task sidebar show the reason (naming the host, and saying the branch is
-     not on `origin`), and the task is **not** failed after 6 hours — the
-     branch is on that host, so failing it would free nothing. Every other
-     placement wait keeps the 6-hour give-up (see
+     task sidebar show the reason (naming the host and its real state —
+     offline or parked — and whether the branch is on `origin`). When the
+     branch is **confirmed to be only on that host**, the task is **not**
+     failed after 6 hours: the branch is there, so failing it would free
+     nothing. A wait whose branch is safely on `origin` — or whose `origin`
+     state could not be confirmed at all (no repository, no token, a rate
+     limit) — is an ordinary placement wait and keeps the 6-hour give-up
+     (see
      [A queued task that cannot dispatch](#a-queued-task-that-cannot-dispatch)).
      A task with no placement requirement follows the same order. **Start
      fresh** (`POST /api/tasks/:id/start-fresh`, offered on the card and in the
@@ -994,11 +1004,15 @@ The reason is not hidden:
   point, since no worktree was ever cut, so it does exactly that: it resets
   the task to `ready`.
 - **One wait is exempt from the 6-hour give-up**: a _retry_ waiting for its
-  original host (`#3194` — the preserved branch is on that host and not on
-  `origin`, so there is nowhere else to run it). Failing it would throw the
-  work away without freeing anything. Such a wait shows the same "Not
-  dispatched yet: …" notice, names the host it waits for, and offers
-  **Start fresh** (see the `failed → in_progress` bullet above).
+  original host because the preserved branch is **on that host and not on
+  `origin`** (`#3194` — there is nowhere else to run it). Failing it would
+  throw the work away without freeing anything. Such a wait shows the same
+  "Not dispatched yet: …" notice, names the host it waits for, and offers
+  **Start fresh** (see the `failed → in_progress` bullet above). A retry
+  waiting for a host while its branch is safely on `origin` is an ordinary
+  placement wait: the 6-hour give-up applies to it, and it keeps the
+  preserved branch (a later **Retry** resumes that branch instead of cutting
+  a new one).
 
 ## Where a task runs: `Platform:`, `Host:` and `Capability:`
 

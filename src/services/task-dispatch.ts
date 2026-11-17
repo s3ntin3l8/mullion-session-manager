@@ -265,6 +265,7 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
       failureReason: tasks.failureReason,
       held: tasks.dispatchHeld,
       retryHostId: tasks.retryHostId,
+      resumeQueued: tasks.resumeQueued,
     })
     .from(tasks)
     .where(eq(tasks.id, taskId))
@@ -278,9 +279,18 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
   const hours = DISPATCH_GIVE_UP_AFTER_MS / (60 * 60 * 1000);
   // A held task never failed an attempt, so its own reason ("it will start
   // once one is") would read as a contradiction after the give-up.
-  const detail = row.held
-    ? `gave up after ${hours}h waiting for a host that matches the task's Platform:/Host: requirement to become eligible`
-    : `gave up after ${hours}h of failed dispatch attempts — last: ${row.failureReason ?? "unknown"}`;
+  //
+  // Issue #3194 — a HELD RETRY is a different case again: its `branchName` is
+  // the PRESERVED branch (the worker's commits), not a name a fresh claim cut
+  // and never used. Clearing it would make a later Retry reset the task to
+  // "ready" and cut a brand-new branch instead of resuming the preserved one
+  // — so a retry keeps its branch and worktree path, and its reason names the
+  // wait it was in (a checkout being prepared on the replacement host, say).
+  const detail = row.resumeQueued
+    ? `gave up after ${hours}h waiting for the retry to start — last: ${row.failureReason ?? "unknown"}`
+    : row.held
+      ? `gave up after ${hours}h waiting for a host that matches the task's Platform:/Host: requirement to become eligible`
+      : `gave up after ${hours}h of failed dispatch attempts — last: ${row.failureReason ?? "unknown"}`;
   app.log.warn({ taskId, detail }, "[task-dispatch] giving up on a task that cannot be dispatched");
   return failQueuedTask(app, taskId, {
     detail,
@@ -291,8 +301,9 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
     // Retry reset the task to ready rather than try to resume a branch that
     // was never created. After a failed ATTEMPT they are left alone — a
     // partial or unclean worktree may exist on the host, and Retry (or the
-    // user) can still find it through them.
-    extra: row.held ? { worktreePath: null, branchName: null } : {},
+    // user) can still find it through them. A retry keeps them either way:
+    // its branch is the preserved one (issue #3194).
+    extra: row.held && !row.resumeQueued ? { worktreePath: null, branchName: null } : {},
   });
 }
 

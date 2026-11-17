@@ -258,6 +258,11 @@ export async function enqueueTask(
       failureReason: null,
       dispatchFailingSince: null,
       dispatchHeld: false,
+      // Issue #3194 — a fresh claim is not waiting for any host: the marker
+      // that exempts a waiting retry from the 6-hour give-up (and that offers
+      // "Start fresh") is dropped here, so a row that somehow carried one into
+      // a new claim cannot ride it into a second wait.
+      retryHostId: null,
     };
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
@@ -1259,8 +1264,13 @@ export async function dispatchQueuedRetry(
     // task stays `claimed` with the reason on it, and the next sweep looks
     // again. The 6h give-up does NOT apply here (task-dispatch.ts's
     // giveUpIfOverdue skips a waiting retry) — see the issue's scope.
-    // The task waits for its ORIGINAL host: that is what `retryHostId` names,
-    // and its presence is what exempts the wait from the 6-hour give-up.
+    //
+    // `retryHostId` names the host the retry waits for, and its presence is
+    // what exempts the wait from the 6-hour give-up — but ONLY for a wait
+    // whose branch is CONFIRMED to be stranded there. A wait whose branch is
+    // safely on origin (or whose origin state could not be confirmed) is an
+    // ordinary placement wait: it keeps the 6-hour bound, and it is not a
+    // "Start fresh" candidate — nothing is stranded to abandon.
     holdRetry(
       app,
       task,
@@ -1268,7 +1278,7 @@ export async function dispatchQueuedRetry(
       decision.detail,
       decision.hostId,
       requirementJson,
-      decision.hostId,
+      decision.strandedOnHost ? decision.hostId : null,
     );
     return { ok: false, reason: "retry-waiting", detail: decision.detail };
   }
@@ -1522,13 +1532,24 @@ export async function dispatchQueuedRetry(
       throw err;
     }
     if (!worktree) {
+      // Issue #3194 — a re-placed retry resumes from ORIGIN, and the host
+      // refuses when it cannot: the branch is no longer on origin, the local
+      // ref has commits origin does not, or the host already has a checkout
+      // of it. Say so, so the operator knows what to look at — the branch
+      // really is on origin in this path, and the checkout is the one thing
+      // here a human can clear.
+      const fromOrigin = decision.kind === "replace";
       await release(
-        "could not resume the preserved branch — it may no longer exist or is checked out elsewhere",
+        fromOrigin
+          ? "could not resume the branch from origin — it may no longer be there, or this host already has a checkout of it"
+          : "could not resume the preserved branch — it may no longer exist or is checked out elsewhere",
       );
       return {
         ok: false,
         reason: "worktree-failed",
-        detail: `Could not check out ${branchName} into a fresh worktree — it may no longer exist, or is already checked out elsewhere`,
+        detail: fromOrigin
+          ? `Could not check out ${branchName} from origin — it may no longer be there, or this host already has a checkout of it`
+          : `Could not check out ${branchName} into a fresh worktree — it may no longer exist, or is already checked out elsewhere`,
       };
     }
 

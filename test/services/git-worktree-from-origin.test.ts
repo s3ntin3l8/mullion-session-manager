@@ -86,4 +86,65 @@ describe("resumeTaskWorktree from origin (#3194)", () => {
     });
     expect(result).toBeNull();
   });
+
+  // Issue #3194 — a branch ref outlives the worktree it was checked out in,
+  // so a host that ran this task at some earlier point still holds a local
+  // ref that is BEHIND origin. Resuming that ref would continue the task
+  // from an older commit while the transition context says the branch is on
+  // origin — the resume has to take origin's tip.
+  it("resumes the ORIGIN tip when the host still holds a stale local ref", async () => {
+    const branch = "mullion/task-8-from-origin";
+
+    // The original host pushes one more commit, so origin's tip moves on.
+    git(origin, ["checkout", "-q", "--detach", `refs/heads/${branch}`]);
+    fs.writeFileSync(path.join(origin, "wip.txt"), "work2");
+    git(origin, ["add", "-A"]);
+    git(origin, ["commit", "-m", "more work", "--no-verify"]);
+    // The commit is on a detached HEAD — push THAT onto the branch.
+    git(origin, ["push", "origin", `HEAD:refs/heads/${branch}`]);
+
+    // The replacement host has a STALE local ref for the branch: it ran this
+    // task earlier, at an older commit, and the ref outlived the worktree.
+    git(clone, ["fetch", "--quiet", "origin", "main"]);
+    git(clone, ["branch", branch, "origin/main"]);
+
+    const result = await resumeTaskWorktree(clone, branch, { fromOrigin: true });
+    expect(result).not.toBeNull();
+    // The origin tip, not the stale local ref.
+    expect(fs.readFileSync(path.join(result!.path, "wip.txt"), "utf8")).toBe("work2");
+  });
+
+  it("refuses to resume when the local branch has commits origin does not", async () => {
+    const branch = "mullion/task-8-from-origin";
+    git(clone, ["fetch", "--quiet", "origin", "main"]);
+    // A local commit the origin does not have, on the branch itself — and
+    // the branch is NOT checked out anywhere, so the ONLY thing that can
+    // refuse the resume is the divergence.
+    git(clone, ["checkout", "-q", "-b", "local-only", "origin/main"]);
+    fs.writeFileSync(path.join(clone, "local.txt"), "local");
+    git(clone, ["add", "-A"]);
+    git(clone, ["commit", "-m", "local only", "--no-verify"]);
+    git(clone, ["branch", "-f", branch, "local-only"]);
+    git(clone, ["checkout", "-q", "main"]);
+
+    // The local branch has diverged from origin: it cannot be moved to
+    // origin's tip, so this host cannot resume from origin at all — and the
+    // retry must not continue from the local commit instead.
+    const result = await resumeTaskWorktree(clone, branch, { fromOrigin: true });
+    expect(result).toBeNull();
+  });
+
+  it("does not adopt a leftover checkout of the branch", async () => {
+    const branch = "mullion/task-8-from-origin";
+    git(clone, ["fetch", "--quiet", "origin", "main"]);
+    git(clone, ["branch", branch, "origin/main"]);
+    const worktreePath = path.join(clone, ".mullion-worktrees", "mullion-task-8-from-origin");
+    git(clone, ["worktree", "add", "-q", worktreePath, branch]);
+
+    // The branch is checked out here, so it cannot be moved to origin's tip:
+    // the resume is refused rather than adopting a checkout that may be
+    // behind origin (with whatever uncommitted work it holds).
+    const result = await resumeTaskWorktree(clone, branch, { fromOrigin: true });
+    expect(result).toBeNull();
+  });
 });

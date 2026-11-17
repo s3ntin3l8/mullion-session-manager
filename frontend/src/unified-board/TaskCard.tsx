@@ -82,6 +82,10 @@ export function TaskCard({
   inStack?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
+  // #3194 — a "Start fresh" that the server refused (409: the task is not
+  // waiting for a host any more) has to say so on the card; the promise is
+  // not dropped silently.
+  const [startFreshError, setStartFreshError] = useState<string | null>(null);
   const epicColour = epicColourVar(task);
   const hosts = useDashboardStore((s) => s.hosts);
   // #3194 — "Start fresh" on a card whose retry waits for its original host.
@@ -657,11 +661,28 @@ export function TaskCard({
           title={`Abandon the branch on ${task.retryHostId} (its commits stay there) and run the task from scratch`}
           onClick={(e) => {
             e.stopPropagation();
-            void startFreshTask(task.id);
+            setStartFreshError(null);
+            // The store action rethrows the API's error (api/client.ts throws
+            // ApiError on any non-2xx), and the app has no unhandledrejection
+            // handler: a dropped promise would put a 409 in the console and
+            // NOTHING on screen — a stale card (two quick clicks, or the
+            // original host coming back between the poll and the click) would
+            // fail silently. Report it on the card instead, the way the
+            // sidebar's own "Start fresh" does.
+            void startFreshTask(task.id).catch((err: unknown) => {
+              setStartFreshError(
+                err instanceof Error ? err.message : "Could not start the task fresh",
+              );
+            });
           }}
         >
           Start fresh
         </button>
+      )}
+      {startFreshError !== null && (
+        <div className="task-card-hint task-card-start-fresh-error" role="status">
+          {startFreshError}
+        </div>
       )}
       {/* Issue #1038 — once a round badge is showing above (autoReturnRounds
           > 0), it already covers "still working" (capped-but-not-announced)
