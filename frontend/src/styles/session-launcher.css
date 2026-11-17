@@ -176,7 +176,7 @@
   min-height: 44px;
 }
 /* "Permissions": the switch at the start of the control column, like
-   Worktree's; "Skip prompts" and the hint follow it and wrap inside the
+   Worktree's; "Skip permissions" and the hint follow it and wrap inside the
    column. */
 .launcher-form-switch-control {
   align-items: flex-start;

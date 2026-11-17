@@ -61,7 +61,9 @@ export default defineConfig({
     // left-rail.css: only the rail's middle region scrolls, LeftRail.test.tsx;
     // companion-views.css: the Dock view's touch-size rows,
     // right-sidebar/DockSidebarView.test.tsx; motion.css and index.css: the
-    // shared press, overlay and material rules, styles/motion.test.ts).
+    // shared press, overlay and material rules, styles/motion.test.ts;
+    // launcher-projects.css: the Add project form keeps its content height,
+    // launchers/LauncherProjects.test.tsx).
     css: {
       include: [
         /styles\/tokens\.css/,
@@ -69,6 +71,7 @@ export default defineConfig({
         /styles\/github-pr\.css/,
         /styles\/task-board\.css/,
         /styles\/session-launcher\.css/,
+        /styles\/launcher-projects\.css/,
         /styles\/left-rail\.css/,
         /styles\/companion-views\.css/,
         /styles\/motion\.css/,

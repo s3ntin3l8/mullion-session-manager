@@ -876,7 +876,7 @@ function AgentOptions({
             type="button"
             role="switch"
             aria-checked={skipValue}
-            aria-label="Skip permission prompts"
+            aria-label="Skip permissions (no permission prompts)"
             aria-describedby={`${idPrefix}-skip-hint`}
             className={`settings-toggle session-launcher-switch${skipValue ? " on" : ""}`}
             onClick={() => onSkipChange(!skipValue)}
@@ -884,7 +884,7 @@ function AgentOptions({
             <span className="settings-toggle-knob" />
           </button>
           <span className="launcher-form-switch-text">
-            <span aria-hidden="true">Skip prompts</span>{" "}
+            <span aria-hidden="true">Skip permissions</span>{" "}
             <span id={`${idPrefix}-skip-hint`} className="session-launcher-hint launcher-form-hint">
               {skipHint}
             </span>
