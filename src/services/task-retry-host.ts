@@ -60,15 +60,19 @@ export type RetryHostDecision =
   | { kind: "replace"; hostId: string; placement: PlacementDecision }
   /**
    * The retry waits for its original host. `detail` is the reason shown on the
-   * card; `hostId` is the host it waits for.
+   * card; `hostId` is the host it waits for — it is ALWAYS the original
+   * worker's host, and it is what the "Start fresh" action is offered
+   * against: the operator's way out of a wait that never ends.
    *
    * `strandedOnHost` says whether the preserved branch is CONFIRMED to be
    * only on that host (it is not on origin): that is the one wait where
    * failing the task frees nothing — the work is on the host, and it is there
-   * for good — so it is exempt from the 6-hour give-up and offers the
-   * operator "Start fresh". A wait whose branch is safely on origin, or whose
-   * origin state could not be confirmed, is an ordinary wait: the give-up
-   * applies to it like to every other placement wait.
+   * for good — so it is exempt from the 6-hour give-up. A wait whose branch
+   * is safely on origin, or whose origin state could not be confirmed, is an
+   * ordinary wait: the give-up applies to it like to every other placement
+   * wait — but "Start fresh" is STILL offered, because the retry is waiting
+   * for a host either way (the two answers live in two columns:
+   * `tasks.retryHostId` and `tasks.retryStrandedOnHost`).
    */
   | { kind: "wait"; hostId: string; detail: string; strandedOnHost: boolean };
 
@@ -194,19 +198,26 @@ export async function decideRetryHost(
   // WHY the original host cannot take it is kept: it is what the wait reason
   // on the card has to say, and "offline" is not the same as "parked" — the
   // operator's next move differs.
-  let originalHostUnavailable: string;
+  let originalHostState: OriginalHostState;
   if (satisfiesRequirement(app, originalHostId, requirement)) {
     const availability = originalHostAvailability(app, originalHostId);
     if (availability.available) {
       return { kind: "resume", hostId: originalHostId };
     }
-    originalHostUnavailable = availability.reason;
+    originalHostState = availability.state;
     app.log.info(
-      { taskId: task.id, hostId: originalHostId, reason: availability.reason },
+      { taskId: task.id, hostId: originalHostId, reason: availability.state.phrase },
       "task retry: the original host cannot take the retry right now",
     );
   } else {
-    originalHostUnavailable = "it no longer matches the task's Platform:/Host: requirement";
+    // Issue #3194 — the host is up but no longer ELIGIBLE for this task.
+    // "is no longer eligible for ..." reads correctly after the host id, and
+    // the wait is for the REQUIREMENT to be satisfiable again — not for the
+    // host to come back, which it never has to do.
+    originalHostState = {
+      phrase: `no longer eligible for ${REQUIREMENT_NAME}`,
+      waitsFor: "eligibility",
+    };
     app.log.info(
       { taskId: task.id, hostId: originalHostId },
       "task retry: the original host no longer satisfies the task's placement requirement",
@@ -233,7 +244,12 @@ export async function decideRetryHost(
         kind: "wait",
         hostId: originalHostId,
         strandedOnHost: false,
-        detail: `the task's branch is on origin, but no other host can take this retry right now (offline, parked, or no capacity reading yet) — waiting for ${originalHostId} to come back`,
+        detail: waitDetail({
+          origin,
+          originalHostId,
+          state: originalHostState,
+          candidateHostId: null,
+        }),
       };
     }
     return {
@@ -245,7 +261,7 @@ export async function decideRetryHost(
       detail: waitDetail({
         origin,
         originalHostId,
-        unavailable: originalHostUnavailable,
+        state: originalHostState,
         candidateHostId: null,
       }),
     };
@@ -260,7 +276,7 @@ export async function decideRetryHost(
       detail: waitDetail({
         origin,
         originalHostId,
-        unavailable: originalHostUnavailable,
+        state: originalHostState,
         candidateHostId: candidate.hostId,
       }),
     };
@@ -269,34 +285,70 @@ export async function decideRetryHost(
 }
 
 /**
+ * The state of the original host, as the card has to say it.
+ *
+ * `phrase` reads after "<host> is ..." — so it is a state ("offline",
+ * "parked"), not a clause. `waitsFor` says what the retry is waiting FOR:
+ * the HOST itself (an offline one comes back on its own, a parked one on the
+ * operator's say-so) or the task's REQUIREMENT to be satisfiable again (a
+ * host that is up but no longer eligible for this task).
+ */
+type OriginalHostState = {
+  phrase: string;
+  waitsFor: "host" | "eligibility";
+};
+
+/**
+ * How the task's placement requirement is named in the card's own words —
+ * `Platform:` / `Host:` / `Capability:` together, because a requirement can
+ * be any of them and the reason must not send the operator after the wrong
+ * one.
+ */
+const REQUIREMENT_NAME = "the task's Platform:/Host:/Capability: requirement";
+
+/**
  * The reason a retry is waiting, in the words the card shows.
  *
  * It says what is actually known:
- *   - "it is not on origin" only when GitHub CONFIRMED the ref is missing
- *     (a 404) — the branch really is only on the original host;
+ *   - "it is only on <host> (it is not on origin)" only when GitHub CONFIRMED
+ *     the ref is missing (a 404) — the branch really is only on the original
+ *     host;
  *   - "could not confirm" when the lookup itself failed, so the operator does
  *     not go hunting for a branch that may well be on origin;
  *   - the original host's REAL state (offline, parked, no longer eligible)
- *     rather than a blanket "is offline".
+ *     rather than a blanket "is offline";
+ *   - and WHAT the retry waits for: the host coming back, or the task's
+ *     requirement becoming satisfiable again — an eligible-but-wrong host
+ *     never has to "come back", so saying it would send the operator after
+ *     the wrong thing.
  */
 function waitDetail(opts: {
   origin: BranchOriginState;
   originalHostId: string;
-  unavailable: string;
+  state: OriginalHostState;
   candidateHostId: string | null;
 }): string {
-  const { origin, originalHostId, unavailable, candidateHostId } = opts;
-  const state = `${originalHostId} is ${unavailable}`;
-  if (origin === "absent") {
-    const stranded = `the task's branch is only on ${originalHostId} (it is not on origin)`;
-    return candidateHostId === null
-      ? `${stranded}, and ${state} — the retry waits for it to come back`
-      : `${stranded}, so it cannot be moved to ${candidateHostId} — the retry waits for ${originalHostId} to come back; ${state}`;
+  const { origin, originalHostId, state, candidateHostId } = opts;
+  const hostState = `${originalHostId} is ${state.phrase}`;
+  const tail =
+    state.waitsFor === "host"
+      ? `the retry waits for ${originalHostId} to come back`
+      : "the retry waits for the requirement to be satisfiable again";
+  const branchClause =
+    origin === "absent"
+      ? `the task's branch is only on ${originalHostId} (it is not on origin)`
+      : origin === "present"
+        ? "the task's branch is on origin"
+        : "could not confirm that the task's branch is on origin";
+  if (candidateHostId === null) {
+    if (origin === "present") {
+      // The branch is safely on origin, so nothing is stranded on the
+      // original host and the wait is an ordinary placement wait.
+      return `${branchClause}, but no other host can take this retry right now (offline, parked, or no capacity reading yet) — ${hostState}; ${tail}`;
+    }
+    return `${branchClause}, and ${hostState} — ${tail}`;
   }
-  const unconfirmed = `could not confirm that the task's branch is on origin`;
-  return candidateHostId === null
-    ? `${unconfirmed}, and ${state} — the retry waits for it to come back`
-    : `${unconfirmed}, so it cannot be moved to ${candidateHostId} — the retry waits for ${originalHostId} to come back; ${state}`;
+  return `${branchClause}, so it cannot be moved to ${candidateHostId} — ${tail}; ${hostState}`;
 }
 
 /**
@@ -350,13 +402,18 @@ function hostPlatform(app: FastifyInstance, hostId: string): string | null {
 function originalHostAvailability(
   app: FastifyInstance,
   hostId: string,
-): { available: boolean; reason: string } {
+): { available: boolean; state: OriginalHostState } {
   const host = listHosts(app).find((h) => h.id === hostId);
-  if (host === undefined) return { available: true, reason: "" };
-  if (host.drained) return { available: false, reason: "parked" };
+  if (host === undefined)
+    return { available: true, state: { phrase: "available", waitsFor: "host" } };
+  if (host.drained) {
+    return { available: false, state: { phrase: "parked", waitsFor: "host" } };
+  }
   const health = app.hostHeartbeatTracker?.getHealth(hostId);
-  if (health?.status === "offline") return { available: false, reason: "offline" };
-  return { available: true, reason: "" };
+  if (health?.status === "offline") {
+    return { available: false, state: { phrase: "offline", waitsFor: "host" } };
+  }
+  return { available: true, state: { phrase: "available", waitsFor: "host" } };
 }
 
 /**

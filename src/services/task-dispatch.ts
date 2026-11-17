@@ -189,16 +189,16 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       return;
     }
     if (outcome.reason === "retry-waiting") {
-      // Issue #3194 — a retry waiting for its ORIGINAL host: the preserved
-      // branch lives there and is not on origin, so failing the task after
-      // 6h would free nothing — it would only throw the work away.
+      // Issue #3194 — a retry waiting for a HOST: the preserved branch lives
+      // on its original host, so failing the task after 6h would free
+      // nothing there — it would only throw the work away.
       //
       // The exemption is scoped to THAT wait, and giveUpIfOverdue is where it
-      // is enforced: it skips a task whose `retryHostId` is set (it waits for
-      // its original host) and applies the 6h bound to every other retry
-      // wait — a checkout being prepared on the replacement host, say, where
-      // nothing is stranded on the original host — exactly like every other
-      // placement wait.
+      // is enforced: it skips a task whose branch is CONFIRMED stranded on
+      // the host it waits for (`retryStrandedOnHost`), and applies the 6h
+      // bound to every other retry wait — a checkout being prepared on the
+      // replacement host, say, where nothing is stranded on the original
+      // host — exactly like every other placement wait.
       giveUpIfOverdue(app, taskId, now);
       continue;
     }
@@ -264,7 +264,7 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
       since: tasks.dispatchFailingSince,
       failureReason: tasks.failureReason,
       held: tasks.dispatchHeld,
-      retryHostId: tasks.retryHostId,
+      retryStrandedOnHost: tasks.retryStrandedOnHost,
       resumeQueued: tasks.resumeQueued,
     })
     .from(tasks)
@@ -274,7 +274,15 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
   // Issue #3194 — a retry waiting for its original host is NEVER given up on:
   // the preserved branch is on that host and not on origin, so failing the
   // task would free nothing. Every other placement wait keeps the 6h bound.
-  if (row.retryHostId !== null) return false;
+  //
+  // The exemption reads `retryStrandedOnHost` — the branch is CONFIRMED to
+  // be only on the host the retry waits for (GitHub's 404 for the branch's
+  // ref). It is NOT `retryHostId` (which host the retry waits for): that one
+  // is set for every original-host wait, including waits whose origin state
+  // could not be confirmed, and those keep the 6-hour bound — their branch
+  // may well be on origin, so failing them frees something. The two answers
+  // live in two columns for exactly that reason.
+  if (row.retryStrandedOnHost) return false;
   if (now - row.since.getTime() < DISPATCH_GIVE_UP_AFTER_MS) return false;
   const hours = DISPATCH_GIVE_UP_AFTER_MS / (60 * 60 * 1000);
   // A held task never failed an attempt, so its own reason ("it will start

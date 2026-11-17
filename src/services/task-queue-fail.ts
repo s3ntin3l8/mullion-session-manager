@@ -51,6 +51,7 @@ export function failQueuedTask(
     dispatchHeld: false,
     // Issue #3194 — a failed task is not waiting for a host any more.
     retryHostId: null,
+    retryStrandedOnHost: false,
     ...opts.extra,
   };
   const updated = app.db

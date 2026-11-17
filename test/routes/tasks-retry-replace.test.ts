@@ -370,12 +370,15 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       const row = getTask(app, task.id);
       expect(row.status).toBe("claimed");
       expect(row.failureReason).toContain("no other host");
+      // The reason names the host the retry is waiting for.
+      expect(row.failureReason).toContain(mac);
       // The branch IS on origin, so nothing is stranded on the original host:
       // this wait is not exempt from the 6-hour give-up (it frees the task
-      // slot, and the work is safe on origin) and it is not a "Start fresh"
-      // candidate — nothing is stranded to abandon.
-      expect(row.retryHostId).toBeNull();
-      expect(mac).toBeTruthy();
+      // slot, and the work is safe on origin). The wait host is still
+      // recorded, though — the retry waits for THAT host, and "Start fresh"
+      // is offered against it.
+      expect(row.retryHostId).toBe(mac);
+      expect(row.retryStrandedOnHost).toBe(false);
     } finally {
       await app.close();
     }
@@ -431,10 +434,13 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       expect(row.worktreePath).toBe(
         `${MAC_CWD}/.mullion-worktrees/mullion-task-9001-retry-replaces`,
       );
-      // The branch is on origin, so the wait is not stranded on the Mac: no
-      // "Start fresh" is offered for it.
-      expect(row.retryHostId).toBeNull();
-      expect(mac).toBeTruthy();
+      // The branch is on origin, so the wait is not stranded on the Mac: it
+      // keeps the 6-hour give-up. The wait host is still recorded — the
+      // retry waits for the Mac, and "Start fresh" is offered against it.
+      expect(row.retryHostId).toBe(mac);
+      expect(row.retryStrandedOnHost).toBe(false);
+      // The reason names the host the retry is waiting for.
+      expect(row.failureReason).toContain(mac);
     } finally {
       await app.close();
     }

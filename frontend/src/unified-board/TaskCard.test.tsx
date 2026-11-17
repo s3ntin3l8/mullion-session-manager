@@ -1388,4 +1388,23 @@ describe("a card for a retry waiting for its host (#3194)", () => {
     // The ordinary queued hint still shows.
     expect(screen.getByText("Queued — waiting for a free slot")).toBeInTheDocument();
   });
+
+  // Issue #3194 — a card that says "Not dispatched yet: …" must not ALSO say
+  // "Queued — waiting for a free slot": two contradictory statements about
+  // the same card, and the second one is wrong (the task is waiting for a
+  // host, not for a slot).
+  it("does not claim a waiting card is queued for a free slot", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "claimed",
+        sessionId: null,
+        retryHostId: null,
+        failureReason: "preparing a checkout on linux",
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(/Not dispatched yet/)).toBeInTheDocument();
+    expect(screen.queryByText("Queued — waiting for a free slot")).toBeNull();
+  });
 });

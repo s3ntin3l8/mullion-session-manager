@@ -430,6 +430,32 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
     }
   });
 
+  it("says the original host is no longer ELIGIBLE when the requirement does not hold on it", async () => {
+    const { app, mac, project, task } = await setup("host-ineligible", {
+      origin: "no",
+      originalOnline: false,
+      originalCapabilities: ["gpu"],
+      replacementCapabilities: [],
+    });
+    try {
+      const decision = await decide(app, task, project, {
+        originalHostId: mac,
+        requirement: { capabilities: ["xcode"] },
+      });
+      expect(decision.kind).toBe("wait");
+      const detail = decision.kind === "wait" ? decision.detail : "";
+      // The host's state reads after "mac is …" — it is a state, not a
+      // clause ("mac is it no longer matches …" said nothing).
+      expect(detail).toContain(`${mac} is no longer eligible for`);
+      // And the wait is for the REQUIREMENT to be satisfiable again: this
+      // host is up, so it never has to "come back".
+      expect(detail).toContain("to be satisfiable again");
+      expect(detail).not.toContain("to come back");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("branchOnOrigin cannot confirm an empty branch name", async () => {
     const { app, project } = await setup("host-empty-branch", { origin: "yes" });
     try {

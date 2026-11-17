@@ -1128,7 +1128,9 @@ export async function clearOrphanedTaskWorktree(
  * branch really is gone.
  *
  * The fetch happens BEFORE the worktree is touched, and a refused fetch is a
- * refusal to resume — see `fetchBranchFromOrigin` below.
+ * refusal to resume — see `fetchBranchFromOrigin` below. Stale worktree
+ * registrations are pruned first, so a registration whose directory was
+ * removed out of band cannot refuse the fetch on its own.
  */
 export async function resumeTaskWorktree(
   cwd: string,
@@ -1156,6 +1158,19 @@ export async function resumeTaskWorktree(
   // makes. So the fetch happens FIRST, before any worktree is touched, and
   // its refusal is a refusal to resume (below).
   if (opts.fromOrigin === true) {
+    // Prune BEFORE the fetch, not after it: git refuses to fetch into a
+    // branch that is checked out in a REGISTERED worktree, and it checks the
+    // REGISTRATION, not the directory. A registration whose directory was
+    // removed out of band (a crash mid-cleanup, a manual `rm -rf`, a disk
+    // sweep) therefore refuses the fetch with "refusing to fetch into branch
+    // ... checked out at <missing path>" — even though there is no checkout
+    // left to protect, and the fetch would otherwise succeed. Pruning drops
+    // exactly those registrations (a live checkout still has its directory,
+    // so it survives the prune and still refuses the fetch, correctly).
+    //
+    // The prune below (for the adoption check) stays: it runs for the
+    // ordinary resume too, and a second prune is a no-op.
+    await runGit(projectRoot, ["worktree", "prune"]);
     const atOrigin = await fetchBranchFromOrigin(projectRoot, branchName);
     if (!atOrigin) {
       // This host cannot resume from origin: the branch is gone from origin,

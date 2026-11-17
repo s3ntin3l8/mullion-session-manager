@@ -9,11 +9,14 @@
 // branch (with the worker's commits) lives on that host, so failing the task
 // would free nothing and would throw the work away. That wait is exempt.
 //
-// The exemption is keyed off `tasks.retryHostId` — the host the task waits
-// for — so it covers that wait and NOTHING else. A retry that waits for
-// something else (a checkout being prepared on the replacement host, where
-// nothing is stranded on the original host) keeps the 6-hour bound, exactly
-// like every other placement wait.
+// The exemption is keyed off `tasks.retryStrandedOnHost` — the branch is
+// CONFIRMED to be only on the host the retry waits for (GitHub's 404 for the
+// branch's ref) — so it covers that wait and NOTHING else. A retry that
+// waits for a host whose origin state could NOT be confirmed keeps the
+// 6-hour bound (its branch may well be on origin), and so does a retry that
+// waits for something else (a checkout being prepared on the replacement
+// host, where nothing is stranded on the original host): exactly like every
+// other placement wait.
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
@@ -167,8 +170,14 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
   /**
    * A failed task whose worker ran on an offline Mac, with the branch NOT on
    * origin — so the retry waits for the Mac.
+   *
+   * `originLookup` picks what the origin lookup says: "absent" is GitHub's
+   * 404 (the branch is CONFIRMED to be only on the Mac), "unknown" is a
+   * lookup that could not be made at all (a rate limit, a network error) —
+   * the branch's whereabouts are then UNKNOWN, and the wait must not claim
+   * the work is stranded on the Mac.
    */
-  async function setupWaitingRetry(name: string) {
+  async function setupWaitingRetry(name: string, originLookup: "absent" | "unknown" = "absent") {
     const app = await buildApp();
     app.db.delete(sessions).run();
     app.db.delete(tasks).run();
@@ -240,9 +249,18 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
     vi.spyOn(hostGitModule, "resolveRepoRef").mockResolvedValue({ owner: "o", repo: "r" });
     vi.spyOn(githubIntegrationModule, "resolveGitHubToken").mockResolvedValue("tok");
     // The branch is NOT on origin: the retry can only wait for its Mac.
-    vi.spyOn(githubRequestModule, "githubRequest").mockRejectedValue(
-      new GitHubApiError("Not Found", 404),
-    );
+    if (originLookup === "absent") {
+      vi.spyOn(githubRequestModule, "githubRequest").mockRejectedValue(
+        new GitHubApiError("Not Found", 404),
+      );
+    } else {
+      // The lookup could not be made — a rate limit, a network error. The
+      // branch's whereabouts are UNKNOWN, which is NOT a confirmation that
+      // it is stranded on the Mac.
+      vi.spyOn(githubRequestModule, "githubRequest").mockRejectedValue(
+        new GitHubApiError("Bad gateway", 502),
+      );
+    }
 
     const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
     expect(res.statusCode).toBe(202);
@@ -257,6 +275,12 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
   it("leaves a retry waiting for its original host queued past the 6-hour give-up", async () => {
     const { app, mac, task } = await setupWaitingRetry("give-up-exempt");
     try {
+      const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      // The branch is CONFIRMED to be only on the Mac, so this wait is
+      // exempt from the give-up.
+      expect(held?.retryHostId).toBe(mac);
+      expect(held?.retryStrandedOnHost).toBe(true);
+
       app.db
         .update(tasks)
         .set({ dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000) })
@@ -269,6 +293,38 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
       // The branch is on the Mac — failing the task would free nothing.
       expect(row?.status).toBe("claimed");
       expect(row?.retryHostId).toBe(mac);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("gives up a retry whose origin state could not be confirmed, and still offers Start fresh", async () => {
+    const { app, mac, task } = await setupWaitingRetry("give-up-unconfirmed", "unknown");
+    try {
+      const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      // The retry waits for its original host, so the host is recorded and
+      // "Start fresh" is offered against it — the operator's only escape
+      // from a wait that never ends.
+      expect(held?.retryHostId).toBe(mac);
+      // But the branch is NOT confirmed stranded there (the lookup never
+      // happened), so the wait keeps the 6-hour bound: the branch may well
+      // be on origin, and failing the task frees something.
+      expect(held?.retryStrandedOnHost).toBe(false);
+
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000) })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await dispatchQueuedTasks(app);
+
+      const failed = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(failed?.status).toBe("failed");
+      expect(failed?.failureReason).toContain("gave up after 6h");
+      // The preserved branch survives: a later Retry resumes it instead of
+      // cutting a brand-new branch.
+      expect(failed?.branchName).toBe(BRANCH);
     } finally {
       await app.close();
     }

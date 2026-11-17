@@ -147,4 +147,27 @@ describe("resumeTaskWorktree from origin (#3194)", () => {
     const result = await resumeTaskWorktree(clone, branch, { fromOrigin: true });
     expect(result).toBeNull();
   });
+
+  // Issue #3194 (review round 2) — a worktree REGISTRATION outlives the
+  // directory it points at when that directory is removed out of band (a
+  // crash mid-cleanup, a manual `rm -rf`, a disk-cleanup sweep). Git checks
+  // the registration, not the directory, when it refuses to fetch into a
+  // branch that is "checked out" — so a registration with nothing behind it
+  // refuses the fetch forever, and the retry can never start on that host.
+  // The prune has to happen BEFORE the fetch for that to clear.
+  it("resumes from origin when a stale worktree registration is left behind", async () => {
+    const branch = "mullion/task-8-from-origin";
+    git(clone, ["fetch", "--quiet", "origin", "main"]);
+    git(clone, ["branch", branch, "origin/main"]);
+    const worktreePath = path.join(clone, ".mullion-worktrees", "mullion-task-8-from-origin");
+    git(clone, ["worktree", "add", "-q", worktreePath, branch]);
+    // The directory goes away out of band; the registration does not.
+    fs.rmSync(worktreePath, { recursive: true, force: true });
+
+    const result = await resumeTaskWorktree(clone, branch, { fromOrigin: true });
+    expect(result).not.toBeNull();
+    expect(result?.branch).toBe(branch);
+    // Origin's tip, checked out fresh.
+    expect(fs.readFileSync(path.join(result!.path, "wip.txt"), "utf8")).toBe("work");
+  });
 });

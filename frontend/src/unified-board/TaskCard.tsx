@@ -644,10 +644,21 @@ export function TaskCard({
           with no session strip above (sessionId is null until dispatch),
           which otherwise looks identical to a genuinely stuck claimed task
           whose session was reaped. This is the "waiting for a slot" tell,
-          following the same hint pattern as the ready/disabled case above. */}
-      {task.status === "claimed" && task.sessionId === null && !task.retryHostId && (
-        <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
-      )}
+          following the same hint pattern as the ready/disabled case above.
+
+          Issue #3194 — the hint is for a task that is genuinely QUEUED, so
+          it is suppressed as soon as the card has something more to say:
+          a retry waiting for its original host (which shows the "Start
+          fresh" action instead, below) and any task with a dispatch reason
+          (whose "Not dispatched yet: …" notice above already says why it
+          has not started — the two together read as two contradictory
+          statements about the same card). */}
+      {task.status === "claimed" &&
+        task.sessionId === null &&
+        !task.retryHostId &&
+        !task.failureReason && (
+          <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
+        )}
       {/* #3194 — a retry waiting for its ORIGINAL host: its branch is there
           and not on origin, so the retry cannot start anywhere else, and it
           is never failed for waiting. The reason is on the card above (the

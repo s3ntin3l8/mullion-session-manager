@@ -2235,6 +2235,11 @@ export interface Task {
   // task is not waiting for a host. Its presence is what offers the "Start
   // fresh" action. Optional so the partial task fixtures (which predate the
   // column) still type-check.
+  //
+  // It says WHERE the retry waits, and that is all: whether the branch is
+  // provably stranded there (which is what exempts the wait from the 6-hour
+  // give-up) is a backend-only fact (`tasks.retryStrandedOnHost`), because
+  // only the dispatcher acts on it.
   retryHostId?: string | null;
   prUrl: string | null;
   // Set alongside prUrl — a draft PR opened at "-> reviewing", or the PR

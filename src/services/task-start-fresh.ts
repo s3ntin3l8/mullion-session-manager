@@ -27,9 +27,14 @@ export type StartFreshOutcome =
  *
  * Only a task that is actually WAITING for a host can be started fresh (a
  * `claimed` row with `resumeQueued` set and `retryHostId` naming the host it
- * waits for). Anything else is refused: starting a task that is running, or
- * one whose branch is still where the worker left it, would throw work away
- * that nobody asked to abandon.
+ * waits for — its original worker's host). Anything else is refused: starting
+ * a task that is running, or one whose branch is still where the worker left
+ * it, would throw work away that nobody asked to abandon.
+ *
+ * The wait does not have to be a CONFIRMED-stranded one: a wait whose origin
+ * state could not be confirmed (a local-only repository, a project with no
+ * GitHub token) offers the same escape, because that is exactly the wait that
+ * would otherwise never end.
  */
 export async function startFreshTask(
   app: FastifyInstance,
@@ -55,6 +60,7 @@ export async function startFreshTask(
         status: "ready",
         resumeQueued: false,
         retryHostId: null,
+        retryStrandedOnHost: false,
         dispatchHeld: false,
         dispatchFailingSince: null,
         failureReason: null,
