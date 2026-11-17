@@ -242,6 +242,18 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(ok.statusCode).toBe(200);
       expect(ok.json().deviceKinds).toEqual(expect.arrayContaining(["emulator", "physical"]));
     });
+
+    it("refuses a device socket whose port is outside 1-65535 or whose kind is unknown", async () => {
+      const headers = { authorization: `Bearer ${AGENT_TOKEN}` };
+      for (const query of ["kind=emulator&port=0", "kind=emulator&port=65536", "kind=tablet"]) {
+        const res = await agent.app.inject({
+          method: "GET",
+          url: `/internal/ws/device/5?${query}`,
+          headers,
+        });
+        expect(res.statusCode, query).toBe(400);
+      }
+    });
   });
 
   describe("POST /api/devices with a hostId", () => {

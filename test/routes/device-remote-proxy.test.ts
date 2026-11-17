@@ -190,6 +190,43 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
       expect(upstream.sendSpy).not.toHaveBeenCalled();
     });
 
+    it("keeps asking for a keyframe while gated, and stops once one arrives or the socket closes", async () => {
+      vi.useFakeTimers();
+      await start();
+      const requests = () =>
+        upstream.sendSpy.mock.calls.filter(
+          ([d]) => d === JSON.stringify({ type: "requestKeyframe" }),
+        ).length;
+
+      browser.bufferedAmount = OVER;
+      upstream.emit("message", frame(1, false), true); // dropped: the gate arms
+      browser.bufferedAmount = 0;
+      upstream.emit("message", frame(1, false), true); // the first request
+      expect(requests()).toBe(1);
+
+      // The request was lost: the proxy asks again on its own, every interval.
+      vi.advanceTimersByTime(5000);
+      expect(requests()).toBe(2);
+      vi.advanceTimersByTime(5000);
+      expect(requests()).toBe(3);
+
+      // A keyframe opens the gate and ends the retries.
+      upstream.emit("message", frame(1, true), true);
+      vi.advanceTimersByTime(20_000);
+      expect(requests()).toBe(3);
+    });
+
+    it("stops asking when the browser goes away while still gated", async () => {
+      vi.useFakeTimers();
+      await start();
+      browser.bufferedAmount = OVER;
+      upstream.emit("message", frame(1, false), true);
+      browser.close();
+      const before = upstream.sendSpy.mock.calls.length;
+      vi.advanceTimersByTime(30_000);
+      expect(upstream.sendSpy.mock.calls.length).toBe(before);
+    });
+
     it("drops frames for a browser socket that is no longer open", async () => {
       await start();
       browser.readyState = 2;
@@ -217,6 +254,11 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
       upstream2.open();
       upstream2.emit("error", new Error("boom"));
       expect(browser2.closeSpy).toHaveBeenCalledTimes(1);
+      // The user is told why, not just disconnected (a refused upgrade lands here).
+      expect(JSON.parse(browser2.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket",
+      });
     });
 
     it("tolerates a browser socket error without throwing", async () => {

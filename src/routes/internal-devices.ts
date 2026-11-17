@@ -138,8 +138,9 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
           );
         }
         const { port } = request.query;
-        if (port !== undefined && !/^[0-9]{1,5}$/.test(port)) {
-          return reply.badRequest("port must be a number");
+        // The same 1-65535 the spawn schema bounds the port to.
+        if (port !== undefined && !(/^[0-9]{1,5}$/.test(port) && +port >= 1 && +port <= 65535)) {
+          return reply.badRequest("port must be a number from 1 to 65535");
         }
       },
     },

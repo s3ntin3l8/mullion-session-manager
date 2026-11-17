@@ -413,6 +413,43 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
   });
 
+  it("a fresh spawn never takes the port an overlapping reattach holds, even after the reserved set was replaced (#3200)", async () => {
+    // An agent host has no DB, so the primary names the ports of the host's
+    // OTHER devices in every spawn request and the manager REPLACES its
+    // reserved set each time — each request leaving out its own port.
+    scopeAliveFor("7");
+    mockGetDevicesShouldFail = false;
+    mockAdbDevices = [{ serial: "emulator-5554" }];
+    const onPortAssigned = vi.fn();
+    const manager = buildManager({ onPortAssigned });
+
+    // Request A (a fresh spawn) is told 5554 is taken, then awaits the scope check.
+    manager.setReservedPorts([5554]);
+    const fresh = manager.getOrCreate({
+      id: "8",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
+    // Request B (the reattach that owns 5554) replaces the set without its own port.
+    manager.setReservedPorts([]);
+    const reattach = manager.getOrCreate({
+      id: "7",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: 5554,
+    });
+    await Promise.all([fresh, reattach]);
+
+    const freshPort = onPortAssigned.mock.calls.find(([id]) => id === "8")?.[1];
+    expect(freshPort).toEqual(expect.any(Number));
+    expect(freshPort).not.toBe(5554);
+  });
+
   it("refuses to spawn when the list-units query itself fails — 'unknown' liveness is neither 'alive' nor 'dead' (#1854)", async () => {
     listUnitsShouldError = true; // systemctl itself errors (e.g. ENOENT), not just "no matching scope"
     const onPortAssigned = vi.fn();

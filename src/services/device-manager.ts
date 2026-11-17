@@ -1234,6 +1234,14 @@ export class DeviceManager {
     const existing = this.devices.get(opts.id);
     if (existing && existing.isAlive) return existing;
 
+    // A persisted port is held from the first instant, BEFORE any await below.
+    // An agent host's `setReservedPorts` replaces its whole set on every spawn
+    // request and omits the requester's own port, so two overlapping requests
+    // (a fresh spawn and a reattach) could otherwise let the fresh one's
+    // allocatePort() take the port the reattaching emulator still holds.
+    // releasePort() below undoes this when the scope is confirmed gone.
+    if (opts.kind === "emulator" && opts.port !== null) this.reservePort(opts.port);
+
     if (opts.kind === "physical") {
       if (opts.serial === null) {
         throw new Error(`physical device ${opts.id} has no persisted adb address to connect to`);

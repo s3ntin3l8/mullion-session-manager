@@ -312,7 +312,10 @@ export async function proxyToRemoteDevice(
     if (upstream.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
     upstream.send(data, { binary: isBinary });
   });
-  deviceSocket.on("close", closeUpstream);
+  deviceSocket.on("close", () => {
+    stopStallTimer();
+    closeUpstream();
+  });
   // A socket error must not escape as an uncaught exception; the close that
   // follows tears everything down.
   deviceSocket.on("error", (err) => {
@@ -330,6 +333,24 @@ export async function proxyToRemoteDevice(
 
   let awaitingKeyframe = false;
   let droppedSinceFrame = false;
+  // A gated socket shows nothing until a keyframe arrives, and the one request
+  // sent when the backlog clears can be lost (the agent had no controller yet,
+  // or ignored it). The agent's own stall timer cannot help: its socket is not
+  // gated. So re-ask until one comes, like attachSocketToDevice does.
+  let stallTimer: ReturnType<typeof setInterval> | null = null;
+  const stopStallTimer = () => {
+    if (stallTimer) clearInterval(stallTimer);
+    stallTimer = null;
+  };
+  const startStallTimer = () => {
+    if (stallTimer) return;
+    stallTimer = setInterval(() => {
+      if (upstream.readyState !== upstream.OPEN) return;
+      app.log.warn({ hostId, deviceId }, "device proxy still waiting for a keyframe; asking again");
+      upstream.send(JSON.stringify({ type: "requestKeyframe" }));
+    }, KEYFRAME_STALL_MS);
+    stallTimer.unref();
+  };
 
   upstream.on("open", () => {
     clearTimeout(openTimer);
@@ -337,12 +358,15 @@ export async function proxyToRemoteDevice(
   });
   upstream.on("close", () => {
     clearTimeout(openTimer);
+    stopStallTimer();
     closeDevice();
   });
   upstream.on("error", (err) => {
     clearTimeout(openTimer);
+    stopStallTimer();
     app.log.error({ err, hostId, deviceId }, "remote device ws upstream error");
-    closeDevice();
+    // Say why, instead of a bare disconnect (a refused upgrade lands here).
+    fail(`Host ${hostId} did not accept the device socket`);
   });
   upstream.on("message", (data, isBinary) => {
     if (deviceSocket.readyState !== deviceSocket.OPEN) return;
@@ -359,6 +383,7 @@ export async function proxyToRemoteDevice(
       if (deviceSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
         droppedSinceFrame = true;
         awaitingKeyframe = true;
+        startStallTimer();
         return;
       }
       if (droppedSinceFrame) {
@@ -372,6 +397,7 @@ export async function proxyToRemoteDevice(
       if (awaitingKeyframe) {
         if ((head[1] & 1) === 0) return;
         awaitingKeyframe = false;
+        stopStallTimer();
       }
     }
     deviceSocket.send(data, { binary: true });
