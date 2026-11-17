@@ -5,6 +5,9 @@ import { NotificationBell } from "./NotificationBell.js";
 import type { Session } from "./api/index.js";
 
 interface ToolbarProps {
+  /** #3216 — out of focus and the accessibility tree while a phone sidebar
+   * view covers the top bar. */
+  inert?: boolean;
   onOpenSession: (session: Session) => void;
   // Issue #270 — passed straight through to NotificationBell; see its own
   // prop doc for why this is distinct from onOpenSession.
@@ -29,13 +32,14 @@ export function Toolbar({
   onOpenBrowser,
   onOpenLauncher,
   mobileSessionSlot,
+  inert = false,
 }: ToolbarProps) {
   // Tasks is an install-wide board, not a workspace view, and has no palette
   // on purpose (issue #730).
   const viewMode = useDashboardStore((s) => s.viewMode);
 
   return (
-    <div className="toolbar">
+    <div className="toolbar" inert={inert}>
       {mobileSessionSlot && <div className="toolbar-mobile-session">{mobileSessionSlot}</div>}
       <div className="toolbar-actions">
         {/* The palette button is OMITTED in Task view, not disabled there. A

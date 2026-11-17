@@ -106,6 +106,21 @@ describe("App tier wiring", () => {
     expect(container.querySelector(".app")!.classList.contains("mode-bar")).toBe(expected);
   });
 
+  // #3216 — a phone sidebar view is not modal (the mode bar under it stays
+  // reachable), so what it covers is inert instead.
+  it("makes the top bar and the grid inert while a sidebar view covers them on the phone", () => {
+    stubWidth("phone");
+    const { container } = render(<App />);
+    const grid = container.querySelector(".grid-area")!;
+    expect(grid.hasAttribute("inert")).toBe(false);
+    expect(screen.getByTestId("toolbar").hasAttribute("inert")).toBe(false);
+    act(() => useDashboardStore.getState().openRightSidebarView("git"));
+    expect(grid.hasAttribute("inert")).toBe(true);
+    expect(screen.getByTestId("toolbar").hasAttribute("inert")).toBe(true);
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    expect(grid.hasAttribute("inert")).toBe(false);
+  });
+
   // #3014 — after "Open session in Workspace" from a task, back returns to
   // Tasks mode (and the task); no other back changes mode.
   it("registers the cross-link's way back to Tasks on the phone", () => {

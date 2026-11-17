@@ -122,7 +122,7 @@ describe("PhoneModeBar with a sidebar view open", () => {
     const bar = screen.getByRole("navigation", { name: "Mode" });
     const more = within(bar).getByRole("button", { name: "More" });
     expect(more).toHaveClass("active");
-    expect(more).toHaveAttribute("aria-current", "page");
+    expect(more).toHaveAttribute("aria-current", "true");
     expect(within(bar).getByRole("button", { name: "Workspace" })).toHaveAttribute(
       "aria-pressed",
       "false",

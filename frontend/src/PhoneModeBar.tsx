@@ -78,9 +78,9 @@ export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void })
             type="button"
             className={`phone-mode-btn phone-mode-more${viewOpen ? " active" : ""}`}
             aria-label="More"
-            // The open view is one of the sheet's entries: "more" is where
-            // the screen is, as a pressed mode button marks the mode.
-            aria-current={viewOpen ? "page" : undefined}
+            // The open view is one of the sheet's entries, so "more" is the
+            // current item (the generic token: it opens a sheet, not a page).
+            aria-current={viewOpen ? "true" : undefined}
             aria-haspopup="dialog"
             aria-expanded={moreOpen}
             onClick={() => setMoreOpen(true)}
