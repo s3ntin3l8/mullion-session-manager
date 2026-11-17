@@ -221,4 +221,31 @@ describe("DockProjectGroup — branch selector persistence (#3230)", () => {
       dockControlId: "dev",
     });
   });
+
+  it("does not replay a stale remembered path once git refs have loaded with nothing to show", async () => {
+    const user = userEvent.setup();
+    const createSession = vi.fn().mockResolvedValue({});
+    resetStore({
+      projects: [PROJECT],
+      sessions: [],
+      sessionsLoaded: true,
+      gitBranchesByProject: {},
+      gitRefsLoadedIds: { 1: true },
+      dockControlWorktrees: { "1": { dev: "/home/x/removed-wt" } },
+      createSession,
+      settings: DEFAULT_SETTINGS,
+    });
+
+    render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+    const startButton = await screen.findByRole("button", {
+      name: "Dev server — click to start log streaming",
+    });
+    await user.click(startButton);
+
+    expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+      kind: "dock",
+      dockControlId: "dev",
+    });
+  });
 });
