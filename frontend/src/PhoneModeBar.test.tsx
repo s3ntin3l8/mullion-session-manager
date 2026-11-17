@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PhoneModeBar } from "./PhoneModeBar.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
@@ -147,6 +147,15 @@ describe("PhoneModeBar with a sidebar view open", () => {
       "aria-pressed",
       "true",
     );
+  });
+
+  it("focuses the tapped mode button, which iOS does not do by itself", () => {
+    render(<Harness />);
+    openView("git");
+    const tasks = screen.getByRole("button", { name: "Tasks" });
+    // fireEvent: a click with no focus change, as on iOS.
+    fireEvent.click(tasks);
+    expect(document.activeElement).toBe(tasks);
   });
 
   it("Tasks closes the view and shows Tasks mode, also when it is already the mode", async () => {

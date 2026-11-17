@@ -30,8 +30,12 @@ export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void })
   // The rail's count (LeftRail.tsx): the one "needs you" definition, install-wide.
   const needsYou = useMemo(() => needsYouTasks(tasks).length, [tasks]);
   const [moreOpen, setMoreOpen] = useState(false);
-  const showMode = (mode: "list" | "kanban") => {
+  const showMode = (mode: "list" | "kanban", button: HTMLButtonElement) => {
     const store = useDashboardStore.getState();
+    // Focus stays on the tapped button (RightSidebar leaves it there rather
+    // than returning it to the view's opener). iOS does not focus a tapped
+    // button by itself, so it is done here.
+    button.focus();
     // Closed explicitly: RightSidebar closes the view on a mode change, but a
     // tap on the current mode changes nothing.
     store.closeRightSidebar();
@@ -48,7 +52,7 @@ export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void })
             type="button"
             className={`phone-mode-btn${workspaceActive ? " active" : ""}`}
             aria-pressed={workspaceActive}
-            onClick={() => showMode("list")}
+            onClick={(e) => showMode("list", e.currentTarget)}
           >
             <GridIcon size={17} aria-hidden="true" />
             Workspace
@@ -60,7 +64,7 @@ export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void })
             aria-label={
               needsYou > 0 ? `Tasks, ${needsYou} need${needsYou === 1 ? "s" : ""} you` : "Tasks"
             }
-            onClick={() => showMode("kanban")}
+            onClick={(e) => showMode("kanban", e.currentTarget)}
           >
             <LayersIcon size={17} aria-hidden="true" />
             Tasks{" "}
