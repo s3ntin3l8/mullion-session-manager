@@ -933,5 +933,7 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     }
     expect(read().reviewPostPending).not.toBeNull();
     await app.close();
-  });
+    // Seven reconcile passes: ~17s on an idle host against the 20s default, so
+    // it timed out whenever the machine was busy (the pre-push gate).
+  }, 60_000);
 });
