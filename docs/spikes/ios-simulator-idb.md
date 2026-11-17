@@ -15,7 +15,7 @@ lifecycle, screenshot, logs and clipboard. Two smaller things remain for #3203 (
 
 ## Findings
 
-### Video: `idb video-stream --format h264 --fps 30`
+### Video: `idb video-stream --udid <udid> --format h264 --fps 30`
 
 - **Annex-B**, 4-byte start codes (`00 00 00 01`). No container, no length
   prefixes. Exactly what a NAL splitter wants.
@@ -23,8 +23,9 @@ lifecycle, screenshot, logs and clipboard. Two smaller things remain for #3203 (
   joiner gets a decodable start without asking.
 - **IDR cadence is ~120 frames (4 s at 30 fps)** (IDRs at slice 1, 123, 243).
   A new browser tab would wait up to 4 s for a keyframe unless the driver
-  caches the last SPS/PPS/IDR group or restarts the stream
-  (`requestKeyframe()` = restart is the fallback; scrcpy has `resetVideo`).
+  replays the current GOP to it (see the decisions below). Unlike scrcpy's
+  `resetVideo`, `VideoStreamRequest` has no force-keyframe control, so
+  `requestKeyframe()` cannot be an on-demand IDR for iOS.
 - SPS header `27 64 00 32` gives **High profile, level 5.0**, so the WebCodecs
   codec string is `avc1.640032`. Derive it from the SPS per stream rather than
   hard-coding it.
@@ -85,8 +86,8 @@ avg_bitrate:0, key_frame_rate:<s>}}`; responses carry
   first ever stream) and led with `7,8,5,1`.
 - **`key_frame_rate` is the IDR interval in seconds.** 0 and 4 gave an IDR every
   ~122 frames (4 s default), 1 gave one every ~31 frames. The driver can set
-  `1` so a new client waits at most ~1 s for a keyframe, at some bitrate cost,
-  or keep the default and cache the last SPS+PPS+IDR group.
+  `1` so a new client waits at most ~1 s for a keyframe, at some bitrate cost
+  for every viewer, or keep the default and replay the current GOP (below).
 - **Touch:** `hid` is a client-streaming call. Held open, repeated
   `{press:{action:{touch:{point:{x,y}}}, direction:"DOWN"}}` at moving points
   (21 events, 16 ms apart) followed by `direction:"UP"` **scrolled Settings.app
@@ -118,7 +119,13 @@ it with a booted simulator and a running companion:
 ```sh
 idb_companion --udid <udid> --grpc-port 10882 &
 idb video-stream --udid <udid> --format h264 --fps 30 > capture.h264   # ^C after ~3 s
-# keep everything before the 24th start code (00 00 00 01)
+# keep the first 23 NAL units (cut before the 24th start code)
+python3 - <<'PY'
+import re
+d = open("capture.h264", "rb").read()
+starts = [m.start() for m in re.finditer(b"\x00\x00\x00\x01", d)]
+open("idb-h264-sample.h264", "wb").write(d[: starts[23]])
+PY
 ```
 
 ## Fallback
@@ -130,8 +137,11 @@ heavier than a brew-installed companion.
 ## Decisions for the implementation issues
 
 - Driver owns one companion per device, restarted after each boot (#3203).
-- Cache the latest SPS+PPS+IDR so a new client decodes immediately, instead of
-  waiting up to 4 s (#3203).
+- Keep the **current GOP** (SPS+PPS, the last IDR and every slice since it, at
+  most ~120 frames) and replay it to a late joiner, so it decodes immediately.
+  A cached IDR alone is not enough: the deltas that follow reference frames in
+  between. Replay beats `key_frame_rate: 1` because it costs no bitrate for
+  the viewers already attached, and the stream has no on-demand IDR (#3203).
 - Convert px to points with the `density` from `describe` (#3203, #3204).
 - Talk gRPC to the companion from Node (proven here); the `fb-idb` Python
   client is dev-only (#3203).
