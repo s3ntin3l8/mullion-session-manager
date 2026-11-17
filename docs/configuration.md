@@ -38,8 +38,9 @@ does not read `~/.zshrc` or an interactive-only `~/.bashrc`. Many installers (nv
 pyenv, opencode, mcode, …) add their `PATH` line only there, so Mullion resolves your
 interactive shell's `PATH` once (a throwaway `$SHELL -ilc`, bash and zsh only, 5 s
 timeout) and merges the entries your service environment lacks, added **in front** of the existing `PATH` — so a directory your rc file _appended_ (`export PATH="$PATH:/opt/tools/bin"`) takes precedence over `/usr/bin` in sessions, unlike in your terminal. A rescan
-(`GET /api/agents?refresh=1`) re-resolves it after you edit your
-rc file. If an rc file misbehaves without a TTY, set `MULLION_RESOLVE_INTERACTIVE_ENV=0`
+(`GET /api/agents?refresh=1` on the host whose rc file you edited; the
+primary's **Settings → Agents → Refresh** only re-resolves the primary's own
+shell) re-resolves it after you edit your rc file. If an rc file misbehaves without a TTY, set `MULLION_RESOLVE_INTERACTIVE_ENV=0`
 in the service environment to skip this; anything on `PATH` via `~/.zshenv` or
 `~/.profile` is always picked up regardless.
 
