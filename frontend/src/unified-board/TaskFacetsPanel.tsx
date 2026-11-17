@@ -1,6 +1,6 @@
 import { QUICK_VIEWS, followOption } from "./taskFilters.js";
 import type { TaskFilterApi } from "./useTaskFilters.js";
-import { EpicChecklist, ProjectPickerPanel } from "./TaskFilterPanels.js";
+import { EpicChecklist, HostChecklist, ProjectPickerPanel } from "./TaskFilterPanels.js";
 
 // The optional left rail of the board's filter bar (#2840, mockup variant 1c): state,
 // projects and epics with counts, for installs with many of each. A second view of
@@ -48,6 +48,9 @@ export function TaskFacetsPanel({
         selectedEpics={filters.epicKeys}
         onToggleEpic={api.toggleEpic}
       />
+      {api.showHostFacet && (
+        <HostChecklist hostOpts={api.hostOpts} selected={filters.hosts} onToggle={api.toggleHost} />
+      )}
     </aside>
   );
 }

@@ -77,6 +77,9 @@ export function TaskFilterBar({
       agentOpts={api.agentOpts}
       selectedAgents={filters.agents}
       onToggleAgent={api.toggleAgent}
+      hostOpts={api.hostOpts}
+      selectedHosts={filters.hosts}
+      onToggleHost={api.showHostFacet ? api.toggleHost : undefined}
       text={filters.text}
       onText={api.setText}
     />
@@ -168,6 +171,7 @@ export function TaskFilterBar({
   const filterDims =
     (filters.epicKeys.length > 0 ? 1 : 0) +
     (filters.agents.length > 0 ? 1 : 0) +
+    (filters.hosts.length > 0 ? 1 : 0) +
     (filters.text.trim() !== "" ? 1 : 0);
   const epicLabel = (key: string) =>
     key === NO_EPIC ? "No epic" : (api.epicOpts.find((o) => o.key === key)?.label ?? key);
@@ -247,6 +251,21 @@ export function TaskFilterBar({
               </button>
             </span>
           ))}
+          {filters.hosts.map((host) => {
+            const label = api.hostLabel(host);
+            return (
+              <span key={host} className="task-token">
+                Host: {label}
+                <button
+                  type="button"
+                  aria-label={`Remove host filter ${label}`}
+                  onClick={() => api.toggleHost(host)}
+                >
+                  <CloseIcon size={10} aria-hidden="true" />
+                </button>
+              </span>
+            );
+          })}
           {filters.text.trim() !== "" && (
             <span className="task-token">
               Text: “{filters.text.trim()}”

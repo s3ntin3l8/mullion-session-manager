@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Task } from "../api/index.js";
+import type { Host, Task } from "../api/index.js";
+import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
+import { hasRemoteHosts, hostDisplayName } from "../lib/hostBadge.js";
 import {
   STORAGE_KEYS,
   readBool,
@@ -13,8 +15,10 @@ import {
 import { isAwaitingMerge } from "./awaitingMerge.js";
 import {
   NO_EPIC,
+  NO_HOST,
   agentOptions,
   epicOptions,
+  hostOptions,
   isFacetsSetting,
   isQuickView,
   noEpicCount,
@@ -26,6 +30,9 @@ import type { FacetsSetting, QuickView, TaskFilters } from "./taskFilters.js";
 import { isCardDensity, isGroupBy } from "./taskLanes.js";
 import type { CardDensity, GroupBy } from "./taskLanes.js";
 
+const NO_SESSIONS: Array<{ id: number; resolvedHostId: string }> = [];
+const NO_HOSTS: Host[] = [];
+const NO_STRINGS: string[] = [];
 const MAX_RECENT_PROJECTS = 5;
 
 function stringArray(raw: unknown): string[] | null {
@@ -76,6 +83,9 @@ export function useTaskFilters(
   projects: Array<{ id: number }>,
   // The project the right sidebar follows (store.followedProjectId), or null.
   followedProjectId: number | null = null,
+  // For the host facet: the worker session of a task names its host.
+  sessions: Array<{ id: number; resolvedHostId: string }> = NO_SESSIONS,
+  hosts: Host[] = NO_HOSTS,
 ) {
   // Read once; the migration's writes happen in the effect below, not in render.
   const [initial] = useState(readInitial);
@@ -96,6 +106,9 @@ export function useTaskFilters(
   const [selectedEpicKeys, setSelectedEpicKeys] = useState<string[]>(initial.epicKeys);
   const [selectedAgents, setSelectedAgents] = useState<string[]>(
     () => stringArray(readJSON<unknown>(STORAGE_KEYS.taskAgentFilter, [])) ?? [],
+  );
+  const [selectedHosts, setSelectedHosts] = useState<string[]>(
+    () => stringArray(readJSON<unknown>(STORAGE_KEYS.taskHostFilter, [])) ?? [],
   );
   const [text, setText] = useState("");
   const [hideDone, setHideDone] = useState(() => readBool(STORAGE_KEYS.taskHideDone, false));
@@ -173,19 +186,41 @@ export function useTaskFilters(
     [selectedAgents, agentOpts],
   );
 
+  const hostOpts = useMemo(() => hostOptions(tasks, sessions, hosts), [tasks, sessions, hosts]);
+  // Unlike the other facets, a saved host that no longer exists is NOT dropped: it
+  // matches nothing and stays removable until the user resets filters. With no remote
+  // host registered the facet is hidden, so the saved selection is ignored too.
+  const remoteHosts = hasRemoteHosts(hosts);
+  const activeHosts = useMemo(
+    () => (remoteHosts ? selectedHosts : NO_STRINGS),
+    [remoteHosts, selectedHosts],
+  );
+
+  // A token's text: the host's name, or the bare id once the host is gone.
+  const hostLabel = useCallback(
+    (id: string) =>
+      id === NO_HOST
+        ? "Not placed yet"
+        : id === LOCAL_HOST_ID || hosts.some((h) => h.id === id)
+          ? hostDisplayName(id, hosts)
+          : `${id} (unknown)`,
+    [hosts],
+  );
+
   const filters: TaskFilters = useMemo(
     () => ({
       projectIds: activeProjectIds,
       view,
       epicKeys: activeEpicKeys,
       agents: activeAgents,
+      hosts: activeHosts,
       text,
       showArchived,
     }),
-    [activeProjectIds, view, activeEpicKeys, activeAgents, text, showArchived],
+    [activeProjectIds, view, activeEpicKeys, activeAgents, activeHosts, text, showArchived],
   );
 
-  const scoped = useMemo(() => scopeTasks(tasks, filters), [tasks, filters]);
+  const scoped = useMemo(() => scopeTasks(tasks, filters, sessions), [tasks, filters, sessions]);
   const counts = useMemo(() => quickViewCounts(scoped), [scoped]);
   const visibleTasks = useMemo(
     () => (view === "all" ? scoped : scoped.filter((t) => matchesQuickView(t, view))),
@@ -195,11 +230,11 @@ export function useTaskFilters(
   // project one, so a project's number is what selecting it would add.
   const projectCounts = useMemo(() => {
     const counts = new Map<number, number>();
-    for (const t of scopeTasks(tasks, { ...filters, projectIds: [] })) {
+    for (const t of scopeTasks(tasks, { ...filters, projectIds: [] }, sessions)) {
       counts.set(t.projectId, (counts.get(t.projectId) ?? 0) + 1);
     }
     return counts;
-  }, [tasks, filters]);
+  }, [tasks, filters, sessions]);
   // Done tasks Clear done would drop that still have an open PR (in the project filter),
   // surfaced in its confirmation.
   const awaitingMergeCount = useMemo(
@@ -269,6 +304,16 @@ export function useTaskFilters(
     },
     [activeAgents],
   );
+  const toggleHost = useCallback(
+    (value: string) => {
+      const next = activeHosts.includes(value)
+        ? activeHosts.filter((h) => h !== value)
+        : [...activeHosts, value];
+      setSelectedHosts(next);
+      writeJSON(STORAGE_KEYS.taskHostFilter, next);
+    },
+    [activeHosts],
+  );
   const setFacets = useCallback((next: FacetsSetting) => {
     setFacetsState(next);
     writeString(STORAGE_KEYS.taskFacets, next);
@@ -290,6 +335,8 @@ export function useTaskFilters(
     setEpicKeys([]);
     setSelectedAgents([]);
     writeJSON(STORAGE_KEYS.taskAgentFilter, []);
+    setSelectedHosts([]);
+    writeJSON(STORAGE_KEYS.taskHostFilter, []);
     setText("");
   }, [setProjectIds, setEpicKeys]);
 
@@ -310,6 +357,10 @@ export function useTaskFilters(
     epicOpts,
     noEpic,
     agentOpts,
+    hostOpts,
+    hostLabel,
+    /** The host facet is only offered when a remote host is registered. */
+    showHostFacet: remoteHosts,
     recentProjectIds,
     hideDone,
     // Hiding Done would hide exactly what the Awaiting merge view asks for.
@@ -321,6 +372,7 @@ export function useTaskFilters(
     toggleEpic,
     setEpicKeys,
     toggleAgent,
+    toggleHost,
     setText,
     toggleHideDone: () => setHideDone((v) => !v),
     toggleShowArchived: () => setShowArchived((v) => !v),
