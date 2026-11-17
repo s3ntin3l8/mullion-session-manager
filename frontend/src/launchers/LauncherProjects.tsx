@@ -339,7 +339,11 @@ function LauncherAddProject({
   const openFocus = useRef<Element | null>(null);
   useEffect(() => {
     // The form's own mount effect (a child's) has already run: this is what
-    // it focused.
+    // it focused. This leans on React running a child's passive effects
+    // before its parent's; if the form's focus ever moved later than that,
+    // this would hold a stale element and the hand-off would never fire —
+    // "the discovered row has focus once it shows" in the test file fails
+    // then, which is what pins the ordering.
     openFocus.current = document.activeElement;
   }, []);
   const rowFocused = useRef(false);
