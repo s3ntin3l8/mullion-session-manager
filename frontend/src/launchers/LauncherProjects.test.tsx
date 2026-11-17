@@ -250,6 +250,13 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
     ).toBeInTheDocument();
   });
 
+  it("a fine pointer keeps the path field focused when the row shows (#3287)", async () => {
+    stub([repo("atlas")]);
+    renderAdd();
+    await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+    expect(screen.getByPlaceholderText("~/code/my-project")).toHaveFocus();
+  });
+
   // #3287 — on a touch device the path field does not take focus (the
   // keyboard would scroll this row away); the row does, once the scan has
   // answered, which is after the form has mounted.
@@ -288,6 +295,17 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
       release(jsonResponse(200, [repo("atlas")]));
       await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
       expect(field).toHaveFocus();
+    });
+
+    it("does not take focus from a non-text control the user went to", async () => {
+      let release: (r: Response) => void = () => {};
+      stub(() => new Promise<Response>((resolve) => (release = resolve)));
+      renderAdd();
+      const browse = screen.getByRole("button", { name: "Browse…" });
+      act(() => browse.focus());
+      release(jsonResponse(200, [repo("atlas")]));
+      await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+      expect(browse).toHaveFocus();
     });
 
     it("with nothing discovered, focus stays on a control, not a text field", async () => {
