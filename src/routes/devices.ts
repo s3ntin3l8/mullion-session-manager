@@ -10,8 +10,15 @@ import {
   type DeviceRow,
 } from "../services/device-store.js";
 import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
-import { isDeviceAction, performDeviceAction } from "../services/device-drivers/actions.js";
+import { isDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
+import type { DeviceAction } from "../services/device-drivers/types.js";
+import { getDeviceHost, liveInfoForRows, type DeviceHost } from "../services/device-host.js";
+import { getHostRow, LOCAL_HOST_ID } from "../services/host-registry.js";
+import { resolveProjectHostId } from "../services/session-host.js";
+import { HostRequestError } from "../services/remote-host-client.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
+import type { FastifyReply } from "fastify";
 
 // CRUD + one-shot action execution for devices (the `devices` DB table's
 // own route — routes/device.ts, singular, is the separate live WS video/
@@ -42,9 +49,16 @@ interface DeviceListItem {
   status: "active" | "killed";
   createdAt: string;
   live: DeviceInfo | null;
+  /** True when the device's host is an agent that did not answer, so `live`
+   * is unknown rather than "not running" (#3200). Absent otherwise. */
+  hostUnreachable?: true;
 }
 
-function toListItem(row: DeviceRow, live: DeviceInfo | undefined): DeviceListItem {
+function toListItem(
+  row: DeviceRow,
+  live: DeviceInfo | undefined,
+  hostUnreachable = false,
+): DeviceListItem {
   return {
     id: row.id,
     hostId: row.hostId,
@@ -56,7 +70,43 @@ function toListItem(row: DeviceRow, live: DeviceInfo | undefined): DeviceListIte
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     live: live ?? null,
+    ...(hostUnreachable ? { hostUnreachable: true as const } : {}),
   };
+}
+
+/** Answers a failed device-host call: a local failure is the 400 it always was;
+ * an agent's own refusal is forwarded with its status; a host that did not
+ * answer is 503 (or 502 when the request may have landed). */
+function replyDeviceError(reply: FastifyReply, host: DeviceHost, err: unknown, what: string) {
+  if (host.isLocal) return reply.badRequest(err instanceof Error ? err.message : String(err));
+  if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+  return replyHostUnreachable(reply, host.hostId, err, what);
+}
+
+/** The host a new device is placed on: the one asked for, else its project's,
+ * else this one. Null when the asked-for host is not registered. */
+function resolvePlacementHostId(
+  app: FastifyInstance,
+  requested: string | undefined,
+  projectId: number | undefined,
+): string | null {
+  if (requested !== undefined) {
+    if (requested === LOCAL_HOST_ID) return LOCAL_HOST_ID;
+    return getHostRow(app, requested) ? requested : null;
+  }
+  return projectId === undefined ? LOCAL_HOST_ID : resolveProjectHostId(app, projectId);
+}
+
+/** Why a host cannot run a device of this kind, or null when it can. */
+async function kindRefusal(host: DeviceHost, kind: DeviceKind): Promise<string | null> {
+  const kinds = await host.kinds();
+  if (kinds === null) {
+    return `Host ${host.hostId} does not report device support — update its agent.`;
+  }
+  if (kinds.includes(kind)) return null;
+  return kinds.length === 0
+    ? `Host ${host.hostId} has the device panel off — set DEVICE_ENABLED=true there.`
+    : `Host ${host.hostId} cannot run ${kind} devices (it supports: ${kinds.join(", ")}).`;
 }
 
 // A physical device's adb TCP address, as both the one-time pairing address
@@ -96,24 +146,47 @@ interface CreateDeviceBody {
   address?: string;
   projectId?: number;
   name?: string;
+  /** The host to run the device on (#3200); defaults to the project's host. */
+  hostId?: string;
 }
 
 export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.post<{ Body: CreateDeviceBody }>("/api/devices", async (request, reply) => {
-    const { kind = "emulator", avdName, address, projectId, name } = request.body ?? {};
+    const {
+      kind = "emulator",
+      avdName,
+      address,
+      projectId,
+      name,
+      hostId: requestedHostId,
+    } = request.body ?? {};
     // Validate before gating: an unknown kind would pass the physical-level
     // gate below and then fall through to the emulator path (and its row).
     if (kind !== "emulator" && kind !== "physical") {
       return reply.badRequest('kind must be "emulator" or "physical"');
     }
+    const hostId = resolvePlacementHostId(app, requestedHostId, projectId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
+    const host = getDeviceHost(app, hostId);
     // Gate on the KIND (issue #1854): physical works wherever the panel does,
-    // an emulator additionally needs a platform device scope.
-    if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
-      return reply.badRequest(
-        kind === "emulator"
-          ? app.deviceEmulatorUnavailableMessage
-          : app.devicePanelUnavailableMessage,
-      );
+    // an emulator additionally needs a platform device scope. A device placed
+    // on an agent host is gated on what THAT host reports it can run (#3200),
+    // before a row exists for something it cannot.
+    if (host.isLocal) {
+      if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+        return reply.badRequest(
+          kind === "emulator"
+            ? app.deviceEmulatorUnavailableMessage
+            : app.devicePanelUnavailableMessage,
+        );
+      }
+    } else {
+      try {
+        const refusal = await kindRefusal(host, kind);
+        if (refusal) return reply.badRequest(refusal);
+      } catch (err) {
+        return replyDeviceError(reply, host, err, "checking the host's device support");
+      }
     }
 
     if (kind === "physical") {
@@ -133,11 +206,12 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // independently pushing/starting its own scrcpy server against the
       // same live serial. Emulators get an equivalent guard for free via
       // allocatePort() (see readActiveDevicePorts()); physical devices have
-      // no port to collide on, so this checks the address directly.
+      // no port to collide on, so this checks the address directly (per
+      // host: an address names a phone on ONE host's network).
       // Synchronous, no `await` in between, and better-sqlite3 is
       // synchronous too — this check-then-insert can't interleave with
       // another request's.
-      const existingActive = findActivePhysicalOwner(app, address);
+      const existingActive = findActivePhysicalOwner(app, address, hostId);
       if (existingActive) {
         return reply.conflict(
           `device ${existingActive.id} is already active for address ${address}`,
@@ -150,25 +224,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         avdName: null,
         projectId: projectId ?? null,
         name: name ?? null,
+        hostId,
       });
 
       // Same fire-and-forget-past-the-quick-check shape as the emulator
       // branch below — see that branch's own comment.
+      let spawned;
       try {
-        await app.device.getOrCreate({
-          id: String(row.id),
-          kind: "physical",
-          avdName: null,
-          serial: address,
-          label: row.name,
-          port: null,
-        });
+        spawned = await host.getOrCreate(row);
       } catch (err) {
-        return reply.badRequest(err instanceof Error ? err.message : String(err));
+        return replyDeviceError(reply, host, err, "starting the device");
       }
 
       reply.code(201);
-      return toListItem(row, app.device.get(String(row.id))?.toInfo());
+      return toListItem(getDeviceRow(app, row.id) ?? row, spawned.info);
     }
 
     if (address !== undefined) {
@@ -182,6 +251,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       serial: null,
       projectId: projectId ?? null,
       name: name ?? null,
+      hostId,
     });
 
     // Only the isScopeAlive() pre-check inside getOrCreate is awaited
@@ -190,21 +260,15 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // that quick check clears, live status is polled via GET afterward
     // (or observed by connecting the WS route, which naturally blocks
     // until streaming or error).
+    let spawned;
     try {
-      await app.device.getOrCreate({
-        id: String(row.id),
-        kind: "emulator",
-        avdName,
-        serial: null,
-        label: row.name,
-        port: row.port,
-      });
+      spawned = await host.getOrCreate(row);
     } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      return replyDeviceError(reply, host, err, "starting the device");
     }
 
     reply.code(201);
-    return toListItem(row, app.device.get(String(row.id))?.toInfo());
+    return toListItem(getDeviceRow(app, row.id) ?? row, spawned.info);
   });
 
   // Stateless — pairing writes a key into the adb SERVER's own keystore,
@@ -441,7 +505,13 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
 
   app.get("/api/devices", async () => {
     const rows = listDeviceRows(app);
-    return rows.map((row) => toListItem(row, app.device.get(String(row.id))?.toInfo()));
+    // One request per agent host, and a host that is down marks ITS devices
+    // unreachable instead of failing the whole list (#3200).
+    const lives = await liveInfoForRows(app, rows);
+    return rows.map((row) => {
+      const found = lives.get(row.id);
+      return toListItem(row, found?.live, found?.unreachable);
+    });
   });
 
   // Issue #1378 — read-only mDNS snapshot of nearby Android phones that
@@ -461,7 +531,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
     const row = getDeviceRow(app, id);
     if (!row) return reply.notFound(`No device ${id}`);
-    return toListItem(row, app.device.get(String(row.id))?.toInfo());
+    const found = (await liveInfoForRows(app, [row])).get(row.id);
+    return toListItem(row, found?.live, found?.unreachable);
   });
 
   // Edits a physical device's stored adb address in place — issue #1347,
@@ -486,6 +557,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       if (row.kind !== "physical") {
         return reply.badRequest("only a physical device's address can be edited");
       }
+      const host = getDeviceHost(app, row.hostId);
       const { address } = request.body ?? {};
       if (!isValidDeviceAddress(address)) {
         return reply.badRequest("address must be host:port (e.g. 192.168.1.23:37251)");
@@ -502,7 +574,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // one phone work at all). Synchronous, no `await` in between, and
       // better-sqlite3 is synchronous too — this check-then-write can't
       // interleave with another request's.
-      const owner = findActivePhysicalOwner(app, address);
+      const owner = findActivePhysicalOwner(app, address, row.hostId);
       if (owner && owner.id !== id) {
         return reply.conflict(`device ${owner.id} is already active for address ${address}`);
       }
@@ -533,22 +605,22 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // the live connection pointed at the dead one. terminate() never
       // touches the DB row (only the in-memory map), so `updated.status`
       // stays "active" throughout.
-      await app.device.terminate(String(id), "physical");
-
       try {
-        await app.device.getOrCreate({
-          id: String(id),
-          kind: "physical",
-          avdName: null,
-          serial: address,
-          label: updated.name,
-          port: null,
-        });
+        await host.terminate(id, "physical");
       } catch (err) {
-        return reply.badRequest(err instanceof Error ? err.message : String(err));
+        // A failed LOCAL teardown has always surfaced as a 500 (not caught); an
+        // agent's failure is answered like any other host error.
+        if (host.isLocal) throw err;
+        return replyDeviceError(reply, host, err, "reconnecting the device");
+      }
+      let spawned;
+      try {
+        spawned = await host.getOrCreate(updated);
+      } catch (err) {
+        return replyDeviceError(reply, host, err, "reconnecting the device");
       }
 
-      return toListItem(updated, app.device.get(String(id))?.toInfo());
+      return toListItem(updated, spawned.info);
     },
   );
 
@@ -568,14 +640,17 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   // state UI" posture — as POST /api/devices creating one. Tearing a device
   // down must keep working while the feature is off.
   app.post<{ Params: { id: string } }>("/api/devices/:id/start", async (request, reply) => {
-    if (!app.devicePanelEnabled) {
+    // The local gates are this host's own config; a device on an agent host is
+    // gated by that agent when the spawn reaches it (#3200).
+    const id = Number(request.params.id);
+    const row = Number.isInteger(id) ? getDeviceRow(app, id) : undefined;
+    if (!app.devicePanelEnabled && (!row || row.hostId === LOCAL_HOST_ID)) {
       return reply.badRequest(app.devicePanelUnavailableMessage);
     }
-    const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-    const row = getDeviceRow(app, id);
     if (!row) return reply.notFound(`No device ${id}`);
-    if (row.kind !== "physical" && !app.deviceEmulatorEnabled) {
+    const host = getDeviceHost(app, row.hostId);
+    if (host.isLocal && row.kind !== "physical" && !app.deviceEmulatorEnabled) {
       return reply.badRequest(app.deviceEmulatorUnavailableMessage);
     }
 
@@ -590,7 +665,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // PATCH's own copy — no `await` between the select and the update below,
     // so it can't interleave with another request's.
     if (row.kind === "physical" && row.serial !== null) {
-      const owner = findActivePhysicalOwner(app, row.serial);
+      const owner = findActivePhysicalOwner(app, row.serial, row.hostId);
       if (owner && owner.id !== id) {
         return reply.conflict(`device ${owner.id} is already active for address ${row.serial}`);
       }
@@ -602,15 +677,9 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     const wasKilled = row.status !== "active";
     setDeviceStatus(app, id, "active");
 
+    let spawned;
     try {
-      await app.device.getOrCreate({
-        id: String(id),
-        kind: row.kind,
-        avdName: row.avdName,
-        serial: row.serial,
-        label: row.name,
-        port: row.port,
-      });
+      spawned = await host.getOrCreate(row);
     } catch (err) {
       // A synchronously-rejected start (a scope left over from before a
       // restart with no persisted port, a confirmed-gone emulator) must not
@@ -631,7 +700,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       if (wasKilled) {
         setDeviceStatus(app, id, "killed");
       }
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      return replyDeviceError(reply, host, err, "starting the device");
     }
 
     // Re-read AFTER the await: getOrCreate() awaits isScopeAlive()/
@@ -647,7 +716,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // DELETE won: the row identifying the scope we just made is gone, so
       // tear the scope down rather than orphan it, then report what the API
       // now says about this id.
-      await app.device.terminate(String(id), row.kind).catch((err) => {
+      await host.terminate(id, row.kind).catch((err) => {
         app.log.warn({ err, deviceId: id }, "start: row deleted mid-start; teardown failed");
       });
       return reply.notFound(`No device ${id}`);
@@ -656,13 +725,13 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // /stop won: roll back what we just brought up so the stopped row the
       // caller asked for stays stopped (a Stop click racing a Start click is
       // a normal thing for the sidebar's two buttons to do).
-      await app.device.terminate(String(id), row.kind).catch((err) => {
+      await host.terminate(id, row.kind).catch((err) => {
         app.log.warn({ err, deviceId: id }, "start: row stopped mid-start; rollback failed");
       });
       return reply.conflict("device was stopped while starting");
     }
 
-    return toListItem(fresh, app.device.get(String(id))?.toInfo());
+    return toListItem(fresh, spawned.info);
   });
 
   // Stops a device WITHOUT discarding its row — what `mullion device stop`,
@@ -681,10 +750,18 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // not a stale "active" row.
     setDeviceStatus(app, id, "killed");
 
-    // Deliberately NOT caught: a failed teardown leaves the row "killed"
+    // Deliberately NOT swallowed: a failed teardown leaves the row "killed"
     // (retryable — it's still the only handle to a possibly-surviving
     // scope), and the caller gets the failure instead of a silent success.
-    await app.device.terminate(String(id), row.kind);
+    const host = getDeviceHost(app, row.hostId);
+    try {
+      await host.terminate(id, row.kind);
+    } catch (err) {
+      // A local failure is thrown (a 500) as it always was; an agent's is
+      // answered as that host's error (a 503 when it did not answer).
+      if (host.isLocal) throw err;
+      return replyDeviceError(reply, host, err, "stopping the device");
+    }
 
     reply.code(204);
   });
@@ -705,10 +782,12 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
 
     setDeviceStatus(app, id, "killed");
 
+    const host = getDeviceHost(app, row.hostId);
     try {
-      await app.device.terminate(String(id), row.kind);
+      await host.terminate(id, row.kind);
     } catch (err) {
       app.log.warn({ err, deviceId: id }, "device delete: teardown failed, keeping the row");
+      if (!host.isLocal) return replyDeviceError(reply, host, err, "deleting the device");
       return reply.internalServerError(
         err instanceof Error ? err.message : "could not tear down this device",
       );
@@ -722,29 +801,31 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string }; Body: unknown }>(
     "/api/devices/:id/action",
     async (request, reply) => {
-      if (!app.devicePanelEnabled) {
+      const id = Number(request.params.id);
+      const row = Number.isInteger(id) ? getDeviceRow(app, id) : undefined;
+      // The panel gate is this host's own config; a device on an agent host is
+      // gated by that agent (#3200). "Regardless of row existence" stays true
+      // for the local gate.
+      if (!app.devicePanelEnabled && (!row || row.hostId === LOCAL_HOST_ID)) {
         return reply.badRequest(app.devicePanelUnavailableMessage);
       }
-      const id = Number(request.params.id);
       if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
-      const row = getDeviceRow(app, id);
       if (!row) return reply.notFound(`No device ${id}`);
       if (!isDeviceAction(request.body)) return reply.badRequest("invalid action body");
 
-      const driver = app.device.getDriver(String(id));
-      if (!driver) {
-        return reply.badRequest(`device ${id} has no live adb connection (status: not running)`);
-      }
-
+      const host = getDeviceHost(app, row.hostId);
+      const action: DeviceAction = request.body;
       try {
-        return await performDeviceAction(driver, request.body);
+        return await host.action(id, action);
       } catch (err) {
         // A driver's own "clear status" failures (no live connection, bad
         // screenshot, unsupported action) answer as that status; anything
-        // else is unexpected and stays a 500.
+        // else is unexpected and stays a 500 — unless it came from an agent,
+        // whose refusal is forwarded and whose silence is a 503.
         if (err instanceof DeviceActionError) {
           return reply.send(app.httpErrors.createError(err.statusCode, err.message));
         }
+        if (!host.isLocal) return replyDeviceError(reply, host, err, "running the device action");
         throw err;
       }
     },

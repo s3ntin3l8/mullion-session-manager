@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { localProtocolInfo } from "../shared/agent-protocol.js";
 import { getSessionEnvInfo } from "../services/user-shell-env.js";
 import { getCachedCapabilities } from "../services/host-capabilities.js";
+import { localDeviceKinds } from "../services/device-kinds.js";
 
 /**
  * The agent's small "what are you" probes. Registered from `internalRoutes` so
@@ -11,7 +12,9 @@ export function registerProbeRoutes(app: FastifyInstance, rateLimit: object): vo
   // Issue #2306 — what this host can do beyond agent CLIs (Xcode, an Android
   // emulator). Its own route: /internal/agents answers a bare array.
   app.get("/internal/capabilities", rateLimit, async () => {
-    return { capabilities: await getCachedCapabilities(app) };
+    // `deviceKinds` (#3200) is additive: an older agent omits it, which the
+    // primary reads as "reports no device support".
+    return { capabilities: await getCachedCapabilities(app), deviceKinds: localDeviceKinds(app) };
   });
 
   // Issue #2248 — the protocol handshake. Answers from the shared registry

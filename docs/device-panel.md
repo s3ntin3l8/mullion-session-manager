@@ -215,13 +215,9 @@ deliberately a **separate** implementation from `PtyManager`/
   Mullion (a host reboot, a crash) while its row stayed `status: "active"`
   would strand that pool slot for the rest of the process's lifetime.
   Populated synchronously (better-sqlite3, no plugin-registration ordering
-  issue). Currently a no-op on the multi-host "agent" role: `devicePlugin`
-  registers there too, but with no `app.db` to read a persisted port from at
-  all (same `app.db ? ... :` fallback posture as `hooksPlugin`,
-  `src/plugins/hooks.ts`) — every `devices` row today is `hostId: "local"`
-  anyway (`src/routes/devices.ts` never sets it from a request), so this is
-  a latent gap rather than an active one, not a claim that the agent role is
-  unaffected in principle.
+  issue). On an agent host (which has no `app.db`) this seed is empty; the
+  primary instead names the ports of that host's other active devices in every
+  spawn request (`reservedPorts`, see "Devices on agent hosts" below).
 - **Scope ownership**, unlike a session's, isn't anchored on a real dtach
   socket (an emulator has neither dtach nor a PTY) — `device-process.ts`
   makes `systemd-run` set the scope's `Description` explicitly to a
@@ -338,6 +334,60 @@ the advertised name/model while the real one is offline, so that case is always
 shown as a confirm-style prompt. If the phone needs a fresh pairing code, delete and re-pair as before.
 The prompt only appears when mDNS can reach the device; otherwise **Edit
 address** remains the manual path.
+
+### Devices on agent hosts (issue #3200)
+
+A device runs on the host its `devices` row names (`hostId`, default `"local"`).
+`POST /api/devices` takes an optional `hostId` (otherwise the project's host,
+else the primary) and refuses, before inserting a row, a kind that host cannot
+serve: an agent reports the kinds it can run at `GET /internal/devices/kinds`
+(and under `deviceKinds` in `/internal/capabilities`), empty while its own
+`DEVICE_ENABLED` is off, and an agent that predates the route is refused with
+"update its agent".
+
+Every route on the primary resolves the row's host through a `DeviceHost`
+(`src/services/device-host.ts`): the local one drives this process's
+`DeviceManager`; the remote one calls the agent's `/internal/devices*` routes
+(`src/routes/internal-devices.ts`), which run the same `DeviceManager` and the
+same driver code. The agent has no database, so each request carries what it
+needs:
+
+- `POST /internal/devices` is an idempotent get-or-create from the full spawn
+  spec: id, kind, AVD name or adb address, label, the row's persisted emulator
+  `port` (so a scope that survived an agent restart reattaches) and
+  `reservedPorts`, the ports of the host's _other_ active emulator rows. The
+  agent skips those when it allocates a fresh port, because it keeps no record
+  of them across a restart. It answers the live info and the port it holds,
+  which the primary persists on the row.
+- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate` and
+  `POST /internal/devices/:id/action` are the live-list, stop/delete and
+  one-shot-action counterparts. The action runs through the same `DeviceDriver`
+  as a local one, so a driver's 4xx (no live adb connection, unsupported
+  action) is forwarded with its own status and message.
+- `/internal/ws/device/:id` is the agent half of the panel's socket. The
+  primary's `/ws/device/:id` proxies to it (`proxyToRemoteDevice`): it first
+  runs the same get-or-create over REST, then relays control messages up and
+  frames down. Binary frames pass through unchanged and the agent keeps the
+  keyframe gating for its own socket. The one thing the agent cannot see is
+  this hop's backlog: when the _browser_ socket is backed up the proxy drops
+  the frame, holds every delta until a keyframe has gone out, and sends the
+  agent `{"type":"requestKeyframe"}` (an H.264 delta cannot be dropped the way a
+  browser pane's JPEG can).
+
+A host that is down shows its devices as unavailable instead of failing the
+list: `GET /api/devices` marks those rows `hostUnreachable: true` with
+`live: null`, and a mutating call answers 503 (or 502 when the request may have
+been delivered), like every other forwarded host call.
+
+Not covered yet, each tracked on its own issue: pairing and mDNS discovery
+still run on the primary only, so a physical device on an agent host is added
+by its adb address ([#3271](https://github.com/s3ntin3l8/mullion-session-manager/issues/3271));
+AVD and system-image management (`/api/avds`, `/api/system-images`) is
+primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272));
+the panel's socket to an agent reached only over the outbound channel needs a
+`device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273));
+and Settings → Devices has no per-host kinds or host picker yet
+([#3270](https://github.com/s3ntin3l8/mullion-session-manager/issues/3270)).
 
 ### Toolbar and gestures (issue #1419)
 

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { devices } from "../db/schema.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
 
 // The `devices` table's read/write seam: routes/device.ts and routes/devices.ts
 // go through these instead of querying `app.db` themselves (the routes>db
@@ -12,7 +13,7 @@ import { devices } from "../db/schema.js";
 export type DeviceRow = typeof devices.$inferSelect;
 export type NewDevice = Pick<
   typeof devices.$inferInsert,
-  "kind" | "serial" | "avdName" | "projectId" | "name"
+  "kind" | "serial" | "avdName" | "projectId" | "name" | "hostId"
 >;
 
 export function getDeviceRow(app: FastifyInstance, id: number): DeviceRow | undefined {
@@ -24,16 +25,24 @@ export function listDeviceRows(app: FastifyInstance): DeviceRow[] {
   return app.db.select().from(devices).all();
 }
 
-/** The id of the ACTIVE physical row that already owns this adb address, if any. */
+/** The id of the ACTIVE physical row that already owns this adb address ON THIS
+ * HOST, if any. An address names a phone only on the network of the host whose
+ * adb server connects to it, so two hosts may each hold the same address. */
 export function findActivePhysicalOwner(
   app: FastifyInstance,
   address: string,
+  hostId: string = LOCAL_HOST_ID,
 ): { id: number } | undefined {
   const [owner] = app.db
     .select({ id: devices.id })
     .from(devices)
     .where(
-      and(eq(devices.status, "active"), eq(devices.kind, "physical"), eq(devices.serial, address)),
+      and(
+        eq(devices.status, "active"),
+        eq(devices.kind, "physical"),
+        eq(devices.serial, address),
+        eq(devices.hostId, hostId),
+      ),
     )
     .all();
   return owner;
@@ -53,6 +62,12 @@ export function updateDeviceSerial(app: FastifyInstance, id: number, serial: str
     .returning()
     .all();
   return updated as DeviceRow; // the caller just read this id; a missing row is its race to handle
+}
+
+/** Records the emulator port a remote host's device holds (#3200); a local
+ * device's port is written by DeviceManager's `onPortAssigned` instead. */
+export function setDevicePort(app: FastifyInstance, id: number, port: number): void {
+  app.db.update(devices).set({ port }).where(eq(devices.id, id)).run();
 }
 
 export function setDeviceStatus(

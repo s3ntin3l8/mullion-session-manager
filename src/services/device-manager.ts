@@ -453,6 +453,13 @@ export class Device {
     return this.status !== "exited" && this.status !== "error";
   }
 
+  /** The emulator console port this device holds (null for a physical device,
+   * or before spawn() has allocated one). An agent host reports it back to the
+   * primary, which persists it for reattach (#3200). */
+  get port(): number | null {
+    return this.allocatedPort;
+  }
+
   get controller(): ScrcpyControlMessageWriter | undefined {
     return this.scrcpyClient?.controller;
   }
@@ -1132,9 +1139,22 @@ export class DeviceManager {
     }
   }
 
+  // Ports another process knows are in use by this host's devices but this
+  // manager has not (yet) been asked to run: on an agent host, which has no
+  // database to seed `initialPorts` from, the primary names them in each spawn
+  // request. Replaced wholesale on every call, so a port its device has since
+  // stopped using is not held for the life of the process.
+  private externallyReservedPorts = new Set<number>();
+
+  /** Replaces the set of ports a fresh allocatePort() must skip. See
+   * `externallyReservedPorts`. */
+  setReservedPorts(ports: readonly number[]): void {
+    this.externallyReservedPorts = new Set(ports);
+  }
+
   private allocatePort(): number {
     for (let port = EMULATOR_PORT_BASE; port <= EMULATOR_PORT_MAX; port += 2) {
-      if (!this.allocatedPorts.has(port)) {
+      if (!this.allocatedPorts.has(port) && !this.externallyReservedPorts.has(port)) {
         this.allocatedPorts.add(port);
         return port;
       }
