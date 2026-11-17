@@ -234,6 +234,17 @@ export function commandModelCli(command: string): ModelInjectingCli | null {
 }
 
 /**
+ * The short alias (`-m`) a model-injecting CLI accepts for `--model`, or
+ * `undefined` for one with only the long flag. Codex and mcode take `-m`; this
+ * is the single place that says so for code that reads a command's own model
+ * flag (the same `shortFlag` codex.ts and mcode.ts hand to `buildModelFlag`).
+ */
+export function commandModelShortFlag(command: string): string | undefined {
+  const cli = commandModelCli(command);
+  return cli === "codex" || cli === "mcode" ? "-m" : undefined;
+}
+
+/**
  * The CLI binary (a `KNOWN_AGENTS` entry — `claude`, not `claude-code`) that
  * `command` launches, so placement can ask whether a host has it installed.
  * `null` for a shell, a KNOWN_AGENTS binary with no adapter (gemini, pi) and

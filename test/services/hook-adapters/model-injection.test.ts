@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { claudeCodeAdapter } from "../../../src/services/hook-adapters/claude-code.js";
 import { codexAdapter } from "../../../src/services/hook-adapters/codex.js";
 import { agyAdapter } from "../../../src/services/hook-adapters/agy.js";
-import { buildModelFlag } from "../../../src/services/hook-adapters/shared.js";
+import { buildModelFlag, extractModelFlag } from "../../../src/services/hook-adapters/shared.js";
 import { commandModelCli } from "../../../src/services/hook-adapters/index.js";
 import type { HookAdapterContext } from "../../../src/services/hook-adapters/types.js";
 
@@ -39,6 +39,32 @@ describe("buildModelFlag", () => {
   it("defers to -m only when a short flag is declared", () => {
     expect(buildModelFlag("codex -m o3", "gpt-5", "-m")).toBe("");
     expect(buildModelFlag("codex -m o3", "gpt-5")).toBe(" --model 'gpt-5'");
+  });
+});
+
+describe("extractModelFlag", () => {
+  it("reads the model a command already names, bare, quoted or with =", () => {
+    expect(extractModelFlag("agy --model gemini-4-argon-medium")).toBe("gemini-4-argon-medium");
+    expect(extractModelFlag("agy --model=gemini-4-argon-medium")).toBe("gemini-4-argon-medium");
+    expect(extractModelFlag("claude --model 'opusplan'")).toBe("opusplan");
+    expect(extractModelFlag('claude --model "opusplan" --resume')).toBe("opusplan");
+  });
+  it("takes the last occurrence, as a CLI's own argv parser does", () => {
+    expect(extractModelFlag("claude --model A --model B")).toBe("B");
+    expect(extractModelFlag("codex -m a --model b", "-m")).toBe("b");
+  });
+  it("is undefined when the command carries no model flag", () => {
+    expect(extractModelFlag("agy")).toBeUndefined();
+    expect(extractModelFlag("agy --modelx foo")).toBeUndefined();
+    expect(extractModelFlag("agy -m foo")).toBeUndefined();
+  });
+  it("reads -m only when a short flag is declared, mirroring buildModelFlag", () => {
+    expect(extractModelFlag("codex -m o3", "-m")).toBe("o3");
+    expect(extractModelFlag("codex -m o3")).toBeUndefined();
+  });
+  it("ignores a value that is not a valid model name", () => {
+    expect(extractModelFlag("agy --model --dangerously-skip-permissions")).toBeUndefined();
+    expect(extractModelFlag("agy --model '$(x)'")).toBeUndefined();
   });
 });
 
