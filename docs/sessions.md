@@ -86,7 +86,9 @@ there are more than eight; **Add** on one adds it, selects it and returns to the
 launcher, and Back returns to the form with what was typed in it kept. While
 the scan runs the row says so; when it finds nothing, or no project roots are
 set, a hint links to Settings → Projects instead. The scan runs only while the
-Add view is open.
+Add view is open. On a touch device the form opens without focusing the path
+field, so the on-screen keyboard stays down: the row takes focus once the scan
+shows it, unless you have already moved to another control.
 
 Selecting an agent and launching are two steps, so its model and permission
 override can be changed first. A double click on a tile launches it directly.

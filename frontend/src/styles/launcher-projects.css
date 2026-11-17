@@ -111,9 +111,13 @@ button.launcher-discovered-row {
   color: var(--fg);
   cursor: pointer;
 }
-button.launcher-discovered-row:hover {
-  border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
-  background: var(--seg);
+/* Only where hover is real: on touch it sticks after the tap that opened the
+   discovered view, and Back would find the row still looking hovered. */
+@media (hover: hover) {
+  button.launcher-discovered-row:hover {
+    border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
+    background: var(--seg);
+  }
 }
 button.launcher-discovered-row:focus-visible {
   outline: 2px solid var(--accent);
@@ -160,6 +164,18 @@ button.launcher-discovered-row:focus-visible {
 .session-launcher-sheet .embedded-form-back,
 .session-launcher-sheet .launcher-discovered-row {
   min-height: 44px;
+}
+/* #3287 — on a touch device (the phone's sheet, and the fold, which is not
+   one) the row reads as an action, like the form's other tappable rows:
+   their border and field background, at a touch target's height. The
+   placeholder shown while the scan runs is a div and keeps the quiet look. */
+@media (pointer: coarse) {
+  button.launcher-discovered-row {
+    min-height: 44px;
+    border-color: var(--border-soft);
+    border-radius: 9px;
+    background: var(--field);
+  }
 }
 .session-launcher-sheet .launcher-discovered-list .discover-item {
   min-height: 44px;

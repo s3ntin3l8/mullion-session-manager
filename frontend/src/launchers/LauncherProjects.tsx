@@ -32,6 +32,7 @@ import type { KebabMenuItem } from "../ui/KebabMenu.js";
 import { Modal } from "../ui/Modal.js";
 import { Dropdown, TextInput } from "../ui/primitives.js";
 import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
+import { COARSE_POINTER_QUERY } from "../lib/layoutTier.js";
 
 const NO_SESSIONS: Session[] = [];
 
@@ -328,6 +329,33 @@ function LauncherAddProject({
   };
 
   const { remaining } = discovery;
+  // #3287 — under a coarse pointer the form opens without focusing its path
+  // field (the keyboard would come up and scroll this row out of view), and
+  // the row takes focus instead. The scan usually answers after the form has
+  // mounted, so this waits for the row, once, and only moves focus if it is
+  // still where the form put it on open (Back): anything else means the user
+  // has gone somewhere (a field, Browse…, a select) and keeps it.
+  const [coarseAtOpen] = useState(() => window.matchMedia(COARSE_POINTER_QUERY).matches);
+  const openFocus = useRef<Element | null>(null);
+  useEffect(() => {
+    // The form's own mount effect (a child's) has already run: this is what
+    // it focused. This leans on React running a child's passive effects
+    // before its parent's; if the form's focus ever moved later than that,
+    // this would hold a stale element and the hand-off would never fire —
+    // "the discovered row has focus once it shows" in the test file fails
+    // then, which is what pins the ordering.
+    openFocus.current = document.activeElement;
+  }, []);
+  const rowFocused = useRef(false);
+  const hasRow = remaining !== null && remaining.length > 0;
+  useEffect(() => {
+    if (!coarseAtOpen || !hasRow || rowFocused.current || discoveredOpen) return;
+    rowFocused.current = true;
+    const active = document.activeElement;
+    if (!active || active === document.body || active === openFocus.current) {
+      rowRef.current?.focus();
+    }
+  }, [coarseAtOpen, hasRow, discoveredOpen]);
   const lead =
     remaining === null ? (
       <div className="launcher-discovered-row" aria-busy="true">

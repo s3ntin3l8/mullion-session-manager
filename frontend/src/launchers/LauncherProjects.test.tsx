@@ -250,6 +250,72 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
     ).toBeInTheDocument();
   });
 
+  it("a fine pointer keeps the path field focused when the row shows (#3287)", async () => {
+    stub([repo("atlas")]);
+    renderAdd();
+    await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+    expect(screen.getByPlaceholderText("~/code/my-project")).toHaveFocus();
+  });
+
+  // #3287 — on a touch device the path field does not take focus (the
+  // keyboard would scroll this row away); the row does, once the scan has
+  // answered, which is after the form has mounted.
+  describe("under a coarse pointer", () => {
+    beforeEach(() => {
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: query === "(pointer: coarse)",
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+    });
+
+    it("the discovered row has focus once it shows, not the path field", async () => {
+      let release: (r: Response) => void = () => {};
+      stub(() => new Promise<Response>((resolve) => (release = resolve)));
+      renderAdd();
+      expect(screen.getByRole("button", { name: "Back" })).toHaveFocus();
+      release(jsonResponse(200, [repo("atlas"), repo("beacon")]));
+      const row = await screen.findByRole("button", {
+        name: "Choose from 2 discovered repositories",
+      });
+      await waitFor(() => expect(row).toHaveFocus());
+      expect(screen.getByPlaceholderText("~/code/my-project")).not.toHaveFocus();
+    });
+
+    it("does not take focus from a field the user went into while the scan ran", async () => {
+      let release: (r: Response) => void = () => {};
+      stub(() => new Promise<Response>((resolve) => (release = resolve)));
+      renderAdd();
+      const field = screen.getByPlaceholderText("~/code/my-project");
+      act(() => field.focus());
+      release(jsonResponse(200, [repo("atlas")]));
+      await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+      expect(field).toHaveFocus();
+    });
+
+    it("does not take focus from a non-text control the user went to", async () => {
+      let release: (r: Response) => void = () => {};
+      stub(() => new Promise<Response>((resolve) => (release = resolve)));
+      renderAdd();
+      const browse = screen.getByRole("button", { name: "Browse…" });
+      act(() => browse.focus());
+      release(jsonResponse(200, [repo("atlas")]));
+      await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+      expect(browse).toHaveFocus();
+    });
+
+    it("with nothing discovered, focus stays on a control, not a text field", async () => {
+      stub([repo("done", { isRegistered: true })]);
+      renderAdd();
+      expect(await screen.findByText("No repositories found")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Back" })).toHaveFocus();
+    });
+  });
+
   it("zero results shows the Settings hint instead of the row", async () => {
     stub([repo("done", { isRegistered: true })]);
     renderAdd();
@@ -440,6 +506,16 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
 });
 
 describe("launcher discovered-view styles (#3244)", () => {
+  // #3287 — the row reads as an action on a touch device (phone and fold).
+  it("a coarse pointer gives the row the form's tappable-row look at 44px", () => {
+    const block =
+      /@media \(pointer: coarse\) \{([\s\S]*?)\n\}/.exec(launcherProjectsCss)?.[1] ?? "";
+    const body = rule(block.replace(/\n {2}/g, "\n"), "button.launcher-discovered-row");
+    expect(body).toContain("min-height: 44px");
+    expect(body).toContain("border-color: var(--border-soft)");
+    expect(body).toContain("background: var(--field)");
+  });
+
   it("the hidden form is not drawn under the discovered view", () => {
     expect(rule(launcherProjectsCss, ".launcher-project-form[hidden]")).toMatch(/display:\s*none/);
   });
