@@ -103,12 +103,13 @@ const SESSION_END_HOOK_TIMEOUT_SECONDS = 2;
 // session it belongs to — a headless Task Master worker that has finished —
 // then looks unfinished until its budget expires.
 //
-// The forwarder's own retry sequence takes at most ~75s (see
-// STOP_RETRY_DELAYS_MS in src/hooks/forwarder.mjs), so the agent's hook
-// timeout has to sit ABOVE that bound: an agent that killed the hook at its
-// own 10s timeout would cut the retry sequence short and the Stop would be
-// lost exactly as before. 120s leaves room for the retry bound plus a slow
-// machine, and stays far below Claude Code's own 600s default for hooks.
+// The forwarder's own retry sequence takes at most ~97s in the worst case
+// (67s of waiting between its six attempts, plus up to 5s for each attempt
+// itself — see STOP_RETRY_DELAYS_MS in src/hooks/forwarder.mjs), so the
+// agent's hook timeout has to sit ABOVE that bound: an agent that killed the
+// hook at its own 10s timeout would cut the retry sequence short and the Stop
+// would be lost exactly as before. 120s clears that 97s worst case with room
+// to spare, and stays far below Claude Code's own 600s default for hooks.
 const STOP_HOOK_TIMEOUT_SECONDS = 120;
 
 function hookEntry(

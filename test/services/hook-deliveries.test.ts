@@ -24,13 +24,6 @@ describe("HookDeliveryRegistry", () => {
     expect(registry.claim("session-2", "delivery-1#0")).toBe(true);
   });
 
-  it("forgets a session's deliveries when it is forgotten", () => {
-    const registry = new HookDeliveryRegistry();
-    expect(registry.claim("session-1", "delivery-1#0")).toBe(true);
-    registry.forget("session-1");
-    expect(registry.claim("session-1", "delivery-1#0")).toBe(true);
-  });
-
   it("expires a claim once its TTL has passed", () => {
     let now = 1_000;
     const registry = new HookDeliveryRegistry({ ttlMs: 500, now: () => now });
@@ -49,7 +42,10 @@ describe("HookDeliveryRegistry", () => {
     now += 501;
     // A claim for a DIFFERENT session sweeps the expired entry of the first
     // one — the ledger lives as long as the server does, so an entry for a
-    // session that stopped delivering long ago must not sit in memory.
+    // session that stopped delivering long ago must not sit in memory. This
+    // TTL sweep is the ledger's ONLY memory bound: there is no explicit
+    // "forget this session" call anywhere (see the file's own header for
+    // why a dead session needs none).
     expect(registry.claim("session-2", "delivery-2#0")).toBe(true);
     expect(registry.claim("session-1", "delivery-1#0")).toBe(true);
   });

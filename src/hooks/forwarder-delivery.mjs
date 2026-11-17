@@ -28,14 +28,16 @@ import { randomUUID } from "node:crypto";
 
 // The retry delays, in milliseconds, before each further attempt.
 //
-// The bound: these wait 67s in total, and each attempt may itself take up
-// to STOP_ATTEMPT_TIMEOUT_MS (5s), so the whole sequence stays under ~75s —
-// inside the two minutes issue #3174 allows, and short enough that the agent
-// CLI's own exit is not held up for long. The agent adapters' Stop hook
-// timeout is raised to match (see src/services/hook-adapters/
-// claude-code.ts's STOP_HOOK_TIMEOUT_SECONDS), because an agent that kills
-// the hook at its own timeout would cut the retry sequence short — and a
-// cut-short retry is a lost Stop, exactly as before.
+// The bound: these five delays wait 67s in total, and there are SIX attempts
+// (the first one, plus one per delay), each of which may itself take up to
+// STOP_ATTEMPT_TIMEOUT_MS (5s) before that attempt is abandoned. The worst
+// case is therefore 67s + 6 × 5s ≈ 97s — inside the two minutes issue #3174
+// allows, and short enough that the agent CLI's own exit is not held up for
+// long. The agent adapters' Stop hook timeout is raised to match (see
+// src/services/hook-adapters/claude-code.ts's STOP_HOOK_TIMEOUT_SECONDS,
+// 120s — above that 97s worst case), because an agent that kills the hook at
+// its own timeout would cut the retry sequence short — and a cut-short retry
+// is a lost Stop, exactly as before.
 export const STOP_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000];
 
 // How long ONE attempt waits for the socket's acknowledgement. Generous for

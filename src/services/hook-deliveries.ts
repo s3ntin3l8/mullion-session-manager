@@ -19,15 +19,28 @@
 // that dies mid-delivery loses the ledger along with the session state it
 // describes, so there is nothing to restore — and nothing to persist.
 //
-// The ledger is keyed per session rather than globally so that a session
-// that dies takes its entries with it (see forget()), and so the per-session
+// The ledger is keyed per session rather than globally so that the per-session
 // cap below bounds what one long-lived session can accumulate.
+//
+// There is deliberately NO explicit "forget this session" entry point. A dead
+// session's hook token stops resolving (see PtyManager.kill(), which drops
+// the token from its map), so a late retry of one of its deliveries is
+// refused at the handshake and never reaches the ledger — those entries would
+// only ever be dead weight. Wiring such a hook into session teardown would
+// also have to be placed exactly right: PtyManager.kill() is NOT terminal (a
+// graceful redeploy leaves the agent process running), so forgetting a
+// session there would drop the ledger of a session that is still alive and
+// possibly still retrying its `Stop` — which is precisely the duplicate this
+// ledger exists to prevent. The TTL sweep in claim() is what actually bounds
+// the memory: it drops every expired entry of every session, so a session
+// that stopped delivering long ago does not sit in memory until the process
+// restarts.
 
 /** How long a delivery id stays on the ledger. Comfortably longer than the
- * forwarder's own retry bound (~75s, see STOP_RETRY_DELAYS_MS in
- * src/hooks/forwarder.mjs), so a retry can never be mistaken for a first
- * attempt — and short enough that a session's ledger does not grow without
- * bound over a long-lived session's lifetime. */
+ * forwarder's own retry bound (~97s in the worst case, see
+ * STOP_RETRY_DELAYS_MS in src/hooks/forwarder.mjs), so a retry can never be
+ * mistaken for a first attempt — and short enough that a session's ledger
+ * does not grow without bound over a long-lived session's lifetime. */
 const DEFAULT_TTL_MS = 5 * 60_000;
 
 /** How many delivery keys one session may hold. A `Stop` delivery carries
@@ -92,7 +105,8 @@ export class HookDeliveryRegistry {
   }
 
   /** Drops every entry whose TTL has passed, and every session left empty
-   * by that sweep. */
+   * by that sweep. This is the ledger's only memory bound — see this file's
+   * own header for why there is no explicit per-session forget. */
   private pruneExpired(now: number): void {
     for (const [sessionId, forSession] of this.seen) {
       for (const [key, expiresAt] of forSession) {
@@ -100,11 +114,5 @@ export class HookDeliveryRegistry {
       }
       if (forSession.size === 0) this.seen.delete(sessionId);
     }
-  }
-
-  /** Drops every remembered delivery for a session — called when the session
-   * dies, so a dead session's ledger does not outlive it. */
-  forget(sessionId: string): void {
-    this.seen.delete(sessionId);
   }
 }

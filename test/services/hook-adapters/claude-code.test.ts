@@ -168,7 +168,7 @@ describe("buildClaudeHookSettings", () => {
     // `Stop` is the one hook the forwarder retries (a refused Stop is
     // dropped otherwise, and the finished headless worker it belongs to then
     // looks unfinished until its budget expires). The retry sequence takes at
-    // most ~75s, so a 10s hook timeout would cut it short and lose the Stop
+    // most ~97s, so a 10s hook timeout would cut it short and lose the Stop
     // exactly as before.
     expect(settings.hooks.Stop[0].hooks[0].timeout).toBe(120);
   });
