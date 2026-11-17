@@ -3,11 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type * as ApiModule from "../api/index.js";
-import type { Task } from "../api/index.js";
-import { makeProject, makeTask } from "../test/fixtures.js";
+import type { Host, Project, Session, Task } from "../api/index.js";
+import { makeHost, makeProject, makeSession, makeTask } from "../test/fixtures.js";
 import { TaskAgents } from "./TaskAgents.js";
 
 let settings: unknown;
+let projects: Project[];
+let hosts: Host[];
+let sessions: Session[];
+let sessionsLoaded: boolean;
 const { updateTask, listProjectActions } = vi.hoisted(() => ({
   updateTask: vi.fn(async (..._a: unknown[]) => ({})),
   listProjectActions: vi.fn(async (_id: number) => [
@@ -20,7 +24,10 @@ vi.mock("../store/index.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
       settings,
-      projects: [makeProject({ id: 1, defaultAgent: "claude", defaultReviewAgent: "codex" })],
+      projects,
+      hosts,
+      sessions,
+      sessionsLoaded,
       updateTask,
     }),
 }));
@@ -33,11 +40,94 @@ const task = (o: Partial<Task>) => makeTask({ id: 1, projectId: 1, status: "back
 
 beforeEach(() => {
   settings = undefined;
+  projects = [makeProject({ id: 1, defaultAgent: "claude", defaultReviewAgent: "codex" })];
+  hosts = [
+    makeHost({ id: "local", name: "local", isLocal: true }),
+    makeHost({ id: "remote-macbook", name: "macbook" }),
+  ];
+  sessions = [];
+  sessionsLoaded = true;
   updateTask.mockClear();
   listProjectActions.mockClear();
 });
 
 describe("TaskAgents", () => {
+  it("shows the worker's host and preserves the placement reason with its display name", () => {
+    sessions = [
+      makeSession({
+        id: 7,
+        resolvedHostId: "remote-macbook",
+        placementReason: "least loaded: remote-macbook at 0.10 load per core",
+      }),
+    ];
+    render(<TaskAgents task={task({ sessionId: 7 })} />);
+    expect(screen.getByText("Host")).toBeInTheDocument();
+    expect(screen.getByText("on macbook")).toHaveAttribute(
+      "title",
+      "least loaded: macbook at 0.10 load per core",
+    );
+  });
+
+  it("updates the host when the worker session changes to this machine", () => {
+    sessions = [makeSession({ id: 7, resolvedHostId: "remote-macbook" })];
+    const { rerender } = render(<TaskAgents task={task({ sessionId: 7 })} />);
+    expect(screen.getByText("on macbook")).toBeInTheDocument();
+    sessions = [makeSession({ id: 7, resolvedHostId: "local" })];
+    rerender(<TaskAgents task={task({ sessionId: 7 })} />);
+    expect(screen.getByText("this machine")).toBeInTheDocument();
+    expect(screen.queryByText("on macbook")).toBeNull();
+  });
+
+  it("shows an unclaimed task's placement requirement", () => {
+    render(<TaskAgents task={task({ placementRequirement: '{"platform":"darwin"}' })} />);
+    expect(screen.getByText("needs darwin")).toBeInTheDocument();
+  });
+
+  it("shows the project's pinned host for an unclaimed task", () => {
+    projects = [makeProject({ id: 1, hostId: "remote-macbook" })];
+    render(<TaskAgents task={task({})} />);
+    expect(screen.getByText("pinned · macbook")).toBeInTheDocument();
+  });
+
+  it("shows automatic placement for an unclaimed task without a requirement", () => {
+    render(<TaskAgents task={task({})} />);
+    expect(screen.getByText("auto")).toBeInTheDocument();
+  });
+
+  it("reports a missing worker session instead of its requirement or project pin", () => {
+    projects = [makeProject({ id: 1, hostId: "remote-macbook" })];
+    render(
+      <TaskAgents
+        task={task({
+          sessionId: 7,
+          placementRequirement: '{"platform":"darwin"}',
+        })}
+      />,
+    );
+    expect(screen.getByText("unknown (session ended)")).toBeInTheDocument();
+    expect(screen.queryByText("needs darwin")).toBeNull();
+    expect(screen.queryByText("pinned · macbook")).toBeNull();
+  });
+
+  it("waits for sessions to load before reporting a missing worker", () => {
+    sessionsLoaded = false;
+    const claimedTask = task({ sessionId: 7, placementRequirement: '{"platform":"darwin"}' });
+    const { rerender } = render(<TaskAgents task={claimedTask} />);
+    expect(screen.getByText("needs darwin")).toBeInTheDocument();
+    expect(screen.queryByText("unknown (session ended)")).toBeNull();
+
+    sessionsLoaded = true;
+    rerender(<TaskAgents task={claimedTask} />);
+    expect(screen.getByText("unknown (session ended)")).toBeInTheDocument();
+  });
+
+  it("keeps the host visible on an installation without remote hosts", () => {
+    hosts = [makeHost({ id: "local", name: "local", isLocal: true })];
+    render(<TaskAgents task={task({})} />);
+    expect(screen.getByText("Host")).toBeInTheDocument();
+    expect(screen.getByText("this machine")).toBeInTheDocument();
+  });
+
   it("shows the effective worker and reviewer with where each comes from", () => {
     render(
       <TaskAgents

@@ -204,6 +204,7 @@ export function TaskDetail({
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
   const hosts = useDashboardStore((s) => s.hosts);
+  const sessionsLoaded = useDashboardStore((s) => s.sessionsLoaded);
   const settings = useDashboardStore((s) => s.settings);
   const updateTask = useDashboardStore((s) => s.updateTask);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
@@ -242,6 +243,7 @@ export function TaskDetail({
     task.sessionId !== null ? sessions.find((x) => x.id === task.sessionId) : null,
     projects?.find((p) => p.id === task.projectId)?.hostId,
     hosts ?? [],
+    sessionsLoaded,
   );
   const reviewRounds = parseReviewRounds(task.reviewFindings);
   // Computed once per render: each call re-reads Date.now() for the relative time.
