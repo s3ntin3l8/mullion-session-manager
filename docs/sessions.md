@@ -43,6 +43,12 @@ or moves when a switch is flipped or a menu opened, so the rows below stay put.
      an anchored menu under a mouse and a bottom sheet under a coarse pointer;
      Escape or a press outside closes it and returns focus to the ⋯. A pull's
      result is a toast.
+   - **Workspace** — on the phone only, and only when there is more than one
+     workspace: where the new session joins (see "A session opened on the
+     fold or the phone" below). It starts on the phone's active workspace and
+     lists them all, a grouped one as "Group / Workspace", in the rail
+     picker's order. On the desktop and the two halves the rail's workspace
+     chip shows and switches the workspace instead.
    - **Host** — only for a project that reaches more than one host (see
      [`multi-host.md`](multi-host.md)).
    - **Worktree** — a switch, **Isolate in a new worktree**, with the base
@@ -114,3 +120,12 @@ workspace and back) drops it. Closing a pane on the fold or the phone only
 closes it there. If the desk has not added it yet, the open is withdrawn. Killing a
 session there closes its pane at the desk too. See
 [`architecture.md`](architecture.md), "Two halves", for the placement rule.
+
+A session started on the phone joins the phone's active workspace, the last
+one you showed there (the session switcher changes it when you open a session
+that lives in another workspace). The launcher's **Workspace** row says which
+one that is, and lets you pick another: starting the session then records its
+open for the workspace you picked, and the phone switches to that workspace to
+show it. The workspace you were in is left as it was. The choice holds for
+that one launch: closing the launcher without starting a session changes
+nothing, and the next open starts on the active workspace again.
