@@ -765,12 +765,21 @@ job being stopped.
 
 The launchd agent only makes the Mac a **host**. A Task Master task placed on it
 with `Platform: darwin` can build iOS or Android only if the Mac's toolchain is
-also finished — nothing Mullion does checks this for you (the `xcode`
-capability proves at most that full Xcode is selected, not that it is usable;
-see [multi-host](../docs/multi-host.md#host-capabilities)). An incomplete setup
-does not fail fast: a build can hang or loop until the task's time budget runs
-out. Work through this list once per Mac, in this order, as the user the agent
-runs as.
+also finished. Mullion's `xcode` capability checks that full Xcode is selected
+(`xcrun --find simctl`), first-launch setup is complete and the licence accepted
+(`xcodebuild -checkFirstLaunchStatus`), and at least one simulator runtime is
+available (`xcrun simctl list runtimes available -j`) — see
+[multi-host](../docs/multi-host.md#host-capabilities). It does **not** check
+Homebrew tools or the Android SDK, or whether Homebrew is on a session's `PATH`.
+An incomplete setup does not fail fast: a build can hang or loop until the
+task's time budget runs out. If a Mac lacks `xcode`, the agent logs the failing
+step once per state change at `info` in
+`<install root>/logs/com.mullion.<role>.out.log`
+(`[host-capabilities] xcode unavailable: simctl missing` /
+`first launch incomplete` / `no simulator runtime`); **Settings → Hosts** shows
+the `Xcode` capability chip once present (and **Session environment** shows the
+resolved `PATH`, any fallback reason, and `recoveredKeys`). Work through this
+list once per Mac, in this order, as the user the agent runs as.
 
 1. **Xcode selected.** Full Xcode, not just the Command Line Tools.
    `xcode-select -p` should print a path inside `/Applications/Xcode.app`
@@ -795,10 +804,20 @@ runs as.
    your own terminal. The usual fix is `eval "$(/opt/homebrew/bin/brew shellenv)"`
    in `~/.zprofile`.
 6. **Android (only if tasks build Android).** Install the SDK and NDK, then:
-   - `ANDROID_HOME` (the SDK root) and `ANDROID_NDK_HOME` must be set **in the
-     session's environment**. Only `PATH` is recovered from your interactive
-     shell — a variable exported only in `~/.zshrc` is **not** seen by
-     sessions. Put the `export` lines in `~/.zprofile`.
+   - `ANDROID_HOME` (the SDK root) and `ANDROID_NDK_HOME` — along with
+     `ANDROID_SDK_ROOT` and `JAVA_HOME`, the default `SESSION_ENV_RECOVER_KEYS`
+     list (`ANDROID_HOME,ANDROID_SDK_ROOT,ANDROID_NDK_HOME,JAVA_HOME`) — are
+     recovered automatically from your interactive shell (`~/.zshrc`), provided
+     they are `export`ed (setting `SESSION_ENV_RECOVER_KEYS=""` disables this).
+     Restart the Mac's launchd job (`launchctl kickstart -k gui/$UID/com.mullion.<role>`,
+     where `<role>` is `agent` or `primary`),
+     or run `GET /api/agents?refresh=1` on the Mac against that host's own API
+     (the primary's **Settings → Agents → Refresh** only re-resolves the
+     primary's own shell), after editing your rc file so the once-per-process
+     shell resolve re-runs. Any **other**
+     variable you need in sessions still has to be exported in `~/.zprofile` or
+     `~/.zshenv` (or added to `SESSION_ENV_RECOVER_KEYS`; see
+     [`docs/configuration.md`](../docs/configuration.md)).
    - `emulator` (`$ANDROID_HOME/emulator`) and `adb`
      (`$ANDROID_HOME/platform-tools`) on `PATH`; verify with `which emulator adb`.
    - For the `android-emulator` capability, set `DEVICE_EMULATOR_PATH` in the
@@ -809,13 +828,28 @@ runs as.
 task would) and run:
 
 ```sh
-xcode-select -p; xcodebuild -checkFirstLaunchStatus; echo $?; which -a xcodebuild swift brew; echo $PATH
+xcode-select -p; xcrun --find simctl && xcodebuild -checkFirstLaunchStatus && { xcrun simctl list runtimes available || echo 'simctl list failed'; } || echo 'simctl missing or first launch incomplete'; which -a xcodebuild swift brew; echo $PATH
 ```
 
-You want a `/Applications/Xcode.app/...` path, exit status `0`, one
+You want a `/Applications/Xcode.app/...` path, `simctl` resolving inside
+`/Applications/Xcode.app`, at least one simulator runtime listed (the `&&` chain
+short-circuits so `simctl list` does not run and trigger the first-launch
+installer if `-checkFirstLaunchStatus` fails, printing
+`simctl missing or first launch incomplete` instead), one
 `xcodebuild`/`swift` under `/usr/bin` (the shims) and `brew` under
 `/opt/homebrew/bin`, and a `PATH` that contains `/opt/homebrew/bin`. For
 Android also check `echo $ANDROID_HOME $ANDROID_NDK_HOME`.
+
+**Troubleshooting.**
+
+- After an Xcode update, `xcodebuild` / `xcrun simctl` can fail with
+  `"CoreSimulator is out of date. Current version (…) is older than build version (…)"`
+  because a stale `CoreSimulator` user service is still running; observed on
+  the `macbook` host, where running `xcrun simctl list` replaced the stale
+  service and fixed it.
+- Observed once after such an update: `xcodebuild -showdestinations` listed
+  only placeholder simulators for a few minutes before resolving the real
+  devices (cause not established).
 
 ## Windows: the scheduled-task deployment (issue #2160 / #1728)
 
