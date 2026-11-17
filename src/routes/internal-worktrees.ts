@@ -6,6 +6,7 @@ import {
   taskCiUnfixablePath,
   taskRereviewRequestPath,
 } from "../services/task-prompt.js";
+import { readCiUnfixableFile } from "../services/task-ci-unfixable-file.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -419,9 +420,9 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       if (!/^[0-9a-f]{40}$/.test(headSha)) {
         return reply.badRequest("headSha query param must be a 40-char lowercase hex SHA");
       }
-      const declPath = taskCiUnfixablePath(app.pty.sessionsDir, taskId, headSha);
-      if (!existsSync(declPath)) return { content: null };
-      return { content: readFileSync(declPath, "utf8").trim() || "(no reason given)" };
+      return {
+        content: readCiUnfixableFile(taskCiUnfixablePath(app.pty.sessionsDir, taskId, headSha)),
+      };
     },
   );
 

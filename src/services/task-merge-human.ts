@@ -74,10 +74,13 @@ export function mergeRecordedSet<T extends object>(mergedAt: Date, extra?: T) {
  * hand-built patch (it lacks the marker and reason clears, so it fails to type-check). */
 export type MergeRecordedPatch = ReturnType<typeof mergeRecordedSet<{ archivedAt?: Date }>>;
 
-/** The `.set()` fields that clear a merge error and its merge-tied reason. */
+/** The `.set()` fields that clear a merge error and its merge-tied reason. A
+ * "Merge anyway" override (`mergeOverrideHeadSha`) goes with it: it answers one
+ * hold, so a cleared hold must not leave it armed for the next. */
 export const CLEARED_MERGE_ERROR = {
   mergeError: null,
   mergeBlockedThreads: null,
+  mergeOverrideHeadSha: null,
   needsHumanReason: clearMergeNeedsHumanReason,
 };
 
@@ -86,7 +89,12 @@ export const CLEARED_MERGE_ERROR = {
 export function clearedFor(reason: string | null | undefined) {
   return {
     ...(reason === "review-post-failed"
-      ? { mergeError: null, mergeBlockedThreads: null, needsHumanReason: null }
+      ? {
+          mergeError: null,
+          mergeBlockedThreads: null,
+          mergeOverrideHeadSha: null,
+          needsHumanReason: null,
+        }
       : CLEARED_MERGE_ERROR),
     reviewPostPending: clearReviewPostFailedMarker,
   };

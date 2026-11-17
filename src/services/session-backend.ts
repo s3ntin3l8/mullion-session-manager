@@ -31,6 +31,7 @@ import {
   taskCiUnfixablePath,
   taskRereviewRequestPath,
 } from "./task-prompt.js";
+import { readCiUnfixableFile } from "./task-ci-unfixable-file.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -795,10 +796,7 @@ class LocalBackend implements SessionBackend {
 
   async readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
     assertFullSha(headSha);
-    const declPath = taskCiUnfixablePath(this.app.pty.sessionsDir, taskId, headSha);
-    if (!existsSync(declPath)) return null;
-    // The file's existence is the declaration, so an empty file still counts.
-    return readFileSync(declPath, "utf8").trim() || "(no reason given)";
+    return readCiUnfixableFile(taskCiUnfixablePath(this.app.pty.sessionsDir, taskId, headSha));
   }
 }
 

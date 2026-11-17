@@ -50,10 +50,12 @@ export async function taskMergeRoute(app: FastifyInstance) {
           "task merge: non-required checks overridden",
         );
       }
+      // Every human merge request re-decides the override: the clear drops a
+      // previous one, and only this click's (if any) is set after it.
       const updated = updateTask(app, taskId, {
         mergeRequestedAt: new Date(),
-        ...(overrideHeadSha ? { mergeOverrideHeadSha: overrideHeadSha } : {}),
         ...mergeHuman.clearedFor(existing.needsHumanReason),
+        ...(overrideHeadSha ? { mergeOverrideHeadSha: overrideHeadSha } : {}),
       });
       resetMergeBackoff(taskId);
       return updated;

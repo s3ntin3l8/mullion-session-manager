@@ -619,7 +619,7 @@ function TaskMergeStatus({ task, trailing }: { task: Task; trailing?: ReactNode 
         <button
           className="notif-gate-btn"
           disabled={submitting || !taskMasterEnabled}
-          title="Merge even though the named non-required checks are red. Applies to this commit only: a new push voids it."
+          title="Merge even though the named non-required checks are red, and past any other non-required check still running. Applies to this commit only: a new push voids it."
           onClick={async () => {
             setSubmitting(true);
             setError(null);

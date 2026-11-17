@@ -92,6 +92,7 @@ export async function approveTask(
       // never has yet.
       mergeRequestedAt: project.mergeOnApprove ? new Date() : null,
       mergeError: null,
+      mergeOverrideHeadSha: null,
       // A human approving past a failed approving-review post acts on the hold
       // (holdsForReviewPost); leave it set and processMergeRequests would skip
       // the merge on every tick.

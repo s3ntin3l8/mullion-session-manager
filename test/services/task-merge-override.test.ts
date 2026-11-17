@@ -222,12 +222,81 @@ describe("Merge anyway", () => {
     await app.close();
   });
 
-  it("a plain Merge now never sets the override", async () => {
+  it("a plain Merge now never sets the override, and replaces one that was armed", async () => {
     const app = await buildApp();
     const id = await createHeldTask(app);
+    const plain = await createHeldTask(app, { mergeOverrideHeadSha: HEAD });
 
     expect((await postMerge(app, id)).statusCode).toBe(200);
     expect(getTask(app, id).mergeOverrideHeadSha).toBeNull();
+    // A human merge request re-decides: an override armed earlier does not survive it.
+    expect((await postMerge(app, plain)).statusCode).toBe(200);
+    expect(getTask(app, plain).mergeOverrideHeadSha).toBeNull();
+    await app.close();
+  });
+
+  it("the route refuses when a DIFFERENT check is red than the one the hold named", async () => {
+    const app = await buildApp();
+    const id = await createHeldTask(app);
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "dependency-audit", conclusion: "failure", status: "completed", url: "" },
+      { name: "codecov/patch", conclusion: "failure", status: "completed", url: "" },
+    ]);
+
+    const res = await postMerge(app, id, true);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toContain("codecov/patch");
+    expect(getTask(app, id).mergeOverrideHeadSha).toBeNull();
+    await app.close();
+  });
+
+  it("the route refuses when no check is red any more, and 502s when the checks cannot be read", async () => {
+    const app = await buildApp();
+    const id = await createHeldTask(app);
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "dependency-audit", conclusion: "success", status: "completed", url: "" },
+    ]);
+    expect((await postMerge(app, id, true)).statusCode).toBe(409);
+
+    mockFetchCheckRunsForHead.mockRejectedValue(new Error("boom"));
+    expect((await postMerge(app, id, true)).statusCode).toBe(502);
+    expect(getTask(app, id).mergeOverrideHeadSha).toBeNull();
+    await app.close();
+  });
+
+  it("every way of clearing a merge hold clears the override with it", async () => {
+    const { CLEARED_MERGE_ERROR, clearedFor } =
+      await import("../../src/services/task-merge-human.js");
+    expect(CLEARED_MERGE_ERROR.mergeOverrideHeadSha).toBeNull();
+    expect(clearedFor(null).mergeOverrideHeadSha).toBeNull();
+    // The review-post-failed hold takes its own branch of clearedFor.
+    expect(clearedFor("review-post-failed").mergeOverrideHeadSha).toBeNull();
+  });
+
+  it("GET /api/tasks and /api/tasks/:id carry mergeOverridable and ciHoldNote", async () => {
+    const app = await buildApp();
+    const held = await createHeldTask(app);
+    const parked = await createHeldTask(app, {
+      status: "reviewing",
+      mergeError: null,
+      needsHumanReason: "ci-unfixable",
+      ciHoldNote: "dependency-audit — no patched release",
+      autoReturnCapAnnouncedAt: new Date(),
+    });
+
+    const one = (await app.inject({ method: "GET", url: `/api/tasks/${held}` })).json();
+    expect(one.mergeOverridable).toBe(true);
+    expect(one.ciHoldNote).toBeNull();
+    const list = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as {
+      id: number;
+      mergeOverridable: boolean;
+      ciHoldNote: string | null;
+    }[];
+    expect(list.find((t) => t.id === held)?.mergeOverridable).toBe(true);
+    const row = list.find((t) => t.id === parked);
+    expect(row?.mergeOverridable).toBe(false);
+    expect(row?.ciHoldNote).toBe("dependency-audit — no patched release");
     await app.close();
   });
 

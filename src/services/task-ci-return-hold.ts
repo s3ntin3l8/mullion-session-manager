@@ -31,17 +31,16 @@ export function resetCiRerunSettleForTests(): void {
 const MAX_UNFIXABLE_REASON_CHARS = 500;
 
 /**
- * A worker's free-text reason, made safe for a PR comment and the board: one
- * line, secrets redacted, capped, and GitHub mentions/markup neutralised
- * (`neutraliseDecisionLine`, the same escaping the PR-description decisions get).
+ * A worker's free-text reason, made safe to store and show: one line, secrets
+ * redacted, capped. It is shown as plain text by the board (React escapes it),
+ * so it is NOT markup-escaped here; the PR comment, which GitHub renders as
+ * markdown, escapes it (`neutraliseDecisionLine`) where it is built.
  */
 export function sanitiseCiUnfixableReason(raw: string): string {
   const oneLine = redactSecrets(raw.replace(/\s+/g, " ").trim());
-  const capped =
-    oneLine.length > MAX_UNFIXABLE_REASON_CHARS
-      ? `${oneLine.slice(0, MAX_UNFIXABLE_REASON_CHARS)}…`
-      : oneLine;
-  return neutraliseDecisionLine(capped);
+  return oneLine.length > MAX_UNFIXABLE_REASON_CHARS
+    ? `${oneLine.slice(0, MAX_UNFIXABLE_REASON_CHARS)}…`
+    : oneLine;
 }
 
 /** What GitHub's merge state says about whether the red checks are required:
@@ -135,10 +134,13 @@ async function parkRedCiForHuman(
     "task reconcile: a check is red on a head the worker was already returned for and no automatic step will clear it — parked for a human",
   );
   const required = requiredClause(park.mergeableState);
+  // The comment is markdown GitHub renders and the check names and the worker's
+  // text are not ours: neutralise mentions and markup in both.
+  const safeNames = neutraliseDecisionLine(names);
   const body =
     park.reason === "ci-unfixable"
-      ? `The worker was sent back for a failing CI check on this task's PR (${names}) and reported that no change to this PR can fix it: "${park.workerReason}".${required} Mullion has stopped re-running it. A human can approve the task and use "Merge anyway" if the check is not required, or fix the cause on the base branch and update this branch (which re-arms the task).`
-      : `A CI check is still failing on this task's PR (${names}). The worker was sent back for this exact commit and pushed nothing, and re-running the failed jobs did not clear it.${required} The automatic loop has stopped; a human needs to re-run the check or push a fix.`;
+      ? `The worker was sent back for a failing CI check on this task's PR (${safeNames}) and reported that no change to this PR can fix it: "${neutraliseDecisionLine(park.workerReason ?? "")}".${required} Mullion has stopped re-running it. A human can approve the task and use "Merge anyway" if the check is not required, or fix the cause on the base branch and update this branch (which re-arms the task).`
+      : `A CI check is still failing on this task's PR (${safeNames}). The worker was sent back for this exact commit and pushed nothing, and re-running the failed jobs did not clear it.${required} The automatic loop has stopped; a human needs to re-run the check or push a fix.`;
   await postReviewFindingsComment(app, task, project, { body });
 }
 

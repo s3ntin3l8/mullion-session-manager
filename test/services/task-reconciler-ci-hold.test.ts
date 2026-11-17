@@ -520,18 +520,23 @@ describe("red CI on a head the worker was already returned for", () => {
       expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
       expect(row.lastReviewedHeadSha).toBe(HEAD_SHA);
       expect(row.autoReturnRounds).toBe(0);
-      // The note names the check and carries the reason, flattened and neutralised.
+      // The note names the check and carries the reason, flattened and redacted.
+      // It is shown as plain text on the board, so it is not markup-escaped...
       expect(row.ciHoldNote).toContain("test-frontend / test-merge — dependency-audit fails on");
       expect(row.ciHoldNote).not.toContain("\n");
-      expect(row.ciHoldNote).not.toContain("@octocat");
       expect(row.ciHoldNote).not.toContain("abc.def-ghi");
-      expect(row.ciHoldNote).not.toContain("<b>");
+      expect(row.ciHoldNote).toContain("@octocat");
+      expect(row.ciHoldNote).not.toContain("&amp;");
       expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
       const body = mockCreatePullRequestReview.mock.calls[0][4].body as string;
       expect(body).toContain("(test-frontend / test-merge)");
       expect(body).toContain("no change to this PR can fix it");
       expect(body).toContain("None of them is a required check.");
       expect(body).not.toContain("lost runner");
+      // ...but the PR comment is markdown GitHub renders: no live mention or tag.
+      expect(body).not.toContain("@octocat");
+      expect(body).not.toContain("<b>");
+      expect(body).toContain("@\u200Boctocat");
 
       await app.close();
     });

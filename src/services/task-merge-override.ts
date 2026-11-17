@@ -10,6 +10,8 @@
 import type { FastifyInstance } from "fastify";
 import type { projects, tasks } from "../db/schema.js";
 import { getPullRequestByNumber } from "./github-write.js";
+import { isRedCheckConclusion } from "./github.js";
+import { readPrCheckRuns } from "./pr-check-runs.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./host-git.js";
 
@@ -39,7 +41,7 @@ export function isMergeOverridable(
  */
 export async function resolveMergeOverrideHead(
   app: FastifyInstance,
-  task: Pick<typeof tasks.$inferSelect, "prNumber" | "status" | "mergeError">,
+  task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
 ): Promise<{ headSha: string } | { refusal: string; status: 409 | 502 }> {
   if (!isMergeOverridable(task) || task.prNumber === null) {
@@ -58,6 +60,22 @@ export async function resolveMergeOverrideHead(
     if (pr.mergeableState !== "unstable") {
       return {
         refusal: `The PR is "${pr.mergeableState}", not held by non-required checks; use Merge now`,
+        status: 409,
+      };
+    }
+    // The button reflects the LAST sweep's hold, which may describe an older head:
+    // refuse unless every check red on THIS head is one the hold named, so the
+    // human is never overriding a check they were not shown.
+    const checks = await readPrCheckRuns(app, task, token, repoRef, pr.headSha, "unstable-merge");
+    if (!checks.ok) return { refusal: "Could not read the PR's checks from GitHub", status: 502 };
+    const red = checks.runs.filter((c) => isRedCheckConclusion(c.conclusion));
+    const unnamed = red.filter((c) => !task.mergeError?.includes(c.name));
+    if (red.length === 0 || unnamed.length > 0) {
+      return {
+        refusal:
+          red.length === 0
+            ? "No check is red on the PR's current head; wait for the next sweep"
+            : `The PR's red checks changed since this hold was recorded (now: ${red.map((c) => c.name).join(", ")}); wait for the next sweep and review them`,
         status: 409,
       };
     }
