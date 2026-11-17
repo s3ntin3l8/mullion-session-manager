@@ -752,6 +752,7 @@ export function DockProjectGroup({
       running,
       storedValue: dockControlWorktrees?.[control.id],
       optionValues,
+      refsLoaded: gitRefs !== undefined,
       mainCheckoutPath: mainCheckout?.path,
       controlCwd: control.cwd,
     });

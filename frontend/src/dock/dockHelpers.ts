@@ -108,11 +108,11 @@ export function isDockPreviewPath(worktreePath: string): boolean {
 
 /**
  * Resolves which option value a monitor's worktree/branch `<select>` should
- * show. The result is always a member of `optionValues` when one exists at
- * all — a dock-preview worktree is deliberately absent from those options
- * (see `isDockPreviewPath`), so naively preferring a running session's raw
- * `cwd` would render the select blank whenever that cwd happens to be a
- * preview path. Order of preference:
+ * show. The result is a member of `optionValues` whenever one matches, and
+ * never a dock-preview path (`isDockPreviewPath`) — a dock-preview worktree is
+ * deliberately absent from those options, so naively preferring a running
+ * session's raw `cwd` would render the select blank whenever that cwd happens
+ * to be a preview path. Order of preference:
  *
  * 1. A running preview session's `previewBranch`, re-expressed as the
  *    `branch:<name>` option value — the only way to resolve a running
@@ -121,18 +121,25 @@ export function isDockPreviewPath(worktreePath: string): boolean {
  *    common case: running in the main checkout or a real worktree).
  * 3. The remembered selection (`storedValue`), when it still matches an option.
  * 4. An escape hatch for the moment right after a launch, before
- *    `refreshGitRefs` has picked up a brand-new worktree/branch — but never
- *    for a dock-preview path, which must never be the select's value.
- * 5. The main checkout, then the control's own configured cwd, then "".
+ *    `refreshGitRefs` has picked up a brand-new worktree/branch (or if refs
+ *    never load) — never for a dock-preview path, which must never be the
+ *    select's value.
+ * 5. While git refs for the project have not loaded yet (`!refsLoaded`),
+ *    the remembered selection (`storedValue`, never a dock-preview path) so
+ *    starting a control in that window still uses the remembered worktree
+ *    instead of falling back to main. Once refs are loaded, an absent
+ *    remembered option falls through to step 6.
+ * 6. The main checkout, then the control's own configured cwd, then "".
  */
 export function resolveSelectedValue(params: {
   running: Session | undefined;
   storedValue: string | undefined;
   optionValues: Set<string>;
+  refsLoaded: boolean;
   mainCheckoutPath: string | undefined;
   controlCwd: string | undefined;
 }): string {
-  const { running, storedValue, optionValues, mainCheckoutPath, controlCwd } = params;
+  const { running, storedValue, optionValues, refsLoaded, mainCheckoutPath, controlCwd } = params;
 
   const previewValue = running?.previewBranch ? `branch:${running.previewBranch}` : null;
   if (previewValue && optionValues.has(previewValue)) return previewValue;
@@ -142,6 +149,8 @@ export function resolveSelectedValue(params: {
   if (storedValue && optionValues.has(storedValue)) return storedValue;
 
   if (running?.cwd && !isDockPreviewPath(running.cwd)) return running.cwd;
+
+  if (!refsLoaded && storedValue && !isDockPreviewPath(storedValue)) return storedValue;
 
   return mainCheckoutPath ?? controlCwd ?? "";
 }

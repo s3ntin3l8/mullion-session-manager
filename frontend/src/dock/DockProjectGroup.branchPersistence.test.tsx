@@ -194,4 +194,31 @@ describe("DockProjectGroup — branch selector persistence (#3230)", () => {
     });
     expect(readStoredDockControlWorktrees()).toEqual({ "1": { dev: "branch:topic-0" } });
   });
+
+  it("launches with the remembered worktree path even before git refs have loaded", async () => {
+    const user = userEvent.setup();
+    const createSession = vi.fn().mockResolvedValue({});
+    resetStore({
+      projects: [PROJECT],
+      sessions: [],
+      sessionsLoaded: true,
+      gitBranchesByProject: {},
+      dockControlWorktrees: { "1": { dev: "/home/x/mullion-wt" } },
+      createSession,
+      settings: DEFAULT_SETTINGS,
+    });
+
+    render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+    const startButton = await screen.findByRole("button", {
+      name: "Dev server — click to start log streaming",
+    });
+    await user.click(startButton);
+
+    expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+      cwd: "/home/x/mullion-wt",
+      kind: "dock",
+      dockControlId: "dev",
+    });
+  });
 });

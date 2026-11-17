@@ -744,6 +744,7 @@ describe("resolveSelectedValue", () => {
         running: undefined,
         storedValue: "branch:feat/ahead",
         optionValues: OPTIONS,
+        refsLoaded: true,
         mainCheckoutPath: "/home/x/mullion",
         controlCwd: "/home/x/mullion",
       }),
@@ -756,6 +757,7 @@ describe("resolveSelectedValue", () => {
         running: undefined,
         storedValue: "branch:deleted-branch",
         optionValues: OPTIONS,
+        refsLoaded: true,
         mainCheckoutPath: "/home/x/mullion",
         controlCwd: "/home/x/mullion",
       }),
@@ -768,10 +770,24 @@ describe("resolveSelectedValue", () => {
         running: undefined,
         storedValue: "/home/x/mullion-wt-gone",
         optionValues: OPTIONS,
+        refsLoaded: true,
         mainCheckoutPath: "/home/x/mullion",
         controlCwd: "/home/x/mullion",
       }),
     ).toBe("/home/x/mullion");
+  });
+
+  it("keeps a remembered worktree path while git refs have not loaded yet", () => {
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: "/home/x/mullion-wt",
+        optionValues: new Set(),
+        refsLoaded: false,
+        mainCheckoutPath: undefined,
+        controlCwd: "/home/x/mullion",
+      }),
+    ).toBe("/home/x/mullion-wt");
   });
 
   it("never returns a dock-preview path even if passed as storedValue or running.cwd", () => {
@@ -781,8 +797,19 @@ describe("resolveSelectedValue", () => {
         running: makeSession({ kind: "dock", cwd: previewCwd }),
         storedValue: previewCwd,
         optionValues: OPTIONS,
+        refsLoaded: true,
         mainCheckoutPath: "/home/x/mullion",
         controlCwd: undefined,
+      }),
+    ).toBe("/home/x/mullion");
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: previewCwd,
+        optionValues: new Set(),
+        refsLoaded: false,
+        mainCheckoutPath: undefined,
+        controlCwd: "/home/x/mullion",
       }),
     ).toBe("/home/x/mullion");
   });
