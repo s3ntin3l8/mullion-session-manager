@@ -495,7 +495,6 @@ export type {
   PlacementPreview,
 } from "./host-types.js";
 import type { CleanupSource } from "./storage-types.js";
-import type { NeedsHumanReason } from "../needsHuman.js";
 
 // Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
 // #820 PR7a/PR7c. Which of resolveSshAuthSock's three tiers is why
