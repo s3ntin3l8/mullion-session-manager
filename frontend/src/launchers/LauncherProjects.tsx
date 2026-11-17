@@ -32,6 +32,17 @@ import type { KebabMenuItem } from "../ui/KebabMenu.js";
 import { Modal } from "../ui/Modal.js";
 import { Dropdown, TextInput } from "../ui/primitives.js";
 import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
+import { COARSE_POINTER_QUERY } from "../lib/layoutTier.js";
+
+// A control that brings up the on-screen keyboard: a text-like input or a
+// textarea (checkboxes, radios and buttons do not).
+function isTextEntry(el: Element): boolean {
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (!(el instanceof HTMLInputElement)) return false;
+  return !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(
+    el.type,
+  );
+}
 
 const NO_SESSIONS: Session[] = [];
 
@@ -328,6 +339,25 @@ function LauncherAddProject({
   };
 
   const { remaining } = discovery;
+  // #3287 — under a coarse pointer the form opens without focusing its path
+  // field (the keyboard would come up and scroll this row out of view), and
+  // the row takes focus instead. The scan usually answers after the form has
+  // mounted, so this waits for the row, once, and leaves focus alone if the
+  // user has already moved into a field or out of the form.
+  const [coarseAtOpen] = useState(() => window.matchMedia(COARSE_POINTER_QUERY).matches);
+  const formRef = useRef<HTMLDivElement>(null);
+  const rowFocused = useRef(false);
+  const hasRow = remaining !== null && remaining.length > 0;
+  useEffect(() => {
+    if (!coarseAtOpen || !hasRow || rowFocused.current || discoveredOpen) return;
+    rowFocused.current = true;
+    const active = document.activeElement;
+    const untouched =
+      !active ||
+      active === document.body ||
+      (formRef.current?.contains(active) === true && !isTextEntry(active));
+    if (untouched) rowRef.current?.focus();
+  }, [coarseAtOpen, hasRow, discoveredOpen]);
   const lead =
     remaining === null ? (
       <div className="launcher-discovered-row" aria-busy="true">
@@ -356,7 +386,7 @@ function LauncherAddProject({
 
   return (
     <div className="launcher-project-view">
-      <div className="launcher-project-form" hidden={discoveredOpen}>
+      <div ref={formRef} className="launcher-project-form" hidden={discoveredOpen}>
         <CreateProjectModal
           surface="embedded"
           hosts={hosts}

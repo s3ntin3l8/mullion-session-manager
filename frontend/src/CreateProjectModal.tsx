@@ -39,6 +39,7 @@ import {
 } from "./createProjectModalUtils.js";
 import { BrowseButton, FolderPicker } from "./FolderPicker.js";
 import { Modal } from "./ui/Modal.js";
+import { COARSE_POINTER_QUERY } from "./lib/layoutTier.js";
 
 // Empty string represents "unset" (fall through to the next precedence
 // tier) in the Dropdown below, which is string-only — converted to/from
@@ -352,6 +353,12 @@ export function CreateProjectModal({
   const [recheckError, setRecheckError] = useState<string | null>(null);
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
+  // #3287 — on a touch device, focusing the path field as Add project opens
+  // brings the on-screen keyboard up at once and scrolls the form to the
+  // field, past whatever leads it (the launcher's discovered-repositories
+  // row). Decided once, as the form opens: a pointer change while it is open
+  // must not pull focus into the field.
+  const [coarseAtOpen] = useState(() => window.matchMedia(COARSE_POINTER_QUERY).matches);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
   // Every registered host the project is NOT pinned to: those are the ones it
   // may also live on. (A remote-hosted project can also live on this machine.)
@@ -773,8 +780,11 @@ export function CreateProjectModal({
       }
       // The repository path is the field the dialog exists to fill in, so
       // it takes initial focus rather than the close button the focus trap
-      // would otherwise pick (it comes first in DOM order).
-      initialFocusRef={pathInputRef}
+      // would otherwise pick (it comes first in DOM order). Not when adding
+      // under a coarse pointer (#3287): the close (or Back) button takes it,
+      // the keyboard stays down and the view opens at its top. The launcher
+      // then hands focus to its discovered-repositories row when it shows.
+      initialFocusRef={coarseAtOpen && !isEdit ? undefined : pathInputRef}
       footer={
         <>
           <span className="create-modal-footer-hint">

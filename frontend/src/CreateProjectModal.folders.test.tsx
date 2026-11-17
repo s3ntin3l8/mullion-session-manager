@@ -196,4 +196,29 @@ describe("CreateProjectModal folder picker", () => {
       screen.queryByRole("region", { name: "Choose repository folder" }),
     ).not.toBeInTheDocument();
   });
+
+  // #3287 — under a coarse pointer the form opens without focusing the path
+  // field, but coming back from the picker the user asked for that field.
+  it("closing the picker focuses the path field under a coarse pointer too", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      const user = userEvent.setup();
+      vi.mocked(api.listDirectories).mockRejectedValue(new Error("Folder is unreadable"));
+      render(<CreateProjectModal initialPath="/x" onClose={vi.fn()} onCreate={vi.fn()} />);
+      expect(screen.getByPlaceholderText("~/code/my-project")).not.toHaveFocus();
+      await user.click(screen.getByRole("button", { name: "Browse…" }));
+      await user.click(await screen.findByRole("button", { name: "Close picker" }));
+      expect(screen.getByPlaceholderText("~/code/my-project")).toHaveFocus();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

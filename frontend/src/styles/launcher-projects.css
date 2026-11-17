@@ -161,6 +161,18 @@ button.launcher-discovered-row:focus-visible {
 .session-launcher-sheet .launcher-discovered-row {
   min-height: 44px;
 }
+/* #3287 — on a touch device (the phone's sheet, and the fold, which is not
+   one) the row reads as an action, like the form's other tappable rows:
+   their border and field background, at a touch target's height. The
+   placeholder shown while the scan runs is a div and keeps the quiet look. */
+@media (pointer: coarse) {
+  button.launcher-discovered-row {
+    min-height: 44px;
+    border-color: var(--border-soft);
+    border-radius: 9px;
+    background: var(--field);
+  }
+}
 .session-launcher-sheet .launcher-discovered-list .discover-item {
   min-height: 44px;
   padding-block: 0;
