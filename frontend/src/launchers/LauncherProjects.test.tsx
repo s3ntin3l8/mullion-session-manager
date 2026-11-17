@@ -3,6 +3,9 @@ import launcherProjectsCss from "../styles/launcher-projects.css?raw";
 
 // The rule body of the first `selector {…}` block in a stylesheet.
 function rule(css: string, selector: string): string {
+  // vitest.config.ts's css.include must list the stylesheet, or `?raw` is "".
+  if (css === "")
+    throw new Error("stylesheet loaded empty: add it to vitest.config.ts css.include");
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`(?:^|\\n)${escaped} \\{([^}]*)\\}`).exec(css);
   if (!match) throw new Error(`no rule for ${selector}`);

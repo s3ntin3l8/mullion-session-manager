@@ -394,10 +394,12 @@ describe("SessionLauncher — skip permissions", () => {
         .map((el) => el.className + ":" + [...el.children].map((c) => c.className).join("|"))
         .slice(-1)[0];
     };
-    await screen.findByRole("switch", { name: "Skip permission prompts" });
+    await screen.findByRole("switch", { name: "Skip permissions (no permission prompts)" });
     const claude = shape();
     await user.click(screen.getByRole("radio", { name: "opencode" }));
-    const toggle = await screen.findByRole("switch", { name: "Skip permission prompts" });
+    const toggle = await screen.findByRole("switch", {
+      name: "Skip permissions (no permission prompts)",
+    });
     expect(toggle).toHaveAccessibleDescription("Off in settings for opencode");
     expect(shape()).toBe(claude);
     // #3071 — a form row like Worktree: a grid with a fixed label column
@@ -409,6 +411,8 @@ describe("SessionLauncher — skip permissions", () => {
     expect(control).toHaveClass("launcher-form-control");
     expect(control.firstElementChild).toBe(toggle);
     expect(control).toHaveTextContent("Skip permissions");
+    // WCAG 2.5.3 label in name: the accessible name contains the visible label.
+    expect(toggle).toHaveAccessibleName(expect.stringContaining("Skip permissions"));
   });
 
   it("off in settings: the switch starts off, launches off, and the override turns it on", async () => {
@@ -418,7 +422,9 @@ describe("SessionLauncher — skip permissions", () => {
     renderHost();
     openLauncher();
 
-    const toggle = await screen.findByRole("switch", { name: "Skip permission prompts" });
+    const toggle = await screen.findByRole("switch", {
+      name: "Skip permissions (no permission prompts)",
+    });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(toggle).toHaveAccessibleDescription("Off in settings for claude");
     // No settings flag on the tile.
@@ -463,7 +469,7 @@ describe("SessionLauncher — skip permissions", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "codex" })).toBeInTheDocument();
-    const toggle = screen.getByRole("switch", { name: "Skip permission prompts" });
+    const toggle = screen.getByRole("switch", { name: "Skip permissions (no permission prompts)" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     expect(toggle).toHaveAccessibleDescription("On in settings for claude");
 
@@ -499,9 +505,11 @@ describe("SessionLauncher — skip permissions", () => {
     renderHost();
     openLauncher();
 
-    await user.click(await screen.findByRole("switch", { name: "Skip permission prompts" }));
+    await user.click(
+      await screen.findByRole("switch", { name: "Skip permissions (no permission prompts)" }),
+    );
     await user.click(screen.getByRole("radio", { name: "codex" }));
-    const toggle = screen.getByRole("switch", { name: "Skip permission prompts" });
+    const toggle = screen.getByRole("switch", { name: "Skip permissions (no permission prompts)" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(toggle).toHaveAccessibleDescription("Off in settings for codex");
     await user.click(screen.getByRole("button", { name: "Launch codex" }));

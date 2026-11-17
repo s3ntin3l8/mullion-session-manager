@@ -32,12 +32,11 @@
 
 /* The Add/Edit project view: the project form (CreateProjectModal.tsx's
    embedded shell) in the launcher's body, the discovered repositories under
-   it. */
-/* #3212: the launcher's body is a flex column that scrolls (modals.css's
+   it. The launcher's body is a flex column that scrolls (modals.css's
    .create-modal-body), so a flex child with min-height: 0 would shrink to fit
    it: the form collapsed to nothing and the Discover list was drawn over its
-   fields. The view, the form and the form's own body keep their content
-   height (flex-shrink: 0) and the launcher's body scrolls them. */
+   fields (#3212). The view, the form and the form's own body keep their
+   content height (flex-shrink: 0) and the launcher's body scrolls them. */
 .launcher-project-view {
   display: flex;
   flex-direction: column;
