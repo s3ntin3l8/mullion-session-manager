@@ -30,7 +30,7 @@ session. Enough for get/rename/logs on yourself, the full `browser` surface,
 `project actions`, reading (not writing) `project tooling`, and most of the
 `device` surface. **Never** enough for full-scope ops: `session
 list/create`, `session kill` of anything but your own child, `dock start/stop/list`, `preview *`, `project list/dock`,
-writing `project tooling`, `agents list`, `device delete/pair/pair-and-connect`, `task list/get`,
+writing `project tooling`, `agents list`, `device delete/pair/pair-and-connect`, `task list/get/retry/start/close/archive/unarchive`,
 `bundle status/resync/remove` — these 403, and that's expected, not a bug.
 `session spawn-child` IS session-reachable (it targets a child of yourself,
 not an arbitrary session), and so is the rest of `device`

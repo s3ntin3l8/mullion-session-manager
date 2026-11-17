@@ -5,49 +5,18 @@
  */
 import { extractIdField } from "../services/control-session-authority.js";
 import {
-  CONTROL_SOCKET_VIA_HEADER,
-  CONTROL_SOCKET_VIA_TOKEN,
-} from "../services/internal-request.js";
-import {
   bad,
-  buildAuthHeaders,
   buildQueryUrl,
-  injectRoute,
   json,
-  jsonHeaders,
+  routeOp,
   type OpContext,
   type OpSpec,
-  type ReplyPayload,
   type Route,
 } from "./control-socket-core.js";
 import { enc } from "./control-socket-support.js";
 
-function fullTaskOp(resolve: (ctx: OpContext) => Route | ReplyPayload): OpSpec {
-  return {
-    scopes: ["full"],
-    handler: async (ctx) => {
-      const resolved = resolve(ctx);
-      if (!("method" in resolved)) {
-        ctx.reply(resolved);
-        return;
-      }
-      ctx.reply(
-        await injectRoute(ctx.app, ctx.conn, {
-          method: resolved.method,
-          url: resolved.url,
-          headers: {
-            ...(resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app)),
-            [CONTROL_SOCKET_VIA_HEADER]: CONTROL_SOCKET_VIA_TOKEN,
-          },
-          ...(resolved.payload !== undefined ? { payload: resolved.payload } : {}),
-        }),
-      );
-    },
-  };
-}
-
 function withTaskId(fn: (id: string, ctx: OpContext) => Route): OpSpec {
-  return fullTaskOp((ctx) => {
+  return routeOp(["full"], (ctx) => {
     const id = extractIdField(ctx.body, "taskId");
     return id === null ? bad(400, "'taskId' is required") : fn(id, ctx);
   });
@@ -61,7 +30,7 @@ function forwardLaunchFields(body: Record<string, unknown> | undefined): string 
 }
 
 export const taskOps: Record<string, OpSpec> = {
-  "tasks.list": fullTaskOp(({ body }) => ({
+  "tasks.list": routeOp(["full"], ({ body }) => ({
     method: "GET",
     url: buildQueryUrl("/api/tasks", body),
   })),

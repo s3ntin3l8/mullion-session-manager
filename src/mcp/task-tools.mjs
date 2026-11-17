@@ -44,8 +44,8 @@ export const getTask = {
 export const retryTask = {
   name: "retry_task",
   description:
-    "Retry a failed Task Master task (re-queues a resume or resets to ready, and syncs the " +
-    `GitHub label). ${FULL_SCOPE_NOTE}`,
+    "Retry a failed Task Master task (re-queues a resume, which syncs the GitHub label, or " +
+    `resets a branchless failed task to ready). ${FULL_SCOPE_NOTE}`,
   inputSchema: {
     type: "object",
     required: ["taskId"],

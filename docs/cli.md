@@ -252,8 +252,9 @@ $M browser screenshot $S --out /tmp/shot.png
 - `task get <id>` — fetches one task by id; default rendering is the task
   JSON (identical with or without `--json`). Full-scope only.
 - `task retry <id> [--agent <a>] [--review-agent <r>]` — retries a `failed`
-  task (re-queues a resume or resets to `ready`, and syncs the GitHub label).
-  Prints `<id>\t<status>`, or the full task with `--json`. Full-scope only.
+  task (re-queues a resume, which syncs the GitHub label, or resets a
+  branchless task to `ready`). Prints `<id>\t<status>`, or the full task with
+  `--json`. Full-scope only.
 - `task start <id> [--agent <a>] [--review-agent <r>]` — claims/enqueues a
   `ready` task (`POST /api/tasks/:id/claim`). Prints `<id>\t<status>`, or the
   full task with `--json`. Full-scope only.
