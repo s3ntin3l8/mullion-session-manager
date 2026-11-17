@@ -739,6 +739,34 @@ export class MullionClient {
     return this.controlRequest("tasks.get", { taskId });
   }
 
+  /** Retries a failed Task Master task (#3173). */
+  retryTask(taskId, { agent, reviewAgent } = {}) {
+    const body = { taskId };
+    if (agent !== undefined) body.agent = agent;
+    if (reviewAgent !== undefined) body.reviewAgent = reviewAgent;
+    return this.controlRequest("tasks.retry", body);
+  }
+
+  /** Claims/starts a ready Task Master task (#3173). */
+  startTask(taskId, { agent, reviewAgent } = {}) {
+    const body = { taskId };
+    if (agent !== undefined) body.agent = agent;
+    if (reviewAgent !== undefined) body.reviewAgent = reviewAgent;
+    return this.controlRequest("tasks.start", body);
+  }
+
+  /** Closes/gives up on a reviewing Task Master task (#3173). */
+  closeTask(taskId, { reason } = {}) {
+    const body = { taskId };
+    if (reason !== undefined) body.reason = reason;
+    return this.controlRequest("tasks.close", body);
+  }
+
+  /** Archives or unarchives a finished Task Master task (#3173). */
+  archiveTask(taskId, { unarchive } = {}) {
+    return this.controlRequest(unarchive ? "tasks.unarchive" : "tasks.archive", { taskId });
+  }
+
   /** Asks the Mullion server to relay a Hermes review request for this
    * session's PR. `prNumber` is optional — the server resolves the PR from
    * the session's branch when omitted. */
