@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useOpenTask } from "./hooks/useOpenTask.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
@@ -455,6 +455,98 @@ export function UnifiedBoard({
     ...(PHONE_SEGMENTS.find((seg) => seg.id === phoneSegment)?.statuses ?? []),
   ];
 
+  const retryButton = (
+    <button
+      type="button"
+      className="git-panel-fetch-btn"
+      onClick={() => void useDashboardStore.getState().refreshTasks()}
+    >
+      Retry
+    </button>
+  );
+  // The board's empty states (#3243): centred over the lanes area, icon above
+  // text, instead of a block in the board's top-left corner. Shown OVER the
+  // columns, not instead of them: the empty columns underneath still show the
+  // board's shape and stay drop targets. Each is gated on tasksLoaded (store.ts),
+  // or it would flash on every board open while the first refreshTasks() is in
+  // flight; a failed fetch is not an empty list (audit finding 15), so the
+  // "no tasks" note is gated on !tasksError.
+  let boardNoteBody: ReactNode = null;
+  if (tasksError && tasks.length === 0) {
+    boardNoteBody = (
+      <>
+        <LayersIcon size={20} />
+        <div>Couldn't load tasks.</div>
+        <div className="tasks-panel-empty-hint">{tasksError}</div>
+        {retryButton}
+      </>
+    );
+  } else if (tasksLoaded && tasks.length === 0 && !tasksError) {
+    boardNoteBody = (
+      <>
+        <LayersIcon size={20} />
+        <div>No tasks yet.</div>
+        <div className="tasks-panel-empty-hint">
+          Label a GitHub issue <code>mullion-task</code>, or use "New task" above to create one
+          locally.
+        </div>
+      </>
+    );
+  } else if (tasksLoaded && tasks.length > 0 && visibleTasks.length === 0) {
+    // There ARE tasks, an active filter hides all of them. The message and
+    // clear actions are filter-aware rather than always blaming the project
+    // filter — a Blocked view with zero blocked tasks isn't fixed by "Clear
+    // the project filter".
+    boardNoteBody = (
+      <>
+        <LayersIcon size={20} />
+        <div>{emptyBoardMessage(filters)}</div>
+        {filters.view !== "all" && (
+          <button
+            type="button"
+            className="tasks-panel-empty-hint-clear"
+            onClick={() => filterApi.setView("all")}
+          >
+            Show every task
+          </button>
+        )}
+        {activeProjectIds.length > 0 && (
+          <button
+            type="button"
+            className="tasks-panel-empty-hint-clear"
+            onClick={() => filterApi.setProjectIds([])}
+          >
+            Clear the project filter
+          </button>
+        )}
+        {filters.epicKeys.length > 0 && (
+          <button
+            type="button"
+            className="tasks-panel-empty-hint-clear"
+            onClick={() => filterApi.setEpicKeys([])}
+          >
+            Clear the epic filter
+          </button>
+        )}
+        {(filters.agents.length > 0 || filters.text.trim() !== "") && (
+          <button
+            type="button"
+            className="tasks-panel-empty-hint-clear"
+            onClick={filterApi.clearFilters}
+          >
+            Clear all filters
+          </button>
+        )}
+      </>
+    );
+  }
+  const boardNote =
+    boardNoteBody === null ? null : (
+      <div className="task-board-empty">
+        <EmptyStateNote className="task-board-empty-note">{boardNoteBody}</EmptyStateNote>
+      </div>
+    );
+
   return (
     <div className="kanban-unified" ref={rootRef} data-board-layout={stacked ? "stacked" : "lanes"}>
       <div className="kanban-unified-main">
@@ -512,112 +604,16 @@ export function UnifiedBoard({
             </div>
           )}
           {/* Audit finding 15 — a FAILED task fetch is NOT an empty task
-              list. The tasks slice keeps the last-known-good list on
-              failure (so `tasks` is still []) and records the failure in
-              `tasksError`; before this, the board said "No tasks yet." and
-              invited the user to create a task, which is actively
-              misleading when the real cause is that the list could not be
-              loaded. Same "above the columns, not instead of them"
-              posture as the empty state below — the seven empty columns
-              still communicate the board's shape. The failure is spelled
-              out in words (never by colour alone), and Retry re-runs the
-              fetch. */}
-          {tasksError && (
-            <EmptyStateNote>
-              <LayersIcon size={20} />
-              {tasks.length > 0 ? (
-                // The tasks ARE on screen — the columns below are the last
-                // known good ones, not nothing. Saying "Couldn't load
-                // tasks." here would read as if there were no tasks at
-                // all, and the board's real state (a populated board that
-                // could not be re-synced) would be a lie. Same split
-                // Sidebar ("showing the last known list") and Source Control
-                // (its stale marker) already make.
-                <>
-                  <div>Could not refresh tasks — showing the last known list.</div>
-                  <div className="tasks-panel-empty-hint">{tasksError}</div>
-                </>
-              ) : (
-                <>
-                  <div>Couldn't load tasks.</div>
-                  <div className="tasks-panel-empty-hint">{tasksError}</div>
-                </>
-              )}
-              <button
-                type="button"
-                className="git-panel-fetch-btn"
-                onClick={() => void useDashboardStore.getState().refreshTasks()}
-              >
-                Retry
-              </button>
-            </EmptyStateNote>
-          )}
-          {/* Shown ABOVE the columns, not instead of them — at zero tasks
-              this used to replace the whole board, so a first-time user saw
-              no workflow model and no drop targets at all. The seven empty
-              columns underneath still communicate the board's shape.
-              Gated on tasksLoaded (store.ts) too — without it this flashed
-              on every board open, since the mount effect above always
-              starts from tasks === [] until its own refreshTasks() lands.
-              Gated on !tasksError too — a failed fetch is not an empty
-              list (see the error note above). */}
-          {tasksLoaded && tasks.length === 0 && !tasksError && (
-            <EmptyStateNote>
-              <LayersIcon size={20} />
-              <div>No tasks yet.</div>
-              <div className="tasks-panel-empty-hint">
-                Label a GitHub issue <code>mullion-task</code>, or use "New task" above to create
-                one locally.
-              </div>
-            </EmptyStateNote>
-          )}
-          {/* Distinct from the "No tasks yet." case above — there ARE tasks, an active
-              filter just hides all of them. Same "above the columns, not instead of
-              them" posture: the empty columns still show, so the board's shape stays
-              legible and clearing whichever filter is responsible is one click away
-              without leaving the board. Message and clear actions are filter-aware
-              rather than always blaming the project filter — a Blocked view with zero
-              blocked tasks isn't fixed by "Clear the project filter". */}
-          {tasksLoaded && tasks.length > 0 && visibleTasks.length === 0 && (
-            <EmptyStateNote>
-              <LayersIcon size={20} />
-              <div>{emptyBoardMessage(filters)}</div>
-              {filters.view !== "all" && (
-                <button
-                  type="button"
-                  className="tasks-panel-empty-hint-clear"
-                  onClick={() => filterApi.setView("all")}
-                >
-                  Show every task
-                </button>
-              )}
-              {activeProjectIds.length > 0 && (
-                <button
-                  type="button"
-                  className="tasks-panel-empty-hint-clear"
-                  onClick={() => filterApi.setProjectIds([])}
-                >
-                  Clear the project filter
-                </button>
-              )}
-              {filters.epicKeys.length > 0 && (
-                <button
-                  type="button"
-                  className="tasks-panel-empty-hint-clear"
-                  onClick={() => filterApi.setEpicKeys([])}
-                >
-                  Clear the epic filter
-                </button>
-              )}
-              {(filters.agents.length > 0 || filters.text.trim() !== "") && (
-                <button
-                  type="button"
-                  className="tasks-panel-empty-hint-clear"
-                  onClick={filterApi.clearFilters}
-                >
-                  Clear all filters
-                </button>
-              )}
+              list. When the tasks ARE on screen (the columns below are the
+              last known good ones), the failure is a centred line above the
+              columns rather than the centred note over them (#3243), which
+              would cover the cards. The failure is spelled out in words
+              (never by colour alone), and Retry re-runs the fetch. */}
+          {tasksError && tasks.length > 0 && (
+            <EmptyStateNote className="task-board-stale-note">
+              <div>Could not refresh tasks — showing the last known list.</div>
+              <div className="tasks-panel-empty-hint">{tasksError}</div>
+              {retryButton}
             </EmptyStateNote>
           )}
           <div
@@ -627,6 +623,7 @@ export function UnifiedBoard({
             {facetsShown && <TaskFacetsPanel api={filterApi} projects={projects} />}
             {stacked ? (
               <div className="task-board-lanes task-board-lanes--stacked">
+                {boardNote}
                 <StackedBoard
                   sections={stackedSections}
                   selectedTaskId={selectedTaskId}
@@ -659,6 +656,7 @@ export function UnifiedBoard({
               </div>
             ) : (
               <div className="task-board-lanes">
+                {boardNote}
                 {lanes.map((lane) => {
                   const epicKey = groupBy === "epic" && lane.key !== NO_EPIC ? lane.key : null;
                   const sample = lane.tasks[0];
