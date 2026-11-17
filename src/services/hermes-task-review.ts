@@ -50,7 +50,11 @@ export interface TaskReviewRound {
  * `output: "reply"`, `workspace: "clone"`). The Target and commit/range lines
  * are the relay's, but not its "post as your GitHub App" paragraph.
  */
-export function buildTaskReviewMessage(target: TaskReviewTarget, prompt: string): string {
+export function buildTaskReviewMessage(
+  target: TaskReviewTarget,
+  prompt: string,
+  correction?: string,
+): string {
   const lines = buildRelayTargetLines("pull_request", target.owner, target.repo, target.prNumber, {
     headSha: target.headSha,
     baseSha: target.baseSha,
@@ -61,7 +65,11 @@ export function buildTaskReviewMessage(target: TaskReviewTarget, prompt: string)
     lines +
     "\nOutput contract: reply with ONLY the findings JSON object described below. This review " +
     "is read-only: post nothing to GitHub (no review, no comment, no check run), push nothing " +
-    "and change nothing. Mullion reads your reply and posts the review itself.\n\n" +
+    "and change nothing. Mullion reads your reply and posts the review itself. The reply is " +
+    "exactly one JSON object with no prose around it, and every double quote inside a JSON " +
+    'string value must be escaped (\\") or replaced with backticks or single quotes.\n' +
+    (correction ? `\n${correction}\n` : "") +
+    "\n" +
     prompt
   );
 }
@@ -77,9 +85,55 @@ export function taskReviewIdempotencyKey(target: TaskReviewTarget, r: TaskReview
   );
 }
 
-/** Not the per-PR `hermes-review-...` session of the relay. */
-export function taskReviewSessionId(r: Pick<TaskReviewRound, "taskId" | "round">): string {
-  return `mullion-task-${r.taskId}-r${r.round}`;
+/**
+ * Not the per-PR `hermes-review-...` session of the relay. A re-armed round gets
+ * its own session: reusing the old conversation made the model re-emit the same
+ * unparseable reply.
+ */
+export function taskReviewSessionId(
+  r: Pick<TaskReviewRound, "taskId" | "round" | "rearms">,
+): string {
+  const base = `mullion-task-${r.taskId}-r${r.round}`;
+  return r.rearms > 0 ? `${base}-x${r.rearms}` : base;
+}
+
+const NOT_JSON_REASON = "The Hermes reply was not the findings JSON";
+const MAX_PARSE_MESSAGE = 200;
+
+/** The `JSON.parse` complaint about a reply, capped, or null when it parses (or is empty). */
+export function describeJsonParseError(text: string): string | null {
+  const raw = text.trim();
+  if (raw === "") return null;
+  try {
+    JSON.parse(raw);
+    return null;
+  } catch (err) {
+    const msg = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ");
+    return msg.slice(0, MAX_PARSE_MESSAGE);
+  }
+}
+
+/** The inconclusive reason for a reply that was not the findings JSON. */
+export function notFindingsJsonReason(reply: string): string {
+  const msg = describeJsonParseError(reply);
+  return msg ? `${NOT_JSON_REASON} (${msg})` : NOT_JSON_REASON;
+}
+
+/**
+ * The correction line for the next dispatch, derived from the stored findings
+ * text when its last block is a not-the-findings-JSON inconclusive; null for
+ * any other ending (timeout, run gone).
+ */
+export function correctionFromStoredFindings(stored: string | null | undefined): string | null {
+  if (!stored) return null;
+  const tail = stored.trimEnd();
+  const suffix = " — treat this review as inconclusive.";
+  if (!tail.endsWith(suffix)) return null;
+  const lastBlock = tail.slice(0, -suffix.length).split("\n\n").pop() ?? "";
+  if (!lastBlock.startsWith(NOT_JSON_REASON)) return null;
+  const m = /^[^(]*\((.*)\)$/s.exec(lastBlock);
+  const detail = m ? `: ${m[1].slice(0, MAX_PARSE_MESSAGE)}` : "";
+  return `Correction: your previous reply was not valid JSON${detail}; escape inner double quotes.`;
 }
 
 export interface TaskReviewDispatch extends PostRunResult {
@@ -95,6 +149,8 @@ export async function dispatchTaskReview(
     prompt: string;
     model?: string;
     provider?: string;
+    /** The task's stored findings; a trailing unparseable-reply round adds a correction line. */
+    previousFindings?: string | null;
   },
 ): Promise<TaskReviewDispatch> {
   const config = resolveHermesConfig(app, { requireProvider: false });
@@ -102,7 +158,11 @@ export async function dispatchTaskReview(
   const idempotencyKey = taskReviewIdempotencyKey(r.target, r);
   const sessionId = taskReviewSessionId(r);
   const run = await postRun(config, {
-    input: buildTaskReviewMessage(r.target, r.prompt),
+    input: buildTaskReviewMessage(
+      r.target,
+      r.prompt,
+      correctionFromStoredFindings(r.previousFindings) ?? undefined,
+    ),
     sessionId,
     idempotencyKey,
     model: r.model,
@@ -116,12 +176,19 @@ export interface TaskReviewPoll extends HermesRun {
   terminal: boolean;
   /** Hermes no longer knows the run. */
   gone: boolean;
+  /** The inconclusive reason should the reply turn out not to be the findings JSON. */
+  notFindingsReason: string;
 }
 
 /** Reads a Task Master review run by id; `output` is the whole reply. */
 export async function pollTaskReview(app: FastifyInstance, runId: string): Promise<TaskReviewPoll> {
   const run = await getRun(resolveHermesConfig(app, { requireProvider: false }), runId);
-  return { ...run, terminal: isTerminal(run.status), gone: isGone(run.status) };
+  return {
+    ...run,
+    terminal: isTerminal(run.status),
+    gone: isGone(run.status),
+    notFindingsReason: notFindingsJsonReason(run.output ?? ""),
+  };
 }
 
 function parsesAsObject(text: string): boolean {

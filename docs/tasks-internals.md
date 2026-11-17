@@ -1219,6 +1219,12 @@ answers with only the findings JSON. Unlike the GitHub relay's message
 push, post or comment anywhere, so a Hermes skill's posting how-to is never
 triggered. Mullion posts the one review, as `mullion-reviewer[bot]`. A reply
 that is not the findings JSON is **inconclusive** (see above), never a verdict.
+A re-armed round gets a **fresh Hermes session** (`mullion-task-<id>-r<round>-x<rearms>`; the first
+attempt keeps `…-r<round>`), so it does not replay the old conversation. When the previous round
+ended because the reply did not parse, the re-dispatch also carries a `Correction:` line naming
+the parser message (≤200 chars) and asking for escaped inner double quotes; it is derived from the
+stored inconclusive reason, and omitted after a timeout or a gone run. The prompt's output contract
+always asks for one JSON object with inner double quotes escaped.
 Observed against the review-bot profile with no extra skill: first and
 follow-up (changes-requested) rounds both ran, each 1-8 minutes and within the
 profile's 75-call turn budget (the worst observed was 67 calls, on a four-round
