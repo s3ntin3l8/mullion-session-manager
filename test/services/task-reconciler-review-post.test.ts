@@ -228,6 +228,8 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     // review-post marker) adds posts to this test's mocks, which made the
     // backoff test count 5 posts instead of 4 under load.
     app.db.delete(tasks).run();
+    // sessions.taskId has no FK, so stale session rows would survive the delete above.
+    app.db.delete(sessions).run();
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -938,7 +940,5 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
     }
     expect(read().reviewPostPending).not.toBeNull();
     await app.close();
-    // Seven reconcile passes: ~17s on an idle host against the 20s default, so
-    // it timed out whenever the machine was busy (the pre-push gate).
-  }, 60_000);
+  }, 60_000); // seven reconcile passes: ~17-22s against the 20s default; it timed out whenever the host was busy
 });
