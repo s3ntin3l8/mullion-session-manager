@@ -449,7 +449,13 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     const launcher = await openLauncher();
     await user.click(within(launcher).getByRole("button", { name: "Manage mullion" }));
     await user.click(screen.getByRole("menuitem", { name: "Add project…" }));
-    await user.click(await within(launcher).findByRole("button", { name: "Add" }));
+    // #3244 — the discovered repositories sit behind one row.
+    await user.click(
+      await within(launcher).findByRole("button", {
+        name: "Choose from 1 discovered repository",
+      }),
+    );
+    await user.click(within(launcher).getByRole("button", { name: "Add" }));
     expect(createProject).toHaveBeenCalledWith("landing", "/home/x/landing", "local", undefined);
     await waitFor(() =>
       expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("11"),

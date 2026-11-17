@@ -294,12 +294,17 @@ function LauncherAddProject({
   const actions = useContext(LauncherProjectActionsContext);
   const [discoveredOpen, setDiscoveredOpen] = useState(false);
   const rowRef = useRef<HTMLButtonElement>(null);
+  const leadRef = useRef<HTMLDivElement>(null);
   // Back from the discovered view: focus the row that opened it.
   const refocusRow = useRef(false);
   useEffect(() => {
     if (discoveredOpen || !refocusRow.current) return;
     refocusRow.current = false;
-    rowRef.current?.focus();
+    // The row is gone when the list emptied while the view was open (the
+    // last one attached as a checkout, a host with nothing): its hint's
+    // first control takes focus instead.
+    const target = rowRef.current ?? leadRef.current?.querySelector<HTMLElement>("button, select");
+    target?.focus();
   }, [discoveredOpen]);
   const discovery = useDiscoveredProjects({
     hosts,
@@ -326,7 +331,7 @@ function LauncherAddProject({
         <span className="launcher-discovered-row-label">Looking for repositories…</span>
       </div>
     ) : remaining.length === 0 ? (
-      <div className="launcher-discovered-hint">
+      <div ref={leadRef} className="launcher-discovered-hint">
         <DiscoverEmptyState discovery={discovery} onOpenSettingsProjects={openSettingsProjects} />
       </div>
     ) : (
@@ -408,6 +413,9 @@ function LauncherDiscoveredView({
   const remaining = discovery.remaining ?? [];
   // Decided on the whole list, so the field does not vanish while typing.
   const searchable = remaining.length > DISCOVERED_SEARCH_MIN;
+  // The shell focuses its initial target whenever this ref changes; fixed
+  // at mount, so a list crossing the threshold later does not move focus.
+  const [initialFocus] = useState(() => (searchable ? searchRef : undefined));
   const needle = query.trim().toLowerCase();
   const shown =
     searchable && needle !== ""
@@ -422,10 +430,13 @@ function LauncherDiscoveredView({
       icon={<FolderIcon size={16} />}
       title="Discovered repositories"
       subtitle="Repositories Mullion found under your project roots."
-      initialFocusRef={searchable ? searchRef : undefined}
+      initialFocusRef={initialFocus}
     >
-      {remaining.length === 0 ? (
-        // Everything was added as a checkout, or a host switch found nothing.
+      {remaining.length === 0 && discovery.addedAny && !discovery.discoverError ? (
+        // The last one was attached as a checkout from here.
+        <p className="launcher-discovered-none">Every discovered repository has been added.</p>
+      ) : remaining.length === 0 ? (
+        // A host switch found nothing, or failed.
         <DiscoverEmptyState discovery={discovery} onOpenSettingsProjects={onOpenSettingsProjects} />
       ) : (
         <>

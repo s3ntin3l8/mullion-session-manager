@@ -69,6 +69,7 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
       },
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/projects/placement-preview": () => jsonResponse(200, null),
+      "POST /api/projects/:id/host-checkouts": () => jsonResponse(200, {}),
     });
     unexpectedCalls = result.unexpectedCalls;
     vi.stubGlobal("fetch", result.fetchMock);
@@ -205,6 +206,27 @@ describe("LauncherProjectView: discovered repositories (#3244)", () => {
     await user.keyboard("{Escape}");
     expect(screen.getByRole("group", { name: "Add project" })).toBeInTheDocument();
     expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("attaching the last one says so, and Back focuses the hint that replaced the row", async () => {
+    stub([
+      repo("mirror", {
+        matchedProject: { id: 3, name: "atlas", hostId: "remote-1", reason: "origin" },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderAdd();
+    await user.click(await screen.findByRole("button", { name: /Choose from 1/ }));
+    await user.click(screen.getByRole("button", { name: "Add as checkout of atlas" }));
+    const view = screen.getByRole("group", { name: "Discovered repositories" });
+    expect(
+      await within(view).findByText("Every discovered repository has been added."),
+    ).toBeInTheDocument();
+    expect(within(view).queryByText("No repositories found")).toBeNull();
+
+    await user.click(within(view).getByRole("button", { name: "Back" }));
+    const configure = screen.getByRole("button", { name: "Configure search roots" });
+    await waitFor(() => expect(configure).toHaveFocus());
   });
 
   it("Configure search roots closes the launcher and opens Settings → Projects", async () => {

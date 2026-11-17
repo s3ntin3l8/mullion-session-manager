@@ -133,6 +133,9 @@ export function useDiscoveredProjects({
 
   return {
     remaining,
+    // Something was added or attached since the last scan: an empty
+    // `remaining` then means "all taken", not "nothing found".
+    addedAny: added.size > 0,
     discoverError,
     selectedHostId,
     setHostId,
