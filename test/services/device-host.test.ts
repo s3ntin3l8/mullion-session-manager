@@ -126,7 +126,10 @@ describe("DeviceHost", () => {
     expect(client.devices.spawn.mock.calls[0][0]).not.toHaveProperty("udid");
 
     await remote.getOrCreate({ ...row, platform: "ios", udid: "UDID-1" });
-    expect(client.devices.spawn.mock.calls[1][0]).toMatchObject({ platform: "ios", udid: "UDID-1" });
+    expect(client.devices.spawn.mock.calls[1][0]).toMatchObject({
+      platform: "ios",
+      udid: "UDID-1",
+    });
   });
 
   it("persists the port a remote emulator reports, and not an unchanged one", async () => {
