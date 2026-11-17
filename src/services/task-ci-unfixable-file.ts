@@ -1,4 +1,5 @@
 import { closeSync, openSync, readSync } from "node:fs";
+import path from "node:path";
 import { taskCiUnfixablePath } from "./task-prompt.js";
 
 // A worker's reason is a short paragraph; anything past this is a runaway file,
@@ -20,6 +21,7 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
  * lowercase SHA, so nothing path-like can reach the filesystem whatever the
  * caller did. It opens the file directly and treats "not found" as `null`, rather
  * than checking existence first, so the file cannot change between check and read.
+ * The resolved path must also stay inside `sessionsDir`.
  */
 export function readCiUnfixableFile(
   sessionsDir: string,
@@ -29,9 +31,12 @@ export function readCiUnfixableFile(
   if (!Number.isInteger(taskId) || !FULL_SHA.test(headSha)) {
     throw new Error("taskId must be an integer and headSha a 40-char lowercase hex SHA");
   }
+  const root = path.resolve(sessionsDir);
+  const target = path.resolve(taskCiUnfixablePath(root, taskId, headSha));
+  if (!target.startsWith(root + path.sep)) throw new Error("declaration path escapes sessionsDir");
   let fd: number;
   try {
-    fd = openSync(taskCiUnfixablePath(sessionsDir, taskId, headSha), "r");
+    fd = openSync(target, "r");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
