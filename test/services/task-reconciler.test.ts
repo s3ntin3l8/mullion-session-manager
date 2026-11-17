@@ -11568,15 +11568,15 @@ describe("reconcileTasks", () => {
           output: "Looks fine to me, nice work!",
           terminal: true,
           gone: false,
+          notFindingsReason: "The Hermes reply was not the findings JSON",
         });
 
         await reconcileTasks(app);
 
         const row = await getTask(app, taskId);
         expect(row.lastReviewVerdict).toBe("inconclusive");
-        expect(row.reviewRunIngestedId).toBe("run_1");
+        expect(row).toMatchObject({ reviewRunIngestedId: "run_1", status: "reviewing" });
         expect(row.reviewFindings).toContain("not the findings JSON");
-        expect(row.status).toBe("reviewing");
         await app.close();
       });
 

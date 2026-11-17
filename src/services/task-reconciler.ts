@@ -850,6 +850,7 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
             baseSha: priorRound?.reviewedSha ?? undefined,
           },
           prompt,
+          previousFindings: task.reviewFindings,
         });
         const attached = app.db
           .update(tasks)
@@ -1011,7 +1012,7 @@ async function processHermesRuns(app: FastifyInstance): Promise<void> {
             // from an external reviewer that is noise, not a verdict.
             if (candidate.structured) parsed = candidate;
           }
-          if (parsed === null) reason = "The Hermes reply was not the findings JSON";
+          if (parsed === null) reason = poll.notFindingsReason;
         }
         await ingestReviewOutcome(app, {
           ...row,
