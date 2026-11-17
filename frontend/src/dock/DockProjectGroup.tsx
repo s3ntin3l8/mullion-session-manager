@@ -637,7 +637,7 @@ export function DockProjectGroup({
       });
       setWorktree(projectId, control.id, remembered);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- controls/sessions/gitRefs are the stable state inputs from which configuredControls/runningFor/allOptions are derived; dockControlWorktrees is intentionally omitted so an in-flight onWorktreeChange is not clobbered by the outgoing session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- controls/sessions/gitRefs are the stable state inputs from which configuredControls/runningFor/allOptions are derived; dockControlWorktrees is omitted because this effect only writes to it and need not re-run on manual picks (syncedSessionByControlRef is what prevents clobbering an in-flight pick).
   }, [projectId, controls, sessions, gitRefs]);
 
   const handleCheckUpdate = async (control: DockControl) => {

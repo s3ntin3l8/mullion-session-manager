@@ -110,6 +110,7 @@ export const STORAGE_KEYS = {
   // Issue #3230 — per-control selected worktree/branch value in the Dock,
   // keyed by `String(projectId)` then `controlId`. Survives stop, remount,
   // and page reload so stopping a dev server keeps its branch selected.
+  // Entries for removed controls or projects are left unpruned (harmless).
   dockControlWorktrees: "crs.dockControlWorktrees",
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",

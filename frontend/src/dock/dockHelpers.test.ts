@@ -762,6 +762,18 @@ describe("resolveSelectedValue", () => {
     ).toBe("/home/x/mullion");
   });
 
+  it("falls back to the main checkout when no session is running and the remembered worktree path no longer exists", () => {
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: "/home/x/mullion-wt-gone",
+        optionValues: OPTIONS,
+        mainCheckoutPath: "/home/x/mullion",
+        controlCwd: "/home/x/mullion",
+      }),
+    ).toBe("/home/x/mullion");
+  });
+
   it("never returns a dock-preview path even if passed as storedValue or running.cwd", () => {
     const previewCwd = "/home/x/mullion/.mullion-worktrees/dock-preview-feat-ahead-1234";
     expect(
@@ -777,7 +789,7 @@ describe("resolveSelectedValue", () => {
 });
 
 describe("resolveRememberedValueFromRunning", () => {
-  const OPTIONS = new Set(["/home/x/mullion", "branch:feat/ahead"]);
+  const OPTIONS = new Set(["/home/x/mullion", "/home/x/mullion-wt", "branch:feat/ahead"]);
 
   it("returns branch:<name> for a running preview session when the option exists", () => {
     const session = makeSession({
@@ -797,12 +809,20 @@ describe("resolveRememberedValueFromRunning", () => {
     expect(resolveRememberedValueFromRunning(session, OPTIONS)).toBeNull();
   });
 
-  it("returns cwd for a running non-preview session", () => {
+  it("returns cwd for a running non-preview session when it is a valid option", () => {
     const session = makeSession({
       kind: "dock",
       cwd: "/home/x/mullion-wt",
     });
     expect(resolveRememberedValueFromRunning(session, OPTIONS)).toBe("/home/x/mullion-wt");
+  });
+
+  it("returns null for a running non-preview session whose cwd is not in optionValues", () => {
+    const session = makeSession({
+      kind: "dock",
+      cwd: "/home/x/mullion-wt-gone",
+    });
+    expect(resolveRememberedValueFromRunning(session, OPTIONS)).toBeNull();
   });
 
   it("returns null when there is no running session", () => {

@@ -179,6 +179,13 @@ describe("DockProjectGroup — branch selector persistence (#3230)", () => {
     expect(deleteSession).toHaveBeenCalledWith(42);
     expect(readStoredDockControlWorktrees()).toEqual({ "1": { dev: "branch:topic-0" } });
 
+    // Trigger a sync-effect re-run while the outgoing session is still in
+    // `sessions` and `deleteSession` is pending — pins `syncedSessionByControlRef`.
+    act(() => {
+      useDashboardStore.setState({ sessions: [{ ...runningSession }] });
+    });
+    expect(readStoredDockControlWorktrees()).toEqual({ "1": { dev: "branch:topic-0" } });
+
     await act(async () => {
       resolveDelete();
     });

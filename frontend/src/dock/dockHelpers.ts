@@ -119,7 +119,7 @@ export function isDockPreviewPath(worktreePath: string): boolean {
  *    preview session back to an option, since its `cwd` is never one.
  * 2. A running session's `cwd`, when that cwd matches a real option (the
  *    common case: running in the main checkout or a real worktree).
- * 3. The user's last manual selection, when it still matches an option.
+ * 3. The remembered selection (`storedValue`), when it still matches an option.
  * 4. An escape hatch for the moment right after a launch, before
  *    `refreshGitRefs` has picked up a brand-new worktree/branch — but never
  *    for a dock-preview path, which must never be the select's value.
@@ -142,9 +142,6 @@ export function resolveSelectedValue(params: {
   if (storedValue && optionValues.has(storedValue)) return storedValue;
 
   if (running?.cwd && !isDockPreviewPath(running.cwd)) return running.cwd;
-  if (storedValue && !storedValue.startsWith("branch:") && !isDockPreviewPath(storedValue)) {
-    return storedValue;
-  }
 
   return mainCheckoutPath ?? controlCwd ?? "";
 }
@@ -152,9 +149,9 @@ export function resolveSelectedValue(params: {
 /**
  * Extracts the selector value to remember from a running dock session, or
  * `null` when the session does not yet resolve to a valid, non-preview
- * option (e.g., a preview session whose `branch:<name>` option is not in
- * `optionValues` because `gitRefs` hasn't loaded or the branch was deleted).
- * Never returns a dock-preview worktree path (`isDockPreviewPath`).
+ * option (e.g., a preview session whose `branch:<name>` option or worktree
+ * `cwd` is not in `optionValues`). Never returns a dock-preview worktree path
+ * (`isDockPreviewPath`).
  */
 export function resolveRememberedValueFromRunning(
   running: Session | undefined,
@@ -163,7 +160,9 @@ export function resolveRememberedValueFromRunning(
   if (!running) return null;
   const previewValue = running.previewBranch ? `branch:${running.previewBranch}` : null;
   if (previewValue && optionValues.has(previewValue)) return previewValue;
-  if (running.cwd && !isDockPreviewPath(running.cwd)) return running.cwd;
+  if (running.cwd && !isDockPreviewPath(running.cwd) && optionValues.has(running.cwd)) {
+    return running.cwd;
+  }
   return null;
 }
 
