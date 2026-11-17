@@ -61,6 +61,7 @@ import {
   commandIsOpencode,
   commandModelCli,
 } from "../services/hook-adapters/index.js";
+import { extractModelFlag } from "../services/hook-adapters/shared.js";
 import { isControlSocketRequest } from "../services/internal-request.js";
 import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
@@ -728,8 +729,17 @@ export async function sessionsRoute(app: FastifyInstance) {
       let resolvedModel: string | undefined;
       let resolvedSmallModel: string | undefined;
       if (modelCli !== null) {
+        // A model flag already on the command wins at launch (buildModelFlag
+        // skips it), so it is the model that runs: record it, not the default
+        // (the quota badge and model display read sessions.model).
         resolvedModel =
-          explicitModel ?? resolveCliModel(app, modelCli, { issueBody: null }) ?? undefined;
+          extractModelFlag(
+            request.body.command,
+            modelCli === "codex" || modelCli === "mcode" ? "-m" : undefined,
+          ) ??
+          explicitModel ??
+          resolveCliModel(app, modelCli, { issueBody: null }) ??
+          undefined;
         // smallModel only means something to Claude Code (its
         // ANTHROPIC_DEFAULT_HAIKU_MODEL); for codex/agy it stays undefined
         // so it's dropped.

@@ -248,6 +248,22 @@ export function buildModelFlag(
   return ` --model ${shellQuote(model)}`;
 }
 
+/** The model a command line already names with its own `--model` flag (or the
+ * CLI's `shortFlag`, e.g. codex's `-m`), as `buildModelFlag` also treats it: a
+ * hand-typed flag wins over a Mullion default, so this is the model that will
+ * actually run. `undefined` when the command carries none, or the value is not
+ * a valid model name (it is only ever recorded, never put back on a command
+ * line). Reads the value in single quotes, double quotes or bare, with a space
+ * or `=` after the flag. */
+export function extractModelFlag(command: string, shortFlag?: string): string | undefined {
+  const flag = shortFlag ? `(?:--model|${shortFlag})` : "--model";
+  const match = new RegExp(`(?:^|\\s)${flag}(?:=|\\s+)(?:'([^']*)'|"([^"]*)"|(\\S+))`).exec(
+    command,
+  );
+  const value = match?.[1] ?? match?.[2] ?? match?.[3];
+  return value !== undefined && validateCliModel(value) ? value : undefined;
+}
+
 /** Max prompt text sessions.prompt will type into an agent (bytes). */
 export const MAX_PROMPT_BYTES = 32 * 1024;
 /** Gap between the pasted body and the Enter that submits it. */
