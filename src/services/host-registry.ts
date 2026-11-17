@@ -416,10 +416,15 @@ export function deleteHost(app: FastifyInstance, id: string, opts: { cascade?: b
         meta.auto.includes(id) || meta.declined.includes(id) || meta.managed.includes(id);
       if (!hasMapping && !hasMeta) continue;
 
-      delete map[id];
       tx.update(projects)
         .set({
-          ...(hasMapping ? { hostCwds: serializeHostCwds(map) } : {}),
+          ...(hasMapping
+            ? {
+                hostCwds: serializeHostCwds(
+                  Object.fromEntries(Object.entries(map).filter(([hostId]) => hostId !== id)),
+                ),
+              }
+            : {}),
           ...(hasMeta
             ? {
                 hostCwdsMeta: serializeHostCwdsMeta({
