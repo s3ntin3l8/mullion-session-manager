@@ -11,7 +11,7 @@ throwaway venv.
 ## Verdict
 
 **Go**, with `idb_companion` as the video and input engine and `simctl` for
-lifecycle, screenshot, logs and clipboard. Three things are not yet proven and
+lifecycle, screenshot, logs and clipboard. Two things are not yet proven and
 must be closed in #3203 (see "Not tested").
 
 ## Findings
@@ -32,6 +32,16 @@ must be closed in #3203 (see "Not tested").
 - Companion's own stats: 29.9 fps, **~670 kbps**, ~1.8 ms/frame encode, 0
   dropped, 0 encode errors. Companion idles around 1.6% CPU and 34 MB RSS.
 - Frame size equals the screenshot: **1206x2622 px** on an iPhone 17.
+
+### Browser decode (WebCodecs, Chrome)
+
+A 258-frame capture (3 IDRs) was split on 4-byte start codes, grouped into
+access units (SPS+PPS+IDR together, every other slice alone) and fed to a
+`VideoDecoder` configured with `avc1.640032` and **no `description`**, i.e.
+Annex-B passthrough. `isConfigSupported` was true; **258 of 258 frames decoded
+at 1206x2622 with zero errors** (288 ms for the whole clip, a bulk decode and not
+a latency figure). So the driver can forward idb's NALs as they are: no
+AVCC conversion and no `description`, with SPS+PPS sent in front of each IDR.
 
 ### Input
 
@@ -63,13 +73,10 @@ must be closed in #3203 (see "Not tested").
 
 ## Not tested (carry into #3203)
 
-1. **WebCodecs decode in Chrome** of the captured stream. The bytes are
-   standard Annex-B with SPS/PPS/IDR, so it is expected to work, but it was not
-   run. #3203 should add a captured fixture and a decode check.
-2. **Direct gRPC `hid` touch down/move/up from Node.** Only the CLI path was
+1. **Direct gRPC `hid` touch down/move/up from Node.** Only the CLI path was
    measured. The latency conclusion above is why this matters; if gRPC proves
    impractical, a long-lived Python `idb` process is the fallback.
-3. **Sustained CPU and latency under real use** (only a ~65 s idle-ish run, not
+2. **Sustained CPU and latency under real use** (only a ~65 s idle-ish run, not
    glass-to-glass latency).
 
 ## Fallback
