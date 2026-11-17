@@ -90,7 +90,12 @@ describe("App two halves", () => {
     cleanup();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
-    useDashboardStore.setState({ foldHalves: {}, focusedHalf: "left", activePanelId: null });
+    useDashboardStore.setState({
+      foldHalves: {},
+      focusedHalf: "left",
+      activePanelId: null,
+      updateCheck: null,
+    });
   });
 
   async function renderHalves(coarse = false, api = makeApi()) {
@@ -165,7 +170,6 @@ describe("App two halves", () => {
     expect(wide.container.querySelector(".grid-area")).toContainElement(gridBanner);
     expect(wide.container.querySelector(".shell-banners")).toBeNull();
     expect(wide.container.querySelector(".app-body")).not.toHaveClass("app-body--halves");
-    useDashboardStore.setState({ updateCheck: null });
   });
 
   it("points the key bar at the focused half", async () => {
