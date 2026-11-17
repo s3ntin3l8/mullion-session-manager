@@ -1258,7 +1258,11 @@ export function mapAgyEvent(kind, payload) {
       ];
       const reason =
         typeof payload?.terminationReason === "string" ? payload.terminationReason : null;
-      if (reason === "error") {
+      // agy reports the reason in upper case ("ERROR", captured live against
+      // agy on 2026-11-17 with the quota exhausted), so compare
+      // case-insensitively: an exact "error" match never fired and a
+      // quota-exhausted turn looked like a clean finish (issue #3233).
+      if (reason?.toLowerCase() === "error") {
         const error = typeof payload?.error === "string" ? payload.error : "";
         const stopFailure = {
           kind: "stop_failure",
