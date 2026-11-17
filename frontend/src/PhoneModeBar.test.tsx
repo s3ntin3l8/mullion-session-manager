@@ -324,10 +324,9 @@ describe("PhoneModeBar", () => {
     await act(flushRaf);
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Notifications" }), { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
-    // The sheet's own restore cannot reach a hidden trigger; jsdom would let
-    // it, so the focus a real browser leaves on <body> is set here.
-    (document.activeElement as HTMLElement | null)?.blur();
-    document.body.focus();
+    // The sheet's own restore cannot reach the trigger inside the hidden bar
+    // (jsdom refuses it too), so focus is on <body> now.
+    expect(document.activeElement).toBe(document.body);
     stubClientHeight(800);
     act(() => vv.resizeTo(800, 0));
     await act(flushRaf);
