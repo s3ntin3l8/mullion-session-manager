@@ -22,6 +22,12 @@ describe("railLabel", () => {
     expect(railLabel(title, command)).toBe(expected);
   });
 
+  it("keeps the number of a numbered command title (#3285)", () => {
+    expect(railLabel("claude 2", "claude")).toBe("claude 2");
+    expect(railLabel("./fake-agent.sh 3", "./fake-agent.sh")).toBe("fake-agent 3");
+    expect(railLabel("claude", "claude")).toBe("claude");
+  });
+
   it("keeps the agent's name when it is the whole title", () => {
     expect(railLabel("claude", "claude")).toBe("claude");
   });

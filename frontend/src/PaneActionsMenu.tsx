@@ -34,6 +34,7 @@ import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange, visibleViewport } from "./hooks/useVisualViewportChange.js";
 import { useCoarsePointer, useLayoutContext, useLayoutPresentationMode } from "./lib/layoutTier.js";
 import { isHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
+import { selectSessionTitleContexts } from "./lib/sessionDisplay.js";
 import { BottomSheet } from "./ui/BottomSheet.js";
 import { describeError } from "./lib/describeError.js";
 
@@ -551,7 +552,14 @@ export function PaneActionsMenu({
           className="pane-tab-overflow-item"
           role="menuitem"
           onClick={() => {
-            closeMenuAfterAction(() => openTimelinePanel(containerApi, session, layout));
+            closeMenuAfterAction(() =>
+              openTimelinePanel(
+                containerApi,
+                session,
+                layout,
+                selectSessionTitleContexts(useDashboardStore.getState()).get(session.id),
+              ),
+            );
           }}
         >
           <ListIcon size={14} style={{ color: "var(--muted)" }} />
@@ -565,7 +573,14 @@ export function PaneActionsMenu({
           className="pane-tab-overflow-item"
           role="menuitem"
           onClick={() => {
-            closeMenuAfterAction(() => openBrowserPanePanel(containerApi, session, layout));
+            closeMenuAfterAction(() =>
+              openBrowserPanePanel(
+                containerApi,
+                session,
+                layout,
+                selectSessionTitleContexts(useDashboardStore.getState()).get(session.id),
+              ),
+            );
           }}
         >
           <BotIcon size={14} style={{ color: "var(--muted)" }} />

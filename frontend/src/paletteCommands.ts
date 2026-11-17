@@ -20,6 +20,7 @@ import {
 import { DOCK_UNAVAILABLE, type DockUnavailableReason } from "./lib/dockAvailability.js";
 import type { Session } from "./api/index.js";
 import { sessionPaneTitle } from "./lib/sessionDisplay.js";
+import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 
 type CommandIcon = ComponentType<{ size?: number; style?: CSSProperties }>;
 
@@ -131,6 +132,9 @@ export interface PaletteCommandContext {
   // pane menu's "View timeline" for that session, so it is omitted when
   // there isn't one — the menu only offers the item on a session pane.
   activeSession?: Session | null;
+  // The active session's task title and number (#3285), so its commands
+  // name it the way the sidebar does.
+  activeSessionTitleContext?: SessionTitleContext;
   // The project's open PRs and local branch names, for the search-only
   // "Go to PR" / "Open session on branch" rows. Empty until loaded.
   prs?: { number: number; title: string }[];
@@ -145,6 +149,7 @@ export function buildPaletteCommands({
   open,
   dockUnavailable,
   activeSession,
+  activeSessionTitleContext,
   prs = [],
   branches = [],
 }: PaletteCommandContext): PaletteCommand[] {
@@ -469,7 +474,7 @@ export function buildPaletteCommands({
   if (open.timeline && activeSession) {
     const openTimeline = open.timeline;
     const session = activeSession;
-    const label = sessionPaneTitle(session);
+    const label = sessionPaneTitle(session, activeSessionTitleContext);
     commands.push({
       id: "session-timeline",
       title: "Session timeline",
@@ -486,7 +491,7 @@ export function buildPaletteCommands({
     const session = activeSession;
     // The same rule as the pane it opens (openBrowserPanePanel) and the
     // timeline row above: a session's tab title.
-    const label = sessionPaneTitle(session);
+    const label = sessionPaneTitle(session, activeSessionTitleContext);
     commands.push({
       id: "agent-browser",
       title: `Open Agent Browser: ${label}`,

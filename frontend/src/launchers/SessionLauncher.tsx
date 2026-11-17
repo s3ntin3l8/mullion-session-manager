@@ -22,6 +22,7 @@ import { AUTO_VALUE, OWN_HOST_VALUE, describeAutoPreview } from "../command-pale
 import { buildPickerSections } from "../lib/mobileSessionPicker.js";
 import type { PickerPanel } from "../lib/mobileSessionPicker.js";
 import { taskLinkedSessionIds } from "../boardLanes.js";
+import { selectSessionTitleContexts } from "../lib/sessionDisplay.js";
 import type { IDockviewPanel } from "dockview";
 import { canLaunchTerminal, panelSessionId } from "../panelUtils.js";
 import { resolveSkipPermissions } from "./skipPermissions.js";
@@ -945,6 +946,7 @@ function OpenExistingList({
       showTaskSessions: s.showTaskSessions,
       workspaces: s.workspaces,
       activeWorkspaceId: s.activeWorkspaceId,
+      titleContexts: selectSessionTitleContexts(s),
     })),
   );
   const taskSessionIds = useMemo(() => taskLinkedSessionIds(input.tasks), [input.tasks]);

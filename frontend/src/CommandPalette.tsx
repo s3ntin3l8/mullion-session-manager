@@ -5,6 +5,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
+import { selectSessionTitleContexts, sessionDisplayTitle } from "./lib/sessionDisplay.js";
 import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDownIcon,
@@ -504,6 +505,7 @@ export function CommandPalette({
   // lists the `top` ones and drills into the `project` ones; a typed query
   // searches them all (useCommandSearch).
   const layoutBand = useCurrentLayoutBand();
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const activeSession =
     sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed") ?? null;
   const commands = buildPaletteCommands({
@@ -520,6 +522,7 @@ export function CommandPalette({
     // the Dock is available (issue #1881).
     dockUnavailable: dockUnavailableReason(layoutTier, isCoarsePointer),
     activeSession,
+    activeSessionTitleContext: activeSession ? titleContexts.get(activeSession.id) : undefined,
     prs: projectPrs?.map((pr) => ({ number: pr.number, title: pr.title })),
     branches: projectBranches?.map((b) => b.name),
     open: {
@@ -1109,7 +1112,7 @@ export function CommandPalette({
                   // returns [] when `query.trim() === ""`), so these rows
                   // only render once that lead is empty.
                   const project = projects.find((p) => p.id === session.projectId);
-                  const title = session.name || session.lastTitle || session.command;
+                  const title = sessionDisplayTitle(session, titleContexts.get(session.id));
                   const subtitleParts = [project?.name, session.liveBranch].filter(
                     (part): part is string => Boolean(part),
                   );

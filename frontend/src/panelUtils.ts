@@ -12,6 +12,7 @@ import { positionToDirection } from "dockview";
 import type { Session, Device } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import { sessionPaneTitle } from "./lib/sessionDisplay.js";
+import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 import type { ProjectHubTab } from "./ProjectHubPanel.js";
 
@@ -1001,13 +1002,19 @@ export function openOrFocusSessionPanel(
 // tier-positioned shape as openSessionPanel above, just a distinct
 // `timeline-<id>` panel id/component so it can coexist with that session's
 // own terminal panel (and be opened/closed independently of it).
-export function openTimelinePanel(api: DockviewApi, session: Session, layout: LayoutContext): void {
+export function openTimelinePanel(
+  api: DockviewApi,
+  session: Session,
+  layout: LayoutContext,
+  // The session's task title and number (#3285), as for the browser pane.
+  titleCtx?: SessionTitleContext,
+): void {
   openOrFocusPanel(
     api,
     `timeline-${session.id}`,
     {
       component: "timeline",
-      title: `Timeline: ${session.name || session.command}`,
+      title: `Timeline: ${sessionPaneTitle(session, titleCtx)}`,
       params: { sessionIds: [session.id] },
     },
     layout,
@@ -1026,13 +1033,16 @@ export function openBrowserPanePanel(
   api: DockviewApi,
   session: Session,
   layout: LayoutContext,
+  // The session's task title and number (#3285), so the pane is named the
+  // way the sidebar names the session.
+  titleCtx?: SessionTitleContext,
 ): void {
   openOrFocusPanel(
     api,
     `browserPane-${session.id}`,
     {
       component: "browserPane",
-      title: `Agent Browser: ${sessionPaneTitle(session)}`,
+      title: `Agent Browser: ${sessionPaneTitle(session, titleCtx)}`,
       params: { sessionId: session.id },
     },
     layout,

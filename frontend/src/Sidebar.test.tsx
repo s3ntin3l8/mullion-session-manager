@@ -554,11 +554,12 @@ describe("Sidebar task session visibility (#9)", () => {
 
   it("shows a currently task-linked session when showTaskSessions is on", () => {
     sessions = [makeSession({ id: 1, command: "task worker session" })];
-    tasks = [makeTask({ id: 7, sessionId: 1 })];
+    tasks = [makeTask({ id: 7, sessionId: 1, title: "Fix the login form" })];
     showTaskSessions = true;
     renderSidebar();
 
-    expect(screen.getByText("task worker session")).toBeTruthy();
+    // A Task Master worker's row is titled by its task (#3285).
+    expect(screen.getByText("Fix the login form")).toBeTruthy();
   });
 
   it("a session not linked to any task is unaffected by the toggle either way", () => {

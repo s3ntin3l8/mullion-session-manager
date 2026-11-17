@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { Launcher, Project, Session, Workspace } from "../api/index.js";
 import { matchesQuery } from "../matchQuery.js";
+import { useDashboardStore } from "../store/index.js";
+import { selectSessionTitleContexts, sessionDisplayTitle } from "../lib/sessionDisplay.js";
 import { isHiddenAgent } from "../launchers/launcherList.js";
 import { searchPaletteCommands } from "../paletteCommands.js";
 import type { PaletteCommand } from "../paletteCommands.js";
@@ -129,6 +131,7 @@ export function useCommandSearch({
   // nameLocked-gated `title`: an un-locked, auto-generated title is still a
   // perfectly good thing to find a session by here. Project name and the
   // best-known live branch extend the match beyond the title alone.
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const matchingSessions = useMemo(() => {
     if (query.trim() === "") return [];
     return sessions
@@ -149,13 +152,15 @@ export function useCommandSearch({
       .filter((s) => {
         const project = projects.find((p) => p.id === s.projectId);
         const title = s.name || s.lastTitle || s.command;
-        return matchesQuery([title, s.command, project?.name, s.liveBranch], query);
+        // Plus the title the row shows (#3285): a task's title or "claude 2".
+        const shown = sessionDisplayTitle(s, titleContexts.get(s.id));
+        return matchesQuery([title, shown, s.command, project?.name, s.liveBranch], query);
       });
     // Deliberately NOT filtered by the global "hide ended sessions" setting
     // the way Sidebar.tsx's tree is — typing a query here is explicit search
     // intent, not passive browsing, so an exited session the user is
     // actively looking for should still surface.
-  }, [sessions, projects, query, scope, effectiveProjectId]);
+  }, [sessions, projects, query, scope, effectiveProjectId, titleContexts]);
 
   // Same "only once there's a real query" gate as matchingSessions above —
   // dumping every workspace into an unscoped list on open would just

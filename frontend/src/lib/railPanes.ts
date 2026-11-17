@@ -3,6 +3,7 @@ import { commandToBinary, resolveAgentLogo } from "../cliLogos.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import type { Theme } from "../store/index.js";
 import { sessionPaneTitle } from "./sessionDisplay.js";
+import type { SessionTitleContexts } from "./sessionDisplay.js";
 
 // The left rail's pane list (#3009): one entry per pane open in a workspace.
 // Built here as plain data, so the list component only renders entries and a
@@ -47,9 +48,16 @@ const EXTENSION = /\.[a-z0-9]{1,4}$/i;
  */
 export function railLabel(title: string, command?: string): string {
   const trimmed = title.trim();
-  if (command !== undefined && trimmed === command.trim()) {
-    const program = commandToBinary(command).replace(EXTENSION, "");
-    if (program) return program;
+  if (command !== undefined) {
+    // The raw command, or the raw command numbered among its project's
+    // look-alikes ("claude 2", #3285), which keeps its number.
+    const cmd = command.trim();
+    const number =
+      trimmed === cmd ? "" : trimmed.startsWith(cmd + " ") ? trimmed.slice(cmd.length + 1) : null;
+    if (number !== null && /^\d*$/.test(number)) {
+      const program = commandToBinary(command).replace(EXTENSION, "");
+      if (program) return number ? `${program} ${number}` : program;
+    }
   }
   const tokens = trimmed.split(SEPARATORS).filter(Boolean);
   const issue = tokens.find((t) => /^#\d+$/.test(t));
@@ -75,6 +83,8 @@ export interface RailPaneContext {
   mutedSessionIds: number[];
   theme: Theme;
   activePanelId: string | null;
+  /** Task titles and numbers (selectSessionTitleContexts, #3285). */
+  titleContexts?: SessionTitleContexts;
 }
 
 /** One entry per pane, in the order given; needs-you and unread follow the
@@ -101,7 +111,7 @@ export function buildRailPaneEntries(
         active,
       };
     }
-    const fullTitle = sessionPaneTitle(session);
+    const fullTitle = sessionPaneTitle(session, ctx.titleContexts?.get(session.id));
     const muted = ctx.mutedSessionIds.includes(session.id);
     const seen = ctx.lastSeenSeq[session.id] ?? 0;
     const events = ctx.events[session.id];

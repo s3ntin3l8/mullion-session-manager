@@ -21,7 +21,7 @@ import { openTerminalPath } from "./lib/openTerminalPath.js";
 import { preferredPaneFor, useFoldHalves } from "./hooks/useFoldHalves.js";
 import { canGoRight, EMPTY_FOLD_HALVES, halfOf, splitByHalf } from "./lib/foldHalves.js";
 import type { Half } from "./lib/foldHalves.js";
-import { sessionPaneTitle } from "./lib/sessionDisplay.js";
+import { selectSessionTitleContexts, sessionPaneTitle } from "./lib/sessionDisplay.js";
 import type { LayoutPresentation } from "./lib/layoutTier.js";
 import type { RailPaneInput } from "./lib/railPanes.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
@@ -1069,6 +1069,8 @@ export function App() {
     railPanes.some((p) => p.id === halvesState.shownRight)
       ? halvesState.shownRight
       : null;
+  // Task titles and numbers (#3285), for the halves' pane headers.
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const rightHalfSession = rightHalfPanelId
     ? sessions.find((s) => `session-${s.id}` === rightHalfPanelId)
     : undefined;
@@ -1087,7 +1089,7 @@ export function App() {
       pane.sessionId === undefined ? undefined : sessions.find((x) => x.id === pane.sessionId);
     return {
       id: pane.id,
-      title: session ? sessionPaneTitle(session) : pane.title,
+      title: session ? sessionPaneTitle(session, titleContexts.get(session.id)) : pane.title,
       projectName: session
         ? (projects.find((p) => p.id === session.projectId)?.name ?? null)
         : null,
@@ -1617,7 +1619,7 @@ export function App() {
                 // right half mounts fresh and plays its arrival (motion.css).
                 key={rightHalfSession.id}
                 sessionId={rightHalfSession.id}
-                title={sessionPaneTitle(rightHalfSession)}
+                title={sessionPaneTitle(rightHalfSession, titleContexts.get(rightHalfSession.id))}
                 projectName={
                   projects.find((p) => p.id === rightHalfSession.projectId)?.name ?? null
                 }

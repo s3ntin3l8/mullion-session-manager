@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DockviewApi, IDockviewPanel } from "dockview";
 import { useDashboardStore } from "./store/index.js";
+import { selectSessionTitleContexts } from "./lib/sessionDisplay.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { MobileSessionSwitcher } from "./MobileSessionSwitcher.js";
 import type {
@@ -92,6 +93,7 @@ export function MobileSessionBar({
     return "var(--dim)";
   };
 
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const pickerSections = useMemo(
     () =>
       buildPickerSections({
@@ -111,6 +113,7 @@ export function MobileSessionBar({
         taskSessionIds,
         workspaces,
         activeWorkspaceId,
+        titleContexts,
       }),
     [
       sessions,
@@ -125,6 +128,7 @@ export function MobileSessionBar({
       taskSessionIds,
       workspaces,
       activeWorkspaceId,
+      titleContexts,
     ],
   );
 
