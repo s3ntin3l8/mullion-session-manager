@@ -7,6 +7,7 @@ import { resolveGitIdentity } from "./git-identity.js";
 import { getStoredSettings } from "./settings.js";
 import { killSession } from "./session-lifecycle.js";
 import { removeCheckoutIfClean } from "./checkout-removal.js";
+import { resolveCleanupTarget } from "./task-cleanup.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
 import type { SessionBackend } from "./session-backend.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -81,11 +82,18 @@ export async function removeFailedTaskWorktree(
   after: string,
 ): Promise<void> {
   if (!task.worktreePath) return;
+  // Issue #3193 — the worktree is on the worker's host, so the project root
+  // passed as the parent cwd must be that host's path (`projects.hostCwds`),
+  // not the primary's `project.cwd`. When the project has no path on that
+  // host there is nothing to remove — skip with a warning rather than send a
+  // path the agent there will reject (as retryTask already does).
+  const target = resolveCleanupTarget(app, task, project, hostId);
+  if (!target) return;
   await removeCheckoutIfClean(app, {
     projectId: project.id,
-    hostId,
+    hostId: target.hostId,
     worktreePath: task.worktreePath,
-    parentCwd: project.cwd,
+    parentCwd: target.cwdOnHost,
   }).catch((err) => {
     app.log.warn(
       { err, taskId: task.id, worktreePath: task.worktreePath },

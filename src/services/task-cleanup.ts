@@ -55,7 +55,7 @@ export function cleanupTaskWorktree(
   });
 }
 
-type CleanupProject = { id?: number; cwd: string; hostId: string; hostCwds?: string | null };
+export type CleanupProject = { id?: number; cwd: string; hostId: string; hostCwds?: string | null };
 
 // Issue #1724 — the worktree lives on the host its worker session was
 // PLACED on, which is not necessarily the project's own host. The
@@ -66,19 +66,27 @@ type CleanupProject = { id?: number; cwd: string; hostId: string; hostCwds?: str
 // worktree or branch, so there is nothing to remove. The project's own root
 // is NOT a stand-in: it is a path that host does not have, and removing
 // against it fails silently and leaks the worktree.
-function resolveCleanupTarget(
+//
+// Exported (issue #3193) so every task-checkout removal resolves its host
+// AND that host's project path together. `explicitHostId` is for a caller
+// that already resolved the worker host (e.g. the budget-failure path, which
+// resolved it for its diagnostics too) and must remove against THAT host,
+// not a freshly re-resolved one.
+export function resolveCleanupTarget(
   app: FastifyInstance,
   task: { sessionId?: number | null; projectId?: number },
   project: CleanupProject,
+  explicitHostId?: string,
 ): { hostId: string; cwdOnHost: string } | null {
   const hostId =
-    task.sessionId !== undefined && task.sessionId !== null && task.projectId !== undefined
+    explicitHostId ??
+    (task.sessionId !== undefined && task.sessionId !== null && task.projectId !== undefined
       ? resolveTaskWorkerHost(
           app,
           { sessionId: task.sessionId, projectId: task.projectId },
           project,
         )
-      : project.hostId;
+      : project.hostId);
   const cwdOnHost = projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds));
   if (cwdOnHost === null) {
     app.log.warn(

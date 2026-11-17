@@ -50,6 +50,7 @@ import { deliverRejectFeedback } from "../services/task-reject.js";
 import { readLiveWorkerState } from "../services/task-reseed.js";
 import { deleteTaskBranch, type TaskBranchDelete } from "../services/task-branch-delete.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
+import { resolveCleanupTarget } from "../services/task-cleanup.js";
 import { isOutcomeUnknown, unknownOutcomeText } from "../services/remote-host-errors.js";
 import { resolveGitHubToken, getToken, getIntegration } from "../services/github-integration.js";
 import {
@@ -713,19 +714,27 @@ export async function tasksRoute(app: FastifyInstance) {
 
     let worktreeRemoved = false;
     if (task.worktreePath) {
-      try {
-        worktreeRemoved = await removeCheckoutForced(app, {
-          projectId: project.id,
-          hostId: project.hostId,
-          worktreePath: task.worktreePath,
-          parentCwd: project.cwd,
-        });
-      } catch (err) {
-        app.log.warn(
-          { err, worktreePath: task.worktreePath, taskId: task.id },
-          "abandon: removeWorktree threw",
-        );
-        if (isOutcomeUnknown(err)) unknown.push("the worktree removal");
+      // Issue #3193 — a task's worktree lives on its WORKER's host, which for
+      // a remote-placed task is not the project's host. Resolve that host and
+      // the project's path ON IT together; never guess with `project.cwd`
+      // (a path the worker's agent does not have), and never force-remove on
+      // the strength of a path the project is not mapped to.
+      const target = resolveCleanupTarget(app, task, project);
+      if (target) {
+        try {
+          worktreeRemoved = await removeCheckoutForced(app, {
+            projectId: project.id,
+            hostId: target.hostId,
+            worktreePath: task.worktreePath,
+            parentCwd: target.cwdOnHost,
+          });
+        } catch (err) {
+          app.log.warn(
+            { err, worktreePath: task.worktreePath, taskId: task.id },
+            "abandon: removeWorktree threw",
+          );
+          if (isOutcomeUnknown(err)) unknown.push("the worktree removal");
+        }
       }
     }
 
