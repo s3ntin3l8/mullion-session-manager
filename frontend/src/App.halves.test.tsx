@@ -172,6 +172,33 @@ describe("App two halves", () => {
     expect(wide.container.querySelector(".app-body")).not.toHaveClass("app-body--halves");
   });
 
+  // #3213 — Tasks mode on the halves band is not foldHalves (the board has no
+  // fold-half classes), but its banners still span both halves.
+  it("shows the update banner above both halves in Tasks mode too", async () => {
+    useDashboardStore.setState({
+      viewMode: "kanban",
+      rightSidebarOpen: true,
+      currentVersion: "1.0.0",
+      dismissedUpdateVersion: null,
+      updateCheck: {
+        currentVersion: "1.0.0",
+        latestVersion: "1.1.0",
+        updateAvailable: true,
+        releaseUrl: null,
+        assetUrl: null,
+        checksumUrl: null,
+      } as never,
+    });
+    const { container } = await renderHalves();
+    expect(container.querySelector(".app")).not.toHaveClass("fold-halves");
+    const gridArea = container.querySelector(".grid-area");
+    expect(gridArea).not.toHaveClass("fold-half");
+    const banner = screen.getByText("v1.0.0 → v1.1.0 available");
+    expect(gridArea).not.toContainElement(banner);
+    expect(container.querySelector(".app-body--halves > .shell-banners")).toContainElement(banner);
+    useDashboardStore.setState({ viewMode: "list", rightSidebarOpen: false });
+  });
+
   it("points the key bar at the focused half", async () => {
     await renderHalves(true);
     // The fake grid reports no active panel on ready; the left half's is set here.

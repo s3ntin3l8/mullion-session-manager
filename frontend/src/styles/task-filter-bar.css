@@ -33,8 +33,12 @@
   min-height: 28px;
 }
 /* Narrower than the row needs with the label: New task becomes a "+" with
-   the same name and title (TaskFilterBar.tsx). */
-@container task-filter-bar (max-width: 920px) {
+   the same name and title (TaskFilterBar.tsx). Measured in the demo, the
+   row with the label is 891px wide (controls 764 + gap 8 + button 91 +
+   padding 28), 897px with a Filter count; 900px keeps the label for as long
+   as that row fits. A longer project name or wider counts still fit: the
+   controls wrap and New task stays on the first line. */
+@container task-filter-bar (max-width: 899.98px) {
   .task-filter-row > .tasks-panel-new-btn {
     padding: 4px 7px;
   }
@@ -43,7 +47,7 @@
   }
 }
 @media (pointer: coarse) {
-  @container task-filter-bar (max-width: 920px) {
+  @container task-filter-bar (max-width: 899.98px) {
     .task-filter-row > .tasks-panel-new-btn {
       min-width: 44px;
       min-height: 44px;
