@@ -30,7 +30,7 @@ session. Enough for get/rename/logs on yourself, the full `browser` surface,
 `project actions`, reading (not writing) `project tooling`, and most of the
 `device` surface. **Never** enough for full-scope ops: `session
 list/create`, `session kill` of anything but your own child, `dock start/stop/list`, `preview *`, `project list/dock`,
-writing `project tooling`, `agents list`, `device delete/pair/pair-and-connect`,
+writing `project tooling`, `agents list`, `device delete/pair/pair-and-connect`, `task list/get`,
 `bundle status/resync/remove` — these 403, and that's expected, not a bug.
 `session spawn-child` IS session-reachable (it targets a child of yourself,
 not an arbitrary session), and so is the rest of `device`
@@ -70,7 +70,8 @@ the same way `--mcp-config` is for Claude Code.
 
 Full-scope-only MCP tools (`list_sessions`, `start_dock_session`,
 `stop_dock_session`, `list_projects`, `create_preview`, `delete_preview`,
-`list_previews`, `set_project_tooling`, `delete_device`) reply with a scope
+`list_previews`, `set_project_tooling`, `delete_device`, `list_tasks`,
+`get_task`) reply with a scope
 error from inside a session, same as the CLI's own — they're for an
 operator running `mullion mcp` directly, not for you.
 

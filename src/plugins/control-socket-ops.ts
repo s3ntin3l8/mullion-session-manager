@@ -951,6 +951,17 @@ export const OPS: Record<string, OpSpec> = {
     ["full", "session"],
     onSession((id) => ({ method: "POST", url: `/api/sessions/${enc(id)}/task-push` })),
   ),
+  // #3165 — read-only Task Master ops, full-scope only (matching sessions.list
+  // and projects.list): a session-scoped connection cannot enumerate or read
+  // arbitrary tasks across the instance.
+  "tasks.list": routeOp(["full"], ({ body }) => ({
+    method: "GET",
+    url: buildQueryUrl("/api/tasks", body),
+  })),
+  "tasks.get": routeOp(
+    ["full"],
+    onField("taskId", (id) => ({ method: "GET", url: `/api/tasks/${enc(id)}` })),
+  ),
   // Status of the latest review run for the caller's PR, and stopping a run the
   // caller's own session dispatched (routes/review-relay.ts enforces that).
   "reviews.status": routeOp(

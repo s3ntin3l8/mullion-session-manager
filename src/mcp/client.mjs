@@ -726,6 +726,19 @@ export class MullionClient {
     return this.reviewOp("tasks.push", {}, TASK_PUSH_REQUEST_TIMEOUT_MS);
   }
 
+  /** Lists Task Master tasks, optionally filtered by status or projectId (#3165). */
+  listTasks({ status, projectId } = {}) {
+    const body = {};
+    if (status !== undefined) body.status = status;
+    if (projectId !== undefined) body.projectId = projectId;
+    return this.controlRequest("tasks.list", body);
+  }
+
+  /** Gets a single Task Master task by id (#3165). */
+  getTask(taskId) {
+    return this.controlRequest("tasks.get", { taskId });
+  }
+
   /** Asks the Mullion server to relay a Hermes review request for this
    * session's PR. `prNumber` is optional — the server resolves the PR from
    * the session's branch when omitted. */
