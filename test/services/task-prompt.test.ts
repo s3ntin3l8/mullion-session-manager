@@ -1455,7 +1455,23 @@ describe("buildCiFailurePrompt", () => {
     expect(out).toContain("- codecov/patch — 66.66% of diff hit (target 75.00%)");
     expect(out).toContain("- test-e2e");
     expect(out).toContain("not required for merging still counts");
+    expect(out).toContain("fix every one your diff can fix");
     expect(buildCiFailurePrompt(base)).not.toContain("Failing checks:");
+  });
+
+  it("tells the worker how to declare a failure unfixable from this PR, and not to work around it", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      failingChecks: [{ name: "dependency-audit" }],
+      ciUnfixablePath: "/sessions/task-1.ci-unfixable.abc1234",
+    });
+    expect(out).toContain("cannot be fixed from this PR");
+    expect(out).toContain("do not push a workaround and do not disable, skip or loosen the check");
+    expect(out).toContain("/sessions/task-1.ci-unfixable.abc1234");
+    // Absent when the caller has no path to offer.
+    expect(buildCiFailurePrompt({ ...base, failingChecks: [{ name: "x" }] })).not.toContain(
+      "cannot be fixed from this PR",
+    );
   });
 
   it("prints a failing check's URL, and does not say CI is SUCCESS above a red non-Actions check", () => {

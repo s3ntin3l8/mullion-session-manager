@@ -446,6 +446,7 @@ function inertBackendMembers() {
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions-dir"),
     readTaskCommitTitle: vi.fn().mockResolvedValue(null),
     readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
+    readTaskCiUnfixable: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -1703,7 +1704,6 @@ describe("reconcileTasks", () => {
         deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
         resolveSessionsDir: vi.fn().mockResolvedValue("/remote/own/sessions-dir"),
         readTaskCommitTitle: vi.fn().mockResolvedValue(null),
-        readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
       };
       const resolveBackendSpy = vi
         .spyOn(sessionBackendModule, "resolveBackend")
@@ -1811,7 +1811,6 @@ describe("reconcileTasks", () => {
         deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
         resolveSessionsDir: vi.fn().mockRejectedValue(new Error("host unreachable")),
         readTaskCommitTitle: vi.fn().mockResolvedValue(null),
-        readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
       };
       const resolveBackendSpy = vi
         .spyOn(sessionBackendModule, "resolveBackend")
@@ -2530,7 +2529,7 @@ describe("reconcileTasks", () => {
       expect(mockMergePullRequest).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.mergeError).toContain("codecov/patch: 66.66% of diff hit (target 75.00%)");
-      expect(row.mergeError).toContain("Merge now");
+      expect(row.mergeError).toContain("Merge anyway");
 
       await app.close();
     });

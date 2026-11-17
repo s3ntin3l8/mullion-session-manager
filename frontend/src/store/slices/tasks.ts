@@ -189,8 +189,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
-    mergeTask: async (id) => {
-      const task = await api.mergeTask(id);
+    mergeTask: async (id, opts) => {
+      const task = await api.mergeTask(id, opts);
       void get().refreshTasks();
       return task;
     },

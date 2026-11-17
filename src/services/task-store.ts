@@ -72,6 +72,9 @@ const TASK_ROW_COLUMNS = {
   // three-state distinction (see TaskCard.tsx/TaskDetail.tsx).
   autoReturnCapAnnouncedAt: tasks.autoReturnCapAnnouncedAt,
   needsHumanReason: tasks.needsHumanReason,
+  // The check names (and the worker's reason) behind `ci-unfixable` /
+  // `ci-still-red`; without this entry they are written but never reach the UI.
+  ciHoldNote: tasks.ciHoldNote,
   // Task 258971's investigation: declared on the frontend Task type
   // (api/types.ts) but never selected here — the same TASK_ROW_COLUMNS
   // silent-drop that bit #816/#818 (see that PR's own doc comment above).

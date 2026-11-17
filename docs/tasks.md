@@ -627,6 +627,15 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
 
 - `cap`, `no-progress`, `finding-persisted` — the review loop stopped (round
   cap, a worker that came back unchanged, the same finding open twice).
+- `ci-unfixable`, `ci-still-red` — a CI check is red and no further automatic step
+  will clear it, and the card names the check. `ci-unfixable`: the worker was sent
+  back for it and reported that no change to the PR can fix it (an upstream advisory
+  with no patched release, an outside service down); its reason is on the card.
+  `ci-still-red`: the worker pushed nothing and two reruns of the failed jobs did
+  not clear it. If the check is not required, **Approve** the task and use **Merge
+  anyway** (it applies to that commit only; a new push voids it). If it is
+  required, fix the cause on the base branch and update the PR's branch, which
+  re-arms the task.
 - `rebase-exhausted` — the PR conflicts with main and the auto-rebase budget
   (two attempts) is spent. Rebase it by hand, or **Reject** it: Reject resets
   the budget, so a fresh conflict can be auto-rebased again.
@@ -1459,13 +1468,14 @@ extensive design comments.
   on and Task Master is enabled; the task's agent can take a seeded prompt;
   the task still has a worktree; and the automatic round cap
   (`maxAutoReturnRounds`) is not already spent — once it is, the task stays in
-  Reviewing with one PR comment naming the failing check(s), and "Merge now"
-  is the override. A check that is only _pending_ never returns the worker, and
+  Reviewing with one PR comment naming the failing check(s), and "Merge anyway"
+  is the override when only non-required checks are red. A check that is only _pending_ never returns the worker, and
   neither does a red check while the head's Actions runs are still going. The
   worker is also not sent back twice for the same commit: if the check is still
   red and the head has not moved, Mullion re-runs the failed jobs itself and, if
-  that does not clear it, parks the task as "worker returned without a change"
-  with one PR comment. See
+  that does not clear it, parks the task as "CI still red after the worker and two
+  reruns" with one PR comment. A worker that says the failure cannot be fixed from
+  the PR (see "Needs a human") parks it at once, with its reason. See
   [`tasks-internals.md`](tasks-internals.md#auto-approve).
 - **Retry put the task in Ready instead of running it.** The task failed
   before it ever had a branch/worktree (e.g. no host matched its `Platform:`

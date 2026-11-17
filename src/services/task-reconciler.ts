@@ -95,6 +95,7 @@ import {
   buildCiFailurePrompt,
   buildPrReviewCommentsPrompt,
   taskCommitTitlePath,
+  taskCiUnfixablePath,
   taskRereviewRequestPath,
   isApprovingVerdict,
   parseReviewFindings,
@@ -168,6 +169,7 @@ import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.
 import { flagClosedUnmergedDoneTask } from "./task-pr-closed.js";
 import { repollUnmergedDoneTasks } from "./task-merge-repoll.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
+import { unstableHeldReason } from "./task-merge-override.js";
 import { resolveReleaseMerge } from "./release-merge.js";
 import {
   isRateLimitGraceActive,
@@ -1592,7 +1594,7 @@ async function attemptMerge(
 
   try {
     const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-    const readiness = classifyMergeReadiness(pr);
+    const readiness = classifyMergeReadiness(pr, task.mergeOverrideHeadSha);
 
     // A finished auto-rebase attempt is judged while the PR reads settled and
     // not conflicting: on a later tick main may already have outrun it, and a
@@ -1705,12 +1707,7 @@ async function attemptMerge(
         // sends a human hunting, while "codecov/patch: 66.66% of diff hit
         // (target 75.00%)" says what to fix — or what "Merge now" overrides.
         const redUnstable = unstableCheckRuns.filter((c) => isRedCheckConclusion(c.conclusion));
-        const heldReason =
-          redUnstable.length > 0
-            ? `Held: a non-required check is red — ${redUnstable
-                .map((c) => (c.detail ? `${c.name}: ${c.detail}` : c.name))
-                .join("; ")}. Fix it, or use "Merge now" to override.`
-            : "A non-required check is failing or still running";
+        const heldReason = unstableHeldReason(redUnstable);
         // #2904 — a non-Actions status (codecov's `codecov/patch`) that stays
         // `pending` on a green head holds the PR forever, and the red-check
         // path cannot see it (it is pending, not red, and has no workflow run
@@ -2564,7 +2561,12 @@ async function attemptReturnRedCiToWorker(
       app,
       task,
       project,
-      { headSha: current.headSha, repoRef: current.repoRef, failedRunIds },
+      {
+        headSha: current.headSha,
+        repoRef: current.repoRef,
+        failedRunIds,
+        mergeableState: current.mergeableState,
+      },
       redChecks,
     );
   }
@@ -2611,19 +2613,15 @@ async function attemptReturnRedCiToWorker(
   // holds its worktree, so its sessions dir is resolved there.
   const workerHostId = resolveTaskWorkerHost(app, task);
   const carryApproval = hasCurrentApproval(task);
-  // Only resolved when something below uses it: a remote-hosted task pays a
-  // round trip for the lookup.
-  const sessionsDir =
-    project.conventionalCommitTitles || carryApproval
-      ? await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
-          taskId: task.id,
-          hostId: workerHostId,
-        })
-      : null;
-  const commitTitlePath =
-    project.conventionalCommitTitles && sessionsDir !== null
-      ? taskCommitTitlePath(sessionsDir, task.id)
-      : undefined;
+  // Always resolved: the unfixable-declaration path below needs it on every
+  // CI return, not only when a commit title or a carried approval does.
+  const sessionsDir = await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
+    taskId: task.id,
+    hostId: workerHostId,
+  });
+  const commitTitlePath = project.conventionalCommitTitles
+    ? taskCommitTitlePath(sessionsDir, task.id)
+    : undefined;
   // #939/#1016 — resolved once per spawn, fail-open — see
   // task-issue-context.ts's own doc comment.
   const issueContext = await resolveTaskIssueContextSafe(app, task, project);
@@ -2640,10 +2638,11 @@ async function attemptReturnRedCiToWorker(
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
     failingChecks: redChecks.map((c) => ({ name: c.name, detail: c.detail, url: c.url })),
     commitTitlePath,
+    ciUnfixablePath: taskCiUnfixablePath(sessionsDir, task.id, current.headSha),
     agentCommand: task.agentCommand,
     delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     rereviewRequestPath:
-      carryApproval && sessionsDir !== null && task.lastReviewVerdictAt
+      carryApproval && task.lastReviewVerdictAt
         ? taskRereviewRequestPath(
             sessionsDir,
             task.id,

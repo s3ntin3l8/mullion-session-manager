@@ -42,7 +42,6 @@ import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
   resetAutoApproveBackoff,
-  resetMergeBackoff,
   resolveMaxAutoReturnRounds,
 } from "../services/task-reconciler.js";
 import { approveWorkflowChange } from "../services/task-workflow-gate.js";
@@ -62,6 +61,7 @@ import {
 } from "../services/code-scanning.js";
 import { listTaskDismissals, recordedPriorDismissals } from "../services/code-scanning-audit.js";
 import { resolveRepoRef } from "../services/host-git.js";
+import { isMergeOverridable } from "../services/task-merge-override.js";
 import { removeLabel } from "../services/github-write.js";
 import { isPullRequestMerged } from "../services/github-merged-prs.js";
 import { isGitHubRateLimited } from "../services/github-fetch.js";
@@ -249,17 +249,22 @@ function withAutoReturnCapped<
     autoReturnRounds: number;
     projectMaxAutoReturnRounds: number | null;
     reviewPostPending: string | null;
+    status: string;
+    mergeError: string | null;
   },
 >(
   row: T,
   installCap: number,
 ): Omit<T, "projectMaxAutoReturnRounds" | "reviewPostPending"> & {
   autoReturnCapped: boolean;
+  /** "Merge anyway" is offered: only named non-required checks hold the merge. */
+  mergeOverridable: boolean;
 } & ReturnType<typeof mergeHuman.reviewPostFlags> {
   const { projectMaxAutoReturnRounds, reviewPostPending, ...rest } = row;
   return {
     ...rest,
     ...mergeHuman.reviewPostFlags(reviewPostPending),
+    mergeOverridable: isMergeOverridable(row),
     autoReturnCapped:
       row.autoReturnRounds >=
       resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }, installCap),
@@ -1404,38 +1409,6 @@ export async function tasksRoute(app: FastifyInstance) {
       }
     }
     return outcome.task;
-  });
-
-  // Merge-on-approve — "Merge now" / "Retry merge". Re-arms the merge sweep
-  // (task-reconciler.ts's processMergeRequests) rather than merging inline:
-  // the same branch-protection reasoning as approve above applies here too
-  // (an up-to-date branch + green required checks a fresh click can't
-  // guarantee synchronously), so this only sets intent and resets the
-  // sweep's own backoff so the next tick attempts it immediately instead of
-  // waiting out whatever interval it was already on.
-  app.post<{ Params: { id: string } }>("/api/tasks/:id/merge", async (request, reply) => {
-    if (!resolveTaskMasterConfig(app).enabled) {
-      return reply.forbidden(
-        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
-      );
-    }
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
-    const existing = getLocalTaskOr404(taskId);
-    if (!existing) return reply.notFound();
-    if (existing.status !== "done") {
-      return reply.conflict(`Cannot request a merge for a task in status "${existing.status}"`);
-    }
-    if (existing.prNumber === null) {
-      return reply.conflict("Task has no linked pull request to merge");
-    }
-
-    const updated = updateTask(app, taskId, {
-      mergeRequestedAt: new Date(),
-      ...mergeHuman.clearedFor(existing.needsHumanReason),
-    });
-    resetMergeBackoff(taskId);
-    return updated;
   });
 
   interface RejectBody {

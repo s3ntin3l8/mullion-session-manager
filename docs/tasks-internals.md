@@ -997,7 +997,10 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   outgrew a small suggestion; the transition reads it through the same
   backend → `/internal/task-rereview-request` path as the PR-title file, and its
   presence makes the return a normal review **and spends a round**, so a
-  worker that asks every time still ends at the cap. An unreadable request
+  worker that asks every time still ends at the cap. (A sibling channel,
+  `taskCiUnfixablePath`, carries a worker's "this red CI check cannot be fixed
+  from this PR" declaration; see "A red check on a head the worker was already
+  returned for" below.) An unreadable request
   (an older peer build, a 5xx) is read as "no request" and the approval is
   carried; a host that is merely unreachable is retried next tick, without
   holding up the host's other tasks.
@@ -2020,8 +2023,17 @@ failing or still running — and this repo deliberately does not require
 `test-e2e` or `codecov/patch` (see [`ci-cd.md`](ci-cd.md)). Merging on
 `unstable` would silently skip whatever that check was verifying, right after
 a fresh push while e2e is still queued. A human clicking Squash-and-merge on
-GitHub at least sees the red X first; "Merge now" is the equivalent override
-here. The flip side: a non-required check that never reports at all leaves a
+GitHub at least sees the red X first; **"Merge anyway"** is the equivalent
+override here. A plain "Merge now" only re-arms the sweep (and so reads the same
+`unstable` state again); "Merge anyway" is `POST /api/tasks/:id/merge?overrideNonRequiredChecks=true`,
+offered only while `mergeError` names the red checks (`isMergeOverridable`, derived
+as `mergeOverridable` on the task row). The route reads the PR head from GitHub at
+click time (`resolveMergeOverrideHead`; it refuses unless GitHub still reports
+`unstable`) and stores it in `mergeOverrideHeadSha`; `classifyMergeReadiness(pr,
+task.mergeOverrideHeadSha)` then reads `unstable` as `clean` while the PR's head
+still equals it, and `mergePullRequest` is called with that head as its `sha`
+guard. A push voids the override, and `blocked` (a required check) is never
+overridable. The flip side: a non-required check that never reports at all leaves a
 PR `unstable` — and therefore never auto-merging — forever.
 
 **A stuck non-Actions status gets its coverage re-uploaded (`#2904`).**
@@ -2345,8 +2357,8 @@ with only _pending_ checks is left alone, and the `unstable` trigger also waits
 for the head's Actions runs to finish (`unstable` means "failing or still
 running", and a push mid-run would cancel and restart them). The gate is
 name-agnostic, so a red check no commit can fix (a CLA gate, say) spends rounds
-until the cap and then parks the task with a comment naming it; "Merge now" is
-the override. A red check whose shape matches the PR-title-lint pattern above is
+until the cap and then parks the task with a comment naming it; "Merge anyway"
+is the override when only non-required checks are red. A red check whose shape matches the PR-title-lint pattern above is
 self-healed instead of returned to the worker — see "Exception — PR-title
 lint self-heals" above. The failing checks, with each check's own one-line
 summary (e.g. codecov's "66.66% of diff hit (target 75.00%)"), are listed in
@@ -2440,18 +2452,40 @@ the worker came back without pushing — typically because nothing in the code i
 wrong (a lost runner, an abandoned shard, a run GitHub never created jobs for;
 tasks 1031536, 1031838 and 1031834 looped on exactly that, one reseed per
 ~90 s, which an unlimited round cap does not stop). `holdRedCiWithoutProgress`
-then re-runs the failed Actions jobs itself — in the run that OWNS each red check, read
+first reads the worker's own declaration, then re-runs the failed Actions jobs
+itself — in the run that OWNS each red check, read
 from the check's `details_url`, not the latest run of the same workflow name, which can be a
 newer green one (`rerunFailedJobs`, at most
 `MAX_CI_RERUNS_PER_HEAD` per head, spaced `CI_RERUN_SETTLE_MS` apart, counted in
 `ciRerunCount`). When GitHub refuses the rerun (it does for CodeQL and
 dependency-review runs and for runs without jobs), the budget is spent, or the
-red check is not an Actions run at all, it parks the task the way the review
-loop does for a worker that returned unchanged: `needsHumanReason: "no-progress"`
-plus `autoReturnCapAnnouncedAt`, and one PR comment. A human push moves the head,
+red check is not an Actions run at all, it parks the task through
+`parkRedCiForHuman`: `needsHumanReason: "ci-still-red"` plus
+`autoReturnCapAnnouncedAt`, the check names in `ciHoldNote`, and one PR comment
+naming the checks (and, from GitHub's `mergeable_state`, whether any is required:
+`unstable` means none is, `blocked` means one is). A human push moves the head,
 and `reannounceCappedTasksAfterHumanPush` re-arms the task. A rerun request that
 itself fails (rate limit, network) holds the tick without parking. A new head
 that is still red is a real round and returns the worker as before.
+
+**A worker can declare a red check unfixable from this PR.** Some failures no
+commit can fix: an upstream advisory with no patched release, an outside service
+that is down, a check that is red on the base branch too. The CI-return prompt
+(`buildCiFailurePrompt`) names a file, `taskCiUnfixablePath(sessionsDir, taskId,
+headSha)` (`task-<id>.ci-unfixable.<head>`, outside the worktree, keyed by the
+head the worker was returned for so a stale declaration never matches a later
+push), where the worker writes one short paragraph naming the check and why, and
+tells it not to push a workaround or disable the check. On the next sweep
+`holdRedCiWithoutProgress` reads it (`SessionBackend.readTaskCiUnfixable`, the
+same backend → `/internal/task-ci-unfixable` path as the re-review request; the
+route validates `headSha` as a 40-char lowercase hex SHA) BEFORE any rerun and
+parks at once with `needsHumanReason: "ci-unfixable"`. The worker's text is
+flattened to one line, run through `redactSecrets`, capped at 500 characters and
+neutralised (`neutraliseDecisionLine`) before it reaches `ciHoldNote` or the PR
+comment. A host that is unreachable or busy holds the tick; any other read error
+(an older peer build with no route) reads as "no declaration" and the rerun path
+runs. The park is shown on the card and the drawer even while the task holds an
+approval (a CI fix keeps it), which the round-cap line never was.
 
 **New PR review comments return the task to the worker (`#757`).** A human
 leaving inline review comments directly on GitHub — not through Mullion's

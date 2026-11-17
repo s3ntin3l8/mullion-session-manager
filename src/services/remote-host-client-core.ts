@@ -1702,6 +1702,20 @@ export class RemoteHostClient {
     return result.content;
   }
 
+  /**
+   * Reads a worker's "this red CI check cannot be fixed from this PR" file off
+   * this agent's own filesystem (`taskCiUnfixablePath`). Same shape and
+   * version-skew posture as `resolveReadTaskRereviewRequest`: a 404 from a peer
+   * build without the route throws HostRequestError, never collapses into `null`.
+   * `headSha` is encoded, though callers pass a validated full SHA.
+   */
+  async resolveReadTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
+    const result = await this.request<{ content: string | null }>(
+      `/internal/task-ci-unfixable?taskId=${taskId}&headSha=${encodeURIComponent(headSha)}`,
+    );
+    return result.content;
+  }
+
   /** The bearer+signature-authed inbound WebSocket to one `/internal/ws/*` route. */
   private inboundStream(requestTarget: string, capPayload: boolean): NodeWebSocket {
     return new NodeWebSocket(`${this.transport.wsBaseUrl}${requestTarget}`, {

@@ -615,6 +615,26 @@ function TaskMergeStatus({ task, trailing }: { task: Task; trailing?: ReactNode 
           {pending ? "Retry merge" : "Merge now"}
         </button>
       )}
+      {!merged && task.mergeOverridable && (
+        <button
+          className="notif-gate-btn"
+          disabled={submitting || !taskMasterEnabled}
+          title="Merge even though the named non-required checks are red. Applies to this commit only: a new push voids it."
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await mergeTask(task.id, { overrideNonRequiredChecks: true });
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to override the checks");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          Merge anyway
+        </button>
+      )}
       {pending && !task.mergeError && !merged && (
         <span className="task-detail-hint">
           Merge pending — landing once the branch is up to date and checks are green.

@@ -9,6 +9,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 import { deriveTaskBranchName } from "../../src/services/git-worktree.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
 import { eq } from "drizzle-orm";
+import { nullTaskFileReads } from "../helpers/null-task-file-reads.js";
 
 // `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
 // remote backend has to satisfy all of it — a fake missing members would
@@ -52,8 +53,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     readTaskReviewFindings: vi.fn().mockResolvedValue(null),
     deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
-    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
-    readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
+    ...nullTaskFileReads(),
     ...overrides,
   };
 }

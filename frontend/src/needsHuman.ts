@@ -11,7 +11,23 @@ export type NeedsHumanReason =
   | "blocked-threads"
   | "review-post-failed"
   | "pr-closed"
-  | "ci-status-stalled";
+  | "ci-status-stalled"
+  | "ci-unfixable"
+  | "ci-still-red";
+
+/** The two review-loop reasons that name a red CI check (`ciHoldNote` carries
+ * the check names and, for `ci-unfixable`, the worker's reason). Unlike the
+ * round-cap reasons they are shown even while the task still holds an approval,
+ * which is exactly when they happen (a CI fix keeps the approval). */
+export function isCiHoldReason(
+  reason: NeedsHumanReason | null | undefined,
+): reason is "ci-unfixable" | "ci-still-red" {
+  return reason === "ci-unfixable" || reason === "ci-still-red";
+}
+
+/** What a human can do about a parked red check. */
+export const CI_HOLD_HINT =
+  'Approve the task, then use "Merge anyway" if the failing check is not required. If it is required, fix the cause on the base branch and update this branch, which re-arms the task.';
 
 /** The reasons tied to a merge that cannot proceed. Unlike the review-loop
  * reasons they do not depend on the round cap or its announce stamp. */
@@ -26,8 +42,19 @@ export function isMergeNeedsHumanReason(
   );
 }
 
-export function needsHumanText(reason: NeedsHumanReason | null | undefined): string {
+export function needsHumanText(
+  reason: NeedsHumanReason | null | undefined,
+  note?: string | null,
+): string {
   switch (reason) {
+    case "ci-unfixable":
+      return note
+        ? `a CI check can't be fixed from this PR: ${note}`
+        : "a CI check can't be fixed from this PR";
+    case "ci-still-red":
+      return note
+        ? `CI still red after the worker and two reruns: ${note}`
+        : "CI still red after the worker and two reruns";
     case "no-progress":
       return "worker returned without a change";
     case "finding-persisted":

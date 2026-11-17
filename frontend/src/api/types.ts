@@ -494,6 +494,7 @@ export type {
   PlacementPreview,
 } from "./host-types.js";
 import type { CleanupSource } from "./storage-types.js";
+import type { NeedsHumanReason } from "../needsHuman.js";
 
 // Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
 // #820 PR7a/PR7c. Which of resolveSshAuthSock's three tiers is why
@@ -2201,17 +2202,16 @@ export interface Task {
   // "no-progress", "finding-persisted") are only meaningful while the announce
   // stamp above is set; the merge-tied ones ("rebase-exhausted",
   // "blocked-threads", "pr-closed", "ci-status-stalled") are set with mergeError and stand on their own; "review-post-failed" is set without the announce stamp.
+  // "ci-unfixable" and "ci-still-red" are review-loop reasons about a red CI
+  // check: set with the announce stamp, and shown even when an approval is held.
   // See needsHuman.ts.
-  needsHumanReason:
-    | "cap"
-    | "no-progress"
-    | "finding-persisted"
-    | "rebase-exhausted"
-    | "blocked-threads"
-    | "review-post-failed"
-    | "pr-closed"
-    | "ci-status-stalled"
-    | null;
+  needsHumanReason: NeedsHumanReason | null;
+  // The failing check names (and, for "ci-unfixable", the worker's sanitised
+  // reason) behind the two CI-hold reasons above. Null otherwise.
+  ciHoldNote: string | null;
+  // "Merge anyway" is offered: a done task whose merge is held only by named
+  // non-required checks (derived server-side from mergeError).
+  mergeOverridable: boolean;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned
