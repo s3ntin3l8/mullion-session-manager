@@ -300,16 +300,34 @@ export async function resolveDefaultBaseRefNoFetch(cwd: string): Promise<string>
   return "HEAD";
 }
 
-export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
-  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return "HEAD";
+export async function resolveDefaultBaseRefWithFetch(
+  cwd: string,
+): Promise<{ ref: string; fetched: boolean }> {
+  // Nothing to fetch (not a repo): not a fetch failure, so `fetched` stays true.
+  // The repo probe goes through git rather than `existsSync(path.join(cwd,
+  // ".git"))`: `cwd` is the same already-validated value, and a git probe
+  // keeps this a spawn-cwd use instead of a filesystem-path sink.
+  if (!isSafeAbsolutePath(cwd) || (await runGit(cwd, ["rev-parse", "--git-dir"])) === null) {
+    return { ref: "HEAD", fetched: true };
+  }
 
   // Best-effort freshness — a stale/missing origin/HEAD or origin/main is
   // exactly the failure mode this guards against; a fetch failure (offline,
   // no remote) just means the candidates below resolve against whatever the
-  // repo already has locally.
-  await runGit(cwd, ["fetch", "origin", "--quiet"]);
+  // repo already has locally. The outcome is reported as `fetched` so the
+  // task-claim path can refuse to cut a worktree from a possibly stale base.
+  let fetched = (await runGit(cwd, ["fetch", "origin", "--quiet"])) !== null;
+  if (!fetched) {
+    // A clone with no `origin` has nothing to be stale against.
+    const originUrl = await runGit(cwd, ["config", "--get", "remote.origin.url"]);
+    if (originUrl === null) fetched = true;
+  }
 
-  return resolveDefaultBaseRefNoFetch(cwd);
+  return { ref: await resolveDefaultBaseRefNoFetch(cwd), fetched };
+}
+
+export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
+  return (await resolveDefaultBaseRefWithFetch(cwd)).ref;
 }
 
 /**

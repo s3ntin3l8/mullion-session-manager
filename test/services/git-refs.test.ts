@@ -10,6 +10,7 @@ import {
   listRemoteBranches,
   listWorktrees,
   resolveDefaultBaseRef,
+  resolveDefaultBaseRefWithFetch,
   resolveDefaultBaseRefForPicker,
   resolveCommitSha,
   resolveRepoRoot,
@@ -288,6 +289,23 @@ describe("resolveDefaultBaseRef (issue #216)", () => {
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
     commitAll(tmpDir, "initial");
     expect(await resolveDefaultBaseRef(tmpDir)).toBe("HEAD");
+  });
+
+  it("reports fetched: false when origin cannot be fetched, true when it can or there is no origin", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    expect((await resolveDefaultBaseRefWithFetch(tmpDir)).fetched).toBe(true);
+
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+    expect((await resolveDefaultBaseRefWithFetch(tmpDir)).fetched).toBe(true);
+
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+    const result = await resolveDefaultBaseRefWithFetch(tmpDir);
+    expect(result.fetched).toBe(false);
+    expect(result.ref).toBe("origin/main");
   });
 
   it("resolves origin/main when origin/HEAD's symbolic ref is set", async () => {

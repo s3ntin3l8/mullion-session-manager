@@ -863,6 +863,15 @@ export async function dispatchClaimedTask(
       await release(detail);
       return { ok: false, reason: "worktree-failed", detail };
     }
+    // `fetched` is absent from an agent too old to report it: unknown, so keep
+    // the old behaviour. An explicit `false` means the fetch of origin failed
+    // and the SHA below may be arbitrarily stale — release and let the
+    // dispatch backoff retry rather than cut the worktree from it.
+    if (baseRefResult.value.fetched === false) {
+      const detail = `could not fetch origin on host ${placement.hostId}: the base ref may be stale`;
+      await release(detail);
+      return { ok: false, reason: "worktree-failed", detail };
+    }
     const { baseRef, baseSha } = {
       baseRef: baseRefResult.value.baseRef,
       baseSha: baseRefResult.value.sha,
