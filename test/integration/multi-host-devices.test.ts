@@ -241,6 +241,8 @@ describe("devices on an agent host (issue #3200)", () => {
       });
       expect(ok.statusCode).toBe(200);
       expect(ok.json().deviceKinds).toEqual(expect.arrayContaining(["emulator", "physical"]));
+      // DEVICE_IOS_ENABLED is unset: Android only.
+      expect(ok.json().platforms).toEqual(["android"]);
     });
 
     it("refuses a spawn for an iOS device: there is no iOS engine on an agent yet (#3202)", async () => {

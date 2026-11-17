@@ -791,6 +791,18 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // The iOS Simulator panel (macOS hosts only, #1943). Off by default; it also
+    // needs the `xcode` host capability and an executable idb_companion.
+    DEVICE_IOS_ENABLED: {
+      type: "boolean",
+      default: false,
+    },
+    // Absolute path to the `idb_companion` binary. Empty means "not configured"
+    // (no PATH fallback), same posture as DEVICE_EMULATOR_PATH.
+    DEVICE_IDB_COMPANION_PATH: {
+      type: "string",
+      default: "",
+    },
     // Absolute path to the scrcpy-server binary pushed onto the device
     // (ansible-playbooks' `android-sdk` role downloads and pins this — see
     // that role's own comment on why it's a plain checksummed download, not
@@ -1222,6 +1234,8 @@ declare module "fastify" {
       DEVICE_ADB_PATH: string;
       DEVICE_ADB_SERVER_PORT: number;
       DEVICE_EMULATOR_PATH: string;
+      DEVICE_IOS_ENABLED: boolean;
+      DEVICE_IDB_COMPANION_PATH: string;
       DEVICE_SCRCPY_SERVER_PATH: string;
       DEVICE_VIDEO_MAX_SIZE: number;
       DEVICE_VIDEO_MAX_FPS: number;
