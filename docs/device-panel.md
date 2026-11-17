@@ -609,6 +609,15 @@ expose them.
 `{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat"|"clipboard", ...}`
 — `clipboard` additionally carries `{op: "get"}` or
 `{op: "set", text, paste?}` — same shape the CLI/MCP surface forwards).
+Every device carries a `platform` (`"android"`, the default, or `"ios"`) and a
+`udid` (an iOS Simulator's identifier, null for Android); `kind`, `avdName`,
+`serial` and `port` stay Android-shaped. `POST /api/devices` takes each
+platform's own fields only: a non-null `udid` is refused for an Android device, and
+`kind: "physical"`, `avdName` and `address` are refused for an iOS one. An iOS
+device answers 400 "not supported yet" until its driver exists
+([#1943](https://github.com/s3ntin3l8/mullion-session-manager/issues/1943)), and
+an agent refuses an iOS spawn the same way. Rows from before the columns existed
+read back as `android`.
 Lifecycle: `POST /:id/start` flips a stopped row
 back to `active` and runs `getOrCreate()` so something is actually running
 behind it. Errors: 400 when `getOrCreate()` throws — synchronously, so a
