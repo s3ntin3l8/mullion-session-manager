@@ -12,6 +12,7 @@ import { positionToDirection } from "dockview";
 import type { Session, Device } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
 import { sessionPaneTitle } from "./lib/sessionDisplay.js";
+import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 import type { ProjectHubTab } from "./ProjectHubPanel.js";
 
@@ -1026,13 +1027,16 @@ export function openBrowserPanePanel(
   api: DockviewApi,
   session: Session,
   layout: LayoutContext,
+  // The session's task title and number (#3285), so the pane is named the
+  // way the sidebar names the session.
+  titleCtx?: SessionTitleContext,
 ): void {
   openOrFocusPanel(
     api,
     `browserPane-${session.id}`,
     {
       component: "browserPane",
-      title: `Agent Browser: ${sessionPaneTitle(session)}`,
+      title: `Agent Browser: ${sessionPaneTitle(session, titleCtx)}`,
       params: { sessionId: session.id },
     },
     layout,

@@ -4,6 +4,7 @@ import { useDashboardStore } from "../store/index.js";
 import { themeClassName } from "../store/theme.js";
 import { buildRailPaneEntries, railPaneAccessibleName } from "../lib/railPanes.js";
 import type { RailPaneEntry, RailPaneInput } from "../lib/railPanes.js";
+import { selectSessionTitleContexts } from "../lib/sessionDisplay.js";
 import { FileTextIcon, PlusIcon, TerminalPromptIcon } from "../ui/icons.js";
 
 export interface RailPaneListProps {
@@ -232,6 +233,7 @@ export function RailPanes({
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
   const theme = useDashboardStore((s) => s.theme);
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const entries = useMemo(
     () =>
       buildRailPaneEntries(panes, {
@@ -243,6 +245,7 @@ export function RailPanes({
         mutedSessionIds,
         theme,
         activePanelId,
+        titleContexts,
       }),
     [
       panes,
@@ -254,6 +257,7 @@ export function RailPanes({
       mutedSessionIds,
       theme,
       activePanelId,
+      titleContexts,
     ],
   );
   return (

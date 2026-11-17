@@ -3,6 +3,7 @@ import { commandToBinary, resolveAgentLogo } from "../cliLogos.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import type { Theme } from "../store/index.js";
 import { sessionPaneTitle } from "./sessionDisplay.js";
+import type { SessionTitleContexts } from "./sessionDisplay.js";
 
 // The left rail's pane list (#3009): one entry per pane open in a workspace.
 // Built here as plain data, so the list component only renders entries and a
@@ -75,6 +76,8 @@ export interface RailPaneContext {
   mutedSessionIds: number[];
   theme: Theme;
   activePanelId: string | null;
+  /** Task titles and numbers (selectSessionTitleContexts, #3285). */
+  titleContexts?: SessionTitleContexts;
 }
 
 /** One entry per pane, in the order given; needs-you and unread follow the
@@ -101,7 +104,7 @@ export function buildRailPaneEntries(
         active,
       };
     }
-    const fullTitle = sessionPaneTitle(session);
+    const fullTitle = sessionPaneTitle(session, ctx.titleContexts?.get(session.id));
     const muted = ctx.mutedSessionIds.includes(session.id);
     const seen = ctx.lastSeenSeq[session.id] ?? 0;
     const events = ctx.events[session.id];

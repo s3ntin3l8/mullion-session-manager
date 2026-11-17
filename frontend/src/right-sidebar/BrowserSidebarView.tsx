@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { useDashboardStore } from "../store/index.js";
 import { BrowserPane } from "../BrowserPane.js";
 import { browserApi } from "../api/browser.js";
 import { useFollowedSession } from "../hooks/useFollowedSession.js";
-import { sessionDisplayTitle } from "../lib/sessionDisplay.js";
+import { selectSessionTitle } from "../lib/sessionDisplay.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import type { RightSidebarViewProps } from "./views.js";
 
@@ -22,6 +23,8 @@ type Probe = { sessionId: number; bound: boolean } | null;
 export function BrowserSidebarView({ projectId }: RightSidebarViewProps) {
   const session = useFollowedSession(projectId);
   const sessionId = session?.id ?? null;
+  // The title the sidebar gives this session (#3285).
+  const title = useDashboardStore((s) => (session ? selectSessionTitle(s, session) : ""));
   const [probe, setProbe] = useState<Probe>(null);
   // Sessions the user asked to open a browser for while this view is mounted.
   const [opened, setOpened] = useState<ReadonlySet<number>>(() => new Set());
@@ -70,7 +73,7 @@ export function BrowserSidebarView({ projectId }: RightSidebarViewProps) {
         <EmptyStateNote>Loading…</EmptyStateNote>
       ) : (
         <div className="browser-sidebar-empty">
-          <EmptyStateNote>{sessionDisplayTitle(session)} has no browser yet.</EmptyStateNote>
+          <EmptyStateNote>{title} has no browser yet.</EmptyStateNote>
           <button
             type="button"
             className="rs-touch-btn"

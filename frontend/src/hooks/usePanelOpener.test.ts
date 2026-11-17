@@ -18,8 +18,17 @@ const openRightSidebarView = vi.fn();
 const startDevice = vi.fn();
 const requestPreviewPicker = vi.fn();
 
+// What selectSessionTitleContexts reads (#3285): the Agent Browser pane is
+// named the way the sidebar names its session.
+let titleTasks: ReturnType<typeof makeTask>[] = [];
+const titleSessions: ReturnType<typeof makeSession>[] = [];
+
 function storeState() {
   return {
+    sessions: titleSessions,
+    tasks: titleTasks,
+    hideEndedSessions: false,
+    showTaskSessions: true,
     triggerPanelHighlight,
     setActiveWorkspaceId,
     setViewMode,
@@ -429,6 +438,22 @@ describe("usePanelOpener — onOpenAgentBrowser (#3215)", () => {
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "browserPane-1", component: "browserPane" }),
     );
+  });
+
+  it("names the pane after the session's task, as the sidebar does (#3285)", () => {
+    titleTasks = [makeTask({ id: 9, sessionId: SESSION.id, title: "Fix the login form" })];
+    try {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+
+      result.current.onOpenAgentBrowser(SESSION);
+
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Agent Browser: Fix the login form" }),
+      );
+    } finally {
+      titleTasks = [];
+    }
   });
 
   it("no-ops when dockviewApi is null", () => {

@@ -25,8 +25,9 @@ import {
   type NotificationEvent,
   type Project,
   type Session,
+  type Task,
 } from "./api/index.js";
-import { makeSession, makeProject, makeHost } from "./test/fixtures.js";
+import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
 // default it to false so the test doesn't need a full store hydrate. Every
@@ -44,6 +45,8 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // Defaults to [] in beforeEach; tests exercising the cascade UI set it
 // before rendering.
 let sessions: Session[];
+// Issue #3285 — a Task Master worker's row is titled by its task.
+let tasks: Task[] = [];
 // Issue #1727 — the hosts the fleet knows about, for the per-session host
 // badge. Defaults to one remote host so the badge's name lookup has
 // something to find.
@@ -72,7 +75,7 @@ vi.mock("./store/index.js", () => {
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
-      tasks: [],
+      tasks,
       openRightSidebarPr: vi.fn(),
       sessions,
       // Issue #1892 — HostStatusLabel subscribes (the name lookup stays on
@@ -574,6 +577,19 @@ describe("SessionRow title display", () => {
     );
     expect(screen.getByText("my custom session")).toBeTruthy();
     expect(screen.queryByText("ignored osc title")).toBeNull();
+  });
+
+  it("shows a Task Master session's task title (#3285)", () => {
+    const session = makeSession({ id: 41, command: "claude", lastTitle: "agent's own title" });
+    tasks = [makeTask({ id: 7, sessionId: 41, title: "Fix the login form" })];
+    sessions = [session];
+    try {
+      render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+      expect(screen.getByText("Fix the login form")).toBeTruthy();
+      expect(screen.queryByText("agent's own title")).toBeNull();
+    } finally {
+      tasks = [];
+    }
   });
 
   it("shows monospace class for command fallback, not for lastTitle", () => {

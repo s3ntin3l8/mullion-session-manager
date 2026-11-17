@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { Device, Project, Session, Task, Workspace } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
+import { selectSessionTitleContexts } from "../lib/sessionDisplay.js";
 import { randomPanelId } from "../random-id.js";
 import {
   findSessionWorkspaces,
@@ -295,7 +296,12 @@ export function usePanelOpener({
     (session: Session) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openBrowserPanePanel(dockviewApi, session, layout);
+      openBrowserPanePanel(
+        dockviewApi,
+        session,
+        layout,
+        selectSessionTitleContexts(useDashboardStore.getState()).get(session.id),
+      );
     },
     [dockviewApi, layout, leaveTaskView],
   );

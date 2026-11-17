@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { makeProject, makeSession } from "../test/fixtures.js";
-import { isListedSession, sessionDisplayTitle, sessionMatchesSearch } from "./sessionDisplay.js";
+import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import {
+  buildSessionTitleContexts,
+  isListedSession,
+  selectSessionTitle,
+  selectSessionTitleContexts,
+  sessionDisplayTitle,
+  sessionMatchesSearch,
+  sessionPaneTitle,
+  sessionTitleIsCommand,
+} from "./sessionDisplay.js";
 
 describe("sessionDisplayTitle", () => {
   it("prefers the locked name when nameLocked is true and name is set", () => {
@@ -9,7 +18,7 @@ describe("sessionDisplayTitle", () => {
   });
 
   it("falls back to lastTitle when not name-locked", () => {
-    const session = makeSession({ nameLocked: false, name: "ignored", lastTitle: "OSC title" });
+    const session = makeSession({ nameLocked: false, name: "launch name", lastTitle: "OSC title" });
     expect(sessionDisplayTitle(session)).toBe("OSC title");
   });
 
@@ -103,5 +112,135 @@ describe("isListedSession", () => {
     const opts = { ...base, taskSessionIds: new Set([7]) };
     expect(isListedSession(linked, opts)).toBe(true);
     expect(isListedSession(linked, { ...opts, showTaskSessions: false })).toBe(false);
+  });
+});
+
+// Issue #3285 — one order for every surface, one case per step.
+describe("sessionTitle order (#3285)", () => {
+  const bare = { nameLocked: false, name: null, lastTitle: null, command: "claude" };
+
+  it("1. the user's name wins over everything", () => {
+    const s = makeSession({
+      ...bare,
+      nameLocked: true,
+      name: "mine",
+      lastTitle: "osc",
+      worktreeBranch: "feat/x",
+    });
+    expect(sessionDisplayTitle(s, { taskTitle: "Task", number: 2 })).toBe("mine");
+  });
+
+  it("2. a task's title wins over the agent's title and the branch", () => {
+    const s = makeSession({ ...bare, lastTitle: "osc", worktreeBranch: "feat/x" });
+    expect(sessionDisplayTitle(s, { taskTitle: "Fix the login form" })).toBe("Fix the login form");
+  });
+
+  it("3. the agent's title wins over the branch", () => {
+    const s = makeSession({ ...bare, lastTitle: "osc", worktreeBranch: "feat/x" });
+    expect(sessionDisplayTitle(s)).toBe("osc");
+  });
+
+  it("4. the session's own worktree branch wins over the launch name", () => {
+    const s = makeSession({ ...bare, name: "Claude", worktreeBranch: "feat/x" });
+    expect(sessionDisplayTitle(s)).toBe("feat/x");
+  });
+
+  it("5. the launch name, else the command, numbered past the first", () => {
+    expect(sessionDisplayTitle(makeSession({ ...bare, name: "Claude Code" }))).toBe("Claude Code");
+    expect(sessionDisplayTitle(makeSession(bare))).toBe("claude");
+    expect(sessionDisplayTitle(makeSession(bare), { number: 1 })).toBe("claude");
+    expect(sessionDisplayTitle(makeSession(bare), { number: 3 })).toBe("claude 3");
+  });
+
+  it("numbers only step 5, never a name, task, agent title or branch", () => {
+    const s = makeSession({ ...bare, worktreeBranch: "feat/x" });
+    expect(sessionDisplayTitle(s, { number: 2 })).toBe("feat/x");
+  });
+
+  it("gives pane headers the same title as the row", () => {
+    const s = makeSession({ ...bare, name: "Claude", worktreeBranch: "feat/x" });
+    expect(sessionPaneTitle(s, { taskTitle: "T" })).toBe(
+      sessionDisplayTitle(s, { taskTitle: "T" }),
+    );
+    expect(sessionPaneTitle(s)).toBe("feat/x");
+  });
+
+  it("says when the title is the raw command, numbered or not", () => {
+    expect(sessionTitleIsCommand(makeSession(bare), { number: 2 })).toBe(true);
+    expect(sessionTitleIsCommand(makeSession({ ...bare, name: "Claude" }))).toBe(false);
+    expect(sessionTitleIsCommand(makeSession(bare), { taskTitle: "T" })).toBe(false);
+  });
+
+  it("matches the search against the shown title", () => {
+    const project = makeProject({ name: "p" });
+    const s = makeSession(bare);
+    expect(sessionMatchesSearch(s, project, "claude 2", { number: 2 })).toBe(true);
+    expect(sessionMatchesSearch(s, project, "login", { taskTitle: "Fix the login" })).toBe(true);
+  });
+});
+
+describe("buildSessionTitleContexts (#3285)", () => {
+  const opts = { hideEndedSessions: false, showTaskSessions: true };
+  const claude = (id: number, projectId: number) =>
+    makeSession({
+      id,
+      projectId,
+      name: null,
+      nameLocked: false,
+      lastTitle: null,
+      command: "claude",
+    });
+  const titles = (
+    sessions: ReturnType<typeof makeSession>[],
+    ctx: ReturnType<typeof buildSessionTitleContexts>,
+  ) => sessions.map((s) => sessionDisplayTitle(s, ctx.get(s.id)));
+
+  it("numbers two unnamed claude sessions in one project in session id order", () => {
+    const sessions = [claude(5, 1), claude(2, 1)];
+    expect(titles(sessions, buildSessionTitleContexts(sessions, [], opts))).toEqual([
+      "claude 2",
+      "claude",
+    ]);
+  });
+
+  it("leaves sessions in different projects unnumbered", () => {
+    const sessions = [claude(1, 1), claude(2, 2)];
+    expect(titles(sessions, buildSessionTitleContexts(sessions, [], opts))).toEqual([
+      "claude",
+      "claude",
+    ]);
+  });
+
+  it("does not count a session that resolves to other text", () => {
+    const sessions = [claude(1, 1), { ...claude(2, 1), lastTitle: "busy" }];
+    expect(titles(sessions, buildSessionTitleContexts(sessions, [], opts))).toEqual([
+      "claude",
+      "busy",
+    ]);
+  });
+
+  it("does not count a session the sidebar does not list", () => {
+    const sessions = [{ ...claude(1, 1), status: "exited" as const }, claude(2, 1)];
+    const ctx = buildSessionTitleContexts(sessions, [], { ...opts, hideEndedSessions: true });
+    expect(sessionDisplayTitle(sessions[1], ctx.get(2))).toBe("claude");
+  });
+
+  it("gives a task's worker its task title, not its review session", () => {
+    const sessions = [claude(1, 1), claude(2, 1), claude(3, 1)];
+    const tasks = [makeTask({ id: 9, sessionId: 1, reviewSessionId: 3, title: "Fix the login" })];
+    expect(titles(sessions, buildSessionTitleContexts(sessions, tasks, opts))).toEqual([
+      "Fix the login",
+      "claude",
+      "claude 2",
+    ]);
+  });
+
+  it("memoizes on the store's inputs and resolves one session's title", () => {
+    const sessions = [claude(1, 1), claude(2, 1)];
+    const state = { sessions, tasks: [], ...opts };
+    const first = selectSessionTitleContexts(state);
+    expect(selectSessionTitleContexts({ ...state })).toBe(first);
+    expect(selectSessionTitleContexts({ ...state, tasks: [] })).not.toBe(first);
+    expect(selectSessionTitle(state, sessions[1])).toBe("claude 2");
   });
 });

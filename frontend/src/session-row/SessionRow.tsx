@@ -15,7 +15,11 @@ import { PromoteDialog } from "../PromoteDialog.js";
 import { CloseIcon, HostsIcon } from "../ui/icons.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
 import { liveChildCount } from "../sidebarHierarchy.js";
-import { sessionDisplayTitle } from "../lib/sessionDisplay.js";
+import {
+  selectSessionTitleContexts,
+  sessionDisplayTitle,
+  sessionTitleIsCommand,
+} from "../lib/sessionDisplay.js";
 import { summarizeFileChanges } from "../lib/sidebarStatus.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
 import { sessionIdFromPanelId } from "../panelUtils.js";
@@ -292,12 +296,14 @@ export function SessionRow({
   const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
   const layoutTier = useLayoutContext().tier;
 
-  // U3 — factored into sessionDisplayTitle (module scope, top of file) so
-  // the sidebar's new search filter matches against exactly this same
-  // precedence rather than drifting from it.
-  const title = sessionDisplayTitle(session);
+  // U3 — factored into sessionDisplayTitle so the sidebar's search filter
+  // matches against exactly this same precedence rather than drifting from
+  // it. The task title and the number (#3285) come from one memoized build
+  // over the store, shared by every row.
+  const titleCtx = useDashboardStore((s) => selectSessionTitleContexts(s).get(session.id));
+  const title = sessionDisplayTitle(session, titleCtx);
 
-  const showCommand = title === session.command;
+  const showCommand = sessionTitleIsCommand(session, titleCtx);
   // Suppress the agent binary label when the title already starts with it
   // (e.g. command fallback "npm run build" already includes "npm") to avoid
   // redundant "npm npm run build" rendering.

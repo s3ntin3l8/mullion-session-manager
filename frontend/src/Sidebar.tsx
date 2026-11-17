@@ -38,7 +38,11 @@ import { buildHierarchicalRows } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
 import { columnForSession } from "./kanban.js";
 import type { KanbanColumnId } from "./kanban.js";
-import { isListedSession, sessionMatchesSearch } from "./lib/sessionDisplay.js";
+import {
+  isListedSession,
+  selectSessionTitleContexts,
+  sessionMatchesSearch,
+} from "./lib/sessionDisplay.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { DiscoverProjects } from "./sidebar/DiscoverProjects.js";
 import { ProjectHeader } from "./sidebar/ProjectHeader.js";
@@ -340,6 +344,10 @@ export function Sidebar({
   );
   const shouldVirtualize = totalBaseSessionCount > VIRTUALIZE_SESSION_THRESHOLD;
 
+  // The same task titles and numbers the rows show (#3285), so the search
+  // matches the text a row displays.
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
+
   const filteredSessionsByProject = useMemo(() => {
     const map = new Map<number, Session[]>();
     const query = searchQuery.trim();
@@ -353,13 +361,13 @@ export function Sidebar({
         project.id,
         base.filter(
           (s) =>
-            (query === "" || sessionMatchesSearch(s, project, query)) &&
+            (query === "" || sessionMatchesSearch(s, project, query, titleContexts.get(s.id))) &&
             (selectedChips.size === 0 || selectedChips.has(columnForSession(s))),
         ),
       );
     }
     return map;
-  }, [treeProjects, baseSessionsByProject, searchQuery, selectedChips]);
+  }, [treeProjects, baseSessionsByProject, searchQuery, selectedChips, titleContexts]);
 
   // U3 — a project with zero matches while a filter is active is skipped
   // entirely, not shown collapsed or with an empty body: the same "nothing
