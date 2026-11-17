@@ -882,24 +882,23 @@
    an element with its descendants into one translucent layer, so a child
    cannot opt back out — the fade has to stop short of the label.
 
-   The label lives in `.session-status-group` (Sidebar.tsx), a direct child
-   of `.session-item-row`. Fading every other direct child of the row, and
-   every direct child of that strip except the group, keeps the name, the
-   dot, the meta lines and the actions at half strength — the same fade the
-   whole row used to have — so an ended session still reads as quieter than
-   a live one. The host badge shares the group, so it keeps its own
-   `opacity: 0.75` instead of being multiplied by the row fade a second time.
-   That extra multiply was the same failure the label had.
+   Since issue #3286 the label lives in `.session-meta-line` (SessionRow.tsx),
+   the row's second line and a direct child of `.session-item`. Fading every
+   other direct child of the row (the `.session-item-row` title strip, the now
+   line, the details) keeps the name, the dot and the actions at half
+   strength — the same fade the whole row used to have — so an ended session
+   still reads as quieter than a live one. The meta line is exempt as a whole:
+   it is already dim, and its host and branch stay at full strength with the
+   label rather than being multiplied by the fade (the host badge's old
+   `opacity: 0.75` is gone for the same reason).
 
    Only `.status-exited`. `rowClassNameForSeverity` never returns
    `.status-killed` — a killed session is filtered out before a row is
    built — so a killed half of this rule could not match. */
-.session-item.status-exited > :not(.session-item-row),
-.session-item.status-exited .session-item-row > :not(.session-status-group) {
+.session-item.status-exited > :not(.session-meta-line) {
   opacity: 0.5;
 }
-.session-item.status-exited:hover > :not(.session-item-row),
-.session-item.status-exited:hover .session-item-row > :not(.session-status-group) {
+.session-item.status-exited:hover > :not(.session-meta-line) {
   opacity: 0.7;
 }
 /* Issue #319 — a session whose status can't be confirmed by its agent's
@@ -965,6 +964,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Issue #3286 — the session's pane is already in this workspace. The word
+   "open" used to say so beside the status; the title's weight says it now,
+   and the row's aria-label says it in words. */
+.session-name.open {
+  font-weight: 600;
+}
 .session-name.mono {
   font-family: "Geist Mono", monospace;
 }
@@ -980,7 +985,16 @@
 .session-agent-text {
   font-size: 0.78125rem;
   color: var(--dim);
-  flex-shrink: 0;
+  /* Issue #3286 — an agent with no logo shows its binary's name here. It
+     used to refuse to shrink, so a long one (a script name) took the title's
+     whole width and pushed the row's controls past the sidebar's edge. It
+     now gives way first, up to a cap, and the title keeps the rest. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .session-status-label {
   font-size: 0.625rem;
@@ -1014,15 +1028,64 @@
 .session-status-label.suspended {
   color: var(--dim);
 }
-/* Issue #1727 / roadmap 8.13 — the status label and the host badge sit
-   together in one inline-flex group, so the badge can sit TIGHT against the
-   label instead of picking up the row's own 8px gap. min-width: 0 lets the
-   group shrink with the sidebar, and the label inside it still ellipsis. */
-.session-status-group {
-  display: inline-flex;
+/* Issue #3286 — the row's second line: status word · host · branch, in the
+   dim colour and a smaller size, under the title. Its own line so the title
+   on line 1 takes all the width the controls leave. Indented past the dot
+   column (14px dot + the row's 8px gap) so it lines up under the logo and
+   title. Each part shrinks and ellipsis on its own; the separators and the
+   status word do not shrink before the branch does. */
+.session-meta-line {
+  display: flex;
   align-items: center;
-  gap: 5px;
   min-width: 0;
+  /* Keep equal to .session-now-line's indent: the row's continuation lines
+     line up under the title. */
+  padding-left: 22px;
+  font-size: 0.65625rem;
+  line-height: 1.3;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.session-meta-line > .session-status-label {
+  flex-shrink: 0;
+  max-width: 60%;
+  font-size: inherit;
+}
+/* The tone colours are tuned for the flat sidebar. On this line the status
+   word is always on show at 10.5px, often over a tinted row (active,
+   hovered, attention, finished), and there most tones fall under AA's 4.5:1:
+   light --g on the active+hovered row is 3.42:1, dark --r on the attention
+   row 3.41:1. Mixing each tone 30% toward --fg darkens it in the light
+   theme and lightens it in the dark one, so one rule set lifts every tone
+   past 4.5:1 on every row tint in both themes; the hue stays recognisable.
+   test/scripts/session-meta-line-contrast.test.ts pins the ratios. */
+.session-meta-line > .session-status-label.attention {
+  color: color-mix(in srgb, var(--ring) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.working {
+  color: color-mix(in srgb, var(--g) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.error {
+  color: color-mix(in srgb, var(--r) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.plan {
+  color: color-mix(in srgb, var(--o) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.permission {
+  color: color-mix(in srgb, var(--p) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.finished {
+  color: color-mix(in srgb, var(--c) 70%, var(--fg));
+}
+.session-meta-sep {
+  flex-shrink: 0;
+  white-space: pre;
+}
+.session-meta-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The host a session runs on. Quiet by design — small, dim, and never for a
    local session (the sidebar already carries a per-PROJECT host badge for
@@ -1032,14 +1095,16 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 0.59375rem;
   color: var(--dim);
-  opacity: 0.75;
   min-width: 0;
-  /* A long host name must not push the row wider than the sidebar — the
-     same cap the row's other chips use (100-110px). The NAME ellipsis
-     inside it; the icon never shrinks. */
-  max-width: 110px;
+  flex: 0 1 auto;
+  /* A long host name must not push the line wider than the sidebar. The
+     NAME ellipsis inside it; the icon and a host's state never shrink. */
+  max-width: 45%;
+}
+.session-host-badge .host-derived-status {
+  flex-shrink: 0;
+  margin-left: 3px;
 }
 .session-host-badge-name {
   min-width: 0;
@@ -1049,18 +1114,6 @@
 }
 .session-host-badge svg {
   flex-shrink: 0;
-}
-/* Issue #1877 — the session's terminal pane is already in this workspace.
-   The word is the whole signal: a dot alone would not say that clicking
-   the row focuses the pane you already have. */
-.session-open-label {
-  flex-shrink: 0;
-  font-size: 0.59375rem;
-  line-height: 14px;
-  color: var(--dim);
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  padding: 0 5px;
 }
 .session-status-label.killed {
   color: var(--r);
@@ -1138,6 +1191,7 @@
   font-size: 0.6875rem;
   font-style: italic;
   color: var(--dim);
+  /* Keep equal to .session-meta-line's indent (#3286). */
   padding-left: 22px;
   white-space: nowrap;
   overflow: hidden;

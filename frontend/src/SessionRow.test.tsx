@@ -28,6 +28,7 @@ import {
   type Task,
 } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
+import { expectNameHasVisibleText } from "./test/a11y.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
 // default it to false so the test doesn't need a full store hydrate. Every
@@ -272,7 +273,7 @@ describe("SessionRow", () => {
       const badge = document.querySelector(".session-host-badge");
       expect(badge).not.toBeNull();
       expect(badge?.closest(".session-status-label")).toBeNull();
-      expect(badge?.closest(".session-status-group")).not.toBeNull();
+      expect(badge?.closest(".session-meta-line")).not.toBeNull();
     });
 
     // Issue #1852 — the placement decision's own words are the answer to
@@ -350,6 +351,219 @@ describe("SessionRow", () => {
       expect(screen.getByText("mac-mini")).toBeInTheDocument();
       expect(screen.getByText("unreachable")).toBeInTheDocument();
       expect(screen.getByText("parked")).toBeInTheDocument();
+    });
+  });
+
+  // Issue #3286 — the title gets line 1 to itself; status, host and branch
+  // move to a dim second line, joined by " · ", each part left out with its
+  // separator when it does not apply.
+  describe("the meta line (issue #3286)", () => {
+    const metaLine = () => document.querySelector(".session-meta-line");
+
+    it("shows only the status for a local idle session", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, sessionStatus: "idle", sessionStatusSeverity: "dormant" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Idle");
+      expect(metaLine()?.querySelector(".session-meta-sep")).toBeNull();
+      expect(metaLine()?.querySelector(".session-status-label")).toHaveClass("idle");
+      // Line 1 holds the title, not the status.
+      const strip = document.querySelector(".session-item-row");
+      expect(strip?.querySelector(".session-name")).toHaveTextContent("claude code");
+      expect(strip?.querySelector(".session-status-label")).toBeNull();
+    });
+
+    it("shows status · host for a remote session, the name alone when its host is online", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "online" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · mac-mini");
+      expect(screen.queryByText("online")).not.toBeInTheDocument();
+    });
+
+    it("shows a remote host's state after its name when it is not online", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const host = metaLine()?.querySelector(".session-host-badge");
+      expect(host?.textContent).toBe("mac-mini unreachable");
+    });
+
+    it("shows a parked online host's state", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "online", drained: true })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.querySelector(".session-host-badge")).toHaveTextContent("parked");
+    });
+
+    it("shows status · branch for a session with a branch", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, liveBranch: "feat/two-lines" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · feat/two-lines");
+    });
+
+    it("shows status · host · branch in that order", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "local", liveBranch: "main" }}
+          project={PROJECT}
+          spansHosts
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · this machine · main");
+    });
+
+    it("keeps the attention tone on the status word", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, sessionStatus: "finished", sessionStatusSeverity: "done" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.querySelector(".session-status-label")).toHaveClass("finished");
+    });
+
+    it("keeps the awaiting-data and stale-hooks indicators with the status word", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, stateRestored: false, staleHooks: true }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const label = metaLine()?.querySelector(".session-status-label");
+      expect(label?.textContent?.startsWith("?")).toBe(true);
+      expect(label?.querySelector(".session-stale-icon")).not.toBeNull();
+    });
+
+    it("says line 2 in the row's accessible name, host state included", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini", liveBranch: "main" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Open session claude code, Working, mac-mini unreachable, main",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it("names the agent first when it shows as text (no logo), as the row shows it", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, command: "fake-agent.sh", name: "fix login", nameLocked: true }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Open session fake-agent.sh fix login, Working" }),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps the row's visible text a run of its accessible name (label-in-name)", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline", drained: true })];
+      render(
+        <SessionRow
+          session={{
+            ...SESSION,
+            command: "fake-agent.sh",
+            name: "fix login",
+            nameLocked: true,
+            resolvedHostId: "mac-mini",
+            liveBranch: "main",
+          }}
+          project={PROJECT}
+          openInWorkspace
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const row = document.querySelector<HTMLElement>(".session-item")!;
+      // No now line here: its text is not part of the name (it never was).
+      expect(row.querySelector(".session-now-line")).toBeNull();
+      expectNameHasVisibleText(row);
+    });
+
+    it("caps a long status detail on the line and in the name; the tooltip keeps it", () => {
+      const detail = "x".repeat(200);
+      render(
+        <SessionRow
+          session={{
+            ...SESSION,
+            sessionStatus: "exited",
+            sessionStatusSeverity: "gone",
+            sessionStatusDetail: detail,
+          }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const label = document.querySelector(".session-meta-line .session-status-label")!;
+      expect(label.textContent).toHaveLength(60);
+      expect(label.textContent?.endsWith("…")).toBe(true);
+      expect(label.getAttribute("title")).toBe(`exited: ${detail}`);
+      const row = document.querySelector(".session-item")!;
+      expect(row.getAttribute("aria-label")).not.toContain(detail);
+      expect(row.getAttribute("aria-label")).toContain(label.textContent);
+    });
+
+    it("drops the word 'open' for an open session; the title is heavier and the name says it", () => {
+      render(
+        <SessionRow
+          session={SESSION}
+          project={PROJECT}
+          openInWorkspace
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const row = screen.getByRole("button", {
+        name: "Open session claude code, Working, already open in this workspace",
+      });
+      expect(row).not.toHaveTextContent(/\bopen\b/);
+      expect(row.querySelector(".session-name")).toHaveClass("open");
     });
   });
 

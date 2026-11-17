@@ -7,7 +7,7 @@
 // GitLine.test.tsx's own header comment for why — same reasoning: the
 // status label's text/tooltip is derived from STATUS_PRESENTATION/
 // formatStatusLabel/isStatusReachable in SessionRow itself, which Header
-// only receives as an already-built `statusLabel` node). Rename IS entirely
+// only receives inside an already-built `metaLine` node). Rename IS entirely
 // local to Header's own state, but a full mount is still the simplest way
 // to drive it through real DOM events (double-click/Enter/Escape/blur)
 // without hand-building Header's dozen other props.
@@ -206,12 +206,13 @@ describe("SessionRow row 1 — header: status label", () => {
     expect(await findByText("exited: clear")).toBeInTheDocument();
   });
 
-  // Issue #1886 — the ended-row fade stops short of `.session-status-group`.
-  // The contrast guard models that chain by hand; this render is what makes
-  // moving the label out of the group fail a test. Direct parents, matching
-  // the `>` combinators in sidebar.css: a wrapper inserted between any two
-  // of these is the same break.
-  it("nests the status label in the group, inside the row, inside the session item", () => {
+  // Issue #1886 — the ended-row fade stops short of `.session-meta-line`
+  // (#3286 moved the label there, onto the row's second line). The contrast
+  // guard models that chain by hand; this render is what makes moving the
+  // label out of the line fail a test. Direct parents, matching the `>`
+  // combinators in sidebar.css: a wrapper inserted between any two of these
+  // is the same break.
+  it("nests the status label in the meta line, inside the session item", () => {
     const { container } = render(
       <SessionRow
         session={makeSession({
@@ -228,13 +229,13 @@ describe("SessionRow row 1 — header: status label", () => {
     );
     const label = container.querySelector(".session-status-label");
     expect(label).not.toBeNull();
-    const group = label!.parentElement;
-    expect(group).toHaveClass("session-status-group");
-    const row = group!.parentElement;
-    expect(row).toHaveClass("session-item-row");
-    const item = row!.parentElement;
+    const line = label!.parentElement;
+    expect(line).toHaveClass("session-meta-line");
+    const item = line!.parentElement;
     expect(item).toHaveClass("session-item");
     expect(item).toHaveClass("status-exited");
+    // The title strip is a sibling, above it.
+    expect(line!.previousElementSibling).toHaveClass("session-item-row");
   });
 
   it("shows 'Finished' label when sessionStatus is finished", async () => {
@@ -261,7 +262,10 @@ describe("SessionRow row 1 — header: status label", () => {
     const { container, findByText } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
-    const label = await findByText(`Tool failure: ${longDetail}`);
+    // #3286 — the meta line caps the text at 60 characters (the name a
+    // screen reader reads carries the same capped text); the tooltip keeps it all.
+    const label = await findByText(/^Tool failure: Bash: grep .*…$/);
+    expect(label.textContent).toHaveLength(60);
     expect(label).toHaveClass("session-status-label");
     expect(label).toHaveAttribute("title", `Tool failure: ${longDetail}`);
     // Exactly one label span — the overflow guard is CSS (ellipsis), not a
