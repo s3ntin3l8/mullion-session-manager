@@ -42,6 +42,8 @@ const TEXT_COLUMNS = [
   "reviewFindings",
   "lastReviewVerdict",
   "needsHumanReason",
+  // The note behind the two CI-hold reasons (check names and the worker's reason).
+  "ciHoldNote",
   // The held workflow change: JSON `{ sha, files }`, as task-workflow-gate.ts
   // writes it. Lets a scene show the sidebar's approval panel (#3108).
   "workflowChange",
@@ -75,6 +77,8 @@ const taskFixtureProps = {
       "review-post-failed",
       "pr-closed",
       "ci-status-stalled",
+      "ci-unfixable",
+      "ci-still-red",
       "rate-limited",
       null,
     ],

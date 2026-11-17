@@ -30,6 +30,7 @@ import {
   taskCommitTitlePath,
   taskRereviewRequestPath,
 } from "./task-prompt.js";
+import { readCiUnfixableFile } from "./task-ci-unfixable-file.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -474,6 +475,21 @@ export interface SessionBackend {
   // version skew — a peer build with no route included), same contract as
   // `readTaskCommitTitle`. Keyed, never deleted — see the path helper.
   readTaskRereviewRequest(taskId: number, key: number): Promise<string | null>;
+  // A worker's "this red CI check cannot be fixed from this PR" declaration
+  // (`taskCiUnfixablePath`, task-prompt.ts), keyed by the PR head it was
+  // returned for. Same contract as `readTaskRereviewRequest`: `null` ONLY for
+  // a genuinely absent file, throws for everything else (host unreachable, a
+  // peer 5xx, version skew — a peer build with no route included). `headSha`
+  // must be a 40-char lowercase hex SHA; anything else throws before any path
+  // is built. Keyed, never deleted.
+  readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null>;
+}
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/** The head keys a file path and a query string, so it is checked at every entry. */
+export function assertFullSha(headSha: string): void {
+  if (!FULL_SHA.test(headSha)) throw new Error("headSha must be a 40-char lowercase hex SHA");
 }
 
 class LocalBackend implements SessionBackend {
@@ -775,6 +791,11 @@ class LocalBackend implements SessionBackend {
     if (!existsSync(requestPath)) return null;
     // The file's existence is the request, so an empty file still counts.
     return readFileSync(requestPath, "utf8").trim() || "(no reason given)";
+  }
+
+  async readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
+    assertFullSha(headSha);
+    return readCiUnfixableFile(this.app.pty.sessionsDir, taskId, headSha);
   }
 }
 
@@ -1223,6 +1244,11 @@ class RemoteBackend implements SessionBackend {
 
   readTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
     return this.client.resolveReadTaskRereviewRequest(taskId, key);
+  }
+
+  readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
+    assertFullSha(headSha);
+    return this.client.resolveReadTaskCiUnfixable(taskId, headSha);
   }
 }
 

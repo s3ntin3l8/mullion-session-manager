@@ -537,6 +537,23 @@ export function taskRereviewRequestPath(sessionsDir: string, taskId: number, key
 }
 
 /**
+ * Where a worker returned for a red CI check writes "this cannot be fixed from
+ * this PR" — a `sessionsDir`-relative path outside the worktree, the same
+ * convention `taskRereviewRequestPath` documents. The file's existence is the
+ * declaration; its content is the worker's reason (the check, and why).
+ *
+ * Keyed by the head the worker was returned for (`ciReturnHeadSha`, which is
+ * also `ci.headSha` in `buildCiFailurePrompt`): a declaration about one head
+ * can never be mistaken for one about the next push, and there is no delete to
+ * carry across hosts. `headSha` must be a full lowercase hex SHA — the
+ * reconciler passes the PR's own head and the internal route re-validates it,
+ * so a caller can never smuggle a path segment in.
+ */
+export function taskCiUnfixablePath(sessionsDir: string, taskId: number, headSha: string): string {
+  return path.join(sessionsDir, `task-${taskId}.ci-unfixable.${headSha}`);
+}
+
+/**
  * Where a worker should write its Conventional Commits PR title (`#761`) —
  * a `sessionsDir`-relative path, same convention `taskReviewFindingsPath`
  * documents: a file written INSIDE the worktree dirties the tree and trips
@@ -1619,6 +1636,9 @@ export function buildCiFailurePrompt(
     /** Set when the task's approval is carried through this fix (no
      * re-review): where the worker writes a line to ask for one anyway. */
     rereviewRequestPath?: string;
+    /** Where the worker declares that a red check cannot be fixed from this PR
+     * (`taskCiUnfixablePath`, keyed by this head). */
+    ciUnfixablePath?: string;
   },
 ): string {
   const preamble = buildTaskMasterPreamble(opts);
@@ -1628,7 +1648,7 @@ export function buildCiFailurePrompt(
           .map((c) => `- ${c.name}${c.detail ? ` — ${c.detail}` : ""}${c.url ? ` — ${c.url}` : ""}`)
           .join(
             "\n",
-          )}\n\nA check that is not required for merging still counts: Mullion holds the merge while it is red, so fix it too (for a coverage check, add tests for the uncovered lines).\n\n`
+          )}\n\nA check that is not required for merging still counts: Mullion holds the merge while it is red, so fix every one your diff can fix (for a coverage check, add tests for the uncovered lines).\n\n`
       : "";
   // When the Actions runs are all green the red check is not one of them (it
   // was reached through GitHub's `unstable` merge state): printing "CI ... is
@@ -1648,6 +1668,15 @@ export function buildCiFailurePrompt(
     `A CI check failed on this task's PR after it reached review.\n\n${actionsSummary}\n\n${checks}` +
     "Pull the latest changes, read the failing check's log, and fix it — then commit and finish " +
     "again. Mullion pushes the branch itself when you do; do not `git push`." +
+    (opts.ciUnfixablePath
+      ? "\n\nSome failures cannot be fixed from this PR: an upstream advisory with no patched " +
+        "release, an outside service that is down, a check that is red on the base branch too. " +
+        "For those, do not push a workaround and do not disable, skip or loosen the check. " +
+        `Write one short paragraph naming the check and saying why to ${opts.ciUnfixablePath} ` +
+        "(outside the worktree, so it does not dirty it), then finish your turn. Mullion will " +
+        "stop re-running it and tell a human exactly what you wrote. Use this only when no " +
+        "change to this PR could fix the check."
+      : "") +
     (opts.rereviewRequestPath
       ? "\n\nThis work was already reviewed and approved, and a fix for CI is not " +
         "reviewed again. If your fix grew past a small change and genuinely needs " +

@@ -93,6 +93,7 @@ import { skillsRoute } from "./routes/skills.js";
 import { browserCookiesRoute } from "./routes/browser-cookies.js";
 import { browserUrlsRoute } from "./routes/browser-urls.js";
 import { tasksRoute } from "./routes/tasks.js";
+import { taskMergeRoute } from "./routes/task-merge.js";
 import { taskBlockingAlertDismissRoute } from "./routes/task-blocking-alert-dismiss.js";
 import { demoFixturesRoute } from "./routes/demo-fixtures.js";
 import { closePinnedConnectors } from "./services/pinned-connect.js";
@@ -623,6 +624,7 @@ export async function buildApp() {
   await app.register(browserCookiesRoute);
   await app.register(browserUrlsRoute);
   await app.register(tasksRoute);
+  await app.register(taskMergeRoute);
   await app.register(taskBlockingAlertDismissRoute);
   await app.register(demoFixturesRoute);
   await app.register(terminalRoute);

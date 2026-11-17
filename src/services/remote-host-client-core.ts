@@ -1688,10 +1688,7 @@ export class RemoteHostClient {
    * peer build — throws HostRequestError, never collapses into `null`).
    */
   async resolveReadTaskCommitTitle(taskId: number): Promise<string | null> {
-    const result = await this.request<{ content: string | null }>(
-      `/internal/task-commit-title?taskId=${taskId}`,
-    );
-    return result.content;
+    return this.readTaskFile(`/internal/task-commit-title?taskId=${taskId}`);
   }
 
   /**
@@ -1702,10 +1699,24 @@ export class RemoteHostClient {
    * `null`.
    */
   async resolveReadTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
-    const result = await this.request<{ content: string | null }>(
-      `/internal/task-rereview-request?taskId=${taskId}&key=${key}`,
-    );
-    return result.content;
+    return this.readTaskFile(`/internal/task-rereview-request?taskId=${taskId}&key=${key}`);
+  }
+
+  /**
+   * Reads a worker's "this red CI check cannot be fixed from this PR" file off
+   * this agent's own filesystem (`taskCiUnfixablePath`). Same shape and
+   * version-skew posture as `resolveReadTaskRereviewRequest`: a 404 from a peer
+   * build without the route throws HostRequestError, never collapses into `null`.
+   * `headSha` is a validated full lowercase hex SHA (`assertFullSha`), so it needs
+   * no encoding.
+   */
+  async resolveReadTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
+    return this.readTaskFile(`/internal/task-ci-unfixable?taskId=${taskId}&headSha=${headSha}`);
+  }
+
+  /** GET one of the agent's `{ content }` task-file routes (a 404 from an old peer throws). */
+  private async readTaskFile(route: string): Promise<string | null> {
+    return (await this.request<{ content: string | null }>(route)).content;
   }
 
   /** The bearer+signature-authed inbound WebSocket to one `/internal/ws/*` route. */

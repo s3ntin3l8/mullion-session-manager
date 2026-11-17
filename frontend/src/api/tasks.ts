@@ -122,7 +122,13 @@ export const tasksApi = {
   // with a linked PR; does not merge inline (main's branch protection can't
   // guarantee that synchronously). See task-reconciler.ts's
   // processMergeRequests for what actually lands it.
-  mergeTask: (id: number) => request<Task>(`/api/tasks/${id}/merge`, { method: "POST" }),
+  // `overrideNonRequiredChecks` is "Merge anyway": the server binds it to the PR
+  // head it reads now and refuses unless only named non-required checks hold the merge.
+  mergeTask: (id: number, opts?: { overrideNonRequiredChecks?: boolean }) =>
+    request<Task>(
+      `/api/tasks/${id}/merge${opts?.overrideNonRequiredChecks ? "?overrideNonRequiredChecks=true" : ""}`,
+      { method: "POST" },
+    ),
 
   // Operator approval for a held `.github/workflows/` change. `sha` is the
   // head commit the drawer showed; the server refuses (409

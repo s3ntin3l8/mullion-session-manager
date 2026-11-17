@@ -129,6 +129,8 @@ export const TASK_DERIVED_DEFAULTS = {
   nudgeCount: 0,
   nudgeLimit: 2,
   lastNudgedAt: null,
+  ciHoldNote: null,
+  mergeOverridable: false,
 } as const;
 
 export function makeTask(overrides: Partial<Task> = {}): Task {

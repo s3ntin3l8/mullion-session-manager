@@ -142,6 +142,7 @@ function fakeSessionBackend(): SessionBackend {
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
     readTaskCommitTitle: vi.fn().mockResolvedValue(null),
     readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
+    readTaskCiUnfixable: vi.fn().mockResolvedValue(null),
   };
 }
 

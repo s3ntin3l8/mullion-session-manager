@@ -12,6 +12,7 @@ import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from
 import { formatRelativeAge } from "../relativeTime.js";
 import {
   approvalStateText,
+  isCiHoldReason,
   isMergeNeedsHumanReason,
   needsHumanText,
   reviewPhaseText,
@@ -616,21 +617,33 @@ export function TaskCard({
           {nudgeNoteText(task)}
         </div>
       )}
-      {task.status === "reviewing" && task.autoReturnRounds > 0 && !task.approvalState && (
+      {task.status === "reviewing" && capAnnounced && isCiHoldReason(task.needsHumanReason) && (
         <div
-          className={
-            capAnnounced
-              ? "task-card-review-round task-card-review-round-capped"
-              : "task-card-review-round"
-          }
+          className="task-card-review-round task-card-review-round-capped"
+          role="status"
+          data-testid="ci-hold-needs-human"
         >
-          {capAnnounced
-            ? `Round ${task.autoReturnRounds} · ${needsHumanText(task.needsHumanReason)}, needs a human`
-            : task.autoReturnCapped
-              ? `Round ${task.autoReturnRounds} · review in flight`
-              : `Round ${task.autoReturnRounds} · returned to worker`}
+          {needsHumanText(task.needsHumanReason, task.ciHoldNote)}, needs a human
         </div>
       )}
+      {task.status === "reviewing" &&
+        task.autoReturnRounds > 0 &&
+        !task.approvalState &&
+        !isCiHoldReason(task.needsHumanReason) && (
+          <div
+            className={
+              capAnnounced
+                ? "task-card-review-round task-card-review-round-capped"
+                : "task-card-review-round"
+            }
+          >
+            {capAnnounced
+              ? `Round ${task.autoReturnRounds} · ${needsHumanText(task.needsHumanReason)}, needs a human`
+              : task.autoReturnCapped
+                ? `Round ${task.autoReturnRounds} · review in flight`
+                : `Round ${task.autoReturnRounds} · returned to worker`}
+          </div>
+        )}
       {(task.needsHumanReason === "review-post-failed" || task.reviewPostFailed) &&
         task.mergedAt === null && (
           <div className="task-card-review-round task-card-review-round-capped" role="status">

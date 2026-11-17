@@ -5,6 +5,7 @@ import {
   taskCommitTitlePath,
   taskRereviewRequestPath,
 } from "../services/task-prompt.js";
+import { readCiUnfixableFile } from "../services/task-ci-unfixable-file.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -399,6 +400,26 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       const requestPath = taskRereviewRequestPath(app.pty.sessionsDir, taskId, key);
       if (!existsSync(requestPath)) return { content: null };
       return { content: readFileSync(requestPath, "utf8").trim() || "(no reason given)" };
+    },
+  );
+
+  // The agent-side counterpart of SessionBackend's readTaskCiUnfixable — a
+  // remote-hosted worker's "this red check cannot be fixed from this PR"
+  // declaration. `headSha` is validated as a full lowercase hex SHA before it
+  // reaches the path helper, so nothing path-like can be smuggled in.
+  app.get<{ Querystring: { taskId?: string; headSha?: string } }>(
+    "/internal/task-ci-unfixable",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const taskId = Number(request.query.taskId);
+      const headSha = request.query.headSha ?? "";
+      if (!Number.isInteger(taskId) || taskId < 1) {
+        return reply.badRequest("taskId query param must be a positive integer");
+      }
+      if (!/^[0-9a-f]{40}$/.test(headSha)) {
+        return reply.badRequest("headSha query param must be a 40-char lowercase hex SHA");
+      }
+      return { content: readCiUnfixableFile(app.pty.sessionsDir, taskId, headSha) };
     },
   );
 

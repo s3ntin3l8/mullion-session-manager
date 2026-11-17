@@ -1,5 +1,10 @@
 import type { Task } from "../api/types.js";
-import { approvalStateText, isMergeNeedsHumanReason, needsHumanText } from "../needsHuman.js";
+import {
+  approvalStateText,
+  isCiHoldReason,
+  isMergeNeedsHumanReason,
+  needsHumanText,
+} from "../needsHuman.js";
 
 // There is no "waiting" status: a task is waiting when it is `claimed` and
 // `failureReason` is set (dispatch held — host offline, parked).
@@ -34,11 +39,16 @@ export function taskBucket(t: Task): TaskBucket | null {
 export function needsYouReason(t: Task): string | null {
   if (t.archivedAt) return null;
   if (t.status === "failed") return t.failureReason ?? "failed";
+  // A parked red CI check names itself even while an approval is held (that is when
+  // it happens), so it comes before the approval line.
+  if (isCiHoldReason(t.needsHumanReason) && t.autoReturnCapAnnouncedAt) {
+    return needsHumanText(t.needsHumanReason, t.ciHoldNote);
+  }
   if (t.approvalState === "awaiting-human") {
     return approvalStateText(t.approvalState, t.autoReturnRounds);
   }
   if (isMergeNeedsHumanReason(t.needsHumanReason)) return needsHumanText(t.needsHumanReason);
-  if (t.autoReturnCapped) return needsHumanText(t.needsHumanReason);
+  if (t.autoReturnCapped) return needsHumanText(t.needsHumanReason, t.ciHoldNote);
   if (t.mergeError) return `merge failed: ${t.mergeError}`;
   if (t.releaseError) return `release failed: ${t.releaseError}`;
   return null;

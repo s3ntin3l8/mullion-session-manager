@@ -39,7 +39,9 @@ import { decideSessionAction } from "./ui/sidebar/linkDecisions.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 import {
+  CI_HOLD_HINT,
   approvalStateText,
+  isCiHoldReason,
   isMergeNeedsHumanReason,
   needsHumanText,
   reviewPhaseText,
@@ -752,6 +754,17 @@ export function TaskDetail({
         />
       </div>
 
+      {task.status === "reviewing" && capAnnounced && isCiHoldReason(task.needsHumanReason) && (
+        <div
+          className="task-detail-review-round task-detail-review-round-capped"
+          role="status"
+          data-testid="ci-hold-needs-human"
+        >
+          {`Needs a human: ${needsHumanText(task.needsHumanReason, task.ciHoldNote)}`}
+          <div className="task-detail-review-hint">{CI_HOLD_HINT}</div>
+        </div>
+      )}
+
       {isMergeNeedsHumanReason(task.needsHumanReason) && !task.mergedAt && (
         <div
           className="task-detail-review-round task-detail-review-round-capped"
@@ -830,21 +843,23 @@ export function TaskDetail({
                 {task.githubSyncError ? ` — ${task.githubSyncError}` : ""}
               </div>
             )}
-          {task.autoReturnRounds > 0 && !task.approvalState && (
-            <div
-              className={
-                capAnnounced
-                  ? "task-detail-review-round task-detail-review-round-capped"
-                  : "task-detail-review-round"
-              }
-            >
-              {capAnnounced
-                ? `Round ${task.autoReturnRounds} — ${needsHumanText(task.needsHumanReason)}, needs a human to take it from here`
-                : task.autoReturnCapped
-                  ? `Round ${task.autoReturnRounds} — review still in flight; nothing needs you yet`
-                  : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
-            </div>
-          )}
+          {task.autoReturnRounds > 0 &&
+            !task.approvalState &&
+            !isCiHoldReason(task.needsHumanReason) && (
+              <div
+                className={
+                  capAnnounced
+                    ? "task-detail-review-round task-detail-review-round-capped"
+                    : "task-detail-review-round"
+                }
+              >
+                {capAnnounced
+                  ? `Round ${task.autoReturnRounds} — ${needsHumanText(task.needsHumanReason)}, needs a human to take it from here`
+                  : task.autoReturnCapped
+                    ? `Round ${task.autoReturnRounds} — review still in flight; nothing needs you yet`
+                    : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
+              </div>
+            )}
           {task.reviewSeedDelivered === false && (
             <div className="task-detail-review-noseed">
               <WarningTriangleIcon size={12} />

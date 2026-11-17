@@ -12,6 +12,7 @@ import { tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { applySettingsPatch } from "../../src/services/settings.js";
 import { clearHermesKey, setHermesKey } from "../../src/services/hermes-integration.js";
+import { nullTaskFileReads } from "../helpers/null-task-file-reads.js";
 
 // `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
 // remote backend has to satisfy all of it — a fake missing members would
@@ -55,8 +56,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     readTaskReviewFindings: vi.fn().mockResolvedValue(null),
     deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
-    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
-    readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
+    ...nullTaskFileReads(),
     ...overrides,
   };
 }

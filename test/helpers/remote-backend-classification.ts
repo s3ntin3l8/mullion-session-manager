@@ -21,4 +21,5 @@ export const READ_ONLY = [
   "resolveSessionsDir",
   "readTaskCommitTitle",
   "readTaskRereviewRequest",
+  "readTaskCiUnfixable",
 ];

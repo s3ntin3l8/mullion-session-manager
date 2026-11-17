@@ -1267,12 +1267,28 @@ export const tasks = sqliteTable(
         "review-post-failed",
         "pr-closed",
         "ci-status-stalled",
+        "ci-unfixable",
+        "ci-still-red",
         // #3234 — the provider quota resets beyond `rateLimitMaxParkHours`, so
         // the worker was not parked; set with the task `failed`, the reset in
         // `rateLimitUntil` and the provider text in `rateLimitMessage`.
         "rate-limited",
       ],
     }),
+    // `ci-unfixable` — the worker was returned for a red check and declared, in
+    // its `task-<id>.ci-unfixable.<head>` file, that no change to this PR can fix
+    // it (an upstream advisory with no patched release, an outside service down);
+    // `ci-still-red` — it came back without pushing and two reruns of the failed
+    // jobs did not clear the check. Both are review-loop reasons: they are set
+    // with the announce stamp above, cleared where it is cleared, and a human
+    // push re-arms the task. `ciHoldNote` carries the check names and, for
+    // `ci-unfixable`, the worker's sanitised reason.
+    ciHoldNote: text("ci_hold_note"),
+    // The PR head a human chose "Merge anyway" on while only NON-required checks
+    // were red. `attemptMerge`'s `unstable` arm merges only while this equals the
+    // PR's current head, so a later push voids it. Never read by the `blocked`
+    // arm: a red REQUIRED check is not overridable.
+    mergeOverrideHeadSha: text("merge_override_head_sha"),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
     // actually about, recorded at every ingest write alongside
     // reviewFindingsIngestedSessionId above (task-reconciler.ts's

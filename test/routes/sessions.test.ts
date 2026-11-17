@@ -31,6 +31,7 @@ import { eq } from "drizzle-orm";
 import { previews, projects, sessions } from "../../src/db/schema.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
+import { nullTaskFileReads } from "../helpers/null-task-file-reads.js";
 
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
@@ -167,8 +168,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     readTaskReviewFindings: vi.fn().mockResolvedValue(null),
     deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
-    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
-    readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
+    ...nullTaskFileReads(),
     ...overrides,
   };
 }
