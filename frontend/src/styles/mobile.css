@@ -223,7 +223,7 @@
   .settings-row-control {
     align-self: stretch;
   }
-  .settings-row-control select,
+  .settings-row-control .ui-dropdown-field,
   .settings-row-control input[type="text"] {
     width: 100%;
   }

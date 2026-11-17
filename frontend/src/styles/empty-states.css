@@ -2294,8 +2294,8 @@ button.github-panel-row.gh-issue-row {
 .history-worktree-filter .settings-dropdown {
   width: 100%;
 }
-.gh-history-toolbar .settings-dropdown select,
-.history-worktree-filter .settings-dropdown select {
+.gh-history-toolbar .settings-dropdown .ui-dropdown-field,
+.history-worktree-filter .settings-dropdown .ui-dropdown-field {
   width: 100%;
   text-overflow: ellipsis;
 }

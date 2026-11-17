@@ -141,7 +141,7 @@
   flex: 1 1 0;
   min-width: 0;
 }
-.launcher-form-control .settings-dropdown select {
+.launcher-form-control .settings-dropdown .ui-dropdown-field {
   width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -332,7 +332,7 @@
   min-height: 72px;
 }
 .session-launcher-sheet .session-launcher-row,
-.session-launcher-sheet .settings-dropdown select,
+.session-launcher-sheet .settings-dropdown .ui-dropdown-field,
 .session-launcher-sheet .session-launcher-launch {
   min-height: 48px;
 }

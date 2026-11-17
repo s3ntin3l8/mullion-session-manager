@@ -519,7 +519,7 @@
 .settings-row-control {
   flex-shrink: 0;
 }
-.settings-row-control select,
+.settings-row-control .ui-dropdown-field,
 .settings-row-control input[type="text"] {
   background: var(--field);
   border: 1px solid var(--border-soft);
@@ -694,7 +694,7 @@
 /* ---------------------------------------------------------------- */
 /* Dropdown (font family, default shell/agent, sound)                */
 /* ---------------------------------------------------------------- */
-.settings-dropdown select {
+.settings-dropdown .ui-dropdown-field {
   appearance: none;
   -webkit-appearance: none;
   font-family: inherit;
@@ -727,17 +727,85 @@
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     center / contain no-repeat;
 }
-.settings-dropdown select:hover {
+.settings-dropdown .ui-dropdown-field:hover {
   border-color: var(--border);
 }
-.settings-dropdown select:focus-visible {
+.settings-dropdown .ui-dropdown-field:focus-visible {
   outline: 2px solid var(--accent-solid);
   outline-offset: 1px;
 }
-.settings-dropdown.small select {
+.settings-dropdown.small .ui-dropdown-field {
   font-size: 0.75rem;
   border-radius: 7px;
   padding: 6px 26px 6px 10px;
+}
+/* The styled dropdown's trigger (#3245, ui/DropdownListbox.tsx): a <button>
+   drawn as the closed native select above, so the field looks the same under
+   either pointer. A button defaults to centred text and its own sizing. */
+.settings-dropdown .ui-dropdown-trigger {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 100%;
+  text-align: left;
+  line-height: normal;
+  font-weight: inherit;
+}
+/* The field is as wide as its longest option, as a native select is: every
+   label sits invisibly in one grid cell under the current one. The column
+   may shrink below that, where a caller narrows the field, and the current
+   label then ends in an ellipsis. */
+.ui-dropdown-value {
+  display: grid;
+  grid-template-columns: minmax(0, max-content);
+}
+.ui-dropdown-current,
+.ui-dropdown-sizer {
+  grid-area: 1 / 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.ui-dropdown-current {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ui-dropdown-sizer {
+  display: grid;
+  visibility: hidden;
+}
+.ui-dropdown-sizer > span {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+.ui-dropdown-sizer > span::before {
+  content: attr(data-label);
+}
+/* The action row ("Add project…") after the options, set apart by a rule. */
+.custom-select-item.custom-select-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  position: relative;
+  color: var(--muted);
+}
+.custom-select-item.custom-select-action::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: -3px;
+  border-top: 1px solid var(--border-soft);
+}
+.custom-select-item.custom-select-action:hover,
+.custom-select-item.custom-select-action.focused {
+  color: var(--fg);
+}
+.custom-select-item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+.custom-select-item[aria-disabled="true"]:hover {
+  background: transparent;
 }
 
 /* ---------------------------------------------------------------- */

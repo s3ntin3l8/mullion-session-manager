@@ -11,6 +11,7 @@ import { App } from "./App.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeProject, makeWorkspace } from "./test/fixtures.js";
 import type { Group, Project } from "./api/index.js";
+import { dropdownValue, pickDropdownOption } from "./test/dropdown.js";
 
 const INFRA: Group = {
   id: 7,
@@ -381,10 +382,7 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     useDashboardStore.setState({ createProject });
     const user = userEvent.setup();
     const launcher = await openLauncher();
-    await user.selectOptions(
-      within(launcher).getByRole("combobox", { name: "Project" }),
-      "Add project…",
-    );
+    pickDropdownOption(within(launcher).getByRole("combobox", { name: "Project" }), "Add project…");
     const form = within(launcher).getByRole("group", { name: "Add project" });
     expect(screen.queryByRole("dialog", { name: "Add project" })).toBeNull();
     const path = within(form).getByPlaceholderText("~/code/my-project");
@@ -394,7 +392,7 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     await waitFor(() => expect(createProject).toHaveBeenCalled());
     expect(createProject.mock.calls[0][1]).toBe("/home/x/runway");
     const project = await within(launcher).findByRole("combobox", { name: "Project" });
-    expect(project).toHaveValue("9");
+    expect(dropdownValue(project)).toBe("9");
     await waitFor(() => expect(project).toHaveFocus());
   });
 
@@ -415,10 +413,7 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     useDashboardStore.setState({ createProject });
     const user = userEvent.setup();
     const launcher = await openLauncher();
-    await user.selectOptions(
-      within(launcher).getByRole("combobox", { name: "Project" }),
-      "Add project…",
-    );
+    pickDropdownOption(within(launcher).getByRole("combobox", { name: "Project" }), "Add project…");
     const form = within(launcher).getByRole("group", { name: "Add project" });
     await user.type(within(form).getByPlaceholderText("~/code/my-project"), "/home/x/runway");
     await user.click(within(form).getByRole("button", { name: "Add project" }));
@@ -432,7 +427,7 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
 
     await act(async () => finish!());
     await waitFor(() =>
-      expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("9"),
+      expect(dropdownValue(within(launcher).getByRole("combobox", { name: "Project" }))).toBe("9"),
     );
   });
 
@@ -458,7 +453,7 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     await user.click(within(launcher).getByRole("button", { name: "Add" }));
     expect(createProject).toHaveBeenCalledWith("landing", "/home/x/landing", "local", undefined);
     await waitFor(() =>
-      expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("11"),
+      expect(dropdownValue(within(launcher).getByRole("combobox", { name: "Project" }))).toBe("11"),
     );
   });
 
@@ -499,7 +494,9 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     expect(updateProject.mock.calls[0][0]).toBe(5);
     expect(updateProject.mock.calls[0][1]).toMatchObject({ name: "mullion-core" });
     // Back in the launcher, which never closed.
-    expect(await within(launcher).findByRole("combobox", { name: "Project" })).toHaveValue("5");
+    expect(dropdownValue(await within(launcher).findByRole("combobox", { name: "Project" }))).toBe(
+      "5",
+    );
     expect(screen.getByRole("dialog", { name: "New session" })).toBeInTheDocument();
   });
 
@@ -558,7 +555,7 @@ describe("App: projects in the launcher's Where row (#3048, #3071)", () => {
     await user.click(screen.getByRole("menuitem", { name: /Click again to delete/ }));
     expect(deleteProject).toHaveBeenCalledWith(5);
     await waitFor(() =>
-      expect(within(launcher).getByRole("combobox", { name: "Project" })).toHaveValue("6"),
+      expect(dropdownValue(within(launcher).getByRole("combobox", { name: "Project" }))).toBe("6"),
     );
     // Focus lands on the next project's "⋯", not on <body>.
     await waitFor(() =>

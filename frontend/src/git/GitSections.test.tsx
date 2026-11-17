@@ -8,6 +8,7 @@ import { HistorySidebarView } from "../right-sidebar/HistorySidebarView.js";
 import { computeGraphLayout } from "./graphLayout.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
+import { dropdownOptions, dropdownValue, pickDropdownOption } from "../test/dropdown.js";
 
 const COMMITS = [
   {
@@ -183,7 +184,7 @@ describe("GitHistorySection", () => {
     render(<GitHistorySection projectId={1} cwd="/wt/x" />);
     await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
     expect(await screen.findByText("older")).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("History scope"), "all");
+    pickDropdownOption(screen.getByLabelText("History scope"), "all");
     await waitFor(() => {
       const urls = fn.mock.calls.map((c) => String(c[0]));
       expect(urls.some((u) => u.includes("scope=all") && u.includes("cwd=%2Fwt%2Fx"))).toBe(true);
@@ -197,7 +198,7 @@ describe("GitHistorySection", () => {
     render(<GitHistorySection projectId={1} cwd="/wt/x" />);
     const scope = await screen.findByLabelText("History scope");
     expect(scope.closest(".settings-dropdown.small")).not.toBeNull();
-    expect(scope).toHaveValue("head");
+    expect(dropdownValue(scope)).toBe("head");
   });
 
   it("drops Load more when a reload (scope change) fails after a page had more", async () => {
@@ -213,7 +214,7 @@ describe("GitHistorySection", () => {
     );
     render(<GitHistorySection projectId={1} />);
     expect(await screen.findByRole("button", { name: "Load more" })).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("History scope"), "all");
+    pickDropdownOption(screen.getByLabelText("History scope"), "all");
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
   });
@@ -307,7 +308,7 @@ describe("GitHistorySection fixes", () => {
     );
     render(<GitHistorySection projectId={1} />);
     await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
-    await userEvent.selectOptions(screen.getByLabelText("History scope"), "all");
+    pickDropdownOption(screen.getByLabelText("History scope"), "all");
     expect(await screen.findByText("all-only")).toBeInTheDocument();
 
     release(
@@ -361,13 +362,13 @@ describe("HistorySidebarView", () => {
     expect(await screen.findByText("merge feat")).toBeInTheDocument();
     expect(logUrls(fn).some((u) => u.includes("scope=head"))).toBe(true);
     const scope = screen.getByLabelText("History scope");
-    expect(Array.from(scope.querySelectorAll("option")).map((o) => o.value)).toEqual([
+    expect(dropdownOptions(scope).map((o) => o.value)).toEqual([
       "head",
       "all",
       "branch:main",
       "branch:feat",
     ]);
-    await userEvent.selectOptions(scope, "branch:feat");
+    pickDropdownOption(scope, "branch:feat");
     await waitFor(() =>
       expect(logUrls(fn).some((u) => u.includes("scope=branch%3Afeat"))).toBe(true),
     );
@@ -378,7 +379,7 @@ describe("HistorySidebarView", () => {
     stubFetch();
     const { rerender } = render(<HistorySidebarView projectId={1} actions={actions} />);
     await screen.findByText("merge feat");
-    await userEvent.selectOptions(screen.getByLabelText("History scope"), "branch:feat");
+    pickDropdownOption(screen.getByLabelText("History scope"), "branch:feat");
     const fn = stubFetch();
     rerender(<HistorySidebarView projectId={2} actions={actions} />);
     await waitFor(() =>
@@ -386,7 +387,7 @@ describe("HistorySidebarView", () => {
     );
     const urls = logUrls(fn).filter((u) => u.includes("/projects/2/git-log"));
     expect(urls.every((u) => u.includes("scope=head"))).toBe(true);
-    expect(screen.getByLabelText("History scope")).toHaveValue("head");
+    expect(dropdownValue(screen.getByLabelText("History scope"))).toBe("head");
   });
 
   it("offers no per-branch scopes on a remote-host project", async () => {
@@ -395,10 +396,7 @@ describe("HistorySidebarView", () => {
     render(<HistorySidebarView projectId={1} actions={actions} />);
     await screen.findByText("merge feat");
     const scope = screen.getByLabelText("History scope");
-    expect(Array.from(scope.querySelectorAll("option")).map((o) => o.value)).toEqual([
-      "head",
-      "all",
-    ]);
+    expect(dropdownOptions(scope).map((o) => o.value)).toEqual(["head", "all"]);
   });
 
   it("filters by worktree and drops it when the project changes", async () => {
@@ -406,7 +404,7 @@ describe("HistorySidebarView", () => {
     stubFetch();
     const { rerender } = render(<HistorySidebarView projectId={1} actions={actions} />);
     await screen.findByText("merge feat");
-    await userEvent.selectOptions(screen.getByLabelText("Worktree filter"), "/repo-wt");
+    pickDropdownOption(screen.getByLabelText("Worktree filter"), "/repo-wt");
     const fn = stubFetch();
     rerender(<HistorySidebarView projectId={2} actions={actions} />);
     await waitFor(() =>

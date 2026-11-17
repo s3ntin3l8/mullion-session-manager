@@ -14,6 +14,7 @@ import { SessionLauncherHost } from "../launchers/SessionLauncher.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Launcher, Project } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
+import { dropdownLabel, dropdownOptions } from "../test/dropdown.js";
 
 const PROJECT: Project = {
   id: 5,
@@ -149,9 +150,9 @@ describe("New session launcher -> worktree isolation toggle", () => {
     const select = await findBaseRefPicker();
     // Hermes review, PR #695 — WorktreeOptions now tags options the same
     // way PromoteDialog's dropdown already does ("(default)"/"(current)").
-    expect(select).toHaveDisplayValue("origin/main (default)");
-    expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "main (current)" })).toBeInTheDocument();
+    expect(dropdownLabel(select)).toBe("origin/main (default)");
+    expect(dropdownOptions(select).map((o) => o.label)).toContain("feature/x");
+    expect(dropdownOptions(select).map((o) => o.label)).toContain("main (current)");
   });
 
   // Hermes review, PR #695 — a `defaultBranch` the backend resolved (it
@@ -180,8 +181,8 @@ describe("New session launcher -> worktree isolation toggle", () => {
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
     const select = await findBaseRefPicker();
-    expect(select).toHaveDisplayValue("origin/main (default)");
-    expect(screen.getByRole("option", { name: "main (current)" })).toBeInTheDocument();
+    expect(dropdownLabel(select)).toBe("origin/main (default)");
+    expect(dropdownOptions(select).map((o) => o.label)).toContain("main (current)");
   });
 
   // Falls back to the current branch when there's no resolvable default —
@@ -209,8 +210,8 @@ describe("New session launcher -> worktree isolation toggle", () => {
 
     await user.click(await screen.findByLabelText("Isolate in a new worktree"));
     const select = await findBaseRefPicker();
-    expect(select).toHaveDisplayValue("main (current)");
-    expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
+    expect(dropdownLabel(select)).toBe("main (current)");
+    expect(dropdownOptions(select).map((o) => o.label)).toContain("feature/x");
   });
 
   it("passes a worktree intent to session creation when the toggle is on", async () => {

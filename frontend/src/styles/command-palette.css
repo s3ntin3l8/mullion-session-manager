@@ -130,7 +130,7 @@
 .cmd-palette-worktree-picker .settings-dropdown {
   width: 100%;
 }
-.cmd-palette-worktree-picker .settings-dropdown select {
+.cmd-palette-worktree-picker .settings-dropdown .ui-dropdown-field {
   width: 100%;
 }
 /* P9 — same shape as .task-detail-error (UnifiedBoard.tsx's own model for

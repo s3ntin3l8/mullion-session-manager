@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CustomSelect } from "./CustomSelect.js";
 import {
@@ -252,6 +252,14 @@ describe("ui/CustomSelect's searchable menu (issue #2495)", () => {
 
     expect(screen.queryByText("No matching options")).not.toBeInTheDocument();
     expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("a press on the filter input still focuses it; a press on an option does not take the focus", async () => {
+    await openSearchable();
+    // #3245: the shared list keeps the focus where it is on a press, except
+    // in the filter input, which has to be focusable by the pointer.
+    expect(fireEvent.mouseDown(screen.getByRole("combobox"))).toBe(true);
+    expect(fireEvent.mouseDown(screen.getAllByRole("option")[0]!)).toBe(false);
   });
 
   it("puts the focus in the filter input, so typing filters right away", async () => {

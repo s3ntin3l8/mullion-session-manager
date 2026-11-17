@@ -7,6 +7,7 @@ import { useDashboardStore } from "../../store/index.js";
 import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
+import { dropdownValue, pickDropdownOption } from "../../test/dropdown.js";
 
 // Model: Settings.notifications.test.tsx's fake-in-memory-backend pattern —
 // renders the real Settings modal (TerminalSection reads settings/
@@ -39,7 +40,7 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     await screen.findByText("Voice dictation");
     expect(screen.getByText("Enable dictation")).toBeInTheDocument();
     expect(screen.getByText("Dictation hotkey")).toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveValue("");
+    expect(dropdownValue(screen.getByRole("combobox"))).toBe("");
   });
 
   it("toggling 'Enable dictation' off patches terminal.voice.enabled and PATCHes it, debounced", async () => {
@@ -215,11 +216,10 @@ describe("Settings -> Terminal -> Voice dictation", () => {
   });
 
   it("changing the dictation language patches terminal.voice.lang", async () => {
-    const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Dictation language");
-    await user.selectOptions(screen.getByRole("combobox"), "de-DE");
+    pickDropdownOption(screen.getByRole("combobox"), "de-DE");
 
     expect(useDashboardStore.getState().settings.terminal.voice.lang).toBe("de-DE");
     __flushPendingSettingsPatchForTests();

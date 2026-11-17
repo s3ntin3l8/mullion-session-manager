@@ -6,6 +6,7 @@ import { CreateProjectModal } from "./CreateProjectModal.js";
 import { api, ApiError } from "./api/index.js";
 import { makeHost } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
+import { pickDropdownOption } from "./test/dropdown.js";
 
 vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -73,11 +74,11 @@ describe("CreateProjectModal — the Display name fills the path (issue #2901)",
       .querySelector("input")!;
   }
 
-  function fieldSelect(labelText: string): HTMLSelectElement {
+  function fieldSelect(labelText: string): HTMLElement {
     return screen
       .getByText(labelText, { selector: ".create-modal-field-label" })
       .closest(".create-modal-field")!
-      .querySelector("select")!;
+      .querySelector<HTMLElement>(".ui-dropdown-field")!;
   }
 
   function pathField(): HTMLInputElement {
@@ -249,7 +250,7 @@ describe("CreateProjectModal — the Display name fills the path (issue #2901)",
       />,
     );
 
-    await user.selectOptions(fieldSelect("Host"), "mac-1");
+    pickDropdownOption(fieldSelect("Host"), "mac-1");
     await user.type(fieldInput("Display name"), "xxx");
 
     expect(pathField()).toHaveValue("/base");

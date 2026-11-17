@@ -190,14 +190,14 @@
   flex: 1;
   min-width: 0;
 }
-.right-sidebar-header .settings-dropdown select {
+.right-sidebar-header .settings-dropdown .ui-dropdown-field {
   width: 100%;
   background-color: transparent;
   border-color: transparent;
   text-overflow: ellipsis;
   font-weight: 600;
 }
-.right-sidebar-header .settings-dropdown select:hover {
+.right-sidebar-header .settings-dropdown .ui-dropdown-field:hover {
   background-color: var(--seg);
 }
 .right-sidebar-toolbar-slot {

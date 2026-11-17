@@ -35,9 +35,9 @@ import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
 
 const NO_SESSIONS: Session[] = [];
 
-// The project dropdown's last entry. Never a project id: picking it opens the
-// Add project view and leaves the selection where it was.
-const ADD_PROJECT = "__add-project__";
+// The project dropdown's action row (#3245), after the projects. Never a
+// project: picking it opens the Add project view and leaves the selection
+// where it was.
 const ADD_PROJECT_LABEL = "Add project…";
 // How long a typeahead search keeps adding letters (browsers use about 1s).
 const TYPEAHEAD_MS = 1000;
@@ -89,7 +89,6 @@ export function LauncherProjectPicker({
   const projectOptions = [
     ...(projects.length === 0 ? [{ value: "", label: "No projects yet", disabled: true }] : []),
     ...projects.map((p) => ({ value: String(p.id), label: p.name })),
-    { value: ADD_PROJECT, label: ADD_PROJECT_LABEL },
   ];
 
   const toast = (message: string, kind: "success" | "error") =>
@@ -162,12 +161,13 @@ export function LauncherProjectPicker({
     onClick: onAddProject,
   });
 
-  // A closed native <select> changes its value on ArrowDown, End, PageDown
-  // and typeahead (Windows and Linux): any of them could land on "Add
-  // project…" and open the Add view by surprise. Those keys stop at the
-  // projects. The guard cannot tell the open list from the closed control,
-  // so with the keyboard Add project… is reached through the "⋯" menu; the
-  // dropdown entry is for the pointer.
+  // Native select only (a coarse pointer, #3245): the styled list never lets
+  // a key land on Add project…, which a closed native <select> does on
+  // ArrowDown, End, PageDown and typeahead (Windows and Linux), opening the
+  // Add view by surprise. Those keys stop at the projects. The guard cannot
+  // tell the open list from the closed control, so with the keyboard Add
+  // project… is reached through the "⋯" menu; the native entry is for the
+  // pointer.
   const guardAddEntry = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const select = e.target as HTMLElement;
     if (!(select instanceof HTMLSelectElement) || e.altKey || e.metaKey || e.ctrlKey) return;
@@ -213,17 +213,21 @@ export function LauncherProjectPicker({
   };
 
   return (
-    <div className="launcher-form-control" onKeyDown={guardAddEntry}>
+    <div className="launcher-form-control" onKeyDown={coarse ? guardAddEntry : undefined}>
       <Dropdown
         id={`${labelId}-select`}
         className="launcher-form-fill"
         ariaLabel="Project"
         value={projectId !== null ? String(projectId) : ""}
         onChange={(v) => {
-          if (v === ADD_PROJECT) onAddProject();
-          else if (v !== "") onChange(Number(v));
+          if (v !== "") onChange(Number(v));
         }}
         options={projectOptions}
+        action={{
+          label: ADD_PROJECT_LABEL,
+          icon: <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} aria-hidden="true" />,
+          onSelect: onAddProject,
+        }}
       />
       <KebabMenu
         items={items}

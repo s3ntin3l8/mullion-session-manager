@@ -10,6 +10,9 @@
 // visual-regression risk for zero functional gain.
 import { createContext, useContext, useId, useRef } from "react";
 import type { ComponentPropsWithRef, ReactNode } from "react";
+import { useCoarsePointer } from "../lib/layoutTier.js";
+import { DropdownListbox } from "./DropdownListbox.js";
+import type { DropdownAction } from "./DropdownListbox.js";
 
 /**
  * What a control inside a Row needs in order to name itself.
@@ -375,6 +378,14 @@ export function NumberField({
   );
 }
 
+// The value a native select gives the action row (`action` below). Not a
+// value any caller uses: picking it runs the action instead of `onChange`.
+const DROPDOWN_ACTION_VALUE = "__dropdown-action__";
+
+// #3245: under a fine pointer the open list is the app's own (DropdownListbox,
+// the Dock's list); under a coarse pointer it stays a native <select>, so a
+// phone or tablet keeps its system picker. The closed field looks the same
+// either way: both carry `.ui-dropdown-field`, which the stylesheets target.
 export function Dropdown<T extends string>({
   options,
   value,
@@ -385,6 +396,7 @@ export function Dropdown<T extends string>({
   className,
   id,
   disabled,
+  action,
 }: {
   options: Array<{ value: T; label: string; disabled?: boolean }>;
   value: T;
@@ -395,27 +407,51 @@ export function Dropdown<T extends string>({
   title?: string;
   // Layout modifier for the wrapper (width, flex) — never colours.
   className?: string;
-  // Forwarded to the <select>, so an external <label htmlFor> can name it.
+  // Forwarded to the field, so an external <label htmlFor> can name it.
   id?: string;
   disabled?: boolean;
+  // A command row after the options ("Add project…"): set apart in the
+  // styled list, the last <option> of a native one. Picking it runs
+  // `onSelect` and leaves the value alone.
+  action?: DropdownAction;
 }) {
   const label = useControlLabel(ariaLabel);
+  const coarse = useCoarsePointer();
   return (
     <div className={`settings-dropdown${small ? " small" : ""}${className ? ` ${className}` : ""}`}>
-      <select
-        id={id}
-        disabled={disabled}
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
-        title={title}
-        {...label}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+      {coarse ? (
+        <select
+          id={id}
+          className="ui-dropdown-field"
+          disabled={disabled}
+          value={value}
+          onChange={(e) => {
+            if (action && e.target.value === DROPDOWN_ACTION_VALUE) action.onSelect();
+            else onChange(e.target.value as T);
+          }}
+          title={title}
+          {...label}
+        >
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value} disabled={opt.disabled}>
+              {opt.label}
+            </option>
+          ))}
+          {action && <option value={DROPDOWN_ACTION_VALUE}>{action.label}</option>}
+        </select>
+      ) : (
+        <DropdownListbox
+          options={options}
+          value={value}
+          onChange={onChange}
+          action={action}
+          id={id}
+          title={title}
+          disabled={disabled}
+          ariaLabel={label["aria-label"]}
+          ariaLabelledBy={label["aria-labelledby"]}
+        />
+      )}
     </div>
   );
 }

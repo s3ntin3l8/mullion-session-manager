@@ -482,6 +482,7 @@ export function TaskDetail({
                 <BotIcon size={12} /> Agent:
               </span>
               <Dropdown
+                ariaLabel="Agent"
                 value={task.agent ?? UNSET_AGENT}
                 onChange={async (val) => {
                   await updateTask(task.id, { agent: val === UNSET_AGENT ? null : val });
@@ -503,6 +504,7 @@ export function TaskDetail({
                 <BotIcon size={12} /> Review agent:
               </span>
               <Dropdown
+                ariaLabel="Review agent"
                 value={task.reviewAgent ?? UNSET_AGENT}
                 onChange={async (val) => {
                   await updateTask(task.id, { reviewAgent: val === UNSET_AGENT ? null : val });

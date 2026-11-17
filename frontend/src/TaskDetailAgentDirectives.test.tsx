@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
 import { makeTask } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
 import type { Task } from "./api/index.js";
+import {
+  dropdownLabel,
+  dropdownValue,
+  findDropdownsWithOption,
+  pickDropdownOption,
+} from "./test/dropdown.js";
 
 // The Agent / Review agent dropdowns show the effective choice in the
 // backend's resolution order: task value, issue-body directive, project default.
@@ -58,7 +63,7 @@ async function renderTask(overrides: Partial<Task>) {
   const r = render(ui());
   // A fresh element each time: re-rendering the same element object bails out.
   rerender = () => r.rerender(ui());
-  await screen.findAllByRole("option", { name: "Claude Code" });
+  await findDropdownsWithOption("Claude Code");
   return screen.getAllByRole("combobox");
 }
 
@@ -67,29 +72,27 @@ describe("TaskDetail agent dropdowns and issue directives", () => {
 
   it("shows the issue directive when the task has no value of its own", async () => {
     const [agent, review] = await renderTask({ issueAgent: "codex", issueReviewAgent: "claude" });
-    expect(agent).toHaveDisplayValue("codex (from issue)");
-    expect(review).toHaveDisplayValue("claude (from issue)");
+    expect(dropdownLabel(agent)).toBe("codex (from issue)");
+    expect(dropdownLabel(review)).toBe("claude (from issue)");
   });
 
   it("labels ReviewAgent: none as disabled", async () => {
     const [, review] = await renderTask({ issueReviewAgent: "none" });
-    expect(review).toHaveDisplayValue("None (disabled) (from issue)");
+    expect(dropdownLabel(review)).toBe("None (disabled) (from issue)");
   });
 
   it("lets a task value win over the directive, and clearing it restores the directive", async () => {
-    const user = userEvent.setup();
     const [agent] = await renderTask({ agent: "claude", issueAgent: "codex" });
-    expect(agent).toHaveValue("claude");
-    await user.selectOptions(agent, "");
+    expect(dropdownValue(agent)).toBe("claude");
+    pickDropdownOption(agent, "");
     expect(updateTask).toHaveBeenCalledWith(1, { agent: null });
     rerender();
-    expect(screen.getAllByRole("combobox")[0]).toHaveDisplayValue("codex (from issue)");
+    expect(dropdownLabel(screen.getAllByRole("combobox")[0])).toBe("codex (from issue)");
   });
 
   it("writes the task field when picking a value over the directive", async () => {
-    const user = userEvent.setup();
     const [, review] = await renderTask({ issueReviewAgent: "claude" });
-    await user.selectOptions(review, "none");
+    pickDropdownOption(review, "none");
     expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
   });
 
@@ -102,12 +105,12 @@ describe("TaskDetail agent dropdowns and issue directives", () => {
 
   it("labels a usable directive hermes from the server value", async () => {
     const [, review] = await renderTask({ issueReviewAgent: "hermes" });
-    expect(review).toHaveDisplayValue("hermes (from issue)");
+    expect(dropdownLabel(review)).toBe("hermes (from issue)");
   });
 
   it("falls back to the project default when there is no usable directive", async () => {
     const [agent, review] = await renderTask({ issueAgent: null, issueReviewAgent: null });
-    expect(agent).toHaveDisplayValue("Project default (claude)");
-    expect(review).toHaveDisplayValue("Project default (None)");
+    expect(dropdownLabel(agent)).toBe("Project default (claude)");
+    expect(dropdownLabel(review)).toBe("Project default (None)");
   });
 });

@@ -9,6 +9,13 @@ import { jsonResponse } from "../test/jsonResponse.js";
 import { mockFetch } from "../test/mockFetch.js";
 import { makeSession } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
+import {
+  dropdownLabel,
+  dropdownOptions,
+  dropdownValue,
+  openDropdown,
+  pickDropdownOption,
+} from "../test/dropdown.js";
 import { useDashboardStore } from "../store/index.js";
 import launcherCss from "../styles/session-launcher.css?raw";
 
@@ -228,7 +235,7 @@ describe("SessionLauncher — desktop dialog", () => {
     openLauncher({ half: "right" });
 
     const model = await screen.findByRole("combobox", { name: "Model for this session" });
-    await user.selectOptions(model, "opusplan");
+    pickDropdownOption(model, "opusplan");
     await user.click(screen.getByRole("button", { name: "Launch claude" }));
 
     await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
@@ -248,7 +255,7 @@ describe("SessionLauncher — desktop dialog", () => {
     renderHost();
     openLauncher();
 
-    await user.selectOptions(
+    pickDropdownOption(
       await screen.findByRole("combobox", { name: "Model for this session" }),
       "opusplan",
     );
@@ -294,8 +301,9 @@ describe("SessionLauncher — desktop dialog", () => {
     openLauncher();
 
     await user.click(await screen.findByRole("switch", { name: /Isolate in a new worktree/ }));
-    const base = await screen.findByDisplayValue(/main/);
-    await user.selectOptions(base, "feature/x");
+    const base = await screen.findByRole("combobox", { name: "Base branch" });
+    await waitFor(() => expect(dropdownLabel(base)).toMatch(/main/));
+    pickDropdownOption(base, "feature/x");
     await user.click(screen.getByRole("button", { name: "Launch claude" }));
 
     await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
@@ -642,18 +650,17 @@ describe("SessionLauncher — keyboard", () => {
 
     expect(await screen.findByRole("radio", { name: "codex" })).toBeInTheDocument();
     const project = screen.getByRole("combobox", { name: "Project" });
-    expect(project).toHaveValue(String(OTHER.id));
+    expect(dropdownValue(project)).toBe(String(OTHER.id));
     expect(project).toBeEnabled();
   });
 
   it("switching the project reloads that project's launchers", async () => {
     stubFetch({ launchersByProject: { [PROJECT.id]: [CLAUDE], [OTHER.id]: [CODEX] } });
-    const user = userEvent.setup();
     renderHost();
     openLauncher();
 
     expect(await screen.findByRole("radio", { name: "claude" })).toBeInTheDocument();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Project" }), String(OTHER.id));
+    pickDropdownOption(screen.getByRole("combobox", { name: "Project" }), String(OTHER.id));
     expect(await screen.findByRole("radio", { name: "codex" })).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "claude" })).toBeNull();
   });
@@ -772,7 +779,7 @@ describe("SessionLauncher — opened from the palette or a split (#3054)", () =>
     const launch = await screen.findByRole("button", { name: "Launch codex" });
     await waitFor(() => expect(launch).toHaveFocus());
     expect(screen.getByRole("radio", { name: "codex" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveValue(String(OTHER.id));
+    expect(dropdownValue(screen.getByRole("combobox", { name: "Project" }))).toBe(String(OTHER.id));
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
@@ -944,12 +951,11 @@ describe("SessionLauncher — a fast Enter from the palette (#3054)", () => {
 
     await user.click(await screen.findByRole("radio", { name: "codex" }));
     const select = await screen.findByRole("combobox", { name: "Model for this session" });
-    await waitFor(() =>
-      expect(within(select).getByRole("option", { name: "gpt-6-astra" })).toBeInTheDocument(),
-    );
-    expect(within(select).getByRole("option", { name: "gpt-6-luna" })).toBeInTheDocument();
+    const labels = () => dropdownOptions(select).map((o) => o.label);
+    await waitFor(() => expect(labels()).toContain("gpt-6-astra"));
+    expect(labels()).toContain("gpt-6-luna");
     // The static fallback list is not shown once the live catalog answers.
-    expect(within(select).queryByRole("option", { name: "gpt-6-sol" })).toBeNull();
+    expect(labels()).not.toContain("gpt-6-sol");
   });
 });
 
@@ -974,7 +980,7 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
 
     const toggle = await screen.findByRole("switch", { name: "Isolate in a new worktree" });
     const base = await screen.findByRole("combobox", { name: "Base branch" });
-    await waitFor(() => expect(base).toHaveValue("main"));
+    await waitFor(() => expect(dropdownValue(base)).toBe("main"));
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(base).toBeDisabled();
     await user.click(toggle);
@@ -1016,12 +1022,12 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     act(() => useDashboardStore.getState().openLauncher({ projectId: PROJECT.id }));
 
     const base = await screen.findByRole("combobox", { name: "Base branch" });
-    await waitFor(() => expect(base).toHaveValue("main"));
+    await waitFor(() => expect(dropdownValue(base)).toBe("main"));
     await user.click(screen.getByRole("switch", { name: "Isolate in a new worktree" }));
-    await user.selectOptions(base, "feature/x");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Project" }), "runway");
+    pickDropdownOption(base, "feature/x");
+    pickDropdownOption(screen.getByRole("combobox", { name: "Project" }), "runway");
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Base branch" })).toHaveValue("trunk"),
+      expect(dropdownValue(screen.getByRole("combobox", { name: "Base branch" }))).toBe("trunk"),
     );
     await user.click(await screen.findByRole("button", { name: "Launch claude" }));
 
@@ -1053,10 +1059,10 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     act(() => useDashboardStore.getState().openLauncher({ projectId: PROJECT.id }));
 
     const base = await screen.findByRole("combobox", { name: "Base branch" });
-    await waitFor(() => expect(base).toHaveValue("main"));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Project" }), "runway");
+    await waitFor(() => expect(dropdownValue(base)).toBe("main"));
+    pickDropdownOption(screen.getByRole("combobox", { name: "Project" }), "runway");
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Base branch" })).toHaveValue("develop"),
+      expect(dropdownValue(screen.getByRole("combobox", { name: "Base branch" }))).toBe("develop"),
     );
     await user.click(screen.getByRole("switch", { name: "Isolate in a new worktree" }));
     await user.click(await screen.findByRole("button", { name: "Launch claude" }));
@@ -1086,19 +1092,21 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     fail = false;
     await user.click(screen.getByRole("button", { name: "Retry" }));
     const base = await screen.findByRole("combobox", { name: "Base branch" });
-    await waitFor(() => expect(base).toHaveValue("main"));
+    await waitFor(() => expect(dropdownValue(base)).toBe("main"));
     expect(screen.getByRole("switch", { name: "Isolate in a new worktree" })).not.toHaveAttribute(
       "aria-disabled",
     );
   });
 
-  it("arrow keys and typeahead on the project dropdown stop before Add project…", async () => {
+  it("arrow keys and typeahead on the native project dropdown stop before Add project…", async () => {
+    // The native select a coarse pointer keeps (#3245): the guard is its.
+    stubCoarsePointer();
     stubFetch();
     renderHost();
     act(() => useDashboardStore.getState().openLauncher({ projectId: OTHER.id }));
 
     const project = await screen.findByRole("combobox", { name: "Project" });
-    expect(project).toHaveValue(String(OTHER.id));
+    expect(dropdownValue(project)).toBe(String(OTHER.id));
     // runway is the last project: ArrowDown would land on Add project….
     expect(fireEvent.keyDown(project, { key: "ArrowDown" })).toBe(false);
     expect(fireEvent.keyDown(project, { key: "End" })).toBe(false);
@@ -1110,19 +1118,35 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     expect(fireEvent.keyDown(project, { key: "m" })).toBe(true);
     now.mockRestore();
     // From the first project, ArrowDown moves on as usual.
-    await userEvent.setup().selectOptions(project, "mullion");
+    pickDropdownOption(project, "mullion");
     expect(fireEvent.keyDown(project, { key: "ArrowDown" })).toBe(true);
     // End and PageDown from an earlier project stop at the last project
     // rather than jumping to the final option, Add project….
     expect(fireEvent.keyDown(project, { key: "End" })).toBe(false);
-    expect(project).toHaveValue(String(OTHER.id));
-    await userEvent.setup().selectOptions(project, "mullion");
+    expect(dropdownValue(project)).toBe(String(OTHER.id));
+    pickDropdownOption(project, "mullion");
     expect(fireEvent.keyDown(project, { key: "PageDown" })).toBe(false);
-    expect(project).toHaveValue(String(OTHER.id));
+    expect(dropdownValue(project)).toBe(String(OTHER.id));
     expect(screen.queryByRole("group", { name: "Add project" })).toBeNull();
   });
 
+  it("a letter on the styled project dropdown is its typeahead, not the launcher's filter", async () => {
+    stubFetch();
+    renderHost();
+    act(() => useDashboardStore.getState().openLauncher({ projectId: PROJECT.id }));
+
+    const project = await screen.findByRole("combobox", { name: "Project" });
+    act(() => project.focus());
+    fireEvent.keyDown(project, { key: "r" });
+    expect(project).toHaveFocus();
+    expect(project).toHaveAttribute("aria-expanded", "true");
+    const active = document.getElementById(project.getAttribute("aria-activedescendant")!);
+    expect(active).toHaveTextContent("runway");
+  });
+
   it("typeahead on a letter a project shares with Add project… cycles the projects only", async () => {
+    // The native select a coarse pointer keeps (#3245): the guard is its.
+    stubCoarsePointer();
     const ALPHA = { ...PROJECT, id: 7, name: "alpha" };
     const ATLAS = { ...PROJECT, id: 8, name: "atlas" };
     resetStore({
@@ -1138,13 +1162,15 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
 
     const project = await screen.findByRole("combobox", { name: "Project" });
     expect(fireEvent.keyDown(project, { key: "a" })).toBe(false);
-    expect(project).toHaveValue(String(ATLAS.id));
+    expect(dropdownValue(project)).toBe(String(ATLAS.id));
     expect(fireEvent.keyDown(project, { key: "A" })).toBe(false);
-    expect(project).toHaveValue(String(ALPHA.id));
+    expect(dropdownValue(project)).toBe(String(ALPHA.id));
     expect(screen.queryByRole("group", { name: "Add project" })).toBeNull();
   });
 
   it("a search that starts with that letter still narrows by the letters after it", async () => {
+    // The native select a coarse pointer keeps (#3245): the guard is its.
+    stubCoarsePointer();
     const ALPHA = { ...PROJECT, id: 7, name: "alpha" };
     const ATLAS = { ...PROJECT, id: 8, name: "atlas" };
     const MULL = { ...PROJECT, id: 9, name: "mull" };
@@ -1165,7 +1191,7 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     expect(fireEvent.keyDown(project, { key: "a" })).toBe(false);
     now.mockReturnValue(1_200);
     expect(fireEvent.keyDown(project, { key: "t" })).toBe(false);
-    expect(project).toHaveValue(String(ATLAS.id));
+    expect(dropdownValue(project)).toBe(String(ATLAS.id));
     // A letter after the window has closed is the browser's again.
     now.mockReturnValue(5_000);
     expect(fireEvent.keyDown(project, { key: "m" })).toBe(true);
@@ -1224,14 +1250,14 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     const project = await screen.findByRole("combobox", { name: "Project" });
     await screen.findByRole("radio", { name: "codex" });
     await user.click(screen.getByRole("radio", { name: "codex" }));
-    await user.selectOptions(project, "Add project…");
+    pickDropdownOption(project, "Add project…");
     // The selection did not move to the sentinel entry.
     const form = screen.getByRole("group", { name: "Add project" });
     expect(screen.queryByRole("radiogroup", { name: "Agent" })).toBeNull();
     await user.click(within(form).getByRole("button", { name: "Back" }));
 
     const again = await screen.findByRole("combobox", { name: "Project" });
-    expect(again).toHaveValue(String(PROJECT.id));
+    expect(dropdownValue(again)).toBe(String(PROJECT.id));
     await waitFor(() => expect(again).toHaveFocus());
     // The choices made before survive the round trip.
     expect(await screen.findByRole("radio", { name: "codex" })).toHaveAttribute(
@@ -1263,17 +1289,16 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
       activePanelId: null,
     });
     stubFetch();
-    const user = userEvent.setup();
     renderHost();
     openLauncher();
 
     const project = await screen.findByRole("combobox", { name: "Project" });
     expect(
-      within(project)
+      within(openDropdown(project))
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toEqual(["No projects yet", "Add project…"]);
-    await user.selectOptions(project, "Add project…");
+    pickDropdownOption(project, "Add project…");
     expect(screen.getByRole("group", { name: "Add project" })).toBeInTheDocument();
   });
 });

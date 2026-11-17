@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { api, ApiError } from "./api/index.js";
@@ -8,6 +8,12 @@ import type { Launcher } from "./api/index.js";
 import { makeHost, makeProject } from "./test/fixtures.js";
 import { useDashboardStore } from "./store/index.js";
 import type * as ApiModule from "./api/index.js";
+import {
+  dropdownLabel,
+  dropdownOptions,
+  dropdownValue,
+  pickDropdownOption,
+} from "./test/dropdown.js";
 
 vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -32,14 +38,14 @@ function makeLauncher(overrides: Partial<Launcher>): Launcher {
 }
 
 // Both dropdowns share the same detected-launcher options, so a page-wide
-// role/label query is ambiguous — scope to the specific field's own <select>
+// role/label query is ambiguous — scope to the specific field's own field
 // via its field-label span, same .closest()+querySelector precedent
 // Settings.sessions.test.tsx already uses for disambiguating repeated rows.
-function fieldSelect(labelText: string): HTMLSelectElement {
+function fieldSelect(labelText: string): HTMLElement {
   return screen
     .getByText(labelText, { selector: ".create-modal-field-label" })
     .closest(".create-modal-field")!
-    .querySelector("select")!;
+    .querySelector<HTMLElement>(".ui-dropdown-field")!;
 }
 
 beforeEach(() => {
@@ -643,7 +649,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
   it("sends the pre-provision choice once it changed", async () => {
     const user = userEvent.setup();
     const onCreate = renderEdit({});
-    await user.selectOptions(screen.getByLabelText("Pre-provision checkouts"), "all");
+    pickDropdownOption(screen.getByLabelText("Pre-provision checkouts"), "all");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onCreate.mock.calls[0][0].preProvision).toBe("all");
@@ -735,10 +741,8 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
     );
 
     const select = fieldSelect("Default agent");
-    await waitFor(() =>
-      expect(within(select).getByRole("option", { name: "claude" })).toBeInTheDocument(),
-    );
-    expect(within(select).getByRole("option", { name: "codex" })).toBeInTheDocument();
+    await waitFor(() => expect(dropdownOptions(select).map((o) => o.label)).toContain("claude"));
+    expect(dropdownOptions(select).map((o) => o.label)).toContain("codex");
   });
 
   it("keeps a saved defaultAgent selected even when it's not among the detected launchers", async () => {
@@ -759,17 +763,14 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
     );
 
     const select = fieldSelect("Default agent");
-    await waitFor(() =>
-      expect(within(select).getByRole("option", { name: "codex" })).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(dropdownOptions(select).map((o) => o.label)).toContain("codex"));
 
     // The saved value gets its own synthetic option rather than the
-    // <select> silently falling back to displaying "Use global default"
+    // native <select> silently falling back to displaying "Use global default"
     // while state still holds "claude" underneath.
-    expect(within(select).getByRole("option", { name: "claude (not detected)" })).toHaveProperty(
-      "selected",
-      true,
-    );
+    expect(dropdownOptions(select).map((o) => o.label)).toContain("claude (not detected)");
+    expect(dropdownValue(select)).toBe("claude");
+    expect(dropdownLabel(select)).toBe("claude (not detected)");
   });
 
   it("shows a retry hint when the launchers fetch fails, and retries on click", async () => {
@@ -802,7 +803,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       ).not.toBeInTheDocument(),
     );
     const select = fieldSelect("Default agent");
-    expect(within(select).getByRole("option", { name: "claude" })).toBeInTheDocument();
+    expect(dropdownOptions(select).map((o) => o.label)).toContain("claude");
   });
 
   it("does not fetch launchers in create mode (no projectId yet)", () => {
@@ -835,10 +836,8 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
     );
 
     const select = fieldSelect("Default agent");
-    await waitFor(() =>
-      expect(within(select).getByRole("option", { name: "claude" })).toBeInTheDocument(),
-    );
-    await user.selectOptions(select, "claude");
+    await waitFor(() => expect(dropdownOptions(select).map((o) => o.label)).toContain("claude"));
+    pickDropdownOption(select, "claude");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(onCreate).toHaveBeenCalledWith({
@@ -1170,7 +1169,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       const select = screen.getByRole("combobox", { name: "Accepts children from other projects" });
       expect(select).toHaveValue("any");
 
-      await user.selectOptions(select, "none");
+      pickDropdownOption(select, "none");
       await user.click(screen.getByRole("button", { name: "Save changes" }));
       expect(onCreate).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -1179,7 +1178,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
         }),
       );
 
-      await user.selectOptions(select, "listed");
+      pickDropdownOption(select, "listed");
       await user.click(
         screen.getByRole("button", { name: "Projects whose coordinators may start children here" }),
       );
@@ -1208,7 +1207,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       await user.click(screen.getByRole("button", { name: "Save changes" }));
       expect(onCreate.mock.calls[0]![0].acceptsMessagesFrom).toBeUndefined();
 
-      await user.selectOptions(select, "listed");
+      pickDropdownOption(select, "listed");
       await user.click(screen.getByRole("button", { name: "Save changes" }));
       expect(onCreate).toHaveBeenCalledTimes(1);
       expect(

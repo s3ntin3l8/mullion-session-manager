@@ -19,6 +19,7 @@ import { BottomSheet } from "../ui/BottomSheet.js";
 import { makeTask } from "../test/fixtures.js";
 import { EMPTY_FOLD_HALVES } from "../lib/foldHalves.js";
 import type { FoldHalvesState } from "../lib/foldHalves.js";
+import { pickDropdownOption } from "../test/dropdown.js";
 
 const PROJECT = { id: 1, name: "demo", cwd: "/x/demo", hostId: "local" } as Project;
 
@@ -497,7 +498,6 @@ describe("RightSidebar", () => {
   });
 
   it("a repeat request for the same project re-pins after the user switched away", async () => {
-    const user = userEvent.setup();
     useDashboardStore.setState({
       rightSidebarOpen: true,
       rightSidebarView: "git",
@@ -513,7 +513,7 @@ describe("RightSidebar", () => {
     act(() => useDashboardStore.getState().openRightSidebarView("git", 2));
     expect(select.value).toBe("2");
 
-    await user.selectOptions(select, "__follow__");
+    pickDropdownOption(select, "__follow__");
     expect(select.value).toBe("__follow__");
 
     act(() => useDashboardStore.getState().openRightSidebarView("git", 2));
