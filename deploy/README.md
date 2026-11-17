@@ -809,8 +809,11 @@ list once per Mac, in this order, as the user the agent runs as.
      list (`ANDROID_HOME,ANDROID_SDK_ROOT,ANDROID_NDK_HOME,JAVA_HOME`) — are
      recovered automatically from your interactive shell (`~/.zshrc`), provided
      they are `export`ed (setting `SESSION_ENV_RECOVER_KEYS=""` disables this).
-     Restart the agent, or run `GET /api/agents?refresh=1`, after editing your
-     rc file so the once-per-process shell resolve re-runs. Any **other**
+     Restart the Mac's launchd job (`launchctl kickstart -k gui/$UID/com.mullion.agent`),
+     or run `GET /api/agents?refresh=1` on the Mac against that host's own API
+     (the primary's **Settings → Agents → Refresh** only re-resolves the
+     primary's own shell), after editing your rc file so the once-per-process
+     shell resolve re-runs. Any **other**
      variable you need in sessions still has to be exported in `~/.zprofile` or
      `~/.zshenv` (or added to `SESSION_ENV_RECOVER_KEYS`; see
      [`docs/configuration.md`](../docs/configuration.md)).
@@ -824,12 +827,13 @@ list once per Mac, in this order, as the user the agent runs as.
 task would) and run:
 
 ```sh
-xcode-select -p; xcrun --find simctl; echo $?; xcodebuild -checkFirstLaunchStatus; echo $?; xcrun simctl list runtimes available; echo $?; which -a xcodebuild swift brew; echo $PATH
+xcode-select -p; xcrun --find simctl && xcodebuild -checkFirstLaunchStatus && xcrun simctl list runtimes available; echo $?; which -a xcodebuild swift brew; echo $PATH
 ```
 
 You want a `/Applications/Xcode.app/...` path, `simctl` resolving inside
-`/Applications/Xcode.app` with exit status `0`, `-checkFirstLaunchStatus`
-exiting `0`, at least one simulator runtime listed with exit status `0`, one
+`/Applications/Xcode.app`, at least one simulator runtime listed (the `&&` chain
+short-circuits so `simctl list` does not run and trigger the first-launch
+installer if `-checkFirstLaunchStatus` fails) with exit status `0`, one
 `xcodebuild`/`swift` under `/usr/bin` (the shims) and `brew` under
 `/opt/homebrew/bin`, and a `PATH` that contains `/opt/homebrew/bin`. For
 Android also check `echo $ANDROID_HOME $ANDROID_NDK_HOME`.
