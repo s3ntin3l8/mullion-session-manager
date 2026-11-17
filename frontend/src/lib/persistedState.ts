@@ -107,6 +107,11 @@ export const STORAGE_KEYS = {
   // collapsed projectIds), keyed by `String(activeWorkspaceId)`. Expanded
   // (not present in the array) is the default for a project not yet seen.
   dockCollapsedGroups: "crs.dockCollapsedGroups",
+  // Issue #3230 — per-control selected worktree/branch value in the Dock,
+  // keyed by `String(projectId)` then `controlId`. Survives stop, remount,
+  // and page reload so stopping a dev server keeps its branch selected.
+  // Entries for removed controls or projects are left unpruned (harmless).
+  dockControlWorktrees: "crs.dockControlWorktrees",
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",
   expandedSubagentRows: "crs.expandedSubagentRows",

@@ -288,6 +288,11 @@ export interface GitSlice {
   // a git repo" — this feature only ever treats both as "nothing to show,"
   // so unlike gitStatuses there's no need for a separate `null` state here.
   gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
+  // Project ids whose git-refs batch entry has been answered (including
+  // `null` for non-repos), distinguishing "not fetched yet" from
+  // "fetched, durably nothing to show" since `gitBranchesByProject` maps
+  // `null` to `undefined`.
+  gitRefsLoadedIds: Record<number, true>;
   // Per-project open-PR list (issue #102/#202), same refreshGitRefs cadence
   // as gitBranchesByProject above. SessionRow matches a session's own
   // branch (from its GitStatus) against this array's `headBranch` fields
@@ -758,6 +763,11 @@ export interface UiSlice {
   triggerPanelHighlight: (id: string) => void;
   activePanelId: string | null;
   setActivePanelId: (id: string | null) => void;
+  /** Issue #3230 — per-project, per-control selected worktree/branch value
+   *  for Dock monitors, persisted in localStorage so stopping a control,
+   *  remounting the Dock, or reloading the page keeps the selection. */
+  dockControlWorktrees: Record<string, Record<string, string>>;
+  setDockControlWorktree: (projectId: number, controlId: string, value: string) => void;
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
   // falling back to first-available/create-default when that happens. Kept
