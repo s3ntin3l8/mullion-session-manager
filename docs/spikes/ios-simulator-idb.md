@@ -10,7 +10,7 @@ throwaway venv.
 
 ## Verdict
 
-**Go**, with `idb_companion` as the video and input engine and `simctl` for
+**Go**, now that the gRPC `hid` path is proven (see the Node prototype below), with `idb_companion` as the video and input engine and `simctl` for
 lifecycle, screenshot, logs and clipboard. Two smaller things remain for #3203 (see "Not tested").
 
 ## Findings
@@ -67,8 +67,8 @@ AVCC conversion and no `description`, with SPS+PPS sent in front of each IDR.
   completed").
 - **Killing and restarting the companion after the simulator boots fixes it**
   (tap succeeded on the restarted companion). So the driver must own the
-  companion process and restart it on every boot, which fits the plan's
-  "restarted on reattach".
+  companion process and restart it on every boot, which fits the "restarted on
+  reattach" requirement in #3203 (epic #1943).
 
 ## Node gRPC prototype (direct to `idb_companion`, no Python)
 
@@ -107,6 +107,19 @@ avg_bitrate:0, key_frame_rate:<s>}}`; responses carry
    several companions at once.
 2. **Multi-touch** (`HIDPinch` exists; separate-finger touch events were not
    explored).
+
+## Fixture
+
+`test/fixtures/devices/idb-h264-sample.h264` is the head of the capture used
+above: SPS, PPS, one IDR and 20 non-IDR slices (157 KB, 1206x2622, Annex-B,
+`avc1.640032`). It is for the driver's NAL-splitter tests (#3203). Regenerate
+it with a booted simulator and a running companion:
+
+```sh
+idb_companion --udid <udid> --grpc-port 10882 &
+idb video-stream --udid <udid> --format h264 --fps 30 > capture.h264   # ^C after ~3 s
+# keep everything before the 24th start code (00 00 00 01)
+```
 
 ## Fallback
 
