@@ -1,8 +1,7 @@
 // Sidebar.tsx's display-title and search-matching helpers, extracted as
-// PR 27 phase 1 (Wave 5, .claude/plans/can-we-do-a-warm-cocke.md) — genuinely
-// pure (no hooks, no component state, no side effects), just not previously
-// reachable by a direct unit test since Sidebar.tsx only exercised them
-// indirectly through its own component tests.
+// PR 27 phase 1 (Wave 5, .claude/plans/can-we-do-a-warm-cocke.md) — pure
+// functions (no hooks, no component state), plus one memo cache for the
+// store selector below (#3285).
 import type { Project, Session, Task } from "../api/index.js";
 import { matchesQuery } from "../matchQuery.js";
 
@@ -82,31 +81,31 @@ export function sessionPaneTitle(session: Session, ctx?: SessionTitleContext): s
  * Each session's task title and number (issue #3285). The task title is the
  * title of the task whose worker the session is (`task.sessionId`); a review
  * session is not the task's worker and falls through to its own title.
- * Numbers are counted over the sessions the sidebar lists (isListedSession,
- * never the search- or chip-filtered subset, so typing does not renumber),
- * per project, among those whose title falls to step 5 with the same text, in
- * session id order. Sessions that need neither are absent from the map.
+ *
+ * Numbers are counted per project, in session id order, among the sessions
+ * whose title falls to step 5 with the same text — over every session that
+ * can be listed at all (a terminal, not killed), not over what one view
+ * currently shows. The views disagree on that set (hideEndedSessions, the
+ * sidebar's Exited chip, showTaskSessions, the search box), so counting
+ * over any one of them made a number change with a toggle or collide in
+ * another view; counting over all of them gives a session one number
+ * everywhere, at the cost of a gap ("claude 2" shown while "claude" is
+ * hidden). Sessions that need neither are absent from the map.
  */
 export function buildSessionTitleContexts(
   sessions: readonly Session[],
   tasks: readonly Task[],
-  listOpts: Pick<ListedSessionOptions, "hideEndedSessions" | "showTaskSessions">,
 ): Map<number, SessionTitleContext> {
   const taskTitleBySession = new Map<number, string>();
-  const taskSessionIds = new Set<number>();
   for (const t of tasks) {
-    if (t.sessionId !== null) {
-      taskSessionIds.add(t.sessionId);
-      if (t.title) taskTitleBySession.set(t.sessionId, t.title);
-    }
-    if (t.reviewSessionId !== null) taskSessionIds.add(t.reviewSessionId);
+    if (t.sessionId !== null && t.title) taskTitleBySession.set(t.sessionId, t.title);
   }
   const contexts = new Map<number, SessionTitleContext>();
   for (const [id, taskTitle] of taskTitleBySession) contexts.set(id, { taskTitle });
 
   const groups = new Map<string, Session[]>();
   for (const s of sessions) {
-    if (!isListedSession(s, { ...listOpts, taskSessionIds })) continue;
+    if (s.kind !== "terminal" || s.status === "killed") continue;
     const { title, fromLaunch } = unnumberedTitle(s, taskTitleBySession.get(s.id));
     if (!fromLaunch) continue;
     const key = `${s.projectId}\u0000${title}`;
@@ -128,11 +127,11 @@ export function buildSessionTitleContexts(
 export interface SessionTitleState {
   sessions: Session[];
   tasks: Task[];
-  hideEndedSessions: boolean;
-  showTaskSessions: boolean;
 }
 
-let memo: { key: SessionTitleState; value: SessionTitleContexts } | null = null;
+// Keyed on the sessions array, so a store snapshot that is replaced is
+// collected with its entry, and two stores do not evict each other.
+const memo = new WeakMap<Session[], { tasks: Task[]; value: SessionTitleContexts }>();
 
 /**
  * buildSessionTitleContexts over the store's own state, memoized on the
@@ -140,23 +139,10 @@ let memo: { key: SessionTitleState; value: SessionTitleContexts } | null = null;
  * build per store change. Usable as a store selector and through getState().
  */
 export function selectSessionTitleContexts(state: SessionTitleState): SessionTitleContexts {
-  if (
-    memo &&
-    memo.key.sessions === state.sessions &&
-    memo.key.tasks === state.tasks &&
-    memo.key.hideEndedSessions === state.hideEndedSessions &&
-    memo.key.showTaskSessions === state.showTaskSessions
-  ) {
-    return memo.value;
-  }
-  const key = {
-    sessions: state.sessions,
-    tasks: state.tasks,
-    hideEndedSessions: state.hideEndedSessions,
-    showTaskSessions: state.showTaskSessions,
-  };
-  const value = buildSessionTitleContexts(state.sessions, state.tasks, key);
-  memo = { key, value };
+  const hit = memo.get(state.sessions);
+  if (hit && hit.tasks === state.tasks) return hit.value;
+  const value = buildSessionTitleContexts(state.sessions, state.tasks);
+  memo.set(state.sessions, { tasks: state.tasks, value });
   return value;
 }
 

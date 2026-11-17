@@ -287,7 +287,12 @@ export function usePanelOpener({
     (session: Session) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openTimelinePanel(dockviewApi, session, layout);
+      openTimelinePanel(
+        dockviewApi,
+        session,
+        layout,
+        selectSessionTitleContexts(useDashboardStore.getState()).get(session.id),
+      );
     },
     [dockviewApi, layout, leaveTaskView],
   );

@@ -367,10 +367,7 @@ describe("buildPickerSections — session titles (#3285)", () => {
       makeSession({ id: 3, projectId: 1, command: "claude" }),
     ];
     const tasks = [makeTask({ id: 5, sessionId: 3, title: "Fix the login form" })];
-    const titleContexts = buildSessionTitleContexts(sessions, tasks, {
-      hideEndedSessions: false,
-      showTaskSessions: true,
-    });
+    const titleContexts = buildSessionTitleContexts(sessions, tasks);
     const [section] = buildPickerSections(
       input({ sessions, showTaskSessions: true, titleContexts }),
     );

@@ -48,9 +48,16 @@ const EXTENSION = /\.[a-z0-9]{1,4}$/i;
  */
 export function railLabel(title: string, command?: string): string {
   const trimmed = title.trim();
-  if (command !== undefined && trimmed === command.trim()) {
-    const program = commandToBinary(command).replace(EXTENSION, "");
-    if (program) return program;
+  if (command !== undefined) {
+    // The raw command, or the raw command numbered among its project's
+    // look-alikes ("claude 2", #3285), which keeps its number.
+    const cmd = command.trim();
+    const number =
+      trimmed === cmd ? "" : trimmed.startsWith(cmd + " ") ? trimmed.slice(cmd.length + 1) : null;
+    if (number !== null && /^\d*$/.test(number)) {
+      const program = commandToBinary(command).replace(EXTENSION, "");
+      if (program) return number ? `${program} ${number}` : program;
+    }
   }
   const tokens = trimmed.split(SEPARATORS).filter(Boolean);
   const issue = tokens.find((t) => /^#\d+$/.test(t));

@@ -1002,13 +1002,19 @@ export function openOrFocusSessionPanel(
 // tier-positioned shape as openSessionPanel above, just a distinct
 // `timeline-<id>` panel id/component so it can coexist with that session's
 // own terminal panel (and be opened/closed independently of it).
-export function openTimelinePanel(api: DockviewApi, session: Session, layout: LayoutContext): void {
+export function openTimelinePanel(
+  api: DockviewApi,
+  session: Session,
+  layout: LayoutContext,
+  // The session's task title and number (#3285), as for the browser pane.
+  titleCtx?: SessionTitleContext,
+): void {
   openOrFocusPanel(
     api,
     `timeline-${session.id}`,
     {
       component: "timeline",
-      title: `Timeline: ${session.name || session.command}`,
+      title: `Timeline: ${sessionPaneTitle(session, titleCtx)}`,
       params: { sessionIds: [session.id] },
     },
     layout,

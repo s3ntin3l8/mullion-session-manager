@@ -552,7 +552,14 @@ export function PaneActionsMenu({
           className="pane-tab-overflow-item"
           role="menuitem"
           onClick={() => {
-            closeMenuAfterAction(() => openTimelinePanel(containerApi, session, layout));
+            closeMenuAfterAction(() =>
+              openTimelinePanel(
+                containerApi,
+                session,
+                layout,
+                selectSessionTitleContexts(useDashboardStore.getState()).get(session.id),
+              ),
+            );
           }}
         >
           <ListIcon size={14} style={{ color: "var(--muted)" }} />

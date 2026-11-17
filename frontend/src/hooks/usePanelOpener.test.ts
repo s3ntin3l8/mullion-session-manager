@@ -27,8 +27,6 @@ function storeState() {
   return {
     sessions: titleSessions,
     tasks: titleTasks,
-    hideEndedSessions: false,
-    showTaskSessions: true,
     triggerPanelHighlight,
     setActiveWorkspaceId,
     setViewMode,
@@ -425,6 +423,22 @@ describe("usePanelOpener — onOpenTimeline", () => {
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenTimeline(SESSION)).not.toThrow();
+  });
+
+  it("names the timeline after the session's task, as the sidebar does (#3285)", () => {
+    titleTasks = [makeTask({ id: 9, sessionId: SESSION.id, title: "Fix the login form" })];
+    try {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+
+      result.current.onOpenTimeline(SESSION);
+
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Timeline: Fix the login form" }),
+      );
+    } finally {
+      titleTasks = [];
+    }
   });
 });
 

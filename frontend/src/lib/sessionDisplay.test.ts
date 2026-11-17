@@ -180,7 +180,6 @@ describe("sessionTitle order (#3285)", () => {
 });
 
 describe("buildSessionTitleContexts (#3285)", () => {
-  const opts = { hideEndedSessions: false, showTaskSessions: true };
   const claude = (id: number, projectId: number) =>
     makeSession({
       id,
@@ -197,7 +196,7 @@ describe("buildSessionTitleContexts (#3285)", () => {
 
   it("numbers two unnamed claude sessions in one project in session id order", () => {
     const sessions = [claude(5, 1), claude(2, 1)];
-    expect(titles(sessions, buildSessionTitleContexts(sessions, [], opts))).toEqual([
+    expect(titles(sessions, buildSessionTitleContexts(sessions, []))).toEqual([
       "claude 2",
       "claude",
     ]);
@@ -205,30 +204,35 @@ describe("buildSessionTitleContexts (#3285)", () => {
 
   it("leaves sessions in different projects unnumbered", () => {
     const sessions = [claude(1, 1), claude(2, 2)];
-    expect(titles(sessions, buildSessionTitleContexts(sessions, [], opts))).toEqual([
-      "claude",
-      "claude",
-    ]);
+    expect(titles(sessions, buildSessionTitleContexts(sessions, []))).toEqual(["claude", "claude"]);
   });
 
   it("does not count a session that resolves to other text", () => {
     const sessions = [claude(1, 1), { ...claude(2, 1), lastTitle: "busy" }];
-    expect(titles(sessions, buildSessionTitleContexts(sessions, [], opts))).toEqual([
-      "claude",
-      "busy",
-    ]);
+    expect(titles(sessions, buildSessionTitleContexts(sessions, []))).toEqual(["claude", "busy"]);
   });
 
-  it("does not count a session the sidebar does not list", () => {
+  it("counts an exited session, so a number never changes with a view's filter", () => {
     const sessions = [{ ...claude(1, 1), status: "exited" as const }, claude(2, 1)];
-    const ctx = buildSessionTitleContexts(sessions, [], { ...opts, hideEndedSessions: true });
-    expect(sessionDisplayTitle(sessions[1], ctx.get(2))).toBe("claude");
+    const ctx = buildSessionTitleContexts(sessions, []);
+    expect(titles(sessions, ctx)).toEqual(["claude", "claude 2"]);
+  });
+
+  it("does not count a killed session or a dock session", () => {
+    const sessions = [
+      { ...claude(1, 1), status: "killed" as const },
+      { ...claude(2, 1), kind: "dock" as const },
+      claude(3, 1),
+    ];
+    expect(sessionDisplayTitle(sessions[2], buildSessionTitleContexts(sessions, []).get(3))).toBe(
+      "claude",
+    );
   });
 
   it("gives a task's worker its task title, not its review session", () => {
     const sessions = [claude(1, 1), claude(2, 1), claude(3, 1)];
     const tasks = [makeTask({ id: 9, sessionId: 1, reviewSessionId: 3, title: "Fix the login" })];
-    expect(titles(sessions, buildSessionTitleContexts(sessions, tasks, opts))).toEqual([
+    expect(titles(sessions, buildSessionTitleContexts(sessions, tasks))).toEqual([
       "Fix the login",
       "claude",
       "claude 2",
@@ -237,10 +241,11 @@ describe("buildSessionTitleContexts (#3285)", () => {
 
   it("memoizes on the store's inputs and resolves one session's title", () => {
     const sessions = [claude(1, 1), claude(2, 1)];
-    const state = { sessions, tasks: [], ...opts };
+    const state = { sessions, tasks: [] };
     const first = selectSessionTitleContexts(state);
     expect(selectSessionTitleContexts({ ...state })).toBe(first);
     expect(selectSessionTitleContexts({ ...state, tasks: [] })).not.toBe(first);
+    expect(selectSessionTitleContexts({ ...state, sessions: [...sessions] })).not.toBe(first);
     expect(selectSessionTitle(state, sessions[1])).toBe("claude 2");
   });
 });
