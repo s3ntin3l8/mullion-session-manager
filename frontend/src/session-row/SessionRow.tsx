@@ -545,9 +545,11 @@ export function SessionRow({
         // hand for its nested reason field.
         role="button"
         tabIndex={0}
-        aria-label={`Open session ${title}, ${metaParts.map((p) => p.text).join(", ")}${
-          openInWorkspace ? ", already open in this workspace" : ""
-        }`}
+        // The name says what the row shows, in the same order: the agent's
+        // name when it is shown as text (no logo), the title, then line 2.
+        aria-label={`Open session ${showAgentFallback ? `${agentBinary} ` : ""}${title}, ${metaParts
+          .map((p) => p.text)
+          .join(", ")}${openInWorkspace ? ", already open in this workspace" : ""}`}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {

@@ -486,6 +486,20 @@ describe("SessionRow", () => {
       ).toBeInTheDocument();
     });
 
+    it("names the agent first when it shows as text (no logo), as the row shows it", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, command: "fake-agent.sh", name: "fix login", nameLocked: true }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Open session fake-agent.sh fix login, Working" }),
+      ).toBeInTheDocument();
+    });
+
     it("drops the word 'open' for an open session; the title is heavier and the name says it", () => {
       render(
         <SessionRow
