@@ -4,6 +4,8 @@ Mullion features an in-app controllable browser (Phase 3) that allows AI agents 
 
 The browser pane is fully integrated into the tiled Dockview layout (`BrowserPane.tsx`) as a WebSocket-driven canvas client.
 
+**Agent Browser or preview browser?** Mullion has two browsers that look alike. The **Agent Browser** described here is one session's server-side Chromium, the one its agent drives, streamed into the pane as a canvas. Open it from a session pane's menu ("Open Agent Browser") or from the command palette ("Open Agent Browser: <session>", offered while a terminal session is the active pane). On the phone and the rails layouts (below 1100px) it is the right sidebar's Browser view instead of a pane, and the palette command opens that view. The **preview browser** ([browser-previews.md](browser-previews.md)) is an iframe embedding a project's dev server, a branch preview or any URL in your own browser; its palette entries all say "preview" ("Open preview browser", "New blank preview browser", "Preview: <saved URL>"). A fresh Agent Browser starts on `about:blank`: the address bar shows its placeholder rather than that address, and Go on an empty address sends nothing.
+
 ---
 
 ## Architecture & Lifecycle

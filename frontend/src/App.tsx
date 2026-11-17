@@ -639,6 +639,7 @@ export function App() {
     onOpenSession,
     onOpenSessionAsFloat,
     onOpenTimeline,
+    onOpenAgentBrowser,
     onOpenGitHub,
     onOpenGit,
     onOpenAgentRules,
@@ -1689,6 +1690,7 @@ export function App() {
           onOpenHosts={() => openSettings("hosts")}
           onOpenSettings={() => openSettings()}
           onOpenTimeline={onOpenTimeline}
+          onOpenAgentBrowser={onOpenAgentBrowser}
           onOpenBlankBrowser={onOpenBlankBrowser}
           onToggleRightSidebar={
             isMobile ? undefined : () => useDashboardStore.getState().toggleRightSidebar()

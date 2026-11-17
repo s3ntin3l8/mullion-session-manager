@@ -139,7 +139,7 @@ describe("buildPaletteCommands", () => {
     });
     const url = buildPaletteCommands(context).find((c) => c.id === "url-1")!;
 
-    expect(url.title).toBe("App");
+    expect(url.title).toBe("Preview: App");
     expect(url.subtitle).toBe("http://localhost:3000");
     url.run();
     expect(open.browserUrl).toHaveBeenCalledWith(5, "http://localhost:3000", "App");
@@ -205,6 +205,41 @@ describe("buildPaletteCommands", () => {
     for (const id of ["settings", "devices", "hosts"]) {
       expect(wired.find((command) => command.id === id)?.movesFocus).toBe(true);
     }
+  });
+
+  it("offers the active session's Agent Browser only when wired and a session is active (#3215)", () => {
+    const { context } = ctx();
+    const agentBrowser = vi.fn();
+    const session = makeSession({ id: 9, projectId: 5, name: "hotfix", nameLocked: true });
+    expect(
+      buildPaletteCommands({ ...context, activeSession: session }).some(
+        (c) => c.id === "agent-browser",
+      ),
+    ).toBe(false);
+    expect(
+      buildPaletteCommands({ ...context, open: { ...context.open, agentBrowser } }).some(
+        (c) => c.id === "agent-browser",
+      ),
+    ).toBe(false);
+
+    const command = buildPaletteCommands({
+      ...context,
+      activeSession: session,
+      open: { ...context.open, agentBrowser },
+    }).find((c) => c.id === "agent-browser")!;
+    expect(command.title).toBe("Open Agent Browser: hotfix");
+    command.run();
+    expect(agentBrowser).toHaveBeenCalledWith(session);
+  });
+
+  it("labels every embedded-browser entry as a preview (#3215)", () => {
+    const commands = buildPaletteCommands(
+      ctx({ favoriteUrls: [{ id: 1, url: "http://localhost:3000", label: "App" }] }).context,
+    );
+    const byId = Object.fromEntries(commands.map((c) => [c.id, c.title]));
+    expect(byId["preview"]).toBe("Open preview browser");
+    expect(byId["blank-browser"]).toBe("New blank preview browser");
+    expect(byId["url-1"]).toBe("Preview: App");
   });
 
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {

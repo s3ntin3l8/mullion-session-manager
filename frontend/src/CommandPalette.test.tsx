@@ -236,7 +236,7 @@ describe("CommandPalette -> Integrations section", () => {
     );
 
     await user.type(await screen.findByPlaceholderText(/Run a command/), "preview");
-    await user.click(await screen.findByText(/^Preview$/));
+    await user.click(await screen.findByText(/^Open preview browser$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -266,7 +266,7 @@ describe("CommandPalette -> Integrations section", () => {
     );
 
     await user.type(await screen.findByPlaceholderText(/Run a command/), "new preview tab");
-    await user.click(await screen.findByText("New preview tab"));
+    await user.click(await screen.findByText("New blank preview browser"));
     expect(onOpenBlankBrowser).toHaveBeenCalled();
   });
 
@@ -1096,7 +1096,7 @@ describe("CommandPalette -> focus management (P11)", () => {
     const user = userEvent.setup();
     const { unmount } = renderPalette();
     await user.type(await screen.findByPlaceholderText(/Run a command/), "new preview tab");
-    await user.click(await screen.findByText("New preview tab"));
+    await user.click(await screen.findByText("New blank preview browser"));
 
     unmount();
     expect(trigger).not.toHaveFocus();
@@ -2464,7 +2464,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(await screen.findByText("Project: mullion")).toBeTruthy();
     expect(screen.getByText("GitHub")).toBeTruthy();
     expect(screen.queryByText("Git", { exact: true })).toBeNull();
-    expect(screen.queryByText("Preview", { exact: true })).toBeNull();
+    expect(screen.queryByText("Open preview browser", { exact: true })).toBeNull();
     expect(screen.queryByText("GitHub settings")).toBeNull();
     for (const hidden of [
       "Agent Rules",
@@ -2721,7 +2721,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     renderPalette(openers(), { scope: "global", projectId: undefined });
 
     expect(await screen.findByText("New workspace")).toBeTruthy();
-    expect(screen.queryByText("New preview tab")).toBeNull();
+    expect(screen.queryByText("New blank preview browser")).toBeNull();
     expect(screen.queryByText(/^Project:/)).toBeNull();
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
   });
@@ -2805,6 +2805,63 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     await user.click(await screen.findByText("Session timeline"));
     expect(onOpenTimeline).toHaveBeenCalledWith(expect.objectContaining({ id: 7, name: "hotfix" }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // #3215: the pane menu's "Open Agent Browser", for the active session.
+  describe("Open Agent Browser", () => {
+    const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
+
+    afterEach(() => {
+      useDashboardStore.setState({
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "auto" },
+      });
+    });
+
+    it("is absent without an active terminal session", async () => {
+      useDashboardStore.setState({ sessions: [session], activePanelId: null, workspaces: [] });
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser: vi.fn() });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      expect(screen.queryByText(/Open Agent Browser/)).toBeNull();
+    });
+
+    it("opens the active session's Agent Browser pane, naming the session", async () => {
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: "session-7",
+        workspaces: [],
+      });
+      const onOpenAgentBrowser = vi.fn();
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser, onClose });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      await user.click(await screen.findByText("Open Agent Browser: hotfix"));
+      expect(onOpenAgentBrowser).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("opens the right sidebar's Browser view in a rails band instead of adding a pane", async () => {
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: "session-7",
+        workspaces: [],
+        rightSidebarView: "git",
+        rightSidebarOpen: false,
+        // The "tablet" override resolves to the rails-halves band.
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "tablet" },
+      });
+      const onOpenAgentBrowser = vi.fn();
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      await user.click(await screen.findByText("Open Agent Browser: hotfix"));
+      expect(onOpenAgentBrowser).not.toHaveBeenCalled();
+      const state = useDashboardStore.getState();
+      expect(state.rightSidebarView).toBe("browser");
+      expect(state.rightSidebarOpen).toBe(true);
+      expect(state.rightSidebarProjectRequest?.projectId).toBe(PROJECT.id);
+    });
   });
 
   it("asks for a workspace name, then creates and switches, and backs out without closing", async () => {
@@ -3070,7 +3127,7 @@ describe("CommandPalette -> default target follows the active pane", () => {
     useDashboardStore.setState({ activePanelId: "session-9" });
     renderGlobal(onOpenBrowser);
     await user.type(await screen.findByPlaceholderText(/Run a command/), "preview");
-    await user.click(await screen.findByText(/^Preview$/));
+    await user.click(await screen.findByText(/^Open preview browser$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(2);
   });
 });

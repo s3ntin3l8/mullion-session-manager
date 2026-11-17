@@ -65,6 +65,16 @@ function parseControlMessage(raw: string): ControlMessage | null {
   return null;
 }
 
+// A page with nothing loaded yet reports `about:blank` (Chromium's start
+// page). The address bar shows that as empty, its placeholder in view, and
+// never sends it back as a navigation: the server refuses any non-http(s)
+// target (routes/browser.ts), so a Go or Enter on a fresh pane would
+// otherwise raise a "Refusing to navigate" error toast (#3215).
+function isBlankAddress(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed === "" || trimmed.toLowerCase() === "about:blank";
+}
+
 function mouseButtonName(button: number): "left" | "right" | "middle" {
   if (button === 2) return "right";
   if (button === 1) return "middle";
@@ -181,8 +191,9 @@ export function BrowserPane(props: {
         if (typeof event.data === "string") {
           const message = parseControlMessage(event.data);
           if (!message) return;
-          if (message.type === "url") setAddressInput(message.url);
-          else if (message.type === "title") onTitleChangeRef.current?.(message.title);
+          if (message.type === "url") {
+            setAddressInput(isBlankAddress(message.url) ? "" : message.url);
+          } else if (message.type === "title") onTitleChangeRef.current?.(message.title);
           else if (message.type === "exited") setStatus("failed");
           else if (message.type === "error") {
             if (message.code === "binding_unavailable") {
@@ -448,7 +459,7 @@ export function BrowserPane(props: {
 
   const navigate = () => {
     const trimmed = addressInput.trim();
-    if (trimmed) sendControlRef.current({ type: "navigate", url: trimmed });
+    if (!isBlankAddress(trimmed)) sendControlRef.current({ type: "navigate", url: trimmed });
   };
 
   return (

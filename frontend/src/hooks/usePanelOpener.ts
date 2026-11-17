@@ -17,6 +17,7 @@ import {
   openSessionPanel,
   openTaskDetailPanel,
   openTimelinePanel,
+  openBrowserPanePanel,
 } from "../panelUtils.js";
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
 import { subscribeFilePathGone } from "../lib/filePathEvents.js";
@@ -96,6 +97,9 @@ export interface UsePanelOpenerResult {
   // Issue #270 — notification-row click opens the timeline instead of the
   // terminal.
   onOpenTimeline: (session: Session) => void;
+  // The command palette's "Open Agent Browser" (#3215): the same pane the
+  // pane menu's item opens, the session's server-side browser.
+  onOpenAgentBrowser: (session: Session) => void;
   // Opens (or focuses) a project's GitHub panel.
   onOpenGitHub: (projectId: number) => void;
   // Opens the Source Control view in the right sidebar for a project (the
@@ -283,6 +287,15 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openTimelinePanel(dockviewApi, session, layout);
+    },
+    [dockviewApi, layout, leaveTaskView],
+  );
+
+  const onOpenAgentBrowser = useCallback(
+    (session: Session) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      openBrowserPanePanel(dockviewApi, session, layout);
     },
     [dockviewApi, layout, leaveTaskView],
   );
@@ -502,6 +515,7 @@ export function usePanelOpener({
     onOpenSession,
     onOpenSessionAsFloat,
     onOpenTimeline,
+    onOpenAgentBrowser,
     onOpenGitHub,
     onOpenGit,
     onOpenProjectHub,

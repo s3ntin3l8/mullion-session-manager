@@ -14,6 +14,15 @@ separate flag:
   is served over https (see "Why the proxy exists" below) and buys framing
   sites that refuse direct embedding.
 
+**Preview browser or Agent Browser?** The preview browser on this page is
+an iframe in _your_ browser: open it from the command palette ("Open preview
+browser" for a project target, "New blank preview browser" for any URL,
+"Preview: <label>" for a saved URL) or from a project's Preview menu. It is
+not the **Agent Browser** ([browser-automation.md](browser-automation.md)),
+the session's server-side Chromium its agent drives, which opens from a
+session pane's menu or the palette's "Open Agent Browser: <session>" (on the
+phone and the rails layouts, the right sidebar's Browser view).
+
 There are two kinds of preview, in either mode:
 
 - **Project preview** — one per project (opening it again reuses the same
