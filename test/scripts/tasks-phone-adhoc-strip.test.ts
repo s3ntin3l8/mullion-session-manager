@@ -75,6 +75,22 @@ describe("phone Tasks screen: the ad-hoc strip sits at the bottom (#3243)", () =
     expect(declsFor(mobile, ".kanban-unified", "overflow", true)).toContain("visible");
   });
 
+  // `min-height: 100%` only resolves against a definite height: the board's
+  // scroller is the overlay, sized by its inline `position: absolute;
+  // inset: 0` at the KanbanBoardOverlay render site. If that became a flow
+  // element the percentage would resolve to nothing and the strip would stop
+  // moving down while the rule above stayed in place.
+  it("keeps the board's scroller a definite-height box", () => {
+    const registry = fs.readFileSync(
+      fileURLToPath(new URL("../../frontend/src/panels/registry.tsx", import.meta.url)),
+      "utf8",
+    );
+    const overlay = registry.slice(registry.indexOf("export function KanbanBoardOverlay"));
+    expect(overlay).toMatch(
+      /className="kanban-board-overlay"\s+style=\{\{ position: "absolute", inset: 0 \}\}/,
+    );
+  });
+
   it("lets the task area grow into the spare height", () => {
     expect(declsFor(mobile, ".kanban-unified-tasks", "flex", true)).toContain("1 0 auto");
   });
@@ -97,7 +113,11 @@ describe("phone Tasks screen: the ad-hoc strip sits at the bottom (#3243)", () =
   });
 
   it("keeps the strip in the flow rather than pinning it over the lanes", () => {
-    for (const name of ["mobile.css", "empty-states.css"]) {
+    // Every stylesheet, not just the two that style the strip today: any of
+    // them could reach the class.
+    const sheets = fs.readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"));
+    expect(sheets).toContain("empty-states.css");
+    for (const name of sheets) {
       const root = parse(name);
       for (const prop of ["position", "bottom"]) {
         expect(declsFor(root, ".kanban-unified-lane", prop, false)).toEqual([]);
