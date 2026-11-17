@@ -154,6 +154,7 @@ export function PhoneModeBar({
           sheet
           triggerClassName="phone-mode-btn phone-mode-inbox"
           label="Inbox"
+          iconSize={20}
         />
         <button
           type="button"

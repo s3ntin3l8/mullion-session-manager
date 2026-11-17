@@ -372,6 +372,7 @@ export function NotificationBell({
   placement = "below",
   triggerClassName = "toolbar-icon-btn",
   label,
+  iconSize = 17,
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -403,6 +404,8 @@ export function NotificationBell({
   // tab bar's "Inbox" entry, #3288). Without one the trigger is icon-only and
   // named "Notifications".
   label?: string;
+  // The bell's size: the tab bar's entries draw theirs at 20.
+  iconSize?: number;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -636,7 +639,7 @@ export function NotificationBell({
           setOpen((v) => !v);
         }}
       >
-        <BellIcon size={17} aria-hidden="true" />
+        <BellIcon size={iconSize} aria-hidden="true" />
         {/* The label before the badge, so "Inbox 3" reads in the name's order. */}
         {label && (
           <>
