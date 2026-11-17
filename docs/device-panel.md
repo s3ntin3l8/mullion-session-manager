@@ -374,9 +374,10 @@ needs:
   agent `{"type":"requestKeyframe"}` (an H.264 delta cannot be dropped the way a
   browser pane's JPEG can).
 
-A host that is down shows its devices as unavailable instead of failing the
-list: `GET /api/devices` marks those rows `hostUnreachable: true` with
-`live: null`, and a mutating call answers 503 (or 502 when the request may have
+A host that is down does not fail the list: `GET /api/devices` marks its rows
+`hostUnreachable: true` with `live: null` (the Settings UI does not read the
+flag yet, so the panel shows them as not running until
+[#3270](https://github.com/s3ntin3l8/mullion-session-manager/issues/3270)), and a mutating call answers 503 (or 502 when the request may have
 been delivered), like every other forwarded host call.
 
 Not covered yet, each tracked on its own issue: pairing and mDNS discovery

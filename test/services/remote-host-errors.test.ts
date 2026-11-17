@@ -30,6 +30,12 @@ describe("isOutcomeUnknown (#2621)", () => {
 // forces a decision (#2637). Read from the registered route table (onRoute), so
 // a route in any file, with or without the `app.post<...>` generic, is seen.
 const MUTATING_INTERNAL_POSTS = [
+  // A device's spawn, teardown and actions: a lost response leaves an outcome
+  // that may have landed (an emulator started, a tap sent), so it is reported
+  // as unknown, never as plain unreachable (#3200).
+  "/internal/devices",
+  "/internal/devices/:id/terminate",
+  "/internal/devices/:id/action",
   "/internal/updates/apply",
   "/internal/git-pull",
   "/internal/git-checkout",

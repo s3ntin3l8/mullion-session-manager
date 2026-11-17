@@ -105,7 +105,7 @@ async function kindRefusal(host: DeviceHost, kind: DeviceKind): Promise<string |
   }
   if (kinds.includes(kind)) return null;
   return kinds.length === 0
-    ? `Host ${host.hostId} has the device panel off — set DEVICE_ENABLED=true there.`
+    ? `Host ${host.hostId} cannot run devices right now: its device panel is off (DEVICE_ENABLED=true) or its platform supports none.`
     : `Host ${host.hostId} cannot run ${kind} devices (it supports: ${kinds.join(", ")}).`;
 }
 

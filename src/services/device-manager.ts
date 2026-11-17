@@ -1239,7 +1239,12 @@ export class DeviceManager {
     // request and omits the requester's own port, so two overlapping requests
     // (a fresh spawn and a reattach) could otherwise let the fresh one's
     // allocatePort() take the port the reattaching emulator still holds.
-    // releasePort() below undoes this when the scope is confirmed gone.
+    // releasePort() below undoes this when the scope is confirmed gone. It is
+    // deliberately NOT released when the check cannot answer (an "unknown"
+    // scope state, a rejected adb call): the emulator may be alive and holding
+    // this port, and freeing it would reopen the very race this closes. A slot
+    // stranded that way is bounded to one per device id, and the next
+    // successful getOrCreate for the id settles it.
     if (opts.kind === "emulator" && opts.port !== null) this.reservePort(opts.port);
 
     if (opts.kind === "physical") {
