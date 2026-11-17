@@ -45,6 +45,11 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
     { ...rateLimit, schema: { body: DEVICE_SPAWN_SCHEMA } },
     async (request, reply) => {
       const spec = request.body;
+      // There is no iOS engine on an agent yet (#1943); say so rather than
+      // handing an iOS spec to the Android manager.
+      if (spec.platform === "ios") {
+        return reply.badRequest("iOS devices are not supported on this agent yet");
+      }
       if (spec.kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
         return reply.badRequest(
           spec.kind === "emulator"
