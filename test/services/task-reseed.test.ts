@@ -163,6 +163,24 @@ describe("reseedTaskIfSessionExited", () => {
     expect(updated.sessionId).toBe(newSessionId);
   });
 
+  it("re-seeds with the task's model so the CLI does not fall back to its own default", async () => {
+    const { task } = insertTaskWithSession("exited");
+    app.db
+      .update(tasks)
+      .set({ modelOverride: "claude-opus-5-5" })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    mockSuccessfulSpawn();
+
+    await reseedTaskIfSessionExited(app, row, project, "prompt text", "test reject");
+
+    expect(mockCreateSessionRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ model: "claude-opus-5-5" }),
+    );
+  });
+
   it("without force: does nothing at all when the previous session is still active", async () => {
     const { task } = insertTaskWithSession("active");
 

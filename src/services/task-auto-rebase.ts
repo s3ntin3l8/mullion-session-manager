@@ -22,6 +22,7 @@ import { resolveBackend, resolveSessionsDirWithFallback } from "./session-backen
 import { getStoredSettings } from "./settings.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { resolveWorkerSpawnModels } from "./task-model-resolve.js";
 import { resolveWorkerDelegation } from "./task-delegation.js";
 import { CLEARED_REVIEW_RUN, hasReviewHandle } from "./task-review-handle.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
@@ -557,6 +558,8 @@ export async function attemptAutoRebase(
     // (`cwd: worktree.path`), so it joins the host that holds it.
     unattended: true,
     hostId: workerHostId,
+    // A rebase worker is still task #N's worker: same model as the claim.
+    ...resolveWorkerSpawnModels(app, task.agentCommand, task),
   });
   // #2637 — an unknown outcome keeps the session row: adopt it below like a
   // successful spawn, so the next tick does not spawn a second rebase worker.

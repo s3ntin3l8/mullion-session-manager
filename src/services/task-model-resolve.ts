@@ -296,3 +296,45 @@ export function explicitModelError(
   }
   return null;
 }
+
+/**
+ * The `model` / `smallModel` a Task Master worker spawn must carry, resolved
+ * the way the claim and retry spawns resolve them: task row > issue body >
+ * install-wide default. `createSessionRecord` does NOT apply the settings
+ * default itself (only `POST /api/sessions` does), so every worker spawn site
+ * has to pass these or the CLI silently falls back to its own default — agy
+ * picked "Gemini 4 Argon" for a task configured for hydrogen once a review
+ * round re-seeded the worker (the re-seed and rebase spawns passed no model).
+ */
+export function resolveWorkerSpawnModels(
+  app: FastifyInstance,
+  command: string,
+  task: {
+    modelOverride?: string | null;
+    smallModelOverride?: string | null;
+    body: string | null;
+  },
+): { model: string | undefined; smallModel: string | undefined } {
+  const cli = commandModelCli(command);
+  const model = commandIsOpencode(command)
+    ? resolveOpenCodeModel(app, {
+        taskModel: task.modelOverride ?? null,
+        issueBody: task.body,
+        role: "implementer",
+      })
+    : cli !== null
+      ? resolveCliModel(app, cli, { taskModel: task.modelOverride ?? null, issueBody: task.body })
+      : null;
+  const smallModel = commandIsOpencode(command)
+    ? resolveOpenCodeSmallModel(app, {
+        taskSmallModel: task.smallModelOverride ?? null,
+        issueBody: task.body,
+      })
+    : cli === "claude-code"
+      ? resolveClaudeSmallModel(app, {
+          taskSmallModel: task.smallModelOverride ?? null,
+          issueBody: task.body,
+        })
+      : null;
+  return { model: model ?? undefined, smallModel: smallModel ?? undefined };
+}
