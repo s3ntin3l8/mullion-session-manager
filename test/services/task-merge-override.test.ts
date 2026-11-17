@@ -251,6 +251,34 @@ describe("Merge anyway", () => {
     await app.close();
   });
 
+  it("the route refuses a check whose NAME is a substring of one the hold named", async () => {
+    const app = await buildApp();
+    // The hold names `test-node / lint-and-test`; `test-node` is a different check.
+    const id = await createHeldTask(app, {
+      mergeError: unstableHeldReason([{ name: "test-node / lint-and-test" }]),
+    });
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "test-node", conclusion: "failure", status: "completed", url: "" },
+    ]);
+
+    const res = await postMerge(app, id, true);
+
+    expect(res.statusCode).toBe(409);
+    expect(getTask(app, id).mergeOverrideHeadSha).toBeNull();
+    await app.close();
+  });
+
+  it("a recorded hold replaces an armed override, so a stale one cannot merge the next red check", async () => {
+    const app = await buildApp();
+    const id = await createHeldTask(app, { mergeOverrideHeadSha: HEAD });
+    const { recordMergeError } = await import("../../src/services/task-merge-human.js");
+
+    recordMergeError(app, id, "Required checks are red or still pending");
+
+    expect(getTask(app, id).mergeOverrideHeadSha).toBeNull();
+    await app.close();
+  });
+
   it("the route refuses when no check is red any more, and 502s when the checks cannot be read", async () => {
     const app = await buildApp();
     const id = await createHeldTask(app);

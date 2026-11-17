@@ -120,6 +120,9 @@ export function recordMergeError(
     .update(tasks)
     .set({
       mergeError: message,
+      // A recorded hold replaces the one a "Merge anyway" answered: it must not stay
+      // armed for whatever the PR reads as next on the same head.
+      mergeOverrideHeadSha: null,
       mergeBlockedThreads:
         needsHumanReason === "blocked-threads" && blockedThreads
           ? JSON.stringify(blockedThreads)

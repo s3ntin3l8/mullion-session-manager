@@ -413,8 +413,8 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const taskId = Number(request.query.taskId);
       const headSha = request.query.headSha ?? "";
-      if (!Number.isInteger(taskId)) {
-        return reply.badRequest("taskId query param must be an integer");
+      if (!Number.isInteger(taskId) || taskId < 1) {
+        return reply.badRequest("taskId query param must be a positive integer");
       }
       if (!/^[0-9a-f]{40}$/.test(headSha)) {
         return reply.badRequest("headSha query param must be a 40-char lowercase hex SHA");

@@ -179,6 +179,11 @@ export async function holdRedCiWithoutProgress(
   // Already parked (by this arm or the cap): nothing more to say or do.
   if (task.autoReturnCapAnnouncedAt !== null) return true;
 
+  // Inside the settle window after a rerun the answer cannot change, and for a
+  // remote-hosted task the read is a host round trip: skip it until the window ends.
+  const lastRerunAt = ciRerunRequestedAt.get(task.id);
+  if (lastRerunAt !== undefined && Date.now() - lastRerunAt < CI_RERUN_SETTLE_MS) return true;
+
   const declared = await readUnfixableDeclaration(app, task, current.headSha);
   if (declared === "transient") return true;
   if (declared !== null) {
@@ -191,9 +196,6 @@ export async function holdRedCiWithoutProgress(
     });
     return true;
   }
-
-  const lastRerunAt = ciRerunRequestedAt.get(task.id);
-  if (lastRerunAt !== undefined && Date.now() - lastRerunAt < CI_RERUN_SETTLE_MS) return true;
 
   if (task.ciRerunCount < MAX_CI_RERUNS_PER_HEAD && current.failedRunIds.length > 0) {
     // `dispatch`, not `write`: re-running jobs needs `actions: write`, which only

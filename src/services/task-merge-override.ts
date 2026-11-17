@@ -64,13 +64,13 @@ export async function resolveMergeOverrideHead(
       };
     }
     // The button reflects the LAST sweep's hold, which may describe an older head:
-    // refuse unless every check red on THIS head is one the hold named, so the
-    // human is never overriding a check they were not shown.
+    // refuse unless the checks red on THIS head would produce exactly the hold the
+    // human was shown. An exact match, not a substring test: a newly red `test-node`
+    // must not pass as "named" because a hold mentioned `test-node / lint-and-test`.
     const checks = await readPrCheckRuns(app, task, token, repoRef, pr.headSha, "unstable-merge");
     if (!checks.ok) return { refusal: "Could not read the PR's checks from GitHub", status: 502 };
     const red = checks.runs.filter((c) => isRedCheckConclusion(c.conclusion));
-    const unnamed = red.filter((c) => !task.mergeError?.includes(c.name));
-    if (red.length === 0 || unnamed.length > 0) {
+    if (red.length === 0 || task.mergeError !== unstableHeldReason(red)) {
       return {
         refusal:
           red.length === 0

@@ -28,8 +28,8 @@ export function readCiUnfixableFile(
   taskId: number,
   headSha: string,
 ): string | null {
-  if (!Number.isInteger(taskId) || !FULL_SHA.test(headSha)) {
-    throw new Error("taskId must be an integer and headSha a 40-char lowercase hex SHA");
+  if (!Number.isInteger(taskId) || taskId < 1 || !FULL_SHA.test(headSha)) {
+    throw new Error("taskId must be a positive integer and headSha a 40-char lowercase hex SHA");
   }
   const root = path.resolve(sessionsDir);
   const target = path.resolve(taskCiUnfixablePath(root, taskId, headSha));

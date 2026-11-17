@@ -65,6 +65,8 @@ describe("GET /internal/task-ci-unfixable (agent role)", () => {
     const app = await buildApp();
     for (const url of [
       `/internal/task-ci-unfixable?taskId=abc&headSha=${HEAD}`,
+      `/internal/task-ci-unfixable?taskId=0&headSha=${HEAD}`,
+      `/internal/task-ci-unfixable?taskId=-3&headSha=${HEAD}`,
       "/internal/task-ci-unfixable?taskId=1",
       "/internal/task-ci-unfixable?taskId=1&headSha=abc",
       `/internal/task-ci-unfixable?taskId=1&headSha=${"E".repeat(40)}`,
