@@ -1080,6 +1080,21 @@ describe("UnifiedBoard task columns", () => {
     expect(document.querySelector(".task-card-failure-reason")).toBeNull();
   });
 
+  it("#2940 — a rate-limit-parked ready task says so and when it resumes", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "ready",
+        failureReason: "rate limited; held until the provider reset",
+        rateLimitUntil: new Date(Date.now() + 60 * 60_000).toISOString(),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".task-card-dispatch-reason")?.textContent).toMatch(
+      /Rate limited · resumes /,
+    );
+  });
+
   it("#1997 — shows no dispatch note for a queued task without a recorded reason", () => {
     tasks = [makeTask({ id: 1, status: "claimed", failureReason: null })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

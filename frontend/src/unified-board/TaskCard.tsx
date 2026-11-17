@@ -24,7 +24,7 @@ import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { epicColourVar, epicUrl } from "./taskLanes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
-import { reviewRunState } from "../taskStatusModel.js";
+import { isRateLimitParked, rateLimitResumeText, reviewRunState } from "../taskStatusModel.js";
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
 // (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
@@ -524,6 +524,13 @@ export function TaskCard({
           host, a worktree git cannot cut, a required host that is not
           eligible yet) is still retried, so this is a waiting notice, not the
           terminal failure above. Cleared when the task dispatches. */}
+      {/* #2940 — parked until the provider's usage limit resets; resumes by itself. */}
+      {isRateLimitParked(task) && task.rateLimitUntil && (
+        <div className="task-card-dispatch-reason" title={task.failureReason ?? undefined}>
+          <ClockIcon size={11} />
+          Rate limited · resumes {rateLimitResumeText(task.rateLimitUntil)}
+        </div>
+      )}
       {task.status === "claimed" && task.failureReason && (
         <div className="task-card-dispatch-reason" title={task.failureReason}>
           <ClockIcon size={11} />

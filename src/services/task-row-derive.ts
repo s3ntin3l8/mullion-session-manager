@@ -30,6 +30,21 @@ export function withNudge<
   };
 }
 
+// The task's recent worker session ids (newest first), parsed from the raw
+// comma list task-store selects, so the task timeline can still show a
+// session after a park/return cleared `tasks.sessionId`.
+export function withWorkerSessionIds<T extends { workerSessionIdsRaw: string | null }>(
+  row: T,
+): Omit<T, "workerSessionIdsRaw"> & { workerSessionIds: number[] } {
+  const { workerSessionIdsRaw, ...rest } = row;
+  const ids = (workerSessionIdsRaw ?? "")
+    .split(",")
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .sort((a, b) => b - a);
+  return { ...rest, workerSessionIds: ids };
+}
+
 // Every derived field routes/tasks.ts layers onto a task row, in one call.
 export function withTaskDerived<
   T extends {
@@ -41,7 +56,8 @@ export function withTaskDerived<
     claimedAt: Date | null;
     nudgeCount: number;
     lastNudgedAt: Date | null;
+    workerSessionIdsRaw: string | null;
   },
 >(app: FastifyInstance, row: T) {
-  return withNudge(withIssueDirectives(app, withPrTitleFallback(row)));
+  return withWorkerSessionIds(withNudge(withIssueDirectives(app, withPrTitleFallback(row))));
 }

@@ -22,6 +22,7 @@ const { parkRateLimitedTask, PARKABLE_RATE_LIMIT_STATUSES } =
   await import("../../src/services/task-rate-limit-park.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const sessionLifecycle = await import("../../src/services/session-lifecycle.js");
+const githubSync = await import("../../src/services/task-github-sync.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-rate-limit-park-${process.pid}.db`);
 
@@ -123,9 +124,18 @@ describe("parkRateLimitedTask (#2940)", () => {
       `usage limit reached; try again at ${reset.toISOString()}`,
     );
 
+    const syncSpy = vi.spyOn(githubSync, "syncTaskTransition").mockResolvedValue(undefined);
     const parked = await parkRateLimitedTask(app, task, session.id, projectId);
 
     expect(parked).toBe(true);
+    // The issue is told why the task went quiet, and when it resumes.
+    expect(syncSpy).toHaveBeenCalledWith(
+      app,
+      expect.objectContaining({ id: task.id, status: "ready" }),
+      expect.objectContaining({ id: projectId }),
+      "rate_limited",
+      { resumeAt: reset },
+    );
     expect(sessionStatus()).toBe("killed");
     const row = load();
     expect(row.status).toBe("ready");

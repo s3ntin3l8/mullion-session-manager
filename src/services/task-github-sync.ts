@@ -77,7 +77,7 @@ export const FAILURE_REASON_LABEL_LOST = "GitHub issue lost its tracking label";
 export const FAILURE_REASON_ISSUE_CLOSED = "GitHub issue was closed";
 
 export type TaskSyncEvent =
-  "claimed" | "in_progress" | "reviewing" | "done" | "failed" | "rejected";
+  "claimed" | "in_progress" | "reviewing" | "done" | "failed" | "rejected" | "rate_limited";
 
 type TaskRow = typeof tasks.$inferSelect;
 // Narrowed to exactly what resolveRepoRef needs, not the full projects row
@@ -155,7 +155,7 @@ async function runSync(
   app: FastifyInstance,
   task: TaskRow,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats },
+  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats; resumeAt?: Date },
 ): Promise<boolean> {
   // Non-null: syncTaskTransition already returned early when
   // task.issueNumber is null.
@@ -248,6 +248,22 @@ async function runSync(
       lastProgressCommentAt.delete(task.id);
       break;
     }
+    case "rate_limited": {
+      // #2940 — a parked worker resumes by itself, so this is a pause notice
+      // (not the terminal failure above); the claim on resume re-adds the label.
+      await removeLabel(token, owner, repo, issueNumber, LABEL_CLAIMED);
+      await createComment(
+        token,
+        owner,
+        repo,
+        issueNumber,
+        extra.resumeAt
+          ? `Paused: the agent hit its provider usage limit. It resumes automatically after ${extra.resumeAt.toISOString().replace(/\.\d{3}Z$/, "Z")}.`
+          : "Paused: the agent hit its provider usage limit. It resumes automatically after the reset.",
+      );
+      lastProgressCommentAt.delete(task.id);
+      break;
+    }
     case "rejected": {
       await createComment(
         token,
@@ -328,7 +344,7 @@ export async function syncTaskTransition(
   task: TaskRow,
   project: ProjectRef,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats } = {},
+  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats; resumeAt?: Date } = {},
 ): Promise<void> {
   if (task.issueNumber === null) return;
   const repoRef = await resolveRepoRef(app, project);
