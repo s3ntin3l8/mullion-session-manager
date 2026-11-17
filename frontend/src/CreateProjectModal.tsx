@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   HERMES_REVIEW_OPTION,
   hermesReviewerAvailable,
@@ -190,6 +191,9 @@ interface CreateProjectModalProps {
   // New session launcher's body) with a Back control, instead of opening a
   // dialog over it. `onClose` is then "back".
   surface?: "modal" | "embedded";
+  // #3244 — content shown first in the form's body, above its fields (the
+  // launcher's "Choose from N discovered repositories" row).
+  lead?: ReactNode;
 }
 
 export function CreateProjectModal({
@@ -220,6 +224,7 @@ export function CreateProjectModal({
   initialHostCwds = {},
   initialHostCwdsMeta,
   surface = "modal",
+  lead,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [pickerPath, setPickerPath] = useState<string | null>(null);
@@ -804,6 +809,7 @@ export function CreateProjectModal({
         </>
       }
     >
+      {lead}
       {/* Issue #1726 / roadmap 8.12 — the placement control.
               "Pinned" is today's behaviour exactly (every session runs on
               the project's own host); "automatic" opts the project into the
