@@ -7,7 +7,11 @@ import type { SessionInfo } from "./pty-manager.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
-import { resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import {
+  resolveSessionHostId,
+  resolveTaskWorkerHost,
+  taskWorkerSessionName,
+} from "./session-live-info.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
@@ -542,7 +546,7 @@ export async function attemptAutoRebase(
     // different path (attemptAutoRebase, #758) than the claim/retry spawns
     // — same naming/locking, same reasoning (see task-claim.ts's own
     // worker-spawn comment).
-    name: `Task #${task.id} · worker`,
+    name: taskWorkerSessionName(task.id),
     nameLocked: true,
     // Same "this is an unattended Task Master worker" marker as the
     // claim/retry spawns (see task-claim.ts's own worker-spawn comments).
