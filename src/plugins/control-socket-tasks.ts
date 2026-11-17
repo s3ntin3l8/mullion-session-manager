@@ -1,12 +1,10 @@
 /**
- * #3165 / #3173 — full-scope Task Master control-socket ops (`tasks.list`,
- * `tasks.get`, `tasks.retry`, `tasks.start`, `tasks.close`, `tasks.archive`,
+ * #3165 / #3173 — full-scope Task Master write ops (`tasks.retry`, `tasks.start`, `tasks.close`, `tasks.archive`,
  * `tasks.unarchive`).
  */
 import { extractIdField } from "../services/control-session-authority.js";
 import {
   bad,
-  buildQueryUrl,
   json,
   routeOp,
   type OpContext,
@@ -30,11 +28,6 @@ function forwardLaunchFields(body: Record<string, unknown> | undefined): string 
 }
 
 export const taskOps: Record<string, OpSpec> = {
-  "tasks.list": routeOp(["full"], ({ body }) => ({
-    method: "GET",
-    url: buildQueryUrl("/api/tasks", body),
-  })),
-  "tasks.get": withTaskId((id) => ({ method: "GET", url: `/api/tasks/${enc(id)}` })),
   "tasks.retry": withTaskId((id, { body }) => ({
     method: "POST",
     url: `/api/tasks/${enc(id)}/retry`,

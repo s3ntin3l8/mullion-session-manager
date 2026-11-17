@@ -218,7 +218,8 @@ owner/name` with `--pr` (MCP: `repo` + `pr_number`). The repository must be
   landed.
 - Drive the browser (see the Mullion browser skill) against whatever's
   already listening, dock-managed or started in your own shell.
-- Task Master management (`task list|get|retry|start|close|archive|unarchive`,
-  or `list_tasks`/`get_task`/`retry_task`/`start_task`/`close_task`/
-  `archive_task`) is **full scope only** — only `mullion task push` /
+- Task Master reads (`task list|get`, `list_tasks`/`get_task`) work read-only: your
+  own project's tasks, and other projects' only if yours is a coordinator they accept.
+  Task Master writes (`task retry|start|close|archive|unarchive`, or `retry_task`/
+  `start_task`/`close_task`/`archive_task`) are **full scope only** — only `mullion task push` /
   `push_task_branch` is reachable at session scope (for your own task).

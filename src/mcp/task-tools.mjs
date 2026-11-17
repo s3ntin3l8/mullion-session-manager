@@ -6,9 +6,15 @@ const FULL_SCOPE_NOTE =
   "Requires full scope (MULLION_AUTH_TOKEN) — 403s from inside a normal agent session when " +
   "authentication is enabled (unrestricted if it's disabled entirely).";
 
+const READ_NOTE =
+  "Read-only. From inside a session it covers your own project's tasks, plus another " +
+  "project's only when your project is a coordinator ('This project coordinates') that " +
+  "reaches it and that project accepts it; an unreachable task looks like a missing one. " +
+  "`agentCommand` is omitted there.";
+
 export const listTasks = {
   name: "list_tasks",
-  description: `List Task Master tasks, optionally filtered by status or projectId. ${FULL_SCOPE_NOTE}`,
+  description: `List Task Master tasks, optionally filtered by status or projectId. ${READ_NOTE}`,
   inputSchema: {
     type: "object",
     properties: {
@@ -27,7 +33,7 @@ export const listTasks = {
 
 export const getTask = {
   name: "get_task",
-  description: `Get a single Task Master task by id. ${FULL_SCOPE_NOTE}`,
+  description: `Get a single Task Master task by id. ${READ_NOTE}`,
   inputSchema: {
     type: "object",
     required: ["taskId"],

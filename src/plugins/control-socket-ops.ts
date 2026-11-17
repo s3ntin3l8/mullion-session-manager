@@ -33,6 +33,7 @@ import type {
 import { findRunningDockSession } from "../services/dock-control.js";
 import { dockConfigOps } from "./control-socket-dock-config.js";
 import { taskOps } from "./control-socket-tasks.js";
+import { readOps } from "./control-socket-reads.js";
 import {
   STREAM_UNAVAILABLE,
   bad,
@@ -216,16 +217,13 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
 export const OPS: Record<string, OpSpec> = {
   ...dockConfigOps,
   ...taskOps,
+  ...readOps,
   ping: {
     scopes: ["full", "session"],
     handler: ({ reply }) => {
       reply({ ok: true, status: 200, result: { pong: true } });
     },
   },
-  "sessions.list": routeOp(["full"], ({ body }) => ({
-    method: "GET",
-    url: buildQueryUrl("/api/sessions", body),
-  })),
   // Phase 4 (#187) — single-session inspect. Reachable at session scope
   // with no `sessionId` at all (defaults to the connection's own pinned
   // session — see resolveTargetSessionId), which is the shape an agent

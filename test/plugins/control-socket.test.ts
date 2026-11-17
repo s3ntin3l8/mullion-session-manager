@@ -982,7 +982,7 @@ describe("controlSocketPlugin (issue #185)", () => {
 
       const socket = await connect(app.pty.controlSocketPath);
       socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
-      socket.write(`${JSON.stringify({ id: 1, op: "sessions.list" })}\n`);
+      socket.write(`${JSON.stringify({ id: 1, op: "projects.list" })}\n`);
 
       const reply = await waitForReply(socket);
       expect(reply).toEqual({
