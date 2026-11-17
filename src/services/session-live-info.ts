@@ -265,9 +265,12 @@ export function resolveTaskWorkerHost(
   app: FastifyInstance,
   task: { id?: number; sessionId: number | null; projectId: number },
   // The project row, when the caller already has it. It is AUTHORITATIVE
-  // for the fallback: re-reading the project from the db would answer for
-  // whatever row carries that id — not necessarily the one the caller is
-  // working with, and in a test not even a row at all.
+  // for step 3 (the project's own host fallback): re-reading the project
+  // from the db would answer for whatever row carries that id — not
+  // necessarily the one the caller is working with, and in a test not even
+  // a row at all. Steps 1 and 2 go through `resolveSessionHostId`, so a
+  // session row with a null `sessions.hostId` still resolves against the
+  // `projects` row in the db.
   project?: { hostId: string },
 ): string {
   if (task.sessionId !== null) {
