@@ -266,7 +266,7 @@ deliberately a **separate** implementation from `PtyManager`/
   emulator's orientation). Neither a malformed (unparseable JSON,
   server-logged) nor an unrecognized (valid JSON, wrong shape, silently
   ignored) message ever produces an error frame back to the client — see
-  `parseInputMessage`'s own comment.
+  `parseDeviceInput`'s own comment (`services/device-drivers/input.ts`).
 
 - **`DevicePane.tsx`** decodes with
   [`@yume-chan/scrcpy-decoder-webcodecs`](https://www.npmjs.com/package/@yume-chan/scrcpy-decoder-webcodecs)
@@ -492,9 +492,9 @@ commands against the device's live adb connection
 video panel is currently open anywhere, and do **not** go through the
 scrcpy control channel the live panel uses. **`text` and `clipboard` are the
 two exceptions**: `routes/devices.ts` routes `text` through
-`device.controller.injectText()` — the same scrcpy control channel the live
-WS panel's own "text" input message uses (`routes/device.ts`'s
-`dispatchInput`) — rather than `adb shell input text`, since `injectText`
+`AndroidDriver.text()` (`device.controller.injectText()`) — the same scrcpy
+control channel the live WS panel's own "text" input message uses
+(`AndroidDriver.input` in `services/device-drivers/android.ts`) — rather than `adb shell input text`, since `injectText`
 needs no shell at all. Both 400 if no scrcpy controller exists yet (a narrow
 window during boot, after adb comes up but before scrcpy does) rather than
 falling back to the shell.

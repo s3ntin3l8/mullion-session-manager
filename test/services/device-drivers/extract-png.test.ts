@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractPng } from "../../src/routes/devices.js";
+import { extractPng } from "../../../src/services/device-drivers/android.js";
 
 const IEND = [0x49, 0x45, 0x4e, 0x44, 0, 0, 0, 0];
 const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];

@@ -17,6 +17,17 @@ import {
   removeDeviceMarker,
   touchDeviceMarker,
 } from "./device-process.js";
+import { AndroidDriver } from "./device-drivers/android.js";
+import type {
+  DeviceDriver,
+  DeviceInfo,
+  DeviceKind,
+  DeviceLiveStatus,
+} from "./device-drivers/types.js";
+
+// Defined in device-drivers/types.ts so the driver seam does not import this
+// module back; re-exported here, where every existing caller imports them.
+export type { DeviceInfo, DeviceKind, DeviceLiveStatus };
 import { getDeviceScopeBackend } from "./scope/index.js";
 import type { ScopeBackend, ScopeLiveness } from "./scope/types.js";
 import {
@@ -228,8 +239,6 @@ export interface DeviceManagerOptions {
   initialPorts?: number[];
 }
 
-export type DeviceKind = "emulator" | "physical";
-
 export interface DeviceSpawnOptions {
   id: string;
   kind: DeviceKind;
@@ -254,18 +263,6 @@ export interface DeviceSpawnOptions {
    * persisted value here would be wrong. Always null for `kind: "physical"`
    * — a physical device has no emulator port pool slot to reserve. */
   port: number | null;
-}
-
-export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" | "error";
-
-export interface DeviceInfo {
-  id: string;
-  kind: DeviceKind;
-  avdName: string | null;
-  label: string | null;
-  status: DeviceLiveStatus;
-  serial: string | null;
-  error: string | null;
 }
 
 /** Runs an adb-server call, rewording a refused connection into something an
@@ -1012,7 +1009,7 @@ export class Device {
   /** Sets the device's clipboard via the scrcpy control channel — the
    * one-shot `clipboard set` REST/CLI/MCP action verb's implementation
    * (routes/devices.ts), and also what the live WS panel's own clipboard
-   * paste uses (routes/device.ts's dispatchInput), so both paths share one
+   * paste uses (AndroidDriver.input, device-drivers/android.ts), so both paths share one
    * code path and update the SAME cache. `sequence: 0n` is fire-and-forget:
    * a non-zero sequence makes the library wait for an ACK_CLIPBOARD device
    * message, which we'd rather not depend on (see pumpClipboard's own
@@ -1161,6 +1158,21 @@ export class DeviceManager {
 
   get(id: string): Device | undefined {
     return this.devices.get(id);
+  }
+
+  /** The platform-neutral handle on a live device: what routes/device.ts and
+   * routes/devices.ts talk to, so neither imports adb/scrcpy types. Built on
+   * `get`/`getOrCreate` (which still return the Android `Device`) so there is
+   * one place that decides which engine a device runs on. Every device is
+   * Android until `devices.platform` lands (#3202). */
+  getDriver(id: string): DeviceDriver | undefined {
+    const device = this.get(id);
+    return device ? new AndroidDriver(device) : undefined;
+  }
+
+  /** `getOrCreate` that returns the driver (see `getDriver`). */
+  async getOrCreateDriver(opts: DeviceSpawnOptions): Promise<DeviceDriver> {
+    return new AndroidDriver(await this.getOrCreate(opts));
   }
 
   list(): DeviceInfo[] {

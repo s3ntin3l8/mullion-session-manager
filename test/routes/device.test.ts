@@ -702,7 +702,7 @@ describe("device route (/ws/device/:deviceId)", () => {
 
       it("pastes host clipboard text via Device.setClipboard (paste: true)", async () => {
         // Routed through Device.setClipboard (device-manager.ts), NOT
-        // controller.setClipboard directly — see dispatchInput's own
+        // controller.setClipboard directly — see AndroidDriver.input's own
         // comment on the "clipboard" case for why (issue #1422's REST
         // action verb and this WS path now share one cache-updating code
         // path). Device.setClipboard's own unit tests

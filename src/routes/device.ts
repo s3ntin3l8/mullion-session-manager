@@ -1,15 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
-import { AndroidKeyEventAction } from "@yume-chan/scrcpy";
-import { AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
-import type {
-  AndroidKeyCode,
-  AndroidKeyEventMeta,
-  ScrcpyMediaStreamPacket,
-} from "@yume-chan/scrcpy";
 import { getDeviceRow } from "../services/device-store.js";
-import type { Device, DeviceKind } from "../services/device-manager.js";
-import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
+import type { DeviceKind } from "../services/device-manager.js";
+import { parseDeviceInput } from "../services/device-drivers/input.js";
+import type {
+  DeviceDriver,
+  DeviceVideoPacket,
+  TouchInput,
+} from "../services/device-drivers/types.js";
 
 // Streams a device's screen to the frontend DevicePane as binary H.264
 // packets over WebSocket, and proxies touch/key/scroll input back —
@@ -53,14 +51,14 @@ const KEYFRAME_STALL_MS = 5000;
 // Cached per PACKET OBJECT (WeakMap, not a plain Map — no explicit eviction
 // needed, and no cross-device corruption risk: Device.pumpVideo emits a
 // fresh object per read, so a cache key is never reused across devices or
-// packets). Device.onVideoPacket fans the SAME packet out to every attached
+// packets). The driver's onVideoPacket fans the SAME packet out to every attached
 // socket's own listener (multiple panels/CLI viewers of one device is an
 // explicitly supported case — see docs/device-panel.md), so without this,
 // N listeners would each independently allocate-and-copy an identical
 // frame on the hottest path in the whole feature (every video frame).
-const encodedFrameCache = new WeakMap<ScrcpyMediaStreamPacket, Uint8Array>();
+const encodedFrameCache = new WeakMap<DeviceVideoPacket, Uint8Array>();
 
-function encodeVideoFrame(packet: ScrcpyMediaStreamPacket): Uint8Array {
+function encodeVideoFrame(packet: DeviceVideoPacket): Uint8Array {
   const cached = encodedFrameCache.get(packet);
   if (cached) return cached;
   const typeByte = packet.type === "configuration" ? 0 : 1;
@@ -71,298 +69,6 @@ function encodeVideoFrame(packet: ScrcpyMediaStreamPacket): Uint8Array {
   out.set(packet.data, 2);
   encodedFrameCache.set(packet, out);
   return out;
-}
-
-interface TapMessage {
-  type: "tap";
-  x: number;
-  y: number;
-  videoWidth: number;
-  videoHeight: number;
-}
-
-interface TouchMessage {
-  type: "touchDown" | "touchMove" | "touchUp";
-  x: number;
-  y: number;
-  videoWidth: number;
-  videoHeight: number;
-  pointerId: number;
-}
-
-interface ScrollMessage {
-  type: "scroll";
-  x: number;
-  y: number;
-  videoWidth: number;
-  videoHeight: number;
-  scrollX: number;
-  scrollY: number;
-}
-
-interface TextMessage {
-  type: "text";
-  text: string;
-}
-
-/** `androidKeyCode` is an AOSP `KEYCODE_*` numeric value — the frontend owns
- * mapping a browser KeyboardEvent to this, same division of labor as
- * `injectKeyCode`'s own doc comment implies (this route is a thin proxy,
- * not a keymap). `metaState` is the same scrcpy `AndroidKeyEventMeta` bitmask
- * `injectKeyCode` takes (Ctrl/Shift/Alt/Meta bits OR'd together) — optional
- * and defaulting to 0 (no modifiers) so older frontend builds and every
- * pre-existing message on the wire keep working unchanged. */
-interface KeyEventMessage {
-  type: "keyEvent";
-  androidKeyCode: number;
-  action: "down" | "up";
-  metaState?: number;
-}
-
-/** Host clipboard text to place on the device and paste (scrcpy
- * SET_CLIPBOARD with paste=true — handles Unicode, unlike `injectText`). */
-interface ClipboardMessage {
-  type: "clipboard";
-  text: string;
-}
-
-interface BackMessage {
-  type: "back";
-}
-
-interface RotateMessage {
-  type: "rotate";
-}
-
-type DeviceInputMessage =
-  | TapMessage
-  | TouchMessage
-  | ScrollMessage
-  | TextMessage
-  | KeyEventMessage
-  | ClipboardMessage
-  | BackMessage
-  | RotateMessage;
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === "number" && Number.isFinite(v);
-}
-
-// scrcpy's InjectKeyCode control message packs metaState into a u32 on the
-// wire — reject anything that couldn't round-trip through that (negative,
-// fractional, or too large), rather than silently truncating or wrapping it.
-const MAX_META_STATE = 0xffffffff;
-function isValidMetaState(v: unknown): v is number {
-  return isFiniteNumber(v) && Number.isInteger(v) && v >= 0 && v <= MAX_META_STATE;
-}
-
-function parseInputMessage(value: unknown): DeviceInputMessage | null {
-  const v = value as Partial<DeviceInputMessage> | null;
-  if (typeof v !== "object" || v === null || typeof v.type !== "string") return null;
-  switch (v.type) {
-    case "tap": {
-      const m = v as Partial<TapMessage>;
-      if (
-        isFiniteNumber(m.x) &&
-        isFiniteNumber(m.y) &&
-        isFiniteNumber(m.videoWidth) &&
-        isFiniteNumber(m.videoHeight)
-      ) {
-        return {
-          type: "tap",
-          x: m.x,
-          y: m.y,
-          videoWidth: m.videoWidth,
-          videoHeight: m.videoHeight,
-        };
-      }
-      return null;
-    }
-    case "touchDown":
-    case "touchMove":
-    case "touchUp": {
-      const m = v as Partial<TouchMessage>;
-      if (
-        isFiniteNumber(m.x) &&
-        isFiniteNumber(m.y) &&
-        isFiniteNumber(m.videoWidth) &&
-        isFiniteNumber(m.videoHeight) &&
-        isFiniteNumber(m.pointerId)
-      ) {
-        return {
-          type: v.type,
-          x: m.x,
-          y: m.y,
-          videoWidth: m.videoWidth,
-          videoHeight: m.videoHeight,
-          pointerId: m.pointerId,
-        };
-      }
-      return null;
-    }
-    case "scroll": {
-      const m = v as Partial<ScrollMessage>;
-      if (
-        isFiniteNumber(m.x) &&
-        isFiniteNumber(m.y) &&
-        isFiniteNumber(m.videoWidth) &&
-        isFiniteNumber(m.videoHeight) &&
-        isFiniteNumber(m.scrollX) &&
-        isFiniteNumber(m.scrollY)
-      ) {
-        return {
-          type: "scroll",
-          x: m.x,
-          y: m.y,
-          videoWidth: m.videoWidth,
-          videoHeight: m.videoHeight,
-          scrollX: m.scrollX,
-          scrollY: m.scrollY,
-        };
-      }
-      return null;
-    }
-    case "text": {
-      const m = v as Partial<TextMessage>;
-      return typeof m.text === "string" ? { type: "text", text: m.text } : null;
-    }
-    case "keyEvent": {
-      const m = v as Partial<KeyEventMessage>;
-      if (!isFiniteNumber(m.androidKeyCode) || (m.action !== "down" && m.action !== "up")) {
-        return null;
-      }
-      if (m.metaState !== undefined && !isValidMetaState(m.metaState)) return null;
-      return {
-        type: "keyEvent",
-        androidKeyCode: m.androidKeyCode,
-        action: m.action,
-        metaState: m.metaState ?? 0,
-      };
-    }
-    case "clipboard": {
-      const m = v as Partial<ClipboardMessage>;
-      if (
-        typeof m.text === "string" &&
-        m.text.length > 0 &&
-        Buffer.byteLength(m.text, "utf8") <= CLIPBOARD_MAX_BYTES
-      ) {
-        return { type: "clipboard", text: m.text };
-      }
-      return null;
-    }
-    case "back":
-      return { type: "back" };
-    case "rotate":
-      return { type: "rotate" };
-    default:
-      return null;
-  }
-}
-
-async function dispatchInput(device: Device, message: DeviceInputMessage): Promise<void> {
-  const controller = device.controller;
-  if (!controller) return;
-  switch (message.type) {
-    case "tap":
-      await controller.injectTouch({
-        action: AndroidMotionEventAction.Down,
-        pointerId: 0n,
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        pressure: 1,
-        actionButton: AndroidMotionEventButton.Primary,
-        buttons: AndroidMotionEventButton.Primary,
-      });
-      await controller.injectTouch({
-        action: AndroidMotionEventAction.Up,
-        pointerId: 0n,
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        pressure: 0,
-        actionButton: AndroidMotionEventButton.Primary,
-        buttons: AndroidMotionEventButton.None,
-      });
-      break;
-    case "touchDown":
-    case "touchMove":
-    case "touchUp": {
-      const action =
-        message.type === "touchDown"
-          ? AndroidMotionEventAction.Down
-          : message.type === "touchMove"
-            ? AndroidMotionEventAction.Move
-            : AndroidMotionEventAction.Up;
-      const down = message.type !== "touchUp";
-      await controller.injectTouch({
-        action,
-        pointerId: BigInt(message.pointerId),
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        pressure: down ? 1 : 0,
-        actionButton: down ? AndroidMotionEventButton.Primary : AndroidMotionEventButton.None,
-        buttons: down ? AndroidMotionEventButton.Primary : AndroidMotionEventButton.None,
-      });
-      break;
-    }
-    case "scroll":
-      await controller.injectScroll({
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        scrollX: message.scrollX,
-        scrollY: message.scrollY,
-        buttons: AndroidMotionEventButton.None,
-      });
-      break;
-    case "text":
-      await controller.injectText(message.text);
-      break;
-    case "keyEvent":
-      await controller.injectKeyCode({
-        action: message.action === "down" ? AndroidKeyEventAction.Down : AndroidKeyEventAction.Up,
-        // The frontend owns mapping a browser key to an AOSP KEYCODE_* value
-        // — this route just proxies whatever numeric value it's given, so
-        // there's no closed set to validate against here.
-        keyCode: message.androidKeyCode as AndroidKeyCode,
-        repeat: 0,
-        // Same proxy posture as keyCode above: parseInputMessage already
-        // validated this is a safe u32 and normalized a missing metaState to
-        // 0, so it's just forwarded — the frontend owns which
-        // AndroidKeyEventMeta bits to set. `?? 0` is belt-and-suspenders for
-        // metaState's `?` in the KeyEventMessage type (any caller of
-        // dispatchInput that skips parseInputMessage would otherwise see
-        // `undefined` reach the wire as NaN).
-        metaState: (message.metaState ?? 0) as AndroidKeyEventMeta,
-      });
-      break;
-    case "clipboard":
-      // Routed through Device.setClipboard (device-manager.ts) rather than
-      // calling controller.setClipboard directly, so a host-initiated paste
-      // from this panel updates the SAME last-known-clipboard cache the
-      // one-shot REST `clipboard get` action verb reads
-      // (routes/devices.ts) — scrcpy does NOT echo a host-initiated
-      // SET_CLIPBOARD back through the autosync clipboard stream
-      // (Device.pumpClipboard only ever sees DEVICE-initiated copies), so
-      // without this an agent's `clipboard get` right after a panel paste
-      // would return stale data. See Device.setClipboard's own comment for
-      // the sequence-0n/fire-and-forget reasoning.
-      await device.setClipboard(message.text, true);
-      break;
-    case "back":
-      await controller.backOrScreenOn(AndroidKeyEventAction.Down);
-      await controller.backOrScreenOn(AndroidKeyEventAction.Up);
-      break;
-    case "rotate":
-      await controller.rotateDevice();
-      break;
-  }
 }
 
 export interface AttachDeviceParams {
@@ -384,7 +90,7 @@ export async function attachSocketToDevice(
 ): Promise<void> {
   let device;
   try {
-    device = await app.device.getOrCreate({
+    device = await app.device.getOrCreateDriver({
       id: String(deviceId),
       kind,
       avdName,
@@ -411,13 +117,13 @@ export async function attachSocketToDevice(
 
   // `device` is a `let` (assigned in the try above), so closures below would
   // otherwise see it as implicitly `any`.
-  const liveDevice: Device = device;
+  const liveDevice: DeviceDriver = device;
   let closed = false;
   let droppedSincePacket = false;
   // A socket can disappear while the frontend is holding a touch. Keep the
   // most recent point for each pointer so its close handler can release the
   // controller state even when the client cannot send touchUp itself.
-  const activeTouches = new Map<number, TouchMessage>();
+  const activeTouches = new Map<number, TouchInput>();
   // A brand-new socket is a late joiner: Device.onVideoPacket replays only
   // the SPS/PPS config, so the next packet is normally a delta frame — and
   // the frontend's WebCodecs decoder throws on a delta before its first
@@ -448,7 +154,7 @@ export async function attachSocketToDevice(
   });
 
   function requestKeyframe(reason: string): void {
-    liveDevice.controller?.resetVideo().catch((err) => {
+    liveDevice.requestKeyframe().catch((err) => {
       app.log.warn({ err, deviceId }, `device resetVideo ${reason} failed`);
     });
   }
@@ -458,7 +164,7 @@ export async function attachSocketToDevice(
   const stallTimer = setTimeout(() => {
     if (closed || !awaitingKeyframe) return;
     app.log.warn(
-      { deviceId, hasController: Boolean(liveDevice.controller) },
+      { deviceId, hasController: liveDevice.hasLiveControl },
       "device socket still waiting for a keyframe; requesting another",
     );
     requestKeyframe("after keyframe stall");
@@ -496,13 +202,13 @@ export async function attachSocketToDevice(
       app.log.warn({ deviceId }, "dropped malformed device control message");
       return;
     }
-    const message = parseInputMessage(parsed);
+    const message = parseDeviceInput(parsed);
     if (!message) return;
     if (message.type === "touchDown") activeTouches.set(message.pointerId, message);
     else if (message.type === "touchMove" && activeTouches.has(message.pointerId)) {
       activeTouches.set(message.pointerId, message);
     } else if (message.type === "touchUp") activeTouches.delete(message.pointerId);
-    dispatchInput(device, message).catch((err) => {
+    liveDevice.input(message).catch((err) => {
       app.log.warn({ err, deviceId }, "device input dispatch failed");
     });
   });
@@ -514,7 +220,7 @@ export async function attachSocketToDevice(
     unsubscribeExit();
     unsubscribeClipboard();
     for (const touch of activeTouches.values()) {
-      dispatchInput(liveDevice, { ...touch, type: "touchUp" }).catch((err) => {
+      liveDevice.input({ ...touch, type: "touchUp" }).catch((err) => {
         app.log.warn({ err, deviceId }, "device touch release on socket close failed");
       });
     }
