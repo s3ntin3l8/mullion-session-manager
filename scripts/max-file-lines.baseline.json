@@ -5,9 +5,9 @@
   "recordedAtMeaning": "the commit whose tree these sizes were measured from — the fork point this branch started from. The baseline is the RECORD of the giants and the fallback reference when there is no git reference commit; when there is one, the guard measures against the reference commit instead, and that already absorbs the default branch's own growth.",
   "counts": {
     "production": 11,
-    "test": 43,
+    "test": 42,
     "tooling": 0,
-    "total": 54
+    "total": 53
   },
   "files": {
     "frontend/src/api/types.ts": 1467,
@@ -24,7 +24,6 @@
     "frontend/src/Sidebar.test.tsx": 1415,
     "frontend/src/Sidebar.tsx": 796,
     "frontend/src/TaskDetail.test.tsx": 1975,
-    "frontend/src/TerminalPane.test.tsx": 3769,
     "frontend/src/TerminalPane.tsx": 996,
     "frontend/src/UnifiedBoard.test.tsx": 1226,
     "src/cli/core.mjs": 1599,

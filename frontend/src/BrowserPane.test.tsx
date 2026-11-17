@@ -4,8 +4,8 @@ import { render, fireEvent, act } from "@testing-library/react";
 import { BrowserPane } from "./BrowserPane.js";
 import { browserApi } from "./api/browser.js";
 
-// Same fake-WebSocket shape as TerminalPane.test.tsx, extended to also track
-// message/close handlers (that file only ever needed "open"). BrowserPane
+// Same fake-WebSocket shape as the TerminalPane test harness, extended to also track
+// message/close handlers (that harness only ever needed "open"). BrowserPane
 // has no xterm/dockview dependency, so this is otherwise a much simpler
 // component test.
 interface FakeSocket {

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
 // Drives real captured byte sequences through a REAL `@xterm/xterm` Terminal
-// (not mocked, unlike TerminalPane.test.tsx's module-level xterm mock) and
+// (not mocked, unlike the TerminalPane test harness's module-level xterm
+// mock) and
 // asserts against its real buffer. This is the integration counterpart to
 // terminalLinks.test.ts's fake-buffer unit tests: it exists specifically to
 // catch a mismatch between our narrow `LinkBufferLine`/`LinkBufferSource`
