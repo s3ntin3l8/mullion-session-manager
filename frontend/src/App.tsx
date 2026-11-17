@@ -1385,9 +1385,6 @@ export function App() {
           The top bar's version label is in Settings → Server. */}
       {isMobile && (
         <Toolbar
-          onOpenSession={onOpenSession}
-          onOpenTimeline={onOpenTimeline}
-          onOpenBrowser={onOpenBrowser}
           onOpenLauncher={openGlobalLauncher}
           mobileSessionSlot={mobileSessionSwitcher}
           inert={phoneViewCovering}
@@ -1668,7 +1665,15 @@ export function App() {
       )}
       {/* Phone (#3014): the mode bar, last in .app's column so it sits under
           the key bar, at the bottom edge. */}
-      {isMobile && <PhoneModeBar onOpenSettings={() => openSettings()} />}
+      {isMobile && (
+        <PhoneModeBar
+          onOpenSettings={() => openSettings()}
+          onNewSession={openNewSessionLauncher}
+          onOpenSession={onOpenSession}
+          onOpenTimeline={onOpenTimeline}
+          onOpenBrowser={onOpenBrowser}
+        />
+      )}
       <ProjectPreviewPicker
         onOpenDefault={onOpenBrowser}
         onBlank={onOpenBlankBrowser}

@@ -339,7 +339,8 @@ export function UnifiedBoard({
   // EVERY opener it returns (onOpenSession included), which is what makes
   // this wrapper redundant — `onOpenSession` itself does what this used to
   // do, for every call site, not just the ones that went through here.
-  const [creating, setCreating] = useState(false);
+  // In the store (#3288): the phone's tab bar opens the same form.
+  const creating = useDashboardStore((s) => s.newTaskFormOpen);
   // Same fire-and-forget-with-resync posture PR #477 established in
   // TasksPanel.tsx — surfaced here verbatim rather than reimplemented.
   const [dragError, setDragError] = useState<string | null>(null);
@@ -570,11 +571,11 @@ export function UnifiedBoard({
             phone={phone}
             facetsShown={facetsShown}
             creating={creating}
-            onToggleCreate={() => setCreating((v) => !v)}
+            onToggleCreate={() => useDashboardStore.getState().setNewTaskFormOpen(!creating)}
             createTask={(projectId, title) =>
               useDashboardStore.getState().createTask(projectId, title)
             }
-            onCreated={() => setCreating(false)}
+            onCreated={() => useDashboardStore.getState().setNewTaskFormOpen(false)}
             clearDoneTasks={(opts) => useDashboardStore.getState().clearDoneTasks(opts)}
             displayExtra={
               <DisplayLayoutControls

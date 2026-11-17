@@ -28,7 +28,11 @@ import type {
 } from "./api/index.js";
 import { makeProject, makeSession, makeTask } from "./test/fixtures.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
-import { boardStoreStubs } from "./test/boardStoreStubs.js";
+import {
+  boardStoreStubs,
+  resetNewTaskFormStub,
+  useNewTaskFormTick,
+} from "./test/boardStoreStubs.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
@@ -106,6 +110,8 @@ vi.mock("./lib/layoutTier.js", async (importOriginal) => ({
 
 vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
+    // The new-task form's open state is the one reactive piece (#3288).
+    useNewTaskFormTick();
     const state = storeState();
     return selector ? selector(state) : state;
   };
@@ -149,6 +155,7 @@ function createDragEvent(type: string, dataTransfer: DataTransfer): DragEvent {
 }
 
 beforeEach(() => {
+  resetNewTaskFormStub();
   sessions = [];
   projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
   tasks = [];
@@ -831,14 +838,30 @@ describe("UnifiedBoard phone layout", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Hide Done & Failed" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Show archived" }));
     await userEvent.click(screen.getByRole("button", { name: "Close filters" }));
-    expect(screen.getByRole("button", { name: "Filter (2)" })).toBeInTheDocument();
+    const filter = screen.getByRole("button", { name: "Filter, 2 active" });
+    expect(filter).toHaveAttribute("title", "Filter");
+    expect(filter.querySelector(".tasks-phone-filter-badge")).toHaveTextContent("2");
   });
 
-  it("creates a task from the phone toolbar's New task form", async () => {
+  // #3288 — the toolbar is [Needs you] [Filter]; New task is the tab bar's
+  // New entry (PhoneModeBar.test.tsx), which opens the same form.
+  it("has no New task button in the phone toolbar, and an icon-only Filter", () => {
     renderPhone();
-    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    const toolbar = document.querySelector<HTMLElement>(".tasks-panel-toolbar--phone")!;
+    expect(within(toolbar).queryByRole("button", { name: "New task" })).toBeNull();
+    const filter = within(toolbar).getByRole("button", { name: "Filter" });
+    expect(filter.textContent).toBe("");
+    expect(filter.querySelector(".tasks-phone-filter-badge")).toBeNull();
+  });
+
+  it("creates a task from the form the store opens, and closes it after", async () => {
+    renderPhone();
+    expect(screen.queryByPlaceholderText("Task title")).toBeNull();
+    act(() => boardStoreStubs.setNewTaskFormOpen(true));
     await userEvent.type(screen.getByPlaceholderText("Task title"), "from phone{Enter}");
     expect(createTask).toHaveBeenCalledWith(1, "from phone");
+    expect(boardStoreStubs.newTaskFormOpen).toBe(false);
+    expect(screen.queryByPlaceholderText("Task title")).toBeNull();
   });
 
   it("the Filter sheet closes on Escape and hosts the two-step Clear done", async () => {

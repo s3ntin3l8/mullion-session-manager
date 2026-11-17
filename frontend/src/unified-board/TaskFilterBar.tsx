@@ -13,8 +13,9 @@ import type { TaskFilterApi } from "./useTaskFilters.js";
 // The Task Master board's single filter row (epic #2847, #2840; mockup view
 // "1 · Filter bar"): facets toggle, project picker, quick-view tabs, Filter menu,
 // Display menu and New task. Active epic/agent/text filters show as removable tokens
-// under it. On phone the row collapses to [New task] [Filter] and everything moves
-// into a filter sheet, rendering the same panels inline.
+// under it. On phone the row collapses to [Needs you] [Filter] and everything moves
+// into a filter sheet, rendering the same panels inline; New task is the phone
+// tab bar's New entry there (#3288), which opens the same form.
 export function TaskFilterBar({
   api,
   projects,
@@ -142,14 +143,23 @@ export function TaskFilterBar({
         >
           Needs you <span className="task-view-n">{api.counts["needs-me"]}</span>
         </button>
-        {newBtn}
+        {/* No New task here (#3288): the phone's tab bar has New, which
+            opens the same form. The filter button is icon-only, its count
+            a badge. */}
         <button
           type="button"
           className="tasks-phone-filter-btn"
           aria-haspopup="dialog"
+          aria-label={count > 0 ? `Filter, ${count} active` : "Filter"}
+          title="Filter"
           onClick={() => setFilterSheetOpen(true)}
         >
-          Filter{count > 0 ? ` (${count})` : ""}
+          <FilterIcon size={18} aria-hidden="true" />
+          {count > 0 && (
+            <span className="tasks-phone-filter-badge" aria-hidden="true">
+              {count}
+            </span>
+          )}
         </button>
         {newForm}
         <BottomSheet

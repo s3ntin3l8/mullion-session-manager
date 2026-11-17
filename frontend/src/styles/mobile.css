@@ -369,7 +369,7 @@
   }
 }
 
-/* Task board status strip, [New task][Filter] row and filter sheet
+/* Task board status strip, [Needs you][Filter] row and filter sheet
    (UnifiedBoard.tsx `phone`) — unscoped: they only render on compact tiers. */
 .task-card-sync-error-text {
   display: none;
@@ -396,20 +396,39 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.tasks-panel-toolbar--phone .tasks-panel-new-btn {
-  flex: 1;
-  min-height: 44px;
-}
+/* Icon-only, at the row's right end (#3288); its count is a badge on the
+   icon's corner. */
 .tasks-phone-filter-btn {
-  flex: 1;
-  min-height: 44px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin-left: auto;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: transparent;
   color: var(--fg);
-  font-family: inherit;
-  font-size: 0.875rem;
   cursor: pointer;
+  touch-action: manipulation;
+}
+.tasks-phone-filter-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.625rem;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
 }
 .tasks-panel-toolbar--phone .tasks-panel-new-form {
   flex-basis: 100%;
@@ -539,13 +558,14 @@
 /* Phone shell without the drawer (#3014)                        */
 /* ============================================================ */
 
-/* The mode bar: full width under the key bar, the last row of .app's column.
-   It owns the bottom safe-area inset while it shows, so the key bar and the
-   grid body drop theirs (tablet.css gives them one under a coarse pointer).
-   While the on-screen keyboard is up the bar is not rendered
-   (useKeyboardUp) and they keep their own. Its height is a property, so a
-   right-sidebar view can end exactly above it (#3216): the 48px buttons, 6px
-   of padding each side and the 1px top border, plus the inset. */
+/* The tab bar (#3014, #3288): full width under the key bar, the last row of
+   .app's column, five entries of an icon over a short label. It owns the
+   bottom safe-area inset while it shows, so the key bar and the grid body
+   drop theirs (tablet.css gives them one under a coarse pointer). While the
+   on-screen keyboard is up the bar is hidden (useKeyboardUp) and they keep
+   their own. Its height is a property, so a right-sidebar view can end
+   exactly above it (#3216): the 52px entries, 4px of padding each side and
+   the 1px top border, plus the inset. */
 .app.mode-bar {
   --phone-mode-bar-h: calc(61px + env(safe-area-inset-bottom));
 }
@@ -554,14 +574,17 @@
   flex: none;
   box-sizing: border-box;
   height: var(--phone-mode-bar-h);
-  gap: 4px;
-  padding: 6px max(8px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom))
-    max(8px, env(safe-area-inset-right));
+  gap: 2px;
+  padding: 4px max(4px, env(safe-area-inset-left)) calc(4px + env(safe-area-inset-bottom))
+    max(4px, env(safe-area-inset-right));
   /* A clear gap from the key bar above it, so two stacked bars do not invite
      mis-taps (design section 4, option B). */
   border-top: 1px solid var(--border);
   box-shadow: 0 -4px 0 0 var(--bg);
   background: var(--chrome);
+}
+.phone-mode-bar[hidden] {
+  display: none;
 }
 :root:not([data-keyboard="up"]) .app.mode-bar .grid-area-body,
 :root:not([data-keyboard="up"]) .app.mode-bar .mobile-key-bar {
@@ -570,19 +593,19 @@
 .phone-mode-btn {
   position: relative;
   flex: 1 1 0;
-  min-width: 0;
-  min-height: 48px;
+  min-width: 44px;
+  min-height: 52px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 3px;
+  padding: 0 2px;
   border: 0;
   border-radius: 10px;
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 0.9375rem;
-  font-weight: 500;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
@@ -592,18 +615,52 @@
   color: var(--fg);
   background: var(--seg);
 }
-.phone-mode-btn.phone-mode-more {
-  flex: 0 0 56px;
+/* One line at 320px: five entries of about 61px each, the longest label
+   ("Workspace") under that at this size. The ellipsis is a guard only. */
+.phone-mode-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.2;
 }
-.phone-mode-badge {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+/* The bar's primary action, set apart by the accent fill on its icon. */
+.phone-mode-new {
+  color: var(--fg);
+}
+.phone-mode-new-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 26px;
   border-radius: 999px;
   background: var(--accent-fill);
   color: #fff;
-  font-size: 0.6875rem;
-  line-height: 18px;
+}
+/* The Tasks count and the Inbox unread count (NotificationBell's own badge),
+   on the icon's top-right. */
+.phone-mode-bar .attention-badge {
+  top: 1px;
+  left: calc(50% + 2px);
+  right: auto;
+}
+.phone-mode-badge {
+  position: absolute;
+  top: 3px;
+  left: calc(50% + 4px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.625rem;
+  line-height: 16px;
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
 

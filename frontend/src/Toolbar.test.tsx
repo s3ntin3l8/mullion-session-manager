@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The phone's top bar (#3009, #3014). From 700px there is no top bar: its
-// controls are the left rail's (LeftRail.test.tsx). NotificationBell needs a
-// much larger store-mock surface than this file cares about, so it's stubbed.
+// controls are the left rail's (LeftRail.test.tsx). NotificationBell is
+// stubbed so a bell the bar must not render (#3288) would show up as its test id.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -29,8 +29,6 @@ vi.mock("./NotificationBell.js", () => ({
 }));
 
 const NOOP_PROPS = {
-  onOpenSession: vi.fn(),
-  onOpenBrowser: vi.fn(),
   onOpenLauncher: vi.fn(),
 };
 
@@ -92,11 +90,26 @@ describe("Toolbar — the phone's top bar", () => {
     expect(container.querySelector(".run-cmd-btn")).toBeNull();
   });
 
-  it("puts the bell at the right edge, as a bottom sheet", () => {
-    render(<Toolbar {...NOOP_PROPS} />);
-    const bell = screen.getByTestId("bell");
-    expect(bell.closest(".toolbar-actions")).not.toBeNull();
-    expect(bell).toHaveAttribute("data-sheet", "true");
-    expect(bell).toHaveAttribute("data-sheet-class", "");
+  // #3288 — the notifications are the tab bar's Inbox entry
+  // (PhoneModeBar.test.tsx), so the phone has exactly one bell.
+  it("has no bell, in either mode", () => {
+    const { rerender } = render(<Toolbar {...NOOP_PROPS} />);
+    expect(screen.queryByTestId("bell")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Notifications/ })).toBeNull();
+    viewMode = "kanban";
+    rerender(<Toolbar {...NOOP_PROPS} />);
+    expect(screen.queryByTestId("bell")).toBeNull();
+  });
+
+  it("is the session picker and the palette button in Workspace mode, the picker alone in Tasks", () => {
+    const { container, rerender } = render(
+      <Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />,
+    );
+    expect(container.querySelectorAll(".toolbar-actions > *")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Command palette" })).toBeInTheDocument();
+    viewMode = "kanban";
+    rerender(<Toolbar {...NOOP_PROPS} mobileSessionSlot={<span>switcher</span>} />);
+    expect(container.querySelectorAll(".toolbar-actions > *")).toHaveLength(0);
+    expect(screen.getByText("switcher")).toBeInTheDocument();
   });
 });

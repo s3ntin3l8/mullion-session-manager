@@ -371,6 +371,10 @@ export function NotificationBell({
   sheetClassName,
   placement = "below",
   triggerClassName = "toolbar-icon-btn",
+  label,
+  labelClassName,
+  iconSize = 17,
+  onOpenChange,
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -396,8 +400,19 @@ export function NotificationBell({
   // Where the popover opens: under the bell (the phone's top bar) or beside it,
   // growing upward from its bottom edge (the left rail's bottom cluster, #3009).
   placement?: "below" | "beside";
-  // The trigger's class: the top bar's icon button, or the rail's.
+  // The trigger's class: the rail's icon button, or the phone tab bar's entry.
   triggerClassName?: string;
+  // A visible label under the icon, which also names the trigger (the phone
+  // tab bar's "Inbox" entry, #3288). Without one the trigger is icon-only and
+  // named "Notifications".
+  label?: string;
+  // The visible label's class (the tab bar's own label style).
+  labelClassName?: string;
+  // The bell's size: the tab bar's entries draw theirs at 20.
+  iconSize?: number;
+  // Told when the feed opens or closes (the phone tab bar returns focus to
+  // its Inbox entry itself when the sheet closed while the bar was hidden).
+  onOpenChange?: (open: boolean) => void;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -413,6 +428,16 @@ export function NotificationBell({
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   const [open, setOpen] = useState(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current === open) return;
+    wasOpen.current = open;
+    onOpenChangeRef.current?.(open);
+  }, [open]);
   // Sheet only: which sessions' groups the feed shows.
   const [filter, setFilter] = useState<"needs" | "all">("all");
   const [pos, setPos] = useState<NotifPanelPosition | null>(null);
@@ -618,11 +643,12 @@ export function NotificationBell({
         // triggers.
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={
-          unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications, none unread"
-        }
+        aria-label={`${label ?? "Notifications"}, ${unreadCount > 0 ? `${unreadCount} unread` : "none unread"}`}
         onClick={(e) => {
           e.stopPropagation();
+          // iOS does not focus a tapped button, and the sheet returns focus to
+          // what was focused when it opened: this trigger, then (#3288).
+          e.currentTarget.focus();
           if (!open && btnRef.current) {
             reposition();
             openFilter();
@@ -630,7 +656,13 @@ export function NotificationBell({
           setOpen((v) => !v);
         }}
       >
-        <BellIcon size={17} />
+        <BellIcon size={iconSize} aria-hidden="true" />
+        {/* The label before the badge, so "Inbox 3" reads in the name's order. */}
+        {label && (
+          <>
+            <span className={labelClassName}>{label}</span>{" "}
+          </>
+        )}
         {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}
       </button>
       {sheet && (

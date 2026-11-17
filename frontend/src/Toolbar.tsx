@@ -1,39 +1,23 @@
 import type { ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { SearchIcon } from "./ui/icons.js";
-import { NotificationBell } from "./NotificationBell.js";
-import type { Session } from "./api/index.js";
 
 interface ToolbarProps {
   /** #3216 — out of focus and the accessibility tree while a phone sidebar
    * view covers the top bar. */
   inert?: boolean;
-  onOpenSession: (session: Session) => void;
-  // Issue #270 — passed straight through to NotificationBell; see its own
-  // prop doc for why this is distinct from onOpenSession.
-  onOpenTimeline?: (session: Session) => void;
-  // Issue #404 — opens (or focuses) a project's preview pane, so accepting a
-  // dev_server_detected offer can jump straight to it, same handler App.tsx
-  // wires to the sidebar's own "Preview" action.
-  onOpenBrowser: (projectId: number) => void;
   onOpenLauncher: () => void;
   // App's MobileSessionSwitcher: the session picker that fills the bar.
   mobileSessionSlot?: ReactNode;
 }
 
-// The phone's top bar (#3009, #3014): [session picker] [palette] [bell]. From
+// The phone's top bar (#3009, #3014, #3288): [session picker] [palette]. From
 // 700px there is no top bar; its controls live on the left rail (LeftRail.tsx).
-// New session is the picker's own row, Settings and the theme the mode bar's
-// "more" sheet. Global keyboard shortcuts (⌘K, ⌘,, Esc) are wired once from
+// New session is the picker's own row and the tab bar's New entry, the
+// notifications the tab bar's Inbox entry, Settings and the theme the tab
+// bar's "more" sheet. Global keyboard shortcuts (⌘K, ⌘,, Esc) are wired once from
 // App.tsx.
-export function Toolbar({
-  onOpenSession,
-  onOpenTimeline,
-  onOpenBrowser,
-  onOpenLauncher,
-  mobileSessionSlot,
-  inert = false,
-}: ToolbarProps) {
+export function Toolbar({ onOpenLauncher, mobileSessionSlot, inert = false }: ToolbarProps) {
   // Tasks is an install-wide board, not a workspace view, and has no palette
   // on purpose (issue #730).
   const viewMode = useDashboardStore((s) => s.viewMode);
@@ -64,14 +48,6 @@ export function Toolbar({
             <span className="kbd">⌘K</span>
           </button>
         )}
-        {/* The bell sits at the right edge and renders its feed as a bottom
-            sheet. */}
-        <NotificationBell
-          onOpenSession={onOpenSession}
-          onOpenTimeline={onOpenTimeline}
-          onOpenBrowser={onOpenBrowser}
-          sheet
-        />
       </div>
     </div>
   );

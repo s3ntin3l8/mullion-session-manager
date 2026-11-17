@@ -164,4 +164,15 @@ describe("store modes (#3009)", () => {
     expect(useDashboardStore.getState().viewMode).toBe("kanban");
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
+
+  // #3288 — the board unmounts with Tasks mode; a form left open would come
+  // back focused and raise the phone's keyboard.
+  it("a mode switch closes the new-task form; a same-mode call keeps it", () => {
+    useDashboardStore.setState({ viewMode: "kanban", newTaskFormOpen: false });
+    useDashboardStore.getState().setNewTaskFormOpen(true);
+    useDashboardStore.getState().setViewMode("kanban");
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(true);
+    useDashboardStore.getState().setViewMode("list");
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(false);
+  });
 });

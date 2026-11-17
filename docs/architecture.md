@@ -616,7 +616,7 @@ Layout mode (`settings.layoutMode`) can force a tier.
 
 | Band             | Width        | Tier      | Shell                                                                        |
 | ---------------- | ------------ | --------- | ---------------------------------------------------------------------------- |
-| `phone`          | under 700    | `phone`   | top bar, one pane at a time, mode bar with "⋯"; no rails                     |
+| `phone`          | under 700    | `phone`   | top bar, one pane at a time, a five-entry tab bar; no rails                  |
 | `rails-full`     | 700 to 799   | `tablet`  | left rail, grid, right rail; an open right-sidebar view takes the full width |
 | `rails-halves`   | 800 to 1099  | `tablet`  | two halves, a rail each (`useLayoutPresentation` returns `"halves"`)         |
 | `desktop-narrow` | 1100 to 1279 | `tablet`  | the desktop shell, with the left sidebar collapsed by default                |
@@ -722,11 +722,17 @@ columns are not plain stacks of rows counts its leaf panes: with fewer than
 2 x columns, and room above the floor, the largest pane is split `below`;
 otherwise the new session is a tab.
 
-**Phone** (under 700px): the top bar (`Toolbar.tsx`: the session switcher, the
-palette, the bell), the mode bar (`PhoneModeBar.tsx`) and its "⋯" sheet, which
-lists exactly the right rail's views and Settings. A view opens over the
-workspace down to the mode bar, which stays visible and is the way out
-(#3216): "⋯" shows as the active entry, Workspace or Tasks closes the view,
+**Phone** (under 700px): the top bar (`Toolbar.tsx`: the session switcher and,
+in Workspace mode, the palette) and the tab bar at the bottom
+(`PhoneModeBar.tsx`, #3288): Workspace · Tasks · New · Inbox · More, each an
+icon over its label. New is the mode's primary action (the new-session
+launcher, or the Tasks board's new-task form, whose open state is in the store
+for that reason); Inbox is the phone's one `NotificationBell`, its feed a
+bottom sheet; More opens a sheet that lists exactly the right rail's views and
+Settings. The bar is hidden, not unmounted, while the on-screen keyboard is up,
+so the Inbox sheet survives a field in it raising the keyboard. A view opens
+over the workspace down to the tab bar, which stays visible and is the way out
+(#3216): More shows as the active entry, Workspace or Tasks closes the view,
 and another view from the sheet replaces it. The view's head names it, with no
 back control of its own; a pushed detail (a task, a PR) keeps its Back.
 There is no drawer: the left sidebar still mounts, hidden, because it loads

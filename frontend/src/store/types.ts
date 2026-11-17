@@ -745,6 +745,10 @@ export interface UiSlice {
    *  (#3014): the phone's back gesture then returns to Tasks, reopening the
    *  task the switch came from. Cleared by any other mode change. */
   crossLinkReturn: { taskId: number | null } | null;
+  /** Whether the Tasks board's new-task form is open (#3288). In the store,
+   *  not the board, so the phone's tab bar "New" entry and the board's own
+   *  New task button reach the same form. */
+  newTaskFormOpen: boolean;
   // Local-only presentation order for Kanban cards within a column (issue
   // #211) — there's no backend field for card order in Phase 1 (a session
   // has no `position` column, unlike workspaces/groups), so this is kept as
@@ -896,6 +900,7 @@ export interface UiSlice {
    *  the right half is not also mounted in the grid. */
   foldHalvesActive: boolean;
   setFoldHalvesActive: (active: boolean) => void;
+  setNewTaskFormOpen: (open: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
   // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,
   // reusing reorder.ts's computeReorder for the actual reindex math) —
