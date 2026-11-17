@@ -1,5 +1,5 @@
 import type { NotificationEvent, Theme as ThemePreference } from "../api/index.js";
-import { STORAGE_KEYS, readBool, readNumber, readString } from "../lib/persistedState.js";
+import { STORAGE_KEYS, readBool, readJSON, readNumber, readString } from "../lib/persistedState.js";
 import {
   EVENTS_PER_SESSION_CAP,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
@@ -38,6 +38,30 @@ export function readStoredViewMode(): ViewMode {
 
 export function readStoredHierarchicalView(): boolean {
   return readBool(STORAGE_KEYS.hierarchicalView, false);
+}
+
+/**
+ * Reads persisted per-project, per-control Dock worktree/branch selections,
+ * sanitizing malformed entries so a corrupted localStorage payload never
+ * crashes store initialization.
+ */
+export function readStoredDockControlWorktrees(): Record<string, Record<string, string>> {
+  const raw = readJSON<unknown>(STORAGE_KEYS.dockControlWorktrees, {});
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const result: Record<string, Record<string, string>> = {};
+  for (const [projectKey, controls] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof controls !== "object" || controls === null || Array.isArray(controls)) continue;
+    const cleaned: Record<string, string> = {};
+    for (const [controlId, val] of Object.entries(controls as Record<string, unknown>)) {
+      if (typeof val === "string" && val.length > 0) {
+        cleaned[controlId] = val;
+      }
+    }
+    if (Object.keys(cleaned).length > 0) {
+      result[projectKey] = cleaned;
+    }
+  }
+  return result;
 }
 
 export function systemPrefersDark(): boolean {

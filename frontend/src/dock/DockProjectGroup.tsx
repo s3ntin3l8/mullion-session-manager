@@ -22,6 +22,7 @@ import {
   groupDockerControls,
   holdVanishedDockerControls,
   isDockPreviewPath,
+  resolveRememberedValueFromRunning,
   resolveSelectedValue,
   runningSessionFor,
 } from "./dockHelpers.js";
@@ -167,6 +168,7 @@ export function DockProjectGroup({
     settings,
     dockConfigRefreshTrigger,
     prsRefreshTrigger,
+    dockControlWorktrees,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
@@ -176,6 +178,7 @@ export function DockProjectGroup({
       settings: s.settings,
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
       prsRefreshTrigger: s.prsRefreshTriggerByProject[projectId] ?? 0,
+      dockControlWorktrees: s.dockControlWorktrees?.[String(projectId)],
     })),
   );
   // U8 — Settings -> Session management's "Confirm before kill" toggle.
@@ -221,9 +224,13 @@ export function DockProjectGroup({
   const bumpToggleGen = (controlId: string) => {
     toggleGenRef.current.set(controlId, (toggleGenRef.current.get(controlId) ?? 0) + 1);
   };
-  // Per-monitor selected worktree path (by monitor config id) — not
-  // persisted, same reasoning as before this extraction.
-  const [worktreePaths, setWorktreePaths] = useState<Record<string, string>>({});
+  // Tracks which running session id + resolved value was already synced to
+  // `dockControlWorktrees` per control so an in-flight manual switch in
+  // `onWorktreeChange` is never overwritten by the outgoing session before
+  // `deleteSession` completes.
+  const syncedSessionByControlRef = useRef<Map<string, { sessionId: number; value: string }>>(
+    new Map(),
+  );
 
   // ---- Collapsible project section (unified-rail dock rework) ----
   // Expanded by default; persisted per project per workspace so a user's
@@ -607,6 +614,32 @@ export function DockProjectGroup({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runningFor/discoveredControls are recomputed fresh from `controls`/`sessions` every render; depending on `controls` avoids re-running this effect on every unrelated re-render.
   }, [controls, sessionsLoaded, settings.dock.autoAttachDockerLogs, projectId]);
 
+  // Issue #3230 — remember the branch/worktree a running monitor resolved to
+  // in the persisted store so stopping it (even after a reload, remount, or
+  // external start) keeps that selection instead of resetting to main.
+  useEffect(() => {
+    const setWorktree = useDashboardStore.getState().setDockControlWorktree;
+    if (!setWorktree) return;
+    const opts = new Set(allOptions.map((o) => o.value));
+    for (const control of configuredControls) {
+      const running = runningFor(control);
+      if (!running) {
+        syncedSessionByControlRef.current.delete(control.id);
+        continue;
+      }
+      const remembered = resolveRememberedValueFromRunning(running, opts);
+      if (!remembered) continue;
+      const prevSynced = syncedSessionByControlRef.current.get(control.id);
+      if (prevSynced?.sessionId === running.id && prevSynced.value === remembered) continue;
+      syncedSessionByControlRef.current.set(control.id, {
+        sessionId: running.id,
+        value: remembered,
+      });
+      setWorktree(projectId, control.id, remembered);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- controls/sessions/gitRefs are the stable state inputs from which configuredControls/runningFor/allOptions are derived; dockControlWorktrees is intentionally omitted so an in-flight onWorktreeChange is not clobbered by the outgoing session.
+  }, [projectId, controls, sessions, gitRefs]);
+
   const handleCheckUpdate = async (control: DockControl) => {
     try {
       const result = await api.checkDockerUpdate(projectId, control.id);
@@ -707,7 +740,7 @@ export function DockProjectGroup({
   };
 
   // A single monitor row's render — closes over this render's own
-  // worktreePaths/toggleGenRef/allOptions/runningFor/etc.
+  // dockControlWorktrees/toggleGenRef/allOptions/runningFor/etc.
   const renderMonitor = (control: DockControl) => {
     const running = runningFor(control);
     const controlShowSelector = showSelector && control.source !== "docker";
@@ -717,7 +750,7 @@ export function DockProjectGroup({
     const optionValues = new Set(allOptions.map((o) => o.value));
     const selectedValue = resolveSelectedValue({
       running,
-      storedValue: worktreePaths[control.id],
+      storedValue: dockControlWorktrees?.[control.id],
       optionValues,
       mainCheckoutPath: mainCheckout?.path,
       controlCwd: control.cwd,
@@ -859,7 +892,7 @@ export function DockProjectGroup({
     };
 
     const onWorktreeChange = (newValue: string) => {
-      setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
+      useDashboardStore.getState().setDockControlWorktree?.(projectId, control.id, newValue);
       if (running) {
         disarmKill(control.id);
         bumpToggleGen(control.id);

@@ -754,6 +754,11 @@ export interface UiSlice {
   triggerPanelHighlight: (id: string) => void;
   activePanelId: string | null;
   setActivePanelId: (id: string | null) => void;
+  /** Issue #3230 — per-project, per-control selected worktree/branch value
+   *  for Dock monitors, persisted in localStorage so stopping a control,
+   *  remounting the Dock, or reloading the page keeps the selection. */
+  dockControlWorktrees: Record<string, Record<string, string>>;
+  setDockControlWorktree: (projectId: number, controlId: string, value: string) => void;
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
   // falling back to first-available/create-default when that happens. Kept

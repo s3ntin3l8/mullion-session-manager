@@ -125,6 +125,12 @@ shows a branch selector the first time you start the monitor. You can:
   Preview worktrees are cleaned up when you switch branches or toggle the
   monitor off.
 
+The selected branch or worktree is remembered per control in the browser:
+stopping a monitor (including after a Dock remount or page reload, or when
+started externally) keeps that selection rather than resetting to the main
+checkout, falling back to the main checkout only if that branch or worktree is
+no longer available.
+
 If you want the preview worktree to stay in sync with commits an agent makes
 in the main checkout, set `"worktreeRefresh": true` on the control (or enable
 "Refresh worktree on agent commits" in Settings → Dock). The backend polls

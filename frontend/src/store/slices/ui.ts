@@ -10,10 +10,12 @@ import {
   readString,
   removeItem,
   writeBool,
+  writeJSON,
   writeMutedSessionIds,
   writeNumber,
   writeString,
 } from "../../lib/persistedState.js";
+import { isDockPreviewPath } from "../../dock/dockHelpers.js";
 import {
   DEFAULT_RIGHT_SIDEBAR_VIEW,
   FALLBACK_TASK_MASTER_ENV,
@@ -23,6 +25,7 @@ import {
 import {
   clampRightSidebarWidth,
   readStoredActiveWorkspaceId,
+  readStoredDockControlWorktrees,
   readStoredHierarchicalView,
   readStoredRightSidebarWidth,
   readStoredSidebarWidth,
@@ -247,6 +250,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     highlightedPanelId: null,
     activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
+    dockControlWorktrees: readStoredDockControlWorktrees(),
     dockConfigRefreshTrigger: 0,
     currentVersion: null,
     updateCheck: null,
@@ -273,6 +277,22 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
 
     setActivePanelId: (id) => set({ activePanelId: id }),
+
+    setDockControlWorktree: (projectId, controlId, value) => {
+      if (!value || isDockPreviewPath(value)) return;
+      const projectKey = String(projectId);
+      const current = get().dockControlWorktrees[projectKey]?.[controlId];
+      if (current === value) return;
+      const next: Record<string, Record<string, string>> = {
+        ...get().dockControlWorktrees,
+        [projectKey]: {
+          ...get().dockControlWorktrees[projectKey],
+          [controlId]: value,
+        },
+      };
+      writeJSON(STORAGE_KEYS.dockControlWorktrees, next);
+      set({ dockControlWorktrees: next });
+    },
 
     setActiveWorkspaceId: (id) => {
       set({ activeWorkspaceId: id });

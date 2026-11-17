@@ -150,6 +150,24 @@ export function resolveSelectedValue(params: {
 }
 
 /**
+ * Extracts the selector value to remember from a running dock session, or
+ * `null` when the session does not yet resolve to a valid, non-preview
+ * option (e.g., a preview session whose `branch:<name>` option is not in
+ * `optionValues` because `gitRefs` hasn't loaded or the branch was deleted).
+ * Never returns a dock-preview worktree path (`isDockPreviewPath`).
+ */
+export function resolveRememberedValueFromRunning(
+  running: Session | undefined,
+  optionValues: Set<string>,
+): string | null {
+  if (!running) return null;
+  const previewValue = running.previewBranch ? `branch:${running.previewBranch}` : null;
+  if (previewValue && optionValues.has(previewValue)) return previewValue;
+  if (running.cwd && !isDockPreviewPath(running.cwd)) return running.cwd;
+  return null;
+}
+
+/**
  * A stable session identity for a discovered Docker log-stream control,
  * persisted as the session's own `name` (PR3 of
  * .claude/plans/can-you-investigate-our-silly-lark.md). `control.command`
