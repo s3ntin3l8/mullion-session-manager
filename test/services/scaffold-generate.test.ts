@@ -6,6 +6,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { gitEnv } from "../../src/services/git-env.js";
+import { fixtureGit as git, initFixtureRepo as initRepo } from "../helpers/git-fixture-repo.js";
 import { LOCAL_HOST_ID } from "../../src/services/host-registry.js";
 import {
   buildGenerationPrompt,
@@ -67,18 +68,6 @@ function probeBwrapUsableSync(): boolean {
   }
 }
 const describeIfBwrap = probeBwrapUsableSync() ? describe : describe.skip;
-
-function git(cwd: string, args: string[]) {
-  execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
-}
-
-function initRepo(cwd: string) {
-  fs.mkdirSync(cwd, { recursive: true });
-  git(cwd, ["init", "-b", "main"]);
-  fs.writeFileSync(path.join(cwd, "README.md"), "# test repo\n");
-  git(cwd, ["add", "-A"]);
-  git(cwd, ["commit", "-m", "initial commit", "--no-verify"]);
-}
 
 function validOutput(slug: string, extra = ""): string {
   return (
