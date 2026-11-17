@@ -153,8 +153,8 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
           // forwarder's retry sequence takes at most ~97s in the worst case
           // (67s of waiting between its six attempts, plus up to 5s for each
           // attempt itself — see STOP_RETRY_DELAYS_MS in
-          // src/hooks/forwarder.mjs). An agent that killed the hook at 10s
-          // would cut that sequence short and lose the Stop exactly as
+          // src/hooks/forwarder-delivery.mjs). An agent that killed the hook
+          // at 10s would cut that sequence short and lose the Stop exactly as
           // before, so the timeout has to sit above the retry bound.
           timeout: 120,
         },

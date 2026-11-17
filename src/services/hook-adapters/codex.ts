@@ -172,10 +172,10 @@ const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 // then looks unfinished until its budget expires). The forwarder's own
 // retry sequence takes at most ~97s in the worst case (67s of waiting between
 // its six attempts, plus up to 5s for each attempt itself — see
-// STOP_RETRY_DELAYS_MS in src/hooks/forwarder.mjs), so the hook timeout has
-// to sit above that bound — an agent that killed the hook at its own 10s
-// timeout would cut the retry sequence short and lose the Stop exactly as
-// before.
+// STOP_RETRY_DELAYS_MS in src/hooks/forwarder-delivery.mjs), so the hook
+// timeout has to sit above that bound — an agent that killed the hook at its
+// own 10s timeout would cut the retry sequence short and lose the Stop
+// exactly as before.
 const STOP_HOOK_TIMEOUT_SECONDS = 120;
 
 function escapeRegExp(value: string): string {

@@ -340,9 +340,9 @@ describe("forwarder.mjs (issue #174)", () => {
         // Issue #3174 — a Stop is now retried, and a socket that is not there
         // at all is exactly the case that earns a retry (nothing was
         // written, so nothing can have landed). The production bound is ~97s
-        // in the worst case (STOP_RETRY_DELAYS_MS in src/hooks/forwarder.mjs);
-        // the test hook shortens it so this suite does not sit through the
-        // whole bound.
+        // in the worst case (STOP_RETRY_DELAYS_MS in
+        // src/hooks/forwarder-delivery.mjs); the test hook shortens it so
+        // this suite does not sit through the whole bound.
         MULLION_FORWARDER_STOP_RETRY_DELAYS_MS: "10,20,30",
       },
       "{}",

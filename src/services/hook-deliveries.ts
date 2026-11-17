@@ -38,9 +38,9 @@
 
 /** How long a delivery id stays on the ledger. Comfortably longer than the
  * forwarder's own retry bound (~97s in the worst case, see
- * STOP_RETRY_DELAYS_MS in src/hooks/forwarder.mjs), so a retry can never be
- * mistaken for a first attempt — and short enough that a session's ledger
- * does not grow without bound over a long-lived session's lifetime. */
+ * STOP_RETRY_DELAYS_MS in src/hooks/forwarder-delivery.mjs), so a retry can
+ * never be mistaken for a first attempt — and short enough that a session's
+ * ledger does not grow without bound over a long-lived session's lifetime. */
 const DEFAULT_TTL_MS = 5 * 60_000;
 
 /** How many delivery keys one session may hold. A `Stop` delivery carries
