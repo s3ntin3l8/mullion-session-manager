@@ -62,13 +62,8 @@ import {
   resolveSeedDelivered,
   workerAgentPinned,
 } from "./task-agent-resolve.js";
-import {
-  resolveCliModel,
-  resolveClaudeSmallModel,
-  resolveOpenCodeModel,
-  resolveOpenCodeSmallModel,
-} from "./task-model-resolve.js";
-import { commandAgentBin, commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
+import { resolveOpenCodeModel, resolveWorkerSpawnModels } from "./task-model-resolve.js";
+import { commandAgentBin, commandIsOpencode } from "./hook-adapters/index.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
@@ -902,30 +897,7 @@ export async function dispatchClaimedTask(
           )
         : undefined,
     });
-    const cliModelAgent = commandModelCli(command);
-    const model = commandIsOpencode(command)
-      ? (resolveOpenCodeModel(app, {
-          taskModel: task.modelOverride ?? null,
-          issueBody: task.body,
-          role: "implementer",
-        }) ?? undefined)
-      : cliModelAgent !== null
-        ? (resolveCliModel(app, cliModelAgent, {
-            taskModel: task.modelOverride ?? null,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
-    const smallModel = commandIsOpencode(command)
-      ? (resolveOpenCodeSmallModel(app, {
-          taskSmallModel: task.smallModelOverride ?? null,
-          issueBody: task.body,
-        }) ?? undefined)
-      : cliModelAgent === "claude-code"
-        ? (resolveClaudeSmallModel(app, {
-            taskSmallModel: task.smallModelOverride ?? null,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
+    const { model, smallModel } = resolveWorkerSpawnModels(app, command, task);
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
@@ -1640,30 +1612,11 @@ export async function dispatchQueuedRetry(
     // Issue #2491 — the same resolution as the claim spawn, so a model picked
     // after the failure reaches the retried worker (and `tasks.model` records
     // what this attempt ran with).
-    const cliModelAgent = commandModelCli(command);
-    const model = commandIsOpencode(command)
-      ? (resolveOpenCodeModel(app, {
-          taskModel: modelOverride,
-          issueBody: task.body,
-          role: "implementer",
-        }) ?? undefined)
-      : cliModelAgent !== null
-        ? (resolveCliModel(app, cliModelAgent, {
-            taskModel: modelOverride,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
-    const smallModel = commandIsOpencode(command)
-      ? (resolveOpenCodeSmallModel(app, {
-          taskSmallModel: smallModelOverride,
-          issueBody: task.body,
-        }) ?? undefined)
-      : cliModelAgent === "claude-code"
-        ? (resolveClaudeSmallModel(app, {
-            taskSmallModel: smallModelOverride,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
+    const { model, smallModel } = resolveWorkerSpawnModels(app, command, {
+      modelOverride,
+      smallModelOverride,
+      body: task.body,
+    });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,

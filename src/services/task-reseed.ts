@@ -12,6 +12,7 @@ import { sessions, tasks } from "../db/schema.js";
 import type { projects } from "../db/schema.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { resolveWorkerSpawnModels } from "./task-model-resolve.js";
 import { resolveBackend } from "./session-backend.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
@@ -301,6 +302,9 @@ export async function reseedTaskIfSessionExited(
     // placed on, so the re-seed joins that host.
     unattended: true,
     hostId: workerHostId,
+    // The re-seed is the same worker, so it keeps the model the claim chose;
+    // without this the CLI falls back to its own default (agy: Argon).
+    ...resolveWorkerSpawnModels(app, task.agentCommand, task),
   });
   if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
     // #2637 — the spawn may have landed: createSessionRecord kept the row. Bind
