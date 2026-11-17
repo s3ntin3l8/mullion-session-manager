@@ -556,6 +556,11 @@ export`/`import --standalone`, re-keying the imported session to the
     reattach, port allocation, mDNS discovery — and its scope-naming/
     marker-file/liveness plumbing, deliberately a separate implementation
     from `pty-manager`/`session-process`, not a generalization of them),
+    and `device-drivers/` (the platform-neutral `DeviceDriver` seam the
+    device routes call: `types.ts` the interface and `DeviceActionError`,
+    `input.ts` the live-input validator, `actions.ts` the one-shot action
+    mapping, `android.ts` the adb+scrcpy implementation — an iOS Simulator
+    driver is the next implementation, #1943),
     `avd-manager` (AVD listing/creation and installed-system-image scanning
     — the provisioning counterpart to `device-manager`'s running half; see
     [`device-panel.md`](device-panel.md)).

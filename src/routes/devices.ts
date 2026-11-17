@@ -13,10 +13,6 @@ import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
 import { isDeviceAction, performDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
 
-// Re-exported for test/routes/devices-extract-png.test.ts; the implementation
-// moved with the rest of the adb shell code into the Android driver.
-export { extractPng } from "../services/device-drivers/android.js";
-
 // CRUD + one-shot action execution for devices (the `devices` DB table's
 // own route — routes/device.ts, singular, is the separate live WS video/
 // input route). Two distinct consumption modes, deliberately kept apart:
@@ -747,9 +743,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         // screenshot, unsupported action) answer as that status; anything
         // else is unexpected and stays a 500.
         if (err instanceof DeviceActionError) {
-          return err.statusCode === 502
-            ? reply.badGateway(err.message)
-            : reply.badRequest(err.message);
+          return reply.send(app.httpErrors.createError(err.statusCode, err.message));
         }
         throw err;
       }

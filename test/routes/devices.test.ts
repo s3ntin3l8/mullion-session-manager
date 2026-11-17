@@ -584,7 +584,7 @@ describe("devices routes", () => {
           },
         };
         // "text" goes through the scrcpy control channel, not the adb shell
-        // (Hermes review — see routes/devices.ts's own shellQuoteArg
+        // (Hermes review — see device-drivers/android.ts's own shellQuoteArg
         // comment) — `controller` is a getter derived from `scrcpyClient`.
         const injectText = vi.fn().mockResolvedValue(undefined);
         (device as unknown as { scrcpyClient: unknown }).scrcpyClient = {

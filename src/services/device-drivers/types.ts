@@ -131,10 +131,11 @@ export type DeviceActionResult =
   | { text: string | null };
 
 /** A failure a driver wants answered as a specific 4xx/5xx with a clear
- * message, as opposed to an unexpected error (which stays a 500). */
+ * message, as opposed to an unexpected error (which stays a 500). The route
+ * answers exactly this status, so a driver can use 404/409/… as it needs. */
 export class DeviceActionError extends Error {
   constructor(
-    readonly statusCode: 400 | 502,
+    readonly statusCode: number,
     message: string,
   ) {
     super(message);
