@@ -144,7 +144,7 @@ export interface TaskHostChip {
  * Null on an install with no remote hosts.
  */
 export function describeTaskHost(
-  task: { placementRequirement: string | null },
+  task: { placementRequirement: string | null; sessionId?: number | null },
   workerSession: { resolvedHostId: string; placementReason: string | null } | null | undefined,
   projectHostId: string | null | undefined,
   hosts: readonly Host[],
@@ -160,6 +160,12 @@ export function describeTaskHost(
     return badge
       ? { label: `on ${badge.name}`, title: badge.title }
       : { label: "on this machine", title: "Runs on this machine" };
+  }
+
+  // A claimed task's missing session cannot tell us where it ran. Do not
+  // present the pre-claim plan as its actual host after the session is reaped.
+  if (task.sessionId != null) {
+    return { label: "unknown (session ended)", title: "The worker session is no longer known" };
   }
 
   const req = parseRequirement(task.placementRequirement);

@@ -138,6 +138,17 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
     ).toBe("on this machine");
   });
 
+  it("does not reuse the placement plan when the claimed session is gone", () => {
+    const chip = describeTaskHost(
+      { sessionId: 42, placementRequirement: '{"platform":"darwin"}' },
+      undefined,
+      "mac-mini",
+      [local, mini],
+    );
+    expect(chip?.label).toBe("unknown (session ended)");
+    expect(chip?.title).toBe("The worker session is no longer known");
+  });
+
   it("describes a combined requirement, falling back to the raw host id", () => {
     const chip = describeTaskHost(
       { placementRequirement: '{"hostId":"gone","platform":"linux"}' },

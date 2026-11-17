@@ -3,6 +3,7 @@ import { api, normalizeAgentId } from "../api/index.js";
 import type { Launcher, Task } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
 import { useAsyncData } from "../hooks/useAsyncData.js";
+import { describeTaskHost } from "../lib/hostBadge.js";
 import { resolvedDefaultModel } from "../lib/taskModelDefault.js";
 import { commandModelCli } from "../models/modelCatalogs.js";
 import {
@@ -51,6 +52,10 @@ function SourceTag({ source }: { source: Source }) {
 export function TaskAgents({ task }: { task: Task }) {
   const settings = useDashboardStore((s) => s.settings);
   const projects = useDashboardStore((s) => s.projects);
+  const hosts = useDashboardStore((s) => s.hosts);
+  const workerSession = useDashboardStore((s) =>
+    s.sessions.find((session) => session.id === task.sessionId),
+  );
   const updateTask = useDashboardStore((s) => s.updateTask);
   const [open, setOpen] = useState(false);
   const editRef = useRef<HTMLButtonElement>(null);
@@ -83,6 +88,10 @@ export function TaskAgents({ task }: { task: Task }) {
   );
 
   const project = projects?.find((p) => p.id === task.projectId);
+  const host = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []) ?? {
+    label: "this machine",
+    title: "Runs on this machine",
+  };
   const projectDefaultAgent =
     project?.defaultAgent || settings?.taskMaster?.defaultAgent || "claude";
   const projectDefaultReviewAgent =
@@ -160,6 +169,10 @@ export function TaskAgents({ task }: { task: Task }) {
             {reviewerName}
             {reviewerModel ? ` · ${reviewerModel}` : ""}{" "}
             <SourceTag source={sourceOf(task.reviewAgent, task.issueReviewAgent)} />
+          </dd>
+          <dt>Host</dt>
+          <dd title={host.title}>
+            {host.label === "on this machine" ? "this machine" : host.label}
           </dd>
         </dl>
       )}
