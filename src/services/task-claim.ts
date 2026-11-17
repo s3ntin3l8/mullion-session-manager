@@ -1146,7 +1146,15 @@ export type RetryTaskOutcome =
         // preserved branch lives there and is not on origin). The task stays
         // `claimed` and is looked at again on the next sweep; it is NOT
         // failed after 6h (the give-up does not apply to this wait).
-        | "retry-waiting";
+        | "retry-waiting"
+        // Issue #3194 — a RE-PLACED retry whose checkout could not be prepared
+        // on the replacement host (the clone failed). This is the ONE
+        // failure here that does NOT fail the row: the retry stays `claimed`
+        // and the next sweep tries the clone again — so the 6-hour give-up is
+        // what ends it (the branch is on origin, so failing the task frees
+        // something). It is its own reason, not "worktree-failed", because
+        // that one comes from the RESUME and always fails the row.
+        | "checkout-failed";
       detail?: string;
       /** Only set for "cap" — mirrors claimTask's own shape. */
       limit?: number;
@@ -1314,11 +1322,16 @@ export async function dispatchQueuedRetry(
     const failedJob = takeFailedMaterialize(project.id, workerHostId);
     if (failedJob !== null) {
       const detail = `could not prepare a checkout on ${workerHostId}: ${failedJob.detail ?? "the clone failed"}`;
-      app.db
+      const written = app.db
         .update(tasks)
         .set({
           failureReason: detail,
-          dispatchFailingSince: new Date(),
+          // Issue #3194 — the failure clock SURVIVES the attempt, exactly like
+          // the fresh-claim path's own `failingSince ?? new Date()` above: a
+          // fresh `new Date()` here would restart the 6-hour bound on every
+          // sweep, and a host that cannot clone would be asked to clone again
+          // for six hours without the retry ever being given up on.
+          dispatchFailingSince: task.dispatchFailingSince ?? new Date(),
           dispatchHeld: false,
           // The retry is being RE-PLACED, not waiting for its original host:
           // the branch is on origin (that is the only reason it may leave the
@@ -1333,7 +1346,16 @@ export async function dispatchQueuedRetry(
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
         .run();
       app.log.warn({ taskId, hostId: workerHostId }, `task retry: ${detail}`);
-      return { ok: false, reason: "worktree-failed", detail };
+      if (written.changes === 0) {
+        // The row left the queue while the clone was failing (cancelled,
+        // deleted, or dispatched by someone else): there is nothing left to
+        // wait for, and the sweep must not keep a backoff for it.
+        return { ok: false, reason: "not-queued" };
+      }
+      // The row stays `claimed` and the next sweep tries the clone again, so
+      // this is a WAIT, not a failure — the sweep gives up on it after 6h
+      // (task-dispatch.ts), like every other placement wait.
+      return { ok: false, reason: "checkout-failed", detail };
     }
     startMaterialize(app, project.id, workerHostId);
     // This wait is NOT about the original host — the branch is on origin, so

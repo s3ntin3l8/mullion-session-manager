@@ -378,6 +378,17 @@ waiting for a free concurrency slot. It never holds a session; see the
      longer be on `origin`, this host may hold commits `origin` does not
      have, or it may already have a checkout of that branch. It never
      continues the task from an older commit;
+
+     a checkout that cannot be prepared on the replacement host (the clone
+     fails) leaves the retry **queued**, with the reason on the card, and
+     the clone is tried again until the ordinary 6-hour give-up ends it
+     (see [A queued task that cannot
+     dispatch](#a-queued-task-that-cannot-dispatch)). Nothing is stranded
+     on the original host in that wait — the branch is on `origin`, which
+     is the only reason the retry may leave it — so failing the task frees
+     something, and the wait offers no **Start fresh**: the retry is not
+     waiting for a host, and the branch it resumes is the one on `origin`;
+
   3. **otherwise the retry waits** for its original host: the card and the
      task sidebar show the reason (naming the host and its real state —
      offline, parked, or no longer eligible for the task's requirement — and

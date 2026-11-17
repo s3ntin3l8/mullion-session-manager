@@ -199,10 +199,51 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // bound to every other retry wait — a checkout being prepared on the
       // replacement host, say, where nothing is stranded on the original
       // host — exactly like every other placement wait.
-      giveUpIfOverdue(app, taskId, now);
+      //
+      // A give-up ends the row's queued spell, so the backoff goes with it:
+      // a leftover entry would delay the operator's next manual Retry of this
+      // task by up to an hour.
+      if (giveUpIfOverdue(app, taskId, now)) {
+        clearDispatchBackoff(taskId);
+      }
+      continue;
+    }
+    if (outcome.reason === "checkout-failed") {
+      // Issue #3194 — a RE-PLACED retry whose checkout could not be prepared
+      // (the clone on the replacement host failed). This is the ONE
+      // queued-retry failure that does not fail the row: it stays `claimed`
+      // and the next sweep tries the clone again — so the 6-hour give-up is
+      // the only thing that ends it, and it has to be evaluated HERE (the
+      // generic queued-retry branch below never reaches it).
+      //
+      // The clock it reads survives the attempts: task-claim.ts's own failure
+      // write KEEPS the original `dispatchFailingSince` (exactly like the
+      // fresh-claim path), so the bound accumulates over the repeated clone
+      // attempts instead of restarting on every sweep.
+      //
+      // Nothing is stranded on the original host here — the branch is on
+      // origin, which is the only reason the retry may leave it — so this
+      // wait keeps the give-up, like every other placement wait.
+      if (giveUpIfOverdue(app, taskId, now)) {
+        clearDispatchBackoff(taskId);
+        continue;
+      }
+      // The clone attempts are spaced out like every other failed dispatch:
+      // a host that cannot clone would otherwise be asked to clone again on
+      // every sweep for the whole six hours.
+      recordDispatchFailure(taskId, now);
+      app.log.info(
+        { taskId, reason: outcome.reason, detail: outcome.detail },
+        "[task-dispatch] queued retry could not prepare its checkout — the retry stays queued",
+      );
       continue;
     }
     if (resumeQueued && outcome.reason !== "not-queued" && outcome.reason !== "not-found") {
+      // Every remaining queued-retry failure fails the row where it happens
+      // (dispatchQueuedRetry's own release() / failQueuedTask), so there is
+      // nothing pending — and a backoff left over from an earlier attempt
+      // must not delay the operator's NEXT manual Retry of this task.
+      clearDispatchBackoff(taskId);
       app.log.info(
         { taskId, reason: outcome.reason, detail: outcome.detail },
         "[task-dispatch] queued retry did not start, task failed (no retry pending)",

@@ -60,6 +60,8 @@ const sessionBackendModule = await import("../../src/services/session-backend.js
 const hostGitModule = await import("../../src/services/host-git.js");
 const githubIntegrationModule = await import("../../src/services/github-integration.js");
 const githubRequestModule = await import("../../src/services/github-request.js");
+const projectOriginModule = await import("../../src/services/project-origin.js");
+const checkoutMaterializeModule = await import("../../src/services/checkout-materialize.js");
 const { GitHubApiError } = await import("../../src/services/github-fetch.js");
 
 const tmpDb = path.join(os.tmpdir(), `tasks-retry-replace-test-${process.pid}.db`);
@@ -174,6 +176,13 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       replacementOnline?: boolean;
       branchOnOrigin?: boolean;
       replacementPlatform?: string;
+      /**
+       * The replacement host has NO checkout of the project yet, so the retry
+       * has to clone one there first (the `needsCheckout` placement). The
+       * project then lives on the ORIGINAL worker host — the one that holds
+       * the preserved branch — and the replacement is not mapped.
+       */
+      replacementNeedsCheckout?: boolean;
     } = {},
   ) {
     const app = await buildApp();
@@ -191,14 +200,17 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
     const linux = await addHost(app, `${name}-linux`, opts.replacementPlatform ?? "linux", {
       online: opts.replacementOnline !== false,
     });
+    const needsCheckout = opts.replacementNeedsCheckout === true;
     const [project] = app.db
       .insert(projects)
       .values({
         name,
-        cwd: LINUX_CWD,
-        hostId: linux,
+        cwd: needsCheckout ? MAC_CWD : LINUX_CWD,
+        hostId: needsCheckout ? mac : linux,
         placement: "auto",
-        hostCwds: JSON.stringify({ [mac]: MAC_CWD, [linux]: LINUX_CWD }),
+        hostCwds: JSON.stringify(
+          needsCheckout ? { [mac]: MAC_CWD } : { [mac]: MAC_CWD, [linux]: LINUX_CWD },
+        ),
       })
       .returning()
       .all();
@@ -257,6 +269,12 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       }
       return { ref: `refs/heads/${BRANCH}` } as never;
     });
+    if (needsCheckout) {
+      // A GIT project — that is what makes a host WITHOUT a checkout of it
+      // cloneable at all (the `needsCheckout` placement). The origin is
+      // stubbed here, never assumed, exactly like the GitHub helpers above.
+      vi.spyOn(projectOriginModule, "cachedProjectOrigin").mockReturnValue("github.com/o/r");
+    }
 
     return { app, mac, linux, task, macBackend, linuxBackend };
   }
@@ -324,6 +342,113 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
         .orderBy(desc(sessions.id))
         .all();
       expect(session?.hostId).toBe(linux);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps the preserved branch when the replacement's checkout could not be prepared", async () => {
+    const { app, task } = await setup("retry-replace-checkout", {
+      originalOnline: false,
+      branchOnOrigin: true,
+      // The replacement host has no checkout of the project yet: the retry
+      // has to clone one there before it can resume the branch from origin.
+      replacementNeedsCheckout: true,
+    });
+    try {
+      // The clone on the replacement host fails.
+      vi.spyOn(checkoutMaterializeModule, "startMaterialize").mockReturnValue({
+        projectId: 0,
+        hostId: "",
+        state: "cloning",
+        startedAt: Date.now(),
+      });
+      vi.spyOn(checkoutMaterializeModule, "takeFailedMaterialize").mockReturnValue({
+        projectId: 0,
+        hostId: "",
+        state: "failed",
+        reason: "failed",
+        detail: "could not reach the host (unreachable)",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+      });
+
+      await retryTask(app, task.id);
+      await vi.waitFor(() => {
+        expect(getTask(app, task.id).failureReason).toContain("could not prepare a checkout");
+      });
+
+      const row = getTask(app, task.id);
+      // The clone failed, but the retry is NOT failed: it stays queued and the
+      // next sweep tries the clone again (the reason is on the card).
+      expect(row.status).toBe("claimed");
+      expect(row.resumeQueued).toBe(true);
+      expect(row.failureReason).toContain("could not prepare a checkout");
+      // The PRESERVED branch survives the failure — a later Retry resumes it
+      // instead of cutting a brand-new one.
+      expect(row.branchName).toBe(BRANCH);
+      expect(row.worktreePath).toBe(
+        `${MAC_CWD}/.mullion-worktrees/mullion-task-9001-retry-replaces`,
+      );
+      // The retry is not waiting for a HOST: nothing is stranded on the
+      // original one (the branch is on origin), so the card offers no "Start
+      // fresh" and this wait keeps the 6-hour give-up.
+      expect(row.retryHostId).toBeNull();
+      expect(row.retryStrandedOnHost).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("gives up a re-placed retry whose checkout could not be prepared after 6 hours", async () => {
+    const { app, task } = await setup("retry-replace-checkout-give-up", {
+      originalOnline: false,
+      branchOnOrigin: true,
+      replacementNeedsCheckout: true,
+    });
+    try {
+      vi.spyOn(checkoutMaterializeModule, "startMaterialize").mockReturnValue({
+        projectId: 0,
+        hostId: "",
+        state: "cloning",
+        startedAt: Date.now(),
+      });
+      vi.spyOn(checkoutMaterializeModule, "takeFailedMaterialize").mockReturnValue({
+        projectId: 0,
+        hostId: "",
+        state: "failed",
+        reason: "failed",
+        detail: "could not reach the host (unreachable)",
+        startedAt: Date.now(),
+        finishedAt: Date.now(),
+      });
+
+      await retryTask(app, task.id);
+      await vi.waitFor(() => {
+        expect(getTask(app, task.id).failureReason).toContain("could not prepare a checkout");
+      });
+
+      // The wait has been running for more than 6 hours. The failed clone
+      // attempt must NOT restart that clock — otherwise the retry would
+      // re-clone forever and never be given up on.
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000) })
+        .where(eq(tasks.id, task.id))
+        .run();
+      // The dispatch backoff is process-local and spaces the clone attempts
+      // out (five minutes and up); the give-up is what this test is about, so
+      // it is reset to reach it.
+      resetDispatchBackoffForTests();
+
+      await dispatchQueuedTasks(app);
+
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("gave up after 6h");
+      // The preserved branch is kept: a later Retry resumes that branch
+      // instead of cutting a brand-new one.
+      expect(row.branchName).toBe(BRANCH);
     } finally {
       await app.close();
     }
