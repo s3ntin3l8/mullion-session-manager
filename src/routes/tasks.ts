@@ -50,6 +50,7 @@ import { deliverRejectFeedback } from "../services/task-reject.js";
 import { readLiveWorkerState } from "../services/task-reseed.js";
 import { deleteTaskBranch, type TaskBranchDelete } from "../services/task-branch-delete.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
+import { resolveCleanupTarget } from "../services/task-cleanup.js";
 import { isOutcomeUnknown, unknownOutcomeText } from "../services/remote-host-errors.js";
 import { resolveGitHubToken, getToken, getIntegration } from "../services/github-integration.js";
 import {
@@ -686,11 +687,11 @@ export async function tasksRoute(app: FastifyInstance) {
   //      whatever's there, and `removeWorktreeIfClean` would just report
   //      "dirty" and leave it.
   //   3. branch delete, forced, last — once nothing has it checked out.
-  // Routed through the project's SessionBackend (not the local git-worktree/
-  // git-branch-delete functions directly) so a remote-hosted project's
-  // worktree and branch — which live on that host's own filesystem — are
-  // actually cleaned up too, matching attemptBranchDeleteForClearDone's own
-  // reasoning above. Every step here is best-effort and reported, never
+  // Both halves resolve the WORKER host and that host's project path together
+  // (`resolveCleanupTarget`), not the project's own host: a remote-placed
+  // task's worktree and branch live in the worker's clone. When that host has
+  // no mapped path, both are skipped — never force-removed against a guessed
+  // `project.cwd`. Every step here is best-effort and reported, never
   // fatal — by the time this runs the task's row (and, for a GitHub-linked
   // task, its label) are already gone, so a leftover worktree/branch/session
   // is a cleanup gap, not a correctness problem.
@@ -711,14 +712,20 @@ export async function tasksRoute(app: FastifyInstance) {
       }
     }
 
+    // Issue #3193 — resolve once and use the same target for both halves. A
+    // task can have a branch with no worktree (or the reverse); either one is
+    // enough to need the worker host's path.
+    const target =
+      task.worktreePath || task.branchName ? resolveCleanupTarget(app, task, project) : null;
+
     let worktreeRemoved = false;
-    if (task.worktreePath) {
+    if (task.worktreePath && target) {
       try {
         worktreeRemoved = await removeCheckoutForced(app, {
           projectId: project.id,
-          hostId: project.hostId,
+          hostId: target.hostId,
           worktreePath: task.worktreePath,
-          parentCwd: project.cwd,
+          parentCwd: target.cwdOnHost,
         });
       } catch (err) {
         app.log.warn(
@@ -731,14 +738,28 @@ export async function tasksRoute(app: FastifyInstance) {
 
     let branchDeleted = false;
     if (task.branchName) {
-      const result = await deleteTaskBranch(app, project, task.branchName);
-      branchDeleted = result.deleted;
-      if (!result.deleted) {
+      if (!target) {
+        // resolveCleanupTarget already warned. Do not fall back to project.cwd:
+        // that clone does not hold this branch, and a force-delete there would
+        // be a guess.
         app.log.warn(
-          { taskId: task.id, branch: task.branchName, reason: result.reason },
-          "abandon: deleteBranch did not delete",
+          { taskId: task.id, branch: task.branchName },
+          "abandon: branch left in place — no path for this project on the worker host",
         );
-        if (result.reason === "outcome-unknown") unknown.push("the branch delete");
+      } else {
+        const result = await deleteTaskBranch(
+          app,
+          { hostId: target.hostId, cwd: target.cwdOnHost },
+          task.branchName,
+        );
+        branchDeleted = result.deleted;
+        if (!result.deleted) {
+          app.log.warn(
+            { taskId: task.id, branch: task.branchName, reason: result.reason },
+            "abandon: deleteBranch did not delete",
+          );
+          if (result.reason === "outcome-unknown") unknown.push("the branch delete");
+        }
       }
     }
 
@@ -887,7 +908,17 @@ export async function tasksRoute(app: FastifyInstance) {
     if (!merged) {
       return { id: task.id, branch, deleted: false, reason: "not-merged" };
     }
-    return { id: task.id, branch, ...(await deleteTaskBranch(app, project, branch)) };
+    // Same target Abandon uses: a placed task's branch is in the worker's
+    // clone. No mapped path means skip, not a force-delete against project.cwd.
+    const target = resolveCleanupTarget(app, task, project);
+    if (!target) {
+      return { id: task.id, branch, deleted: false, reason: "no-host-path" };
+    }
+    return {
+      id: task.id,
+      branch,
+      ...(await deleteTaskBranch(app, { hostId: target.hostId, cwd: target.cwdOnHost }, branch)),
+    };
   }
 
   // #746 — bulk companion to DELETE /api/tasks/:id above, scoped to `done`

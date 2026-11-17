@@ -175,4 +175,78 @@ describe("budget failure keeps the worker's scrollback tail", () => {
     expect(terminate).toHaveBeenCalledWith(String(sessionId));
     await app.close();
   });
+
+  // Issue #3193 — a budget failure must remove the worktree on the host the
+  // worker actually ran on, using that host's project path (projects.hostCwds),
+  // never the primary's project.cwd. The #3193 incident sent the primary path
+  // to a macbook agent, which rejected it and left the worktree behind.
+  it("removes a budget-failed remote worker's worktree with the worker host's mapped path, never the primary's cwd (#3193)", async () => {
+    const app = await buildApp();
+    const projectRes = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { allowDuplicate: true, createDir: true, name: "budget-remote-p", cwd: "/tmp" },
+    });
+    const projectId = projectRes.json().id as number;
+    const hostRes = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const remoteHostId = hostRes.json().id as string;
+    const remoteCwd = "/Users/bjoern/Projects/branchdam-mobile";
+    const worktreePath = `${remoteCwd}/.mullion-worktrees/mullion-task-1`;
+
+    const { sessions, projects } = await import("../../src/db/schema.js");
+    const [session] = app.db
+      .insert(sessions)
+      .values({ projectId, command: "claude", hostId: remoteHostId, status: "active" })
+      .returning()
+      .all();
+    const [row] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "t",
+        status: "claimed",
+        sessionId: session.id,
+        claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+        worktreePath,
+      })
+      .returning()
+      .all();
+    app.db
+      .update(projects)
+      .set({ hostCwds: JSON.stringify({ [remoteHostId]: remoteCwd }) })
+      .where(eq(projects.id, projectId))
+      .run();
+
+    const sessionBackendModule = await import("../../src/services/session-backend.js");
+    const realResolveBackend = sessionBackendModule.resolveBackend;
+    const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+    const resolveBackendSpy = vi
+      .spyOn(sessionBackendModule, "resolveBackend")
+      .mockImplementation((appArg, hostId) => {
+        const real = realResolveBackend(appArg, hostId);
+        if (hostId !== remoteHostId) return real;
+        return new Proxy(real, {
+          get(target, prop, receiver) {
+            if (prop === "liveStatus") return async () => ({ [session.id]: workingInfo() });
+            if (prop === "getRenderedScrollback") return async () => "tail";
+            if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+            if (prop === "terminate") return async () => undefined;
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+
+    await reconcileTasks(app);
+
+    expect(getTask(app, row.id).status).toBe("failed");
+    expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(worktreePath, remoteCwd);
+    expect(removeWorktreeIfCleanMock.mock.calls[0][1]).not.toBe("/tmp");
+    resolveBackendSpy.mockRestore();
+    await app.close();
+  });
 });

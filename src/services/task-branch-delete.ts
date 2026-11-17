@@ -1,7 +1,9 @@
-// Force-deletes a task's branch on the host that owns the project's clone, for
-// the two callers that clean up after a task (Abandon and clear-done). Routed
-// through the project's SessionBackend, not the local function directly: a
-// remote-hosted project's branch lives on that host's own filesystem.
+// Force-deletes a task's branch in the clone the caller names (`hostId` + `cwd`),
+// for the two callers that clean up after a task (Abandon and clear-done). Those
+// callers pass the worker host's project path (`resolveCleanupTarget`), which is
+// the project's own clone when the worker ran locally — a placed task's branch
+// lives in the worker's clone, not the primary's. Routed through that host's
+// SessionBackend, not the local function directly.
 import type { FastifyInstance } from "fastify";
 import type { projects } from "../db/schema.js";
 import { resolveBackend, unknownOutcomeMessage } from "./session-backend.js";

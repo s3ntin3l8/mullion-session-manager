@@ -828,6 +828,109 @@ describe("reconcileExitedSessions", () => {
       resolveBackendSpy.mockRestore();
     });
 
+    // Issue #3193 — a task whose worker was placed on a remote host keeps its
+    // worktree THERE. The cleanup must send the project's path ON THAT HOST
+    // (projects.hostCwds), never the primary's project.cwd, which the remote
+    // agent does not have.
+    it("removes a task's worktree with the worker host's mapped project path, not the primary's cwd (#3193)", async () => {
+      const app = await openTestApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      const remoteHostId = "remote-cwd-mapped";
+      const remoteCwd = "/Users/bjoern/Projects/branchdam-mobile";
+      const worktreePath = `${remoteCwd}/.mullion-worktrees/mullion-task-1`;
+
+      const { hosts, projects, tasks } = await import("../../src/db/schema.js");
+      app.db
+        .insert(hosts)
+        .values({ id: remoteHostId, name: remoteHostId, baseUrl: "http://127.0.0.1:1" })
+        .run();
+      app.db.update(sessions).set({ hostId: remoteHostId }).where(eq(sessions.id, sessionId)).run();
+      app.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify({ [remoteHostId]: remoteCwd }) })
+        .where(eq(projects.id, projectId))
+        .run();
+      app.db.update(tasks).set({ worktreePath }).where(eq(tasks.id, taskId)).run();
+      mockMasterAlive(app, false);
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          if (hostId !== remoteHostId) return real;
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "liveness") return async () => ({ [sessionId]: "dead" });
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      await reconcileExitedSessions(app);
+
+      // The mapped path as the parent cwd, never the primary's "/tmp".
+      expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(worktreePath, remoteCwd);
+      expect(removeWorktreeIfCleanMock.mock.calls[0][1]).not.toBe("/tmp");
+      resolveBackendSpy.mockRestore();
+    });
+
+    // A host with no mapped path cannot be holding this project's worktree.
+    // Skip the removal with a warning instead of force/clean-removing against
+    // a guessed path the agent there will reject (the #3193 incident).
+    it("skips the worktree removal with a warning when the worker host has no mapped project path (#3193)", async () => {
+      const app = await openTestApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      const remoteHostId = "remote-cwd-unmapped";
+      const worktreePath = `/Users/bjoern/Projects/unknown/.mullion-worktrees/mullion-task-2`;
+
+      const { hosts, tasks } = await import("../../src/db/schema.js");
+      app.db
+        .insert(hosts)
+        .values({ id: remoteHostId, name: remoteHostId, baseUrl: "http://127.0.0.1:1" })
+        .run();
+      app.db.update(sessions).set({ hostId: remoteHostId }).where(eq(sessions.id, sessionId)).run();
+      // Deliberately no hostCwds entry for remoteHostId.
+      app.db.update(tasks).set({ worktreePath }).where(eq(tasks.id, taskId)).run();
+      mockMasterAlive(app, false);
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          if (hostId !== remoteHostId) return real;
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "liveness") return async () => ({ [sessionId]: "dead" });
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileExitedSessions(app);
+
+      expect(removeWorktreeIfCleanMock).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: remoteHostId }),
+        expect.stringContaining("no path for this project on that host"),
+      );
+      resolveBackendSpy.mockRestore();
+    });
+
     it("still calls syncTaskTransition for a local task (no issueNumber) — the local/GitHub-linked distinction is syncTaskTransition's own job, not duplicated here", async () => {
       const app = await openTestApp();
       const sessionId = await createSession(app);
