@@ -2032,11 +2032,12 @@ click time (`resolveMergeOverrideHead`; it refuses unless GitHub still reports
 `unstable`) and stores it in `mergeOverrideHeadSha`; `classifyMergeReadiness(pr,
 task.mergeOverrideHeadSha)` then reads `unstable` as `clean` while the PR's head
 still equals it, and `mergePullRequest` is called with that head as its `sha`
-guard. The route also refuses (409) unless the checks red on that head would produce
-exactly the recorded hold's text (`isMergeOverridable` reflects the LAST sweep, which
-can describe an older head; an exact match, not a substring test, so a newly red
-`test-node` never passes as the `test-node / lint-and-test` the hold named), so a
-human never overrides a check they were not shown. A newly recorded hold clears an
+guard. The route also refuses (409) unless the recorded hold names exactly the checks red on
+that head (`holdNamesChecks`; `isMergeOverridable` reflects the LAST sweep, which can
+describe an older head). Names must match whole entries with the same count, so a newly
+red `test-node` never passes as the `test-node / lint-and-test` the hold named, while a
+check that rewrote its own summary (a coverage re-upload) still matches; a human never
+overrides a check they were not shown. A newly recorded hold clears an
 armed override too (`recordMergeError`).
 The override covers that commit: it also merges past a non-required check still
 running on it, as `unstable` includes pending ones. A push voids the override,

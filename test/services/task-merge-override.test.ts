@@ -75,7 +75,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks, resetMergeBackoff } = await import("../../src/services/task-reconciler.js");
-const { isMergeOverridable, unstableHeldReason, UNSTABLE_HOLD_PREFIX } =
+const { holdNamesChecks, isMergeOverridable, unstableHeldReason, UNSTABLE_HOLD_PREFIX } =
   await import("../../src/services/task-merge-override.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
@@ -103,6 +103,39 @@ function mockPr(overrides: Partial<Record<string, unknown>> = {}) {
     ...overrides,
   };
 }
+
+describe("holdNamesChecks", () => {
+  const hold = unstableHeldReason([
+    { name: "test-node / lint-and-test", detail: "3 failed" },
+    { name: "codecov/patch" },
+  ]);
+
+  it("matches the same checks whatever their summaries now say, in any order", () => {
+    expect(
+      holdNamesChecks(hold, [{ name: "codecov/patch" }, { name: "test-node / lint-and-test" }]),
+    ).toBe(true);
+  });
+
+  it("refuses a substring of a named check, an extra check, a missing check or a foreign hold", () => {
+    expect(holdNamesChecks(hold, [{ name: "test-node" }, { name: "codecov/patch" }])).toBe(false);
+    expect(holdNamesChecks(hold, [{ name: "test-node / lint-and-test" }])).toBe(false);
+    expect(
+      holdNamesChecks(hold, [
+        { name: "test-node / lint-and-test" },
+        { name: "codecov/patch" },
+        { name: "extra" },
+      ]),
+    ).toBe(false);
+    expect(holdNamesChecks("Required checks are red", [{ name: "x" }])).toBe(false);
+    expect(holdNamesChecks(null, [{ name: "x" }])).toBe(false);
+  });
+
+  it("counts a repeated name once per occurrence", () => {
+    const twice = unstableHeldReason([{ name: "a" }, { name: "a" }]);
+    expect(holdNamesChecks(twice, [{ name: "a" }, { name: "a" }])).toBe(true);
+    expect(holdNamesChecks(twice, [{ name: "a" }, { name: "b" }])).toBe(false);
+  });
+});
 
 describe("unstableHeldReason / isMergeOverridable", () => {
   it("names the red checks and points at Merge anyway", () => {
@@ -265,6 +298,30 @@ describe("Merge anyway", () => {
 
     expect(res.statusCode).toBe(409);
     expect(getTask(app, id).mergeOverrideHeadSha).toBeNull();
+    await app.close();
+  });
+
+  it("the route accepts the same checks when one rewrote its own summary on this head", async () => {
+    const app = await buildApp();
+    const id = await createHeldTask(app, {
+      mergeError: unstableHeldReason([
+        { name: "codecov/patch", detail: "66.66% of diff hit (target 75.00%)" },
+        { name: "dependency-audit" },
+      ]),
+    });
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      {
+        name: "codecov/patch",
+        conclusion: "failure",
+        status: "completed",
+        url: "",
+        detail: "71.40% of diff hit (target 75.00%)",
+      },
+      { name: "dependency-audit", conclusion: "failure", status: "completed", url: "" },
+    ]);
+
+    expect((await postMerge(app, id, true)).statusCode).toBe(200);
+    expect(getTask(app, id).mergeOverrideHeadSha).toBe(HEAD);
     await app.close();
   });
 

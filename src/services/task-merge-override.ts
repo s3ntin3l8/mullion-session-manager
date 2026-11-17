@@ -18,12 +18,38 @@ import { resolveRepoRef } from "./host-git.js";
 /** The `mergeError` the sweep records for an `unstable` PR with named red checks. */
 export const UNSTABLE_HOLD_PREFIX = "Held: a non-required check is red";
 
+const HOLD_SEPARATOR = " — ";
+const HOLD_SUFFIX = '. Fix it, or use "Merge anyway" to override.';
+
 /** The merge sweep's `unstable` message: name the red checks when there are any
  * ("failing or still running" sends a human hunting). */
 export function unstableHeldReason(red: { name: string; detail?: string | null }[]): string {
   if (red.length === 0) return "A non-required check is failing or still running";
   const named = red.map((c) => (c.detail ? `${c.name}: ${c.detail}` : c.name)).join("; ");
-  return `${UNSTABLE_HOLD_PREFIX} — ${named}. Fix it, or use "Merge anyway" to override.`;
+  return `${UNSTABLE_HOLD_PREFIX}${HOLD_SEPARATOR}${named}${HOLD_SUFFIX}`;
+}
+
+/**
+ * Does `mergeError` (an `unstableHeldReason`) name exactly these red checks, by
+ * name? A check's own summary ("66% of diff hit") can change on the same head
+ * (a coverage re-upload), so details are not compared; a name must match a whole
+ * entry, never a substring (`test-node` is not `test-node / lint-and-test`), and
+ * the counts must agree so an extra red check is refused. This reads the format
+ * `unstableHeldReason` writes, which is why it lives beside it.
+ */
+export function holdNamesChecks(mergeError: string | null, red: { name: string }[]): boolean {
+  const start = `${UNSTABLE_HOLD_PREFIX}${HOLD_SEPARATOR}`;
+  if (!mergeError?.startsWith(start) || !mergeError.endsWith(HOLD_SUFFIX)) return false;
+  const entries = mergeError
+    .slice(start.length, mergeError.length - HOLD_SUFFIX.length)
+    .split("; ");
+  if (entries.length !== red.length) return false;
+  for (const check of red) {
+    const i = entries.findIndex((e) => e === check.name || e.startsWith(`${check.name}: `));
+    if (i === -1) return false;
+    entries.splice(i, 1);
+  }
+  return true;
 }
 
 /** A `done` task whose merge is held by named non-required red checks — the only
@@ -64,13 +90,12 @@ export async function resolveMergeOverrideHead(
       };
     }
     // The button reflects the LAST sweep's hold, which may describe an older head:
-    // refuse unless the checks red on THIS head would produce exactly the hold the
-    // human was shown. An exact match, not a substring test: a newly red `test-node`
-    // must not pass as "named" because a hold mentioned `test-node / lint-and-test`.
+    // refuse unless the hold names exactly the checks red on THIS head (see
+    // `holdNamesChecks`: whole names, same count, summaries may have changed).
     const checks = await readPrCheckRuns(app, task, token, repoRef, pr.headSha, "unstable-merge");
     if (!checks.ok) return { refusal: "Could not read the PR's checks from GitHub", status: 502 };
     const red = checks.runs.filter((c) => isRedCheckConclusion(c.conclusion));
-    if (red.length === 0 || task.mergeError !== unstableHeldReason(red)) {
+    if (red.length === 0 || !holdNamesChecks(task.mergeError, red)) {
       return {
         refusal:
           red.length === 0
