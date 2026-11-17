@@ -131,7 +131,7 @@ describe("devices on an agent host (issue #3200)", () => {
   };
 
   const getOrCreateCalls = () =>
-    spies.getOrCreate.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    spies.getOrCreate.mock.calls.map((c: unknown[]) => c[0] as Record<string, unknown>);
   const createDevice = (payload: Record<string, unknown> = {}) =>
     primary.app.inject({
       method: "POST",
@@ -542,7 +542,9 @@ describe("devices on an agent host (issue #3200)", () => {
       const { ws, frames } = await connect(id);
       try {
         // The agent spawned the device for this row (the proxy's REST get-or-create).
-        expect(getOrCreateCalls().every((c) => c.id === String(id))).toBe(true);
+        expect(getOrCreateCalls().every((c: Record<string, unknown>) => c.id === String(id))).toBe(
+          true,
+        );
 
         const payload = new Uint8Array([0, 0, 0, 1, 0x65, 0xaa, 0xbb]);
         for (const l of [...videoListeners]) l({ type: "data", keyframe: true, data: payload });

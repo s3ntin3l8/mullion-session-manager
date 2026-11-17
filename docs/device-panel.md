@@ -341,8 +341,8 @@ A device runs on the host its `devices` row names (`hostId`, default `"local"`).
 `POST /api/devices` takes an optional `hostId` (otherwise the project's host,
 else the primary) and refuses, before inserting a row, a kind that host cannot
 serve: an agent reports the kinds it can run at `GET /internal/devices/kinds`
-(and under `deviceKinds` in `/internal/capabilities`), empty while its own
-`DEVICE_ENABLED` is off, and an agent that predates the route is refused with
+(empty while its own
+`DEVICE_ENABLED` is off); an agent that predates the route is refused with
 "update its agent".
 
 Every route on the primary resolves the row's host through a `DeviceHost`
