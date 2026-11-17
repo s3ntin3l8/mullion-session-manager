@@ -262,7 +262,10 @@ describe("SessionRow row 1 — header: status label", () => {
     const { container, findByText } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
-    const label = await findByText(`Tool failure: ${longDetail}`);
+    // #3286 — the meta line caps the text at 60 characters (the name a
+    // screen reader reads carries the same capped text); the tooltip keeps it all.
+    const label = await findByText(/^Tool failure: Bash: grep .*…$/);
+    expect(label.textContent).toHaveLength(60);
     expect(label).toHaveClass("session-status-label");
     expect(label).toHaveAttribute("title", `Tool failure: ${longDetail}`);
     // Exactly one label span — the overflow guard is CSS (ellipsis), not a

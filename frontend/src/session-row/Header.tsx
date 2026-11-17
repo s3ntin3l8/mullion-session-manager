@@ -146,6 +146,11 @@ export function Header({
           <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
         )}
         {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
+        {/* Whitespace-only text is not painted in a flex row, but it keeps
+            the row's text content as separate words ("fake-agent.sh fix
+            login", not "fake-agent.shfix login"), which is what the row's
+            aria-label is checked against (#3286). Same before the meta line. */}
+        {showAgentFallback && " "}
         {renaming ? (
           <TextInput
             small
@@ -293,7 +298,7 @@ export function Header({
             </ConfirmButton>
           </span>
         )}
-      </div>
+      </div>{" "}
       {metaLine}
     </>
   );

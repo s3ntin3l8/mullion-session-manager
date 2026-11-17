@@ -28,6 +28,7 @@ import {
   type Task,
 } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
+import { expectNameHasVisibleText } from "./test/a11y.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
 // default it to false so the test doesn't need a full store hydrate. Every
@@ -402,7 +403,7 @@ describe("SessionRow", () => {
         />,
       );
       const host = metaLine()?.querySelector(".session-host-badge");
-      expect(host?.textContent).toBe("mac-miniunreachable");
+      expect(host?.textContent).toBe("mac-mini unreachable");
     });
 
     it("shows a parked online host's state", () => {
@@ -498,6 +499,54 @@ describe("SessionRow", () => {
       expect(
         screen.getByRole("button", { name: "Open session fake-agent.sh fix login, Working" }),
       ).toBeInTheDocument();
+    });
+
+    it("keeps the row's visible text a run of its accessible name (label-in-name)", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline", drained: true })];
+      render(
+        <SessionRow
+          session={{
+            ...SESSION,
+            command: "fake-agent.sh",
+            name: "fix login",
+            nameLocked: true,
+            resolvedHostId: "mac-mini",
+            liveBranch: "main",
+          }}
+          project={PROJECT}
+          openInWorkspace
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const row = document.querySelector<HTMLElement>(".session-item")!;
+      // No now line here: its text is not part of the name (it never was).
+      expect(row.querySelector(".session-now-line")).toBeNull();
+      expectNameHasVisibleText(row);
+    });
+
+    it("caps a long status detail on the line and in the name; the tooltip keeps it", () => {
+      const detail = "x".repeat(200);
+      render(
+        <SessionRow
+          session={{
+            ...SESSION,
+            sessionStatus: "exited",
+            sessionStatusSeverity: "gone",
+            sessionStatusDetail: detail,
+          }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const label = document.querySelector(".session-meta-line .session-status-label")!;
+      expect(label.textContent).toHaveLength(60);
+      expect(label.textContent?.endsWith("…")).toBe(true);
+      expect(label.getAttribute("title")).toBe(`exited: ${detail}`);
+      const row = document.querySelector(".session-item")!;
+      expect(row.getAttribute("aria-label")).not.toContain(detail);
+      expect(row.getAttribute("aria-label")).toContain(label.textContent);
     });
 
     it("drops the word 'open' for an open session; the title is heavier and the name says it", () => {

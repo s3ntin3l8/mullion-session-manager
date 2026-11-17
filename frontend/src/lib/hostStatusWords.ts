@@ -13,6 +13,10 @@ const IDLE_PING: PingState = { status: "unknown", lastCheckedAtSnapshot: null };
 // these four.
 const KNOWN_HEALTH = new Set<Host["health"]>(["pending", "online", "degraded", "offline"]);
 
+/** The word for a drained host — Settings calls it "parked". One literal, so
+ * HostStatusLabel and the row's accessible name cannot drift apart. */
+export const PARKED_WORD = "parked";
+
 /** What HostStatusLabel shows for a host: the heartbeat's display, and whether it is parked. */
 export function namedHostStatus(host: Host): {
   display: HostStatusDisplay | null;
@@ -31,6 +35,6 @@ export function namedHostStatus(host: Host): {
  */
 export function hostStatusWords(host: Host): string | null {
   const { display, parked } = namedHostStatus(host);
-  const words = [display?.label, parked ? "parked" : null].filter(Boolean);
+  const words = [display?.label, parked ? PARKED_WORD : null].filter(Boolean);
   return words.length > 0 ? words.join(" ") : null;
 }

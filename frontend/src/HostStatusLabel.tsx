@@ -1,5 +1,5 @@
 import type { Host } from "./api/index.js";
-import { namedHostStatus } from "./lib/hostStatusWords.js";
+import { namedHostStatus, PARKED_WORD } from "./lib/hostStatusWords.js";
 
 /**
  * Issue #1892 — the words Settings → Hosts already shows, next to a host
@@ -28,12 +28,15 @@ export function HostStatusLabel({ host }: { host: Host }) {
           {display.label}
         </span>
       )}
+      {/* Not painted (a flex container), but keeps "unreachable parked" as
+          two words in the text content an accessible name is matched to. */}
+      {display?.label && parked && " "}
       {parked && (
         <span
           className="host-derived-status-parked"
           title="Parked: this host takes no new work. Nothing on it is stopped."
         >
-          parked
+          {PARKED_WORD}
         </span>
       )}
     </span>

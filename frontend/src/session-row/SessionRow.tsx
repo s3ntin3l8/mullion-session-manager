@@ -70,6 +70,9 @@ import { expandedSessionRows, setSessionRowExpanded } from "./expandedSessionRow
 // elsewhere in this codebase).
 
 const FILE_CHANGE_MAX_SHOWN = 5;
+// The longest status text the meta line (and the row's accessible name)
+// carries; the label's tooltip has the rest (#3286).
+const STATUS_LINE_MAX_CHARS = 60;
 
 export function SessionRow({
   session,
@@ -388,6 +391,15 @@ export function SessionRow({
   const showUnknownIndicator = !session.stateRestored && session.alive;
   const showStaleIndicator = session.staleHooks;
   const statusLabelText = formatStatusLabel(presentation, session.sessionStatusDetail);
+  // Issue #3286 — the status word on the meta line, and in the row's
+  // aria-label. A detail can run to 200 characters (a review gate's prompt,
+  // sessionStatus.ts's formatStatusLabel), which a screen reader would read
+  // out in full on every row; the line shows a capped form and the label's
+  // tooltip keeps the whole text.
+  const statusLineText =
+    statusLabelText.length > STATUS_LINE_MAX_CHARS
+      ? `${statusLabelText.slice(0, STATUS_LINE_MAX_CHARS - 1).trimEnd()}…`
+      : statusLabelText;
   // Issue #1727 / roadmap 8.13 — the host THIS session runs on.
   //
   // Quiet by design: a small icon and the host's name, in --dim, and not
@@ -436,13 +448,13 @@ export function SessionRow({
   const metaParts: { key: string; text: string; node: React.ReactNode }[] = [
     {
       key: "status",
-      text: statusLabelText,
+      text: statusLineText,
       node: (
         <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
           {showUnknownIndicator && (
             <span title="Awaiting data… — session state not yet restored after restart">?</span>
           )}
-          {statusLabelText}
+          {statusLineText}
           {showStaleIndicator && (
             <span
               className="session-stale-icon"
@@ -467,6 +479,9 @@ export function SessionRow({
         <span className="session-host-badge" title={hostBadge.title}>
           <HostsIcon size={10} />
           <span className="session-host-badge-name">{hostBadge.name}</span>
+          {/* Not painted (a flex container), but keeps the name and the
+              state as two words in the row's text content. */}
+          {showHostStatus && remoteHost && " "}
           {showHostStatus && remoteHost && <HostStatusLabel host={remoteHost} />}
         </span>
       ),
