@@ -28,7 +28,6 @@ import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./s
 import {
   taskReviewFindingsPath,
   taskCommitTitlePath,
-  taskCiUnfixablePath,
   taskRereviewRequestPath,
 } from "./task-prompt.js";
 import { readCiUnfixableFile } from "./task-ci-unfixable-file.js";
@@ -796,7 +795,7 @@ class LocalBackend implements SessionBackend {
 
   async readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
     assertFullSha(headSha);
-    return readCiUnfixableFile(taskCiUnfixablePath(this.app.pty.sessionsDir, taskId, headSha));
+    return readCiUnfixableFile(this.app.pty.sessionsDir, taskId, headSha);
   }
 }
 

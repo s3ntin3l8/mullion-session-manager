@@ -3,7 +3,6 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import {
   taskReviewFindingsPath,
   taskCommitTitlePath,
-  taskCiUnfixablePath,
   taskRereviewRequestPath,
 } from "../services/task-prompt.js";
 import { readCiUnfixableFile } from "../services/task-ci-unfixable-file.js";
@@ -420,9 +419,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       if (!/^[0-9a-f]{40}$/.test(headSha)) {
         return reply.badRequest("headSha query param must be a 40-char lowercase hex SHA");
       }
-      return {
-        content: readCiUnfixableFile(taskCiUnfixablePath(app.pty.sessionsDir, taskId, headSha)),
-      };
+      return { content: readCiUnfixableFile(app.pty.sessionsDir, taskId, headSha) };
     },
   );
 
