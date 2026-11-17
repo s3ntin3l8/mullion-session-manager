@@ -41,7 +41,8 @@ export function deleteGroup(id: number): void {
 
 // Moves a workspace to `index` within the bucket `groupId` (null: ungrouped),
 // the index counted without the moved workspace itself — the drag-and-drop's
-// drop and the picker's Move up/Move down/Move to group share this.
+// drop and the picker's handle (drag or arrow keys) and Move to group share
+// this.
 export function moveWorkspace(
   workspaces: Workspace[],
   id: number,
