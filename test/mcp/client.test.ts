@@ -698,6 +698,28 @@ describe("MullionClient (issue #271)", () => {
       });
     });
 
+    describe("listTasks and getTask (#3165)", () => {
+      it("listTasks sends tasks.list with filters and returns the result", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("tasks.list");
+          expect(msg.body).toEqual({ status: "ready", projectId: "3" });
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, result: [{ id: 1 }] })}\n`);
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.listTasks({ status: "ready", projectId: "3" })).toEqual([{ id: 1 }]);
+      });
+
+      it("getTask sends tasks.get with taskId and returns the result", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("tasks.get");
+          expect(msg.body).toEqual({ taskId: "42" });
+          socket.write(`${JSON.stringify({ id: msg.id, ok: true, result: { id: 42 } })}\n`);
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.getTask("42")).toEqual({ id: 42 });
+      });
+    });
+
     describe("requestReview", () => {
       it("sends reviews.request with no body fields by default", async () => {
         const socketPath = await startControlServer((msg, socket) => {

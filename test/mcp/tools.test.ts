@@ -77,6 +77,8 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "get_scrollback",
       "get_session_transcript",
       "push_task_branch",
+      "list_tasks",
+      "get_task",
       "request_review",
       "review_status",
       "stop_review",
@@ -599,6 +601,22 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(JSON.parse(out)).toEqual({ ok: true, prUrl: "u", prNumber: 3 });
     expect(tool.description).toContain("instead of `git push`");
     expect(tool.description).toContain("operator");
+  });
+
+  it("list_tasks calls client.listTasks with status/projectId and returns JSON", async () => {
+    const tool = TOOLS.find((t) => t.name === "list_tasks")!;
+    const listTasks = vi.fn().mockResolvedValue([{ id: 1, status: "ready", title: "T" }]);
+    const text = await tool.handler({ status: "ready", projectId: "3" }, { listTasks });
+    expect(listTasks).toHaveBeenCalledWith({ status: "ready", projectId: "3" });
+    expect(JSON.parse(text)).toEqual([{ id: 1, status: "ready", title: "T" }]);
+  });
+
+  it("get_task calls client.getTask with taskId and returns JSON", async () => {
+    const tool = TOOLS.find((t) => t.name === "get_task")!;
+    const getTask = vi.fn().mockResolvedValue({ id: 42, status: "done", title: "D" });
+    const text = await tool.handler({ taskId: "42" }, { getTask });
+    expect(getTask).toHaveBeenCalledWith("42");
+    expect(JSON.parse(text)).toEqual({ id: 42, status: "done", title: "D" });
   });
 
   it("request_review passes pr_number to client.requestReview and returns the result", async () => {

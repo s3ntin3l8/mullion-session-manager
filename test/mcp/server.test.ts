@@ -211,6 +211,8 @@ describe("mcp/server.mjs (issue #271)", () => {
       "get_scrollback",
       "get_session_transcript",
       "push_task_branch",
+      "list_tasks",
+      "get_task",
       "request_review",
       "review_status",
       "stop_review",

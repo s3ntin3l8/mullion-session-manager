@@ -1491,9 +1491,29 @@ const bundleCommands = {
   },
 };
 
-// #2102 — a Task Master worker pushes its branch through Mullion (the gated
-// path, bot identity) instead of with its own git credentials.
+const TASK_LIST_SPEC = { status: "string", project: "string" };
+
 const taskCommands = {
+  async list(client, args) {
+    const { flags } = extractFlags(args, TASK_LIST_SPEC);
+    const body = {};
+    if (flags.status !== undefined) body.status = flags.status;
+    if (flags.project !== undefined) body.projectId = flags.project;
+    const result = await client.request("tasks.list", body);
+    return {
+      json: result,
+      text: Array.isArray(result)
+        ? result.map((t) => `${t.id}\t${t.status}\t${t.title}`).join("\n")
+        : String(result),
+    };
+  },
+  async get(client, args) {
+    const id = requireOne(args, "task id");
+    const result = await client.request("tasks.get", { taskId: id });
+    return { json: result };
+  },
+  // #2102 — a Task Master worker pushes its branch through Mullion (the gated
+  // path, bot identity) instead of with its own git credentials.
   async push(client, _args, opts) {
     const body = {};
     if (opts.session !== undefined) body.sessionId = opts.session;
@@ -1966,6 +1986,8 @@ Commands:
   preview create|get|delete|list
   dock start|stop|list
   device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
+  task list [--status <s>] [--project <id>]
+  task get <id>
   task push        push your Task Master branch through Mullion (gated; never git push)
   bundle status|resync|remove
   events tail [--children]

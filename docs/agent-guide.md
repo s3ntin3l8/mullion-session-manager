@@ -122,6 +122,8 @@ MCP tools. It is **never** enough for **full-scope** ops:
 | `project get_tooling`                               | full or session                     |
 | `project set_tooling`                               | **full only**                       |
 | `preview create/get/delete/list`                    | **full only**                       |
+| `task list/get` / `list_tasks` / `get_task`         | **full only**                       |
+| `task push` / `push_task_branch`                    | full or session; own task only      |
 | `dock start/stop/list` (`docks.*`)                  | full or session; own project only   |
 | `agents list`                                       | **full only**                       |
 | `device list/get/action/start/terminate/discovered` | full or session                     |
@@ -205,7 +207,7 @@ pair-and-connect`, the three ops above with no MCP tool at all.
 **From inside a session, the full-scope-only MCP tools
 (`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
 `create_preview`/`delete_preview`/`list_previews`/`set_project_tooling`/
-`delete_device`) reply with a scope error, same as the CLI's own** — they're
+`delete_device`/`list_tasks`/`get_task`) reply with a scope error, same as the CLI's own** — they're
 there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
 set, not for you. `get_scrollback` and `get_session_transcript` (both default to your own session),
 `list_actions` (defaults to your own project), `get_project_tooling`
