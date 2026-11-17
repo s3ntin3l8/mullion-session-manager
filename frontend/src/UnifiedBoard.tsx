@@ -56,7 +56,8 @@ function useViewportWidth(): number {
 // What the empty-board note says when filters hide every task.
 function emptyBoardMessage(f: TaskFilters): string {
   const where = f.projectIds.length > 0 ? " in the selected projects" : "";
-  if (f.agents.length > 0 || f.text.trim() !== "") return "No tasks match the current filters.";
+  if (f.agents.length > 0 || f.hosts.length > 0 || f.text.trim() !== "")
+    return "No tasks match the current filters.";
   if (f.epicKeys.length > 0) {
     return `No tasks match the selected epic${f.epicKeys.length > 1 ? "s" : ""}${where}.`;
   }
@@ -520,7 +521,9 @@ export function UnifiedBoard({
                   Clear the epic filter
                 </button>
               )}
-              {(filters.agents.length > 0 || filters.text.trim() !== "") && (
+              {(filters.agents.length > 0 ||
+                filters.hosts.length > 0 ||
+                filters.text.trim() !== "") && (
                 <button
                   type="button"
                   className="tasks-panel-empty-hint-clear"
