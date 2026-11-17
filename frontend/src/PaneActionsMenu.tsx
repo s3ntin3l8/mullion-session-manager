@@ -365,8 +365,9 @@ export function PaneActionsMenu({
   // closed since it's only ever read from the (conditionally rendered) menu
   // content — `canBalanceSiblingsOf` serializes the layout (`toJSON()`), so it
   // must not run on every render of the trigger button.
-  const canReset =
-    overflowOpen && hasGrid && !!api.group && canBalanceSiblingsOf(containerApi, api.group.id);
+  // Where there is no grid the item is not rendered at all (`hasGrid` on it
+  // below), so that is the one gate for #3214.
+  const canReset = overflowOpen && !!api.group && canBalanceSiblingsOf(containerApi, api.group.id);
   // #3214 — Split right/down only while this pane's header is hiding its own
   // split buttons, by the header's own width measurement
   // (PaneHeaderActions.tsx publishes it per group in lib/paneHeaderSplit.ts),
