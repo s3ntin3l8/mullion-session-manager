@@ -7,7 +7,12 @@ import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
-import { isRateLimitParked, rateLimitResumeText } from "./taskStatusModel.js";
+import {
+  isQuotaExhausted,
+  isRateLimitParked,
+  quotaExhaustedText,
+  rateLimitResumeText,
+} from "./taskStatusModel.js";
 import { api, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
@@ -574,6 +579,17 @@ export function TaskDetail({
           <ClockIcon size={12} />
           <span>
             Rate limited: resumes automatically {rateLimitResumeText(task.rateLimitUntil)}
+            {task.rateLimitMessage && ` (${task.rateLimitMessage})`}
+          </span>
+        </div>
+      )}
+      {/* #3234 — the quota resets beyond the park limit: failed, with the reset. */}
+      {isQuotaExhausted(task) && (
+        <div className="task-detail-dispatch">
+          <ClockIcon size={12} />
+          <span>
+            {quotaExhaustedText(task)}
+            {task.rateLimitMessage && ` (${task.rateLimitMessage})`}
           </span>
         </div>
       )}

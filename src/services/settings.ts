@@ -317,6 +317,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     budgetMinutes: -1,
     progressCommentMinutes: -1,
     rateLimitGraceMinutes: -1,
+    rateLimitMaxParkHours: -1,
     skipPermissions: "inherit",
     trustedLogins: [],
     reviewCiWaitMinutes: 15,
@@ -752,6 +753,12 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         sentinel: -1,
         min: 0,
         max: 1440,
+      }),
+      // -1 = inherit; 0 is a real value (never park).
+      rateLimitMaxParkHours: safeSentinelNumber(settings.taskMaster.rateLimitMaxParkHours, {
+        sentinel: -1,
+        min: 0,
+        max: 168,
       }),
       skipPermissions:
         settings.taskMaster.skipPermissions === "inherit" ||

@@ -157,7 +157,11 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // manager (and this callback) are constructed once, here. See
     // onPortAssigned's own comment on why this fires immediately rather
     // than after boot succeeds.
+    //
+    // An agent host has no database (#3200): there the primary persists the
+    // port itself, from the spawn response (routes/internal-devices.ts).
     onPortAssigned: (id, port) => {
+      if (!app.db) return;
       app.db
         .update(devices)
         .set({ port })

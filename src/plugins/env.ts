@@ -628,6 +628,16 @@ export const schema = {
       minimum: 0,
       maximum: 1440,
     },
+    // #3234 — the longest a rate-limited worker is parked for the provider
+    // reset. A reset further out than this fails the task with a
+    // "quota exhausted, resets <time>" reason instead of holding it for days.
+    // 0 = never park. Default 24, max 168 (a week).
+    MULLION_TASK_RATE_LIMIT_MAX_PARK_HOURS: {
+      type: "number",
+      default: 24,
+      minimum: 0,
+      maximum: 168,
+    },
     // Whether an unattended task spawn (claim/auto-claim/retry/review agent)
     // passes skipPermissions through to the agent's own flag. Default OFF:
     // an unattended agent bypassing every permission prompt is a deliberate
@@ -1201,6 +1211,7 @@ declare module "fastify" {
       MULLION_TASK_BUDGET_MINUTES: number;
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
       MULLION_TASK_RATE_LIMIT_GRACE_MINUTES: number;
+      MULLION_TASK_RATE_LIMIT_MAX_PARK_HOURS: number;
       MULLION_TASK_SKIP_PERMISSIONS: boolean;
       MULLION_TASK_TRUSTED_LOGINS: string;
       BROWSER_ENABLED: boolean;

@@ -30,6 +30,7 @@ const SERVER_INFO: ServerInfo = {
     budgetMinutes: 120,
     progressCommentMinutes: 15,
     rateLimitGraceMinutes: 5,
+    rateLimitMaxParkHours: 24,
     skipPermissions: false,
     issueLabel: "mullion-task",
     pollIntervalSeconds: 60,

@@ -12,6 +12,7 @@ const ENV_DEFAULTS = {
   budgetMinutes: 120,
   progressCommentMinutes: 15,
   rateLimitGraceMinutes: 5,
+  rateLimitMaxParkHours: 24,
   skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,
@@ -27,6 +28,7 @@ describe("resolveTaskMaster", () => {
       budgetMinutes: 120,
       progressCommentMinutes: 15,
       rateLimitGraceMinutes: 5,
+      rateLimitMaxParkHours: 24,
       skipPermissions: false,
       reviewCiWaitMinutes: 15,
       maxAutoReturnRounds: 10,
@@ -46,6 +48,20 @@ describe("resolveTaskMaster", () => {
         { ...ENV_DEFAULTS, enabled: true },
       ).enabled,
     ).toBe(false);
+  });
+
+  it("#3234 — rateLimitMaxParkHours inherits on -1 and 0 is a real value", () => {
+    expect(resolveTaskMaster(DEFAULT_SETTINGS.taskMaster, ENV_DEFAULTS).rateLimitMaxParkHours).toBe(
+      24,
+    );
+    expect(
+      resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, rateLimitMaxParkHours: 0 }, ENV_DEFAULTS)
+        .rateLimitMaxParkHours,
+    ).toBe(0);
+    expect(
+      resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, rateLimitMaxParkHours: 72 }, ENV_DEFAULTS)
+        .rateLimitMaxParkHours,
+    ).toBe(72);
   });
 
   it("resolves a concrete maxConcurrent as a real override", () => {

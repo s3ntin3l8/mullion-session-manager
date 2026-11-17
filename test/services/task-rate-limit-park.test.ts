@@ -16,7 +16,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { tasks, sessions } = await import("../../src/db/schema.js");
+const { tasks, sessions, sessionEvents } = await import("../../src/db/schema.js");
 const { enqueueTask } = await import("../../src/services/task-claim.js");
 const { parkRateLimitedTask, PARKABLE_RATE_LIMIT_STATUSES } =
   await import("../../src/services/task-rate-limit-park.js");
@@ -64,7 +64,7 @@ async function setup(message: string, variant: string | null = "usage_limit_exce
   vi.spyOn(app.pty, "codexTranscriptPathSessions").mockReturnValue([
     { id: String(session.id), transcriptPath, codexHome },
   ]);
-  const reset = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const reset = new Date(Date.now() + 6 * 60 * 60 * 1000);
   reset.setMilliseconds(0);
   const task = app.db
     .insert(tasks)
@@ -118,7 +118,7 @@ describe("parkRateLimitedTask (#2940)", () => {
   });
 
   it("kills the worker and parks the task ready until the parsed reset", async () => {
-    const reset = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const reset = new Date(Date.now() + 6 * 60 * 60 * 1000);
     reset.setMilliseconds(0);
     const { app, projectId, session, task, load, sessionStatus } = await setup(
       `usage limit reached; try again at ${reset.toISOString()}`,
@@ -231,7 +231,7 @@ describe("parkRateLimitedTask (#2940)", () => {
 
   it("does not park when terminate fails, leaving the session active", async () => {
     const { app, projectId, session, task, load, sessionStatus, backend } = await setup(
-      "try again at 2030-01-02T01:00:00.000Z",
+      `try again at ${new Date(Date.now() + 3_600_000).toISOString()}`,
     );
     backend.terminate.mockRejectedValueOnce(new Error("host down"));
     expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(false);
@@ -244,7 +244,7 @@ describe("parkRateLimitedTask (#2940)", () => {
 
   it("does not change the task when the kill fails", async () => {
     const { app, projectId, session, task, load, sessionStatus } = await setup(
-      "try again at 2030-01-02T01:00:00.000Z",
+      `try again at ${new Date(Date.now() + 3_600_000).toISOString()}`,
     );
     vi.spyOn(sessionLifecycle, "killSession").mockRejectedValueOnce(new Error("terminate down"));
     expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(false);
@@ -253,5 +253,119 @@ describe("parkRateLimitedTask (#2940)", () => {
     expect(sessionStatus()).toBe("active");
     vi.restoreAllMocks();
     await app.close();
+  });
+
+  describe("cap (#3234)", () => {
+    const AGY = (dur: string) =>
+      `generating and executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in ${dur}.`;
+
+    // The hook's own stop_failure event, as PtyManager persists it.
+    function stopFailure(
+      app: Awaited<ReturnType<typeof setup>>["app"],
+      sessionId: number,
+      error: string,
+      ts = Date.now(),
+    ) {
+      app.db
+        .insert(sessionEvents)
+        .values({ sessionId, seq: 1, kind: "stop_failure", ts, payload: JSON.stringify({ error }) })
+        .run();
+    }
+
+    // An agy-shaped worker: no Codex rollout, a task with no worktree to salvage.
+    async function agySetup() {
+      const ctx = await setup("unused");
+      vi.spyOn(ctx.app.pty, "codexTranscriptPathSessions").mockReturnValue([]);
+      ctx.app.db.update(tasks).set({ worktreePath: null }).where(eq(tasks.id, ctx.task.id)).run();
+      vi.spyOn(githubSync, "syncTaskTransition").mockResolvedValue(undefined);
+      return ctx;
+    }
+
+    it("parks an agy task until now + the stated duration, within the cap", async () => {
+      const { app, projectId, session, task, load, sessionStatus } = await agySetup();
+      const errorAt = Date.now();
+      stopFailure(app, session.id, AGY("5h30m"), errorAt);
+      const ok = await parkRateLimitedTask(app, task, session.id, projectId);
+      expect(ok).toBe(true);
+      const row = load();
+      expect(row.status).toBe("ready");
+      expect(row.rateLimitMessage).toBe(AGY("5h30m"));
+      expect(row.rateLimitUntil?.getTime()).toBe(
+        Math.floor((errorAt + 5.5 * 3600_000) / 1000) * 1000,
+      );
+      expect(sessionStatus()).toBe("killed");
+      await app.close();
+    });
+
+    it("fails agy's 102h reset as rate-limited, naming the quota and the reset", async () => {
+      const { app, projectId, session, task, load, sessionStatus } = await agySetup();
+      stopFailure(app, session.id, AGY("102h16m12s"));
+      const ok = await parkRateLimitedTask(app, task, session.id, projectId);
+      expect(ok).toBe(true);
+      const row = load();
+      expect(row.status).toBe("failed");
+      expect(row.needsHumanReason).toBe("rate-limited");
+      expect(row.rateLimitUntil!.getTime()).toBeGreaterThan(Date.now() + 100 * 3600_000);
+      expect(row.failureReason).toContain("Individual quota reached");
+      expect(row.failureReason).toContain("24h park limit");
+      expect(sessionStatus()).toBe("killed");
+      await app.close();
+    });
+
+    it("leaves a beyond-cap task on grace when the session cannot be terminated", async () => {
+      const { app, projectId, session, task, load, sessionStatus, backend } = await agySetup();
+      stopFailure(app, session.id, AGY("102h16m12s"));
+      backend.terminate.mockRejectedValueOnce(new Error("host down"));
+      expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(false);
+      expect(load().status).toBe("in_progress");
+      expect(sessionStatus()).toBe("active");
+      await app.close();
+    });
+
+    it("applies the cap to a Codex reset too", async () => {
+      const reset = new Date(Date.now() + 48 * 3600_000);
+      reset.setMilliseconds(0);
+      const { app, projectId, session, task, load } = await setup(
+        `usage limit reached; try again at ${reset.toISOString()}`,
+      );
+      app.db.update(tasks).set({ worktreePath: null }).where(eq(tasks.id, task.id)).run();
+      vi.spyOn(githubSync, "syncTaskTransition").mockResolvedValue(undefined);
+      expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(true);
+      const row = load();
+      expect(row.status).toBe("failed");
+      expect(row.needsHumanReason).toBe("rate-limited");
+      expect(row.rateLimitUntil?.toISOString()).toBe(reset.toISOString());
+      await app.close();
+    });
+
+    it("stays on grace when the session has no stop_failure event to read", async () => {
+      const { app, projectId, session, task, load } = await agySetup();
+      expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(false);
+      expect(load().status).toBe("in_progress");
+      await app.close();
+    });
+
+    it("leaves the task on grace when no reset can be parsed", async () => {
+      const { app, projectId, session, task, load, sessionStatus } = await agySetup();
+      stopFailure(app, session.id, "RESOURCE_EXHAUSTED (code 429): try later");
+      expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(false);
+      expect(load().status).toBe("in_progress");
+      expect(sessionStatus()).toBe("active");
+      await app.close();
+    });
+
+    it("never parks when the cap is 0", async () => {
+      const { app, projectId, session, task, load } = await agySetup();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { rateLimitMaxParkHours: 0 } },
+      });
+      stopFailure(app, session.id, AGY("1h"));
+      expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(true);
+      expect(load().status).toBe("failed");
+      expect(load().needsHumanReason).toBe("rate-limited");
+      await app.close();
+    });
   });
 });

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "44e50353-9b3e-4151-acda-07fe7f04072e",
+  "id": "0260fbbe-6060-4884-a8c8-f5b1e95bbf7c",
   "prevId": "3998aca8-b8f8-416f-84c4-b9818ecbedb9",
   "tables": {
     "bridges": {
@@ -2325,20 +2325,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "ci_hold_note": {
-          "name": "ci_hold_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "merge_override_head_sha": {
-          "name": "merge_override_head_sha",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "last_reviewed_head_sha": {
           "name": "last_reviewed_head_sha",
           "type": "text",
@@ -2701,6 +2687,13 @@
         "rate_limit_until": {
           "name": "rate_limit_until",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "rate_limit_message": {
+          "name": "rate_limit_message",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

@@ -30,6 +30,13 @@ import {
   uploadOverChannel,
 } from "./remote-host-channel-transfers.js";
 import { attachStreamQuery, openStreamOnTransport } from "./agent-channel-streams.js";
+import type {
+  DeviceAction,
+  DeviceActionResult,
+  DeviceInfo,
+  DeviceKind,
+} from "./device-drivers/types.js";
+import type { DeviceSpawnSpec, DeviceWsQuery, SpawnDeviceResponse } from "./device-wire.js";
 import {
   AGENT_CHANNEL_STREAMS_OPERATION,
   type AgentChannelStreamKind,
@@ -37,6 +44,7 @@ import {
 import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
+import * as devices from "./remote-host-devices.js";
 import { probeHealth } from "./host-health-probe.js";
 
 export {
@@ -1785,6 +1793,37 @@ export class RemoteHostClient {
   openBrowserWs(sessionId: number, target: BrowserTarget): NodeWebSocket {
     const requestTarget = `/internal/ws/browser/${sessionId}?${browserTargetQuery(target)}`;
     return this.inboundStream(requestTarget, false);
+  }
+
+  // --- devices (issue #3200); the request builders are in remote-host-devices.ts
+
+  /** The device kinds this host can run; null when the agent predates the routes. */
+  resolveDeviceKinds(): Promise<DeviceKind[] | null> {
+    return devices.resolveDeviceKinds(this.gitRequest);
+  }
+
+  /** Get-or-create one device on this host (idempotent; routes/internal-devices.ts). */
+  spawnDevice(spec: DeviceSpawnSpec): Promise<SpawnDeviceResponse> {
+    return devices.spawnDevice(this.gitRequest, spec);
+  }
+
+  liveDevices(): Promise<DeviceInfo[]> {
+    return devices.liveDevices(this.gitRequest);
+  }
+
+  terminateDevice(id: string, kind: DeviceKind): Promise<void> {
+    return devices.terminateDevice(this.gitRequest, id, kind);
+  }
+
+  deviceAction(id: string, action: DeviceAction): Promise<DeviceActionResult> {
+    return devices.deviceAction(this.gitRequest, id, action);
+  }
+
+  /** The device panel's video/input socket on this host. Always the inbound
+   * transport for now: an agent reached only over the outbound channel has no
+   * device stream kind yet (#3273). */
+  openDeviceWs(id: string, query: DeviceWsQuery): NodeWebSocket {
+    return this.inboundStream(devices.deviceWsTarget(id, query), false);
   }
 
   /**

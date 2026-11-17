@@ -1289,6 +1289,17 @@ the macOS one is process-based. See
 [#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854) for
 the history.
 
+#### Devices on agent hosts
+
+A device can run on an agent host, which is where a Mac's Android tooling (and,
+later, the iOS Simulator) lives. `POST /api/devices` takes a `hostId`; the
+device's row records it, and the REST routes, the panel's WebSocket and
+`mullion device` all resolve the owning host and go there. The agent serves
+`/internal/devices*` behind the same auth as every other `/internal/*` route and
+reports the kinds it can run at `/internal/devices/kinds`. See
+[`device-panel.md`](device-panel.md#devices-on-agent-hosts-issue-3200) for the
+request shapes, port handling and what is not covered yet.
+
 ### Windows agents (preview)
 
 Windows agent hosts are in progress under

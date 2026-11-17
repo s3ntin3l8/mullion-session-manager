@@ -162,6 +162,7 @@ const TASK_ROW_COLUMNS = {
   // #2940 — a rate-limit park leaves the task `ready` until this reset; the
   // board and sidebar read it to say so instead of reading as a plain queued task.
   rateLimitUntil: tasks.rateLimitUntil,
+  rateLimitMessage: tasks.rateLimitMessage,
   // The task's latest worker session (comma list, parsed by
   // withWorkerSessionIds). A park or return clears `sessionId`, so the task
   // timeline falls back to these. Worker vs. review is the "· worker" name

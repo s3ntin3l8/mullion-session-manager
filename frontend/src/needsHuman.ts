@@ -13,7 +13,8 @@ export type NeedsHumanReason =
   | "pr-closed"
   | "ci-status-stalled"
   | "ci-unfixable"
-  | "ci-still-red";
+  | "ci-still-red"
+  | "rate-limited";
 
 /** The two review-loop reasons that name a red CI check (`ciHoldNote` carries
  * the check names and, for `ci-unfixable`, the worker's reason). Unlike the
@@ -73,6 +74,10 @@ export function needsHumanText(
     // it: the provider itself is the one that stopped reporting.
     case "ci-status-stalled":
       return "a CI status stayed pending after green CI — a Codecov-side stall; re-run the coverage upload";
+    // #3234 — the provider quota resets beyond the park limit, so the worker
+    // was stopped rather than held for days; the card adds the reset time.
+    case "rate-limited":
+      return "provider quota exhausted";
     default:
       return "round cap reached";
   }

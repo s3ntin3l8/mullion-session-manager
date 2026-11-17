@@ -24,6 +24,10 @@ describe("needsHumanText", () => {
     );
   });
 
+  it("#3234 — names an exhausted provider quota", () => {
+    expect(needsHumanText("rate-limited")).toBe("provider quota exhausted");
+  });
+
   it("treats pr-closed as a merge-tied reason, standing on its own", () => {
     expect(isMergeNeedsHumanReason("pr-closed")).toBe(true);
     expect(isMergeNeedsHumanReason("cap")).toBe(false);

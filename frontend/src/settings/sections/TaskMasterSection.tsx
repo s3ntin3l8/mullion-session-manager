@@ -40,6 +40,7 @@ export function TaskMasterSection() {
   const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
   const [graceDraft, setGraceDraft] = useState<number | null>(null);
+  const [maxParkDraft, setMaxParkDraft] = useState<number | null>(null);
   const [ciWaitDraft, setCiWaitDraft] = useState<number | null>(null);
   const [roundsDraft, setRoundsDraft] = useState<number | null>(null);
   const [trustedDraft, setTrustedDraft] = useState<string | null>(null);
@@ -163,6 +164,25 @@ export function TaskMasterSection() {
         />
       </Row>
       <Row
+        label="Longest rate-limit park"
+        desc={`When a rate-limited agent's quota resets within this many hours, the task waits and resumes by itself. A later reset fails the task with the quota and reset time on the card; Retry it once the quota is back. 0 never waits. Server default: ${env.rateLimitMaxParkHours ?? 24} h.`}
+      >
+        <NumberField
+          value={maxParkDraft ?? resolved.rateLimitMaxParkHours}
+          min={0}
+          max={168}
+          width={46}
+          suffix="hours"
+          onChange={setMaxParkDraft}
+          onCommit={(v) => {
+            setMaxParkDraft(null);
+            updateSettings({
+              taskMaster: { rateLimitMaxParkHours: clampNumberFieldOnCommit(v, 0, 168) },
+            });
+          }}
+        />
+      </Row>
+      <Row
         label="Review-agent CI wait"
         desc="How long the review agent waits for CI results on the pull request before it starts, so the review sees real pass/fail results. 0 starts the review immediately."
       >
@@ -268,6 +288,7 @@ export function TaskMasterSection() {
             setBudgetDraft(null);
             setThrottleDraft(null);
             setGraceDraft(null);
+            setMaxParkDraft(null);
             updateSettings({
               taskMaster: {
                 enabled: "inherit",
@@ -275,6 +296,7 @@ export function TaskMasterSection() {
                 budgetMinutes: -1,
                 progressCommentMinutes: -1,
                 rateLimitGraceMinutes: -1,
+                rateLimitMaxParkHours: -1,
                 skipPermissions: "inherit",
               },
             });

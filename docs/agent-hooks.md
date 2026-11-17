@@ -1187,6 +1187,11 @@ quota reached. … Resets in 102h16m12s."`. `agy --print` also writes
 `AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","error_code":429,"retryable":true,…}`
 to its output. The reset is a relative duration inside `error`.
 
+That text survives in the persisted `stop_failure` session event.
+`parkRateLimitedTask` reads the latest one, and `parseRelativeResetDuration`
+(`relative-reset-duration.ts`) turns its "Resets in …" into a reset `Date`,
+relative to the event's own timestamp (#3234).
+
 This still only covers the case where agy's Stop hook actually fires with
 `terminationReason` `"error"` (any case). Whether a genuinely different agy
 termination path can also occur during quota exhaustion is tracked
