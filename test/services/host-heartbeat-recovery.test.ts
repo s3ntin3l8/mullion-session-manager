@@ -46,7 +46,7 @@ vi.mock("../../src/services/settings.js", async (importOriginal) => {
     ...actual,
     getStoredSettings: () => ({
       ...actual.DEFAULT_SETTINGS,
-      hosts: { heartbeatSeconds: 30 },
+      hosts: { heartbeatSeconds: 30, staleAfterDays: 30 },
     }),
   };
 });
@@ -154,7 +154,6 @@ describe("startHostHeartbeat: onHostRecovered", () => {
 
     const onHostRecovered = vi.fn();
     const app = {
-      db: {},
       log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
     } as unknown as FastifyInstance;
@@ -191,7 +190,6 @@ describe("startHostHeartbeat: onHostRecovered", () => {
       if (hostId === "h1") throw new Error("handler exploded");
     });
     const app = {
-      db: {},
       log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
     } as unknown as FastifyInstance;
@@ -221,7 +219,6 @@ describe("startHostHeartbeat: onHostRecovered", () => {
 describe("startHostHeartbeat: onHostOnline", () => {
   const fakeApp = () =>
     ({
-      db: {},
       log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
     }) as unknown as FastifyInstance;
@@ -389,7 +386,6 @@ describe("hostHeartbeatPlugin: force-reconnect on recovery", () => {
 describe("startHostHeartbeat: agent list refresh", () => {
   const fakeApp = () =>
     ({
-      db: {},
       log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30, HOST_AGENTS_TTL_SECONDS: 600 },
     }) as unknown as FastifyInstance;
@@ -446,7 +442,6 @@ describe("startHostHeartbeat: agent list refresh", () => {
 describe("startHostHeartbeat: a saturated channel (busy ping)", () => {
   const fakeApp = () =>
     ({
-      db: {},
       log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
     }) as unknown as FastifyInstance;

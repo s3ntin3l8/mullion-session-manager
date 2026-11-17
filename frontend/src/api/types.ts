@@ -47,6 +47,7 @@ import type {
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
 import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
+import type { HostSettings } from "./host-types.js";
 import type { UpdateStatus } from "./update-types.js";
 import type {
   PlacementCapability,
@@ -2590,9 +2591,7 @@ export interface AppSettings {
     pollQuietSeconds: number;
     pollStaleThresholdSeconds: number;
   };
-  hosts: {
-    heartbeatSeconds: number;
-  };
+  hosts: HostSettings;
   // Non-secret half of the Hermes review relay — the key itself is
   // write-only via api.setHermesKey and never part of settings.
   reviewRelay: {

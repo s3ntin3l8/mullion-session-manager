@@ -27,7 +27,7 @@ import {
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
 import { PairDesktopSection } from "./PairDesktopSection.js";
-import { HostHeartbeatSetting } from "../RuntimeSettings.js";
+import { HostHeartbeatSetting, HostStaleAfterSetting } from "../RuntimeSettings.js";
 
 // Issue #647 / roadmap 7.8 — separate from ServerInfoSection's own
 // UPDATE_STATUS_POLL_MS (2000ms), which only gates the primary's own
@@ -208,7 +208,12 @@ export function HostsSection() {
   // Issue #2582 — the server flags a newer enrolled row as a probable
   // duplicate of older offline, session-free ones. The older rows are the
   // ones offered for removal; nothing is ever removed automatically.
-  const staleHostIds = new Set(hosts.flatMap((h) => h.possibleDuplicateOf ?? []));
+  const duplicateHostIds = new Set(hosts.flatMap((h) => h.possibleDuplicateOf ?? []));
+  const staleHosts = hosts.filter((host) => host.id !== LOCAL_HOST_ID && host.stale);
+  const [now, setNow] = useState(Date.now);
+  const [selectedStaleIds, setSelectedStaleIds] = useState<string[]>([]);
+  const [removingStale, setRemovingStale] = useState(false);
+  const [remainingStale, setRemainingStale] = useState<Host[]>([]);
   const hostNameById = new Map(hosts.map((h) => [h.id, h.name]));
   // The primary's own version, reported on its "local" row (Issue #2969).
   const primaryVersion = hosts.find((h) => h.id === LOCAL_HOST_ID)?.mullionVersion ?? null;
@@ -358,10 +363,14 @@ export function HostsSection() {
   // #246) actually updates while this section stays open, instead of only
   // on mount/after a host mutation — matching #246's "continuously-updated
   // indicator" ask, not just a one-shot fetch.
-  usePolling(() => void refreshHosts(), LIVE_REFRESH_INTERVAL_MS, {
-    pauseWhenHidden: true,
-    deps: [refreshHosts],
-  });
+  usePolling(
+    () => {
+      setNow(Date.now());
+      void refreshHosts();
+    },
+    LIVE_REFRESH_INTERVAL_MS,
+    { pauseWhenHidden: true, deps: [refreshHosts] },
+  );
 
   // Snapshotting host.lastCheckedAt when the click *begins* (not when it
   // resolves) is what deriveHostStatus compares against later — see its
@@ -388,9 +397,12 @@ export function HostsSection() {
       );
   };
 
-  const handleDelete = (host: Host) => {
+  const handleDelete = async (host: Host): Promise<"deleted" | "conflict" | "error"> => {
     setDeleteError(null);
-    void deleteHost(host.id).catch((err: unknown) => {
+    try {
+      await deleteHost(host.id);
+      return "deleted";
+    } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       // 409 is src/routes/hosts.ts's HostHasProjectsError (still owns
       // projects) — branching on the status code rather than matching the
@@ -399,10 +411,28 @@ export function HostsSection() {
       // 404) surfaces as a plain inline error instead.
       if (err instanceof ApiError && err.statusCode === 409) {
         setCascadePrompt({ id: host.id, message });
+        return "conflict";
       } else {
         setDeleteError(message);
       }
-    });
+      return "error";
+    }
+  };
+
+  // Stop at a conflict so every project-owning host gets the existing prompt.
+  const removeStaleHosts = async (queue: Host[]) => {
+    setRemovingStale(true);
+    for (const [index, host] of queue.entries()) {
+      const result = await handleDelete(host);
+      if (result !== "deleted") {
+        setRemainingStale(result === "conflict" ? queue.slice(index + 1) : []);
+        setRemovingStale(false);
+        return;
+      }
+      setSelectedStaleIds((ids) => ids.filter((id) => id !== host.id));
+    }
+    setRemainingStale([]);
+    setRemovingStale(false);
   };
 
   const handleRevoke = (host: Host) => {
@@ -444,9 +474,17 @@ export function HostsSection() {
     if (!cascadePrompt) return;
     const { id } = cascadePrompt;
     setCascadePrompt(null);
-    void deleteHost(id, { cascade: true }).catch((err: unknown) => {
-      setDeleteError(err instanceof Error ? err.message : String(err));
-    });
+    setRemovingStale(true);
+    void deleteHost(id, { cascade: true })
+      .then(() => {
+        setSelectedStaleIds((ids) => ids.filter((selected) => selected !== id));
+        return removeStaleHosts(remainingStale);
+      })
+      .catch((err: unknown) => {
+        setDeleteError(err instanceof Error ? err.message : String(err));
+        setRemainingStale([]);
+        setRemovingStale(false);
+      });
   };
 
   return (
@@ -519,6 +557,19 @@ export function HostsSection() {
                 title={host.name}
                 subtitle={
                   <>
+                    {host.stale && host.lastSeenAt && (
+                      <>
+                        <span style={{ color: "var(--y)" }}>
+                          Not seen for{" "}
+                          {Math.max(
+                            0,
+                            Math.floor((now - Date.parse(host.lastSeenAt)) / 86_400_000),
+                          )}{" "}
+                          days
+                        </span>
+                        {" · "}
+                      </>
+                    )}
                     {host.baseUrl ??
                       (host.health === "online"
                         ? "connected over the outbound channel"
@@ -771,7 +822,10 @@ export function HostsSection() {
                           : []),
                         {
                           key: "delete",
-                          label: staleHostIds.has(host.id) ? "Remove stale host" : "Delete host",
+                          label:
+                            host.stale || duplicateHostIds.has(host.id)
+                              ? "Remove stale host"
+                              : "Delete host",
                           armLabel: "Click again to delete",
                           icon: <CloseIcon size={14} />,
                           danger: true,
@@ -787,6 +841,42 @@ export function HostsSection() {
           })}
       </StyledList>
 
+      {staleHosts.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <GroupHeading
+            title="Remove stale hosts"
+            desc="These hosts have been offline for a long time and have no active sessions. Select the hosts you want to remove."
+          />
+          {staleHosts.map((host) => (
+            <label key={host.id} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <input
+                type="checkbox"
+                checked={selectedStaleIds.includes(host.id)}
+                disabled={removingStale || !!cascadePrompt}
+                onChange={(event) =>
+                  setSelectedStaleIds((ids) =>
+                    event.target.checked ? [...ids, host.id] : ids.filter((id) => id !== host.id),
+                  )
+                }
+              />
+              {host.name}
+            </label>
+          ))}
+          <SecondaryButton
+            disabled={
+              removingStale ||
+              !!cascadePrompt ||
+              !staleHosts.some((host) => selectedStaleIds.includes(host.id))
+            }
+            onClick={() =>
+              void removeStaleHosts(staleHosts.filter((host) => selectedStaleIds.includes(host.id)))
+            }
+          >
+            {removingStale ? "Removing…" : "Remove selected hosts"}
+          </SecondaryButton>
+        </div>
+      )}
+
       {cascadePrompt && (
         <div className="settings-cascade-warning">
           <span>{cascadePrompt.message}</span>
@@ -794,7 +884,14 @@ export function HostsSection() {
             <SecondaryButton onClick={confirmCascadeDelete}>
               Delete host and its projects
             </SecondaryButton>
-            <SecondaryButton onClick={() => setCascadePrompt(null)}>Cancel</SecondaryButton>
+            <SecondaryButton
+              onClick={() => {
+                setCascadePrompt(null);
+                setRemainingStale([]);
+              }}
+            >
+              Cancel
+            </SecondaryButton>
           </div>
         </div>
       )}
@@ -873,6 +970,7 @@ export function HostsSection() {
 
       <div style={{ marginTop: 16 }}>
         <HostHeartbeatSetting />
+        <HostStaleAfterSetting />
       </div>
 
       <div style={{ marginTop: 28 }}>

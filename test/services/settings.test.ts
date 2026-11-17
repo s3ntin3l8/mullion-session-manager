@@ -819,6 +819,16 @@ describe("sanitizeSettings: runtime env overrides", () => {
     expect(s.github.pollStaleThresholdSeconds).toBe(-1);
   });
 
+  it("accepts whole stale-host days including disabled, and repairs invalid thresholds", () => {
+    expect(mergeSettings({}).hosts.staleAfterDays).toBe(30);
+    for (const days of [0, 1, 90, 36500]) {
+      expect(mergeSettings({ hosts: { staleAfterDays: days } }).hosts.staleAfterDays).toBe(days);
+    }
+    for (const value of [-1, 1.5, 36501, NaN, Infinity, "30", null]) {
+      expect(mergeSettings({ hosts: { staleAfterDays: value } }).hosts.staleAfterDays).toBe(30);
+    }
+  });
+
   it("keeps 0 as a real 'heartbeat off' value and clamps the frame rate", () => {
     const s = mergeSettings({ hosts: { heartbeatSeconds: 0 }, browser: { framerate: 120 } });
     expect(s.hosts.heartbeatSeconds).toBe(0);

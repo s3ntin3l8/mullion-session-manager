@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { useDashboardStore, FALLBACK_RUNTIME_ENV } from "../store/index.js";
 import { LOG_LEVELS, type LogLevel } from "../api/index.js";
-import { Dropdown, GroupHeading, Row } from "../ui/primitives.js";
+import { Dropdown, GroupHeading, NumberField, Row } from "../ui/primitives.js";
 import { ServerDefaultNumberRow } from "./ServerDefaultNumberRow.js";
 import { useServerInfo } from "./useServerInfo.js";
 
@@ -67,6 +68,31 @@ export function HostHeartbeatSetting() {
       suffix="seconds"
       onChange={(v) => updateSettings({ hosts: { heartbeatSeconds: v } })}
     />
+  );
+}
+
+export function HostStaleAfterSetting() {
+  const { settings, updateSettings } = useDashboardStore();
+  const [draft, setDraft] = useState<number | null>(null);
+  return (
+    <Row
+      label="Flag offline hosts after"
+      desc="Offer to remove hosts not seen for this many days. 0 never flags hosts; nothing is removed automatically."
+    >
+      <NumberField
+        value={draft ?? settings.hosts.staleAfterDays}
+        min={0}
+        max={36500}
+        suffix="days"
+        onChange={setDraft}
+        onCommit={(value) => {
+          setDraft(null);
+          updateSettings({
+            hosts: { staleAfterDays: Math.min(36500, Math.max(0, Math.trunc(value))) },
+          });
+        }}
+      />
+    </Row>
   );
 }
 
