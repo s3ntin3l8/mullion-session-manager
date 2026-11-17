@@ -2,7 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useRef } from "react";
-import { dropTargetAt, edgeScrollSpeed, usePointerReorder } from "./usePointerReorder.js";
+import {
+  OUTSIDE_TOLERANCE,
+  dropTargetAt,
+  edgeScrollSpeed,
+  overList,
+  usePointerReorder,
+} from "./usePointerReorder.js";
 import type { DropTarget, ZoneRect } from "./usePointerReorder.js";
 
 describe("dropTargetAt", () => {
@@ -36,6 +42,19 @@ describe("dropTargetAt", () => {
     // In the gap between two zones: the closer one.
     expect(dropTargetAt(115, zones, 1)).toEqual({ groupId: 2, index: 0 });
     expect(dropTargetAt(10, [], 1)).toBeNull();
+  });
+});
+
+describe("overList", () => {
+  const rect = { top: 100, bottom: 300, left: 50, right: 250 };
+  it("takes the list's box plus a small tolerance, nothing further away", () => {
+    expect(overList(100, 200, rect)).toBe(true);
+    expect(overList(100, 100 - OUTSIDE_TOLERANCE, rect)).toBe(true);
+    expect(overList(100, 300 + OUTSIDE_TOLERANCE, rect)).toBe(true);
+    expect(overList(100, 99 - OUTSIDE_TOLERANCE, rect)).toBe(false);
+    expect(overList(100, 2000, rect)).toBe(false);
+    expect(overList(250 + OUTSIDE_TOLERANCE + 1, 200, rect)).toBe(false);
+    expect(overList(0, 200, rect)).toBe(false);
   });
 });
 
@@ -155,6 +174,18 @@ describe("usePointerReorder", () => {
     fireEvent.pointerCancel(grip(1), { pointerId: 7 });
     expect(state()).toBeNull();
     up(1, 80);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it("moves nothing when released away from the list", () => {
+    const onDrop = vi.fn();
+    render(<Harness onDrop={onDrop} />);
+    down(1, 20);
+    move(1, 80);
+    expect(state().target).not.toBeNull();
+    move(1, 5000);
+    expect(state()).toEqual({ id: 1, target: null });
+    up(1, 5000);
     expect(onDrop).not.toHaveBeenCalled();
   });
 

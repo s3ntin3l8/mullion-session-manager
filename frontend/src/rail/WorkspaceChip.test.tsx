@@ -177,6 +177,10 @@ describe("WorkspaceChip", () => {
       "New workspace",
       "New group",
     ]);
+    // The header counts the rows shown, not the whole group.
+    expect(
+      within(list).getByRole("group", { name: "AI Usage" }).querySelector(".rail-ws-group-count"),
+    ).toHaveTextContent(/^1$/);
     // A filtered list is not the groups' order: no reordering from it.
     expect(within(list).getByRole("button", { name: "Reorder Runway" })).toBeDisabled();
     await user.clear(within(list).getByRole("searchbox"));
@@ -338,6 +342,9 @@ describe("reordering in the picker", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
+      // The list spans 0-200; No group sits at 100-150, the rest at 0-50.
+      if (this.classList.contains("rail-ws-scroll"))
+        return { top: 0, bottom: 200, left: 0, right: 100, width: 100, height: 200 } as DOMRect;
       const top = this.dataset.dropZone === "none" ? 100 : 0;
       return { top, bottom: top + 50, left: 0, right: 100, width: 100, height: 50 } as DOMRect;
     });
@@ -345,8 +352,22 @@ describe("reordering in the picker", () => {
     expect(none).toHaveClass("drop-target");
     // An empty zone lights up its own box rather than drawing a line.
     expect(none.querySelector(".rail-ws-drop-indicator")).toBeNull();
+    // The announcement below is for this drop.
     fireEvent.pointerUp(handle, { pointerId: 1, clientY: 120 });
     expect(moveWorkspace).toHaveBeenCalledWith(expect.any(Array), 3, null, 0);
+    vi.mocked(moveWorkspace).mockClear();
+    // Released away from the list: no target, nothing moves.
+    const mullion = within(list).getByRole("button", { name: "Reorder Mullion" });
+    fireEvent.pointerDown(mullion, { pointerId: 2, isPrimary: true, button: 0, clientY: 10 });
+    // The first move starts the drag (No group appears), the next one aims.
+    fireEvent.pointerMove(mullion, { pointerId: 2, clientY: 40 });
+    fireEvent.pointerMove(mullion, { pointerId: 2, clientY: 120 });
+    expect(within(list).getByRole("group", { name: "No group" })).toHaveClass("drop-target");
+    fireEvent.pointerMove(mullion, { pointerId: 2, clientY: 2000 });
+    expect(within(list).getByRole("group", { name: "No group" })).not.toHaveClass("drop-target");
+    expect(list.querySelector(".rail-ws-drop-indicator")).toBeNull();
+    fireEvent.pointerUp(mullion, { pointerId: 2, clientY: 2000 });
+    expect(moveWorkspace).not.toHaveBeenCalled();
     expect(within(list).getByRole("status")).toHaveTextContent(
       "Runway moved to position 1 of 1 in No group",
     );
@@ -365,8 +386,8 @@ describe("reordering in the picker", () => {
       height: 0,
     } as DOMRect);
     fireEvent.pointerDown(handle, { pointerId: 1, isPrimary: true, button: 0, clientY: 0 });
-    fireEvent.pointerMove(handle, { pointerId: 1, clientY: -20 });
-    fireEvent.pointerUp(handle, { pointerId: 1, clientY: -20 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: -10 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientY: -10 });
     expect(moveWorkspace).not.toHaveBeenCalled();
     vi.restoreAllMocks();
   });

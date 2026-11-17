@@ -36,7 +36,8 @@ Every row has a drag handle (⠿) on its left.
   in another group (an empty group shows a "drag one here" box) to move it
   there, or in "No group" to take it out of all groups; "No group" appears as
   a target while you drag even when nothing is in it yet. Near the top or
-  bottom edge the list scrolls. **Escape** puts the row back.
+  bottom edge the list scrolls. **Escape**, or letting go away from the
+  list, puts the row back.
 - Only the handle drags: under touch, swiping on a row still scrolls the
   list.
 - **From the keyboard**, focus a row's handle and press **Arrow Up** or

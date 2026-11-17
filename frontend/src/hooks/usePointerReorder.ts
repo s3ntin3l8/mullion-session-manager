@@ -18,7 +18,9 @@ import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 //
 // Only the handle starts a drag (its CSS sets `touch-action: none`), so a
 // finger on a row still scrolls the list. Escape or a pointer cancel puts the
-// row back; nothing moves until the pointer is released over a zone.
+// row back; nothing moves until the pointer is released over a zone. Away
+// from the list (beyond OUTSIDE_TOLERANCE of its box) there is no target, so
+// a release there moves nothing either.
 
 /** Where a dragged workspace lands: a bucket and an index in it, counted
  *  without the dragged workspace itself (moveWorkspace's index rule). */
@@ -91,6 +93,24 @@ function measureZones(root: HTMLElement): ZoneRect[] {
  *  drag, so a click on it does not flash the drop indicator. */
 const DRAG_THRESHOLD = 4;
 
+/** How far outside the list's box the pointer may be and still drop: enough
+ *  for a slightly overshot edge row, not a release elsewhere on screen. */
+export const OUTSIDE_TOLERANCE = 16;
+
+/** Whether (x, y) is over the list, within OUTSIDE_TOLERANCE of its box. */
+export function overList(
+  x: number,
+  y: number,
+  rect: { top: number; bottom: number; left: number; right: number },
+): boolean {
+  return (
+    y >= rect.top - OUTSIDE_TOLERANCE &&
+    y <= rect.bottom + OUTSIDE_TOLERANCE &&
+    x >= rect.left - OUTSIDE_TOLERANCE &&
+    x <= rect.right + OUTSIDE_TOLERANCE
+  );
+}
+
 export interface PointerReorderState {
   id: number;
   target: DropTarget | null;
@@ -133,13 +153,17 @@ export function usePointerReorder({
       }
       const startY = e.clientY;
       let lastY = startY;
+      let lastX = e.clientX;
       let started = false;
       let target: DropTarget | null = null;
       let frame = 0;
 
       const retarget = () => {
         const root = scrollRef.current;
-        target = root ? dropTargetAt(lastY, measureZones(root), id) : null;
+        target =
+          root && overList(lastX, lastY, root.getBoundingClientRect())
+            ? dropTargetAt(lastY, measureZones(root), id)
+            : null;
         setDragging({ id, target });
       };
       const autoScroll = () => {
@@ -163,6 +187,7 @@ export function usePointerReorder({
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
         lastY = ev.clientY;
+        lastX = ev.clientX;
         if (!started) {
           if (Math.abs(lastY - startY) < DRAG_THRESHOLD) return;
           started = true;

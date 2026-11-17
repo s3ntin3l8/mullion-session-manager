@@ -610,7 +610,9 @@ export function WorkspaceListContent({
                   </span>
                 )}
                 <span className="rail-ws-group-count" aria-hidden="true">
-                  {tree.groupWorkspaces(group.id).length}
+                  {/* While a search filters the rows, the count is of the
+                      rows shown. */}
+                  {reorderable ? tree.groupWorkspaces(group.id).length : items.length}
                 </span>
                 {more(`Manage group ${group.name}`, group.name, groupItems(group))}
               </div>
