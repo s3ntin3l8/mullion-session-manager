@@ -690,11 +690,13 @@ one session, sufficient for everything a session-scoped agent needs to do to
 itself (`session get/rename/logs`, the full `browser` subcommand,
 `project actions`, `events tail`, `history` — restricted to its own
 session's events). It is never sufficient for **full-scope**
-ops — `session create`, `session kill` of anything but your own child, `project list/dock`, `preview *`, and (`session list`, `task list/get` work at session scope, read-only, for your own project and, for a coordinator, targets that accept it)
-`mcp`-adjacent listing — because `MULLION_AUTH_TOKEN` is deliberately
-stripped from every spawned session's environment
-(`src/services/session-env.ts`) so a session can never mint itself operator
-credentials.
+ops — `session create`, `session kill` of anything but your own child,
+`project list/dock`, `preview *` and `mcp`-adjacent listing — because
+`MULLION_AUTH_TOKEN` is deliberately stripped from every spawned session's
+environment (`src/services/session-env.ts`) so a session can never mint itself
+operator credentials. (`session list`, `task list` and `task get` are the one
+exception: they work at session scope, read-only, for your own project and, for
+a coordinator, for targets that accept it.)
 
 Running a full-scope-only command from inside a session fails with a message
 naming which token was used and what to do about it:

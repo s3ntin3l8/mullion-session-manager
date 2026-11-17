@@ -689,6 +689,18 @@ describe("formatError", () => {
     expect(msg).not.toContain("set MULLION_AUTH_TOKEN");
   });
 
+  it("prints a session-scope target mismatch as-is, without the operator-only preamble", () => {
+    const err = new MullionSocketError(
+      403,
+      "session-scoped connections may only target their own session's project",
+    );
+    const msg = formatError(err, { tokenSource: "MULLION_HOOK_TOKEN" });
+    expect(msg).toBe(
+      "session-scoped connections may only target their own session's project (connected via MULLION_HOOK_TOKEN).",
+    );
+    expect(msg).not.toContain("operator-only");
+  });
+
   it("renders a non-scope MullionSocketError with its status", () => {
     const err = new MullionSocketError(404, "no such session");
     expect(formatError(err, {})).toBe("no such session (status 404)");
