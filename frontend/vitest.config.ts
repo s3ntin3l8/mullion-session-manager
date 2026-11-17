@@ -61,6 +61,7 @@ export default defineConfig({
     css: {
       include: [
         /styles\/tokens\.css/,
+        /styles\/modals\.css/,
         /styles\/sidebar-kit\.css/,
         /styles\/github-pr\.css/,
         /styles\/task-board\.css/,
