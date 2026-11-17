@@ -48,6 +48,8 @@ const deleteSession = vi.fn(async () => {});
 const refreshTasks = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 const createTask = vi.fn(async () => makeTask({}));
+// #3194 — "Start fresh" on a card whose retry waits for its original host.
+const startFreshTask = vi.fn(async () => makeTask({}));
 const requestOpenTask = vi.fn();
 const openRightSidebarTask = vi.fn();
 const openRightSidebarPr = vi.fn();
@@ -69,6 +71,7 @@ function storeState() {
     refreshTasks,
     updateTask,
     createTask,
+    startFreshTask,
     requestOpenTask,
     openRightSidebarTask,
     openRightSidebarPr,
@@ -152,6 +155,7 @@ beforeEach(() => {
   refreshTasks.mockClear();
   updateTask.mockClear();
   createTask.mockClear();
+  startFreshTask.mockClear();
   requestOpenTask.mockClear();
   openRightSidebarTask.mockClear();
   localStorage.clear();
@@ -1342,5 +1346,36 @@ describe("UnifiedBoard task columns", () => {
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
       expect(screen.queryByText(/Nudged the worker/)).toBeNull();
     });
+  });
+});
+
+// Issue #3194 — a retry waiting for its ORIGINAL host: the preserved branch
+// is on that host and not on origin, so the retry cannot start anywhere else
+// (and it is never failed for waiting). The card offers the operator's way
+// out: abandon that branch (it stays on that host, with its commits) and run
+// the task from scratch.
+describe("a card for a retry waiting for its host (#3194)", () => {
+  it("offers 'Start fresh', saying that the commits stay on that host", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: null, retryHostId: "macbook" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const button = screen.getByRole("button", { name: "Start fresh" });
+    expect(button.getAttribute("title")).toContain("macbook");
+    expect(button.getAttribute("title")).toContain("commits stay there");
+  });
+
+  it("starts the task fresh when the button is clicked", async () => {
+    const user = userEvent.setup();
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: null, retryHostId: "macbook" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(startFreshTask).toHaveBeenCalledWith(1);
+  });
+
+  it("does not offer it for a task that is not waiting for a host", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: null, retryHostId: null })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Start fresh" })).toBeNull();
+    // The ordinary queued hint still shows.
+    expect(screen.getByText("Queued — waiting for a free slot")).toBeInTheDocument();
   });
 });

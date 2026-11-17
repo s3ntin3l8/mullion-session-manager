@@ -191,9 +191,15 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
     if (outcome.reason === "retry-waiting") {
       // Issue #3194 — a retry waiting for its ORIGINAL host: the preserved
       // branch lives there and is not on origin, so failing the task after
-      // 6h would free nothing — it would only throw the work away. The
-      // give-up is EXEMPT for this wait; every other placement wait keeps
-      // DISPATCH_GIVE_UP_AFTER_MS (see giveUpIfOverdue below).
+      // 6h would free nothing — it would only throw the work away.
+      //
+      // The exemption is scoped to THAT wait, and giveUpIfOverdue is where it
+      // is enforced: it skips a task whose `retryHostId` is set (it waits for
+      // its original host) and applies the 6h bound to every other retry
+      // wait — a checkout being prepared on the replacement host, say, where
+      // nothing is stranded on the original host — exactly like every other
+      // placement wait.
+      giveUpIfOverdue(app, taskId, now);
       continue;
     }
     if (resumeQueued && outcome.reason !== "not-queued" && outcome.reason !== "not-found") {

@@ -37,9 +37,22 @@ export function holdRetry(
   detail: string,
   hostId: string,
   requirementJson: string | null,
+  /**
+   * The host the task is waiting FOR — the one whose preserved branch the
+   * retry resumes, and the one the "Start fresh" action abandons that branch
+   * on. It is `tasks.retryHostId`, and its presence is what EXEMPTS this wait
+   * from the 6-hour give-up (the branch is on that host, so failing the task
+   * would free nothing).
+   *
+   * It is null for a wait that is NOT about the original host — a checkout
+   * being prepared on the replacement host. Nothing is stranded on the
+   * original host then (the branch is on origin), so that wait keeps the
+   * 6-hour give-up like every other placement wait.
+   */
+  retryHostId: string | null,
 ): void {
   const unchanged =
-    task.failureReason === detail && task.retryHostId === hostId && task.dispatchHeld;
+    task.failureReason === detail && task.retryHostId === retryHostId && task.dispatchHeld;
   if (unchanged) return;
   const written = app.db
     .update(tasks)
@@ -48,7 +61,7 @@ export function holdRetry(
       dispatchHeld: true,
       dispatchFailingSince: task.dispatchFailingSince ?? new Date(),
       placementRequirement: requirementJson,
-      retryHostId: hostId,
+      retryHostId,
     })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
     .run();

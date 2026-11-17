@@ -396,7 +396,7 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
     }
   });
 
-  it("keeps a waiting retry queued past the 6h give-up, while a fresh-claim placement wait still gives up", async () => {
+  it("keeps a waiting retry queued past the 6h give-up", async () => {
     const { app, mac, task } = await setup("retry-give-up", {
       originalOnline: false,
       branchOnOrigin: false,
@@ -420,6 +420,43 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       expect(row.status).toBe("claimed");
       expect(row.retryHostId).toBe(mac);
       expect(row.failureReason).toContain("not on origin");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("still gives up a FRESH-claim placement wait after 6 hours", async () => {
+    const { app, task } = await setup("retry-fresh-give-up", {
+      originalOnline: false,
+      // The only linux host is offline, so a linux task waits for it.
+      replacementOnline: false,
+      branchOnOrigin: true,
+    });
+    try {
+      // A FRESH claim (not a retry): it waits for a linux host that is
+      // offline. That wait has no preserved branch behind it, so failing it
+      // after 6h frees something — the 6-hour give-up still applies to it.
+      const [fresh] = app.db
+        .insert(tasks)
+        .values({
+          projectId: getTask(app, task.id).projectId,
+          title: "fresh claim waits for a host",
+          body: "Platform: linux",
+          status: "claimed",
+          resumeQueued: false,
+          dispatchHeld: true,
+          dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000),
+          failureReason:
+            "this task requires platform linux, and a matching host is registered but not eligible right now",
+        })
+        .returning()
+        .all();
+
+      await dispatchQueuedTasks(app);
+
+      const row = getTask(app, fresh.id);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("gave up after 6h");
     } finally {
       await app.close();
     }
@@ -451,6 +488,67 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
       );
     } finally {
       await app.close();
+    }
+  });
+
+  it("Start fresh refuses a task that is not waiting for a host", async () => {
+    const { app, task } = await setup("retry-start-fresh-not-waiting", {
+      originalOnline: false,
+      branchOnOrigin: false,
+    });
+    try {
+      // The task has never been retried, so it waits for nobody: there is no
+      // preserved branch to abandon, and starting it fresh would throw work
+      // away that nobody asked to abandon.
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-fresh` });
+      expect(res.statusCode).toBe(409);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("Start fresh answers 404 for a task that does not exist", async () => {
+    const { app } = await setup("retry-start-fresh-missing");
+    try {
+      const res = await app.inject({ method: "POST", url: "/api/tasks/999999/start-fresh" });
+      expect(res.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("Start fresh answers 400 for a task id that is not a number", async () => {
+    const { app } = await setup("retry-start-fresh-bad-id");
+    try {
+      const res = await app.inject({ method: "POST", url: "/api/tasks/not-a-number/start-fresh" });
+      expect(res.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("Start fresh is refused while Task Master is disabled", async () => {
+    // The flag is read when the app is built, so it has to be off BEFORE the
+    // app exists.
+    const previous = process.env.MULLION_TASK_MASTER_ENABLED;
+    process.env.MULLION_TASK_MASTER_ENABLED = "false";
+    let app: Awaited<ReturnType<typeof buildApp>> | null = null;
+    try {
+      const setupResult = await setup("retry-start-fresh-disabled", {
+        originalOnline: false,
+        branchOnOrigin: false,
+      });
+      app = setupResult.app;
+      // The action starts a session, so it is gated exactly like every other
+      // Task Master action.
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${setupResult.task.id}/start-fresh`,
+      });
+      expect(res.statusCode).toBe(403);
+    } finally {
+      if (app) await app.close();
+      process.env.MULLION_TASK_MASTER_ENABLED = previous;
     }
   });
 });

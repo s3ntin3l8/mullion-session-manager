@@ -1259,7 +1259,17 @@ export async function dispatchQueuedRetry(
     // task stays `claimed` with the reason on it, and the next sweep looks
     // again. The 6h give-up does NOT apply here (task-dispatch.ts's
     // giveUpIfOverdue skips a waiting retry) — see the issue's scope.
-    holdRetry(app, task, project, decision.detail, decision.hostId, requirementJson);
+    // The task waits for its ORIGINAL host: that is what `retryHostId` names,
+    // and its presence is what exempts the wait from the 6-hour give-up.
+    holdRetry(
+      app,
+      task,
+      project,
+      decision.detail,
+      decision.hostId,
+      requirementJson,
+      decision.hostId,
+    );
     return { ok: false, reason: "retry-waiting", detail: decision.detail };
   }
 
@@ -1296,7 +1306,21 @@ export async function dispatchQueuedRetry(
       return { ok: false, reason: "worktree-failed", detail };
     }
     startMaterialize(app, project.id, workerHostId);
-    holdRetry(app, task, project, describePreparing(workerHostId), workerHostId, requirementJson);
+    // This wait is NOT about the original host — the branch is on origin, so
+    // nothing is stranded there and failing the task would free something.
+    // `retryHostId` stays null, which keeps the 6-hour give-up in force for
+    // this wait (the issue's scope: the exemption covers the original-host
+    // wait only) and keeps "Start fresh" off a task that is not waiting for
+    // its original host.
+    holdRetry(
+      app,
+      task,
+      project,
+      describePreparing(workerHostId),
+      workerHostId,
+      requirementJson,
+      null,
+    );
     return { ok: false, reason: "retry-waiting", detail: describePreparing(workerHostId) };
   }
 

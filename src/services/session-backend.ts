@@ -664,7 +664,14 @@ class LocalBackend implements SessionBackend {
     branchName: string,
     opts?: { fromOrigin?: boolean },
   ): Promise<WorktreeResult | null> {
-    return resumeTaskWorktree(cwd, branchName, opts);
+    // Issue #3194 — the options are forwarded ONLY when there are any. The
+    // ordinary resume keeps its exact two-argument call shape into
+    // git-worktree.ts, so a caller (or a test) that watches that function
+    // sees no third argument on the path that never asks for a
+    // from-origin resume.
+    return opts === undefined
+      ? resumeTaskWorktree(cwd, branchName)
+      : resumeTaskWorktree(cwd, branchName, opts);
   }
 
   listTaskWorktreeDirs(cwd: string): Promise<string[]> {

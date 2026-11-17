@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { TaskActions } from "./TaskActions.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeTask } from "./test/fixtures.js";
+import { ApiError } from "./api/client.js";
 
 const rejectTask = vi.fn();
 const giveUpTask = vi.fn();
@@ -159,5 +160,22 @@ describe("TaskActions' Start fresh on a waiting retry", () => {
   it("is not offered for a task that is not waiting for a host", () => {
     render(<TaskActions task={makeTask({ id: 7, status: "claimed" })} />);
     expect(screen.queryByRole("button", { name: "Start fresh" })).toBeNull();
+  });
+
+  it("reports the API's own reason and re-enables the button", async () => {
+    const user = userEvent.setup();
+    startFreshTask.mockRejectedValueOnce(new ApiError("This task is not waiting for a host", 409));
+    render(<TaskActions task={makeTask({ id: 7, status: "claimed", retryHostId: "macbook" })} />);
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(await screen.findByText(/not waiting for a host/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start fresh" })).not.toBeDisabled();
+  });
+
+  it("falls back to a generic message when the failure is not an API error", async () => {
+    const user = userEvent.setup();
+    startFreshTask.mockRejectedValueOnce(new Error("network down"));
+    render(<TaskActions task={makeTask({ id: 7, status: "claimed", retryHostId: "macbook" })} />);
+    await user.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(await screen.findByText("Failed to start the task fresh")).toBeInTheDocument();
   });
 });

@@ -100,6 +100,14 @@ const TASK_ROW_COLUMNS = {
   // would be written but never reach GET /api/tasks or GET /api/tasks/:id —
   // the TASK_ROW_COLUMNS silent-drop this constant's other comments record.
   placementRequirement: tasks.placementRequirement,
+  // Issue #3194 — the host a QUEUED RETRY waits for (its original worker's
+  // host, whose preserved branch the retry resumes). Without this entry it
+  // would be written but never reach GET /api/tasks or GET /api/tasks/:id —
+  // and the frontend's "Start fresh" action (TaskCard.tsx/TaskActions.tsx)
+  // keys off exactly this field, so without it the operator's way out of a
+  // waiting retry would never appear. Same TASK_ROW_COLUMNS silent drop the
+  // comments above record (#816/#818/#957/#1954).
+  retryHostId: tasks.retryHostId,
   // Issue #957/#958 — the resolved opencode model(s) the worker actually ran
   // under, recorded at claim time (task-model-resolve.ts). Was previously
   // missing here, the exact TASK_ROW_COLUMNS silent-drop that bit #816/#818
