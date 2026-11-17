@@ -30,13 +30,6 @@ import {
   uploadOverChannel,
 } from "./remote-host-channel-transfers.js";
 import { attachStreamQuery, openStreamOnTransport } from "./agent-channel-streams.js";
-import type {
-  DeviceAction,
-  DeviceActionResult,
-  DeviceInfo,
-  DeviceKind,
-} from "./device-drivers/types.js";
-import type { DeviceSpawnSpec, DeviceWsQuery, SpawnDeviceResponse } from "./device-wire.js";
 import {
   AGENT_CHANNEL_STREAMS_OPERATION,
   type AgentChannelStreamKind,
@@ -44,7 +37,7 @@ import {
 import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
-import * as devices from "./remote-host-devices.js";
+import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
 import { probeHealth } from "./host-health-probe.js";
 
 export {
@@ -367,9 +360,14 @@ export class RemoteHostClient {
     return this.transport.request<T>(path, init, timeoutMs);
   }
 
-  // `request`, bound, for the git path builders in remote-host-git.ts.
-  private readonly gitRequest: git.GitRequest = (path, init, timeoutMs) =>
+  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts).
+  private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
+
+  readonly devices: DevicesClient = createDevicesClient({
+    request: this.boundRequest,
+    openInbound: (target) => this.inboundStream(target, false),
+  });
 
   discover(): Promise<DiscoveredCandidate[]> {
     return this.request("/internal/discover");
@@ -553,11 +551,11 @@ export class RemoteHostClient {
   }
 
   resolveGitHubRepo(cwd: string): Promise<GitHubRepoRef | null> {
-    return git.resolveGitHubRepo(this.gitRequest, cwd);
+    return git.resolveGitHubRepo(this.boundRequest, cwd);
   }
 
   resolveGitBranch(cwd: string): Promise<string | null> {
-    return git.resolveGitBranch(this.gitRequest, cwd);
+    return git.resolveGitBranch(this.boundRequest, cwd);
   }
 
   /** Mirrors `/internal/git-status`'s `{ isRepo, status }` shape exactly (see
@@ -572,7 +570,7 @@ export class RemoteHostClient {
    * polls) omits it and keeps the cached read, at the default timeout. */
   resolveGitStatus(cwd: string, opts?: { fresh?: boolean }): Promise<GitStatusResult> {
     return this.sharedGitRead(`status\0${cwd}`, opts?.fresh === true, () =>
-      git.resolveGitStatus(this.gitRequest, cwd, opts),
+      git.resolveGitStatus(this.boundRequest, cwd, opts),
     );
   }
 
@@ -627,7 +625,7 @@ export class RemoteHostClient {
     // back to the current branch."
     defaultBranch?: string | null;
   } | null> {
-    return git.resolveGitBranches(this.gitRequest, cwd, detail);
+    return git.resolveGitBranches(this.boundRequest, cwd, detail);
   }
 
   /** Creates a worktree on this agent's own filesystem (issue #271's
@@ -814,7 +812,7 @@ export class RemoteHostClient {
     opts: { fresh?: boolean } = {},
   ): Promise<{ isRepo: boolean; stats: GitDiffStats | null; baseResolved?: boolean }> {
     return this.sharedGitRead(`diff\0${cwd}\0${baseRef ?? ""}`, opts.fresh === true, () =>
-      git.resolveGitDiffStats(this.gitRequest, cwd, baseRef, opts),
+      git.resolveGitDiffStats(this.boundRequest, cwd, baseRef, opts),
     );
   }
 
@@ -826,7 +824,7 @@ export class RemoteHostClient {
     filePath: string,
     baseRef?: string,
   ): Promise<{ patch: string | null }> {
-    return git.resolveGitFileDiff(this.gitRequest, cwd, filePath, baseRef);
+    return git.resolveGitFileDiff(this.boundRequest, cwd, filePath, baseRef);
   }
 
   /** Commit history (issue #1969) for a remote-hosted project's Git view —
@@ -836,7 +834,7 @@ export class RemoteHostClient {
     cwd: string,
     opts: { worktree?: string; skip: number; limit: number; scope: "all" | "head" },
   ): Promise<{ commits: CommitLogEntry[] | null; forbidden?: boolean }> {
-    return git.resolveGitLog(this.gitRequest, cwd, opts);
+    return git.resolveGitLog(this.boundRequest, cwd, opts);
   }
 
   /** One commit's message and changed files — mirrors /internal/git-commit. */
@@ -845,7 +843,7 @@ export class RemoteHostClient {
     sha: string,
     worktree?: string,
   ): Promise<{ detail: CommitDetail | null; forbidden?: boolean }> {
-    return git.resolveGitCommit(this.gitRequest, cwd, sha, worktree);
+    return git.resolveGitCommit(this.boundRequest, cwd, sha, worktree);
   }
 
   /** One file's patch within a commit — mirrors /internal/git-commit-file. */
@@ -855,7 +853,7 @@ export class RemoteHostClient {
     filePath: string,
     worktree?: string,
   ): Promise<{ patch: string | null; forbidden?: boolean }> {
-    return git.resolveGitCommitFile(this.gitRequest, cwd, sha, filePath, worktree);
+    return git.resolveGitCommitFile(this.boundRequest, cwd, sha, filePath, worktree);
   }
 
   /** Runs `git fetch origin` on this agent's filesystem (issue #369 —
@@ -870,7 +868,7 @@ export class RemoteHostClient {
     cwd: string,
     token?: string,
   ): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
-    return git.resolveGitFetch(this.gitRequest, cwd, token);
+    return git.resolveGitFetch(this.boundRequest, cwd, token);
   }
 
   /** Issue #1851 — the READ-ONLY clone health check on this agent's
@@ -879,7 +877,7 @@ export class RemoteHostClient {
    * Its own timeout: the agent-side check runs `git fsck`, which has a 30s
    * budget of its own — see GIT_HEALTH_REQUEST_TIMEOUT_MS above. */
   resolveGitHealth(cwd: string): Promise<CloneHealth> {
-    return git.resolveGitHealth(this.gitRequest, cwd);
+    return git.resolveGitHealth(this.boundRequest, cwd);
   }
 
   /** Issue #1896 — the clone REPAIR on this agent's filesystem, and the
@@ -898,14 +896,14 @@ export class RemoteHostClient {
     cwd: string,
     opts: { confirm?: boolean } = {},
   ): Promise<RepairPlan | RepairOutcome> {
-    return git.resolveGitRepair(this.gitRequest, cwd, opts);
+    return git.resolveGitRepair(this.boundRequest, cwd, opts);
   }
 
   /** Runs a fast-forward `git pull` on this agent's filesystem (issue #745).
    * Returns `{ pulled: boolean, reason?, detail? }` matching runGitPull's
    * GitPullResult shape. */
   resolveGitPull(cwd: string): Promise<GitPullResult> {
-    return git.resolveGitPull(this.gitRequest, cwd);
+    return git.resolveGitPull(this.boundRequest, cwd);
   }
 
   /** The guarded checkout / create / rebase on this agent's filesystem
@@ -913,7 +911,7 @@ export class RemoteHostClient {
    * and /internal/git-rebase, each returning git-branch-ops.ts's
    * GitBranchOpResult. */
   resolveGitCheckout(cwd: string, branch: string): Promise<GitBranchOpResult> {
-    return git.resolveGitCheckout(this.gitRequest, cwd, branch);
+    return git.resolveGitCheckout(this.boundRequest, cwd, branch);
   }
 
   resolveGitBranchCreate(
@@ -922,11 +920,11 @@ export class RemoteHostClient {
     startPoint: string,
     checkout?: boolean,
   ): Promise<GitBranchOpResult> {
-    return git.resolveGitBranchCreate(this.gitRequest, cwd, name, startPoint, checkout);
+    return git.resolveGitBranchCreate(this.boundRequest, cwd, name, startPoint, checkout);
   }
 
   resolveGitRebase(cwd: string, onto?: string): Promise<GitBranchOpResult> {
-    return git.resolveGitRebase(this.gitRequest, cwd, onto);
+    return git.resolveGitRebase(this.boundRequest, cwd, onto);
   }
 
   /** Resolves this agent's default base ref (and its pinned commit SHA) on
@@ -969,7 +967,7 @@ export class RemoteHostClient {
    * already-signed, IP-pinned channel; never logged by this method or the
    * route it calls. */
   resolveGitClone(url: string, name: string, token?: string): Promise<CloneResult> {
-    return git.resolveGitClone(this.gitRequest, url, name, token);
+    return git.resolveGitClone(this.boundRequest, url, name, token);
   }
 
   /** Reads `paths`' current content directly off this agent's own
@@ -1782,37 +1780,6 @@ export class RemoteHostClient {
   openBrowserWs(sessionId: number, target: BrowserTarget): NodeWebSocket {
     const requestTarget = `/internal/ws/browser/${sessionId}?${browserTargetQuery(target)}`;
     return this.inboundStream(requestTarget, false);
-  }
-
-  // --- devices (issue #3200); the request builders are in remote-host-devices.ts
-
-  /** The device kinds this host can run; null when the agent predates the routes. */
-  resolveDeviceKinds(): Promise<DeviceKind[] | null> {
-    return devices.resolveDeviceKinds(this.gitRequest);
-  }
-
-  /** Get-or-create one device on this host (idempotent; routes/internal-devices.ts). */
-  spawnDevice(spec: DeviceSpawnSpec): Promise<SpawnDeviceResponse> {
-    return devices.spawnDevice(this.gitRequest, spec);
-  }
-
-  liveDevices(): Promise<DeviceInfo[]> {
-    return devices.liveDevices(this.gitRequest);
-  }
-
-  terminateDevice(id: string, kind: DeviceKind): Promise<void> {
-    return devices.terminateDevice(this.gitRequest, id, kind);
-  }
-
-  deviceAction(id: string, action: DeviceAction): Promise<DeviceActionResult> {
-    return devices.deviceAction(this.gitRequest, id, action);
-  }
-
-  /** The device panel's video/input socket on this host. Always the inbound
-   * transport for now: an agent reached only over the outbound channel has no
-   * device stream kind yet (#3273). */
-  openDeviceWs(id: string, query: DeviceWsQuery): NodeWebSocket {
-    return this.inboundStream(devices.deviceWsTarget(id, query), false);
   }
 
   /**
