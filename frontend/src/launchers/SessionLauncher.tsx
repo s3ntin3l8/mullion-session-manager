@@ -15,6 +15,7 @@ import { resolveLauncherLogo } from "../cliLogos.js";
 import { ModelSelect } from "../settings/ModelPicker.js";
 import { LauncherProjectPicker, LauncherProjectView } from "./LauncherProjects.js";
 import { LauncherWorktreeRow } from "./LauncherWorktreeRow.js";
+import { LauncherWorkspaceRow } from "./LauncherWorkspaceRow.js";
 import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
 import type { LauncherProjectActions } from "./launcherProjectActions.js";
 import { AUTO_VALUE, OWN_HOST_VALUE, describeAutoPreview } from "../command-palette/hostTarget.js";
@@ -53,7 +54,9 @@ export interface SessionLauncherHostProps {
   phone: boolean;
   // `target` is the request's target (which half the session should land
   // on). Passed through, not acted on yet: a later slice places by it.
-  onLaunched: (session: Session, target: LauncherTarget | null) => void;
+  // `workspaceId` (#3246) is the workspace chosen in the phone's Workspace
+  // row when it is not the active one; null otherwise.
+  onLaunched: (session: Session, target: LauncherTarget | null, workspaceId: number | null) => void;
   onOpenSession: (session: Session, target: LauncherTarget | null) => void;
   // The Where row's project management (#3048, LauncherProjects.tsx).
   projectActions?: LauncherProjectActions;
@@ -104,6 +107,7 @@ export function SessionLauncherHost({
         <LauncherDialog
           key={request.seq}
           request={request}
+          phone={phone}
           onClose={close}
           onLaunched={onLaunched}
           suppressRestoreRef={suppressRestoreRef}
@@ -144,16 +148,17 @@ function finishOpen(seq: number, suppressRestoreRef: MutableRefObject<(() => voi
 
 interface SurfaceProps {
   onClose: () => void;
-  onLaunched: (session: Session, target: LauncherTarget | null) => void;
+  onLaunched: SessionLauncherHostProps["onLaunched"];
   suppressRestoreRef: MutableRefObject<(() => void) | null>;
 }
 
 function LauncherDialog({
   request,
+  phone,
   onClose,
   onLaunched,
   suppressRestoreRef,
-}: SurfaceProps & { request: LauncherRequest }) {
+}: SurfaceProps & { request: LauncherRequest; phone: boolean }) {
   const filterRef = useRef<HTMLInputElement>(null);
   return (
     <Modal
@@ -167,12 +172,13 @@ function LauncherDialog({
     >
       <LauncherNewSession
         coarse={false}
+        phone={phone}
         initialProjectId={request.target?.projectId ?? null}
         initialLauncherId={request.target?.launcherId ?? null}
         filterRef={filterRef}
-        onLaunched={(session) => {
+        onLaunched={(session, workspaceId) => {
           finishOpen(request.seq, suppressRestoreRef);
-          onLaunched(session, request.target);
+          onLaunched(session, request.target, workspaceId);
         }}
       />
     </Modal>
@@ -275,11 +281,12 @@ function LauncherSheet({
             // A fresh body per open: the sheet itself stays mounted.
             key={request.seq}
             coarse
+            phone={phone}
             initialProjectId={request.target?.projectId ?? null}
             initialLauncherId={request.target?.launcherId ?? null}
-            onLaunched={(session) => {
+            onLaunched={(session, workspaceId) => {
               finishOpen(request.seq, suppressRestoreRef);
-              onLaunched(session, target);
+              onLaunched(session, target, workspaceId);
             }}
           />
         </div>
@@ -308,12 +315,15 @@ function LauncherSheet({
 // The New session choices — the same in the dialog and in the sheet.
 function LauncherNewSession({
   coarse,
+  phone,
   initialProjectId,
   initialLauncherId,
   filterRef,
   onLaunched,
 }: {
   coarse: boolean;
+  // #3246 — the phone layout: the Where group gets a Workspace row.
+  phone: boolean;
   // A project to preselect (a sidebar project's "+"); null picks the usual
   // default (the focused pane's project, then the last launched into).
   initialProjectId: number | null;
@@ -322,17 +332,23 @@ function LauncherNewSession({
   // so the palette's Enter-then-Enter stays two keystrokes.
   initialLauncherId: string | null;
   filterRef?: MutableRefObject<HTMLInputElement | null>;
-  onLaunched: (session: Session) => void;
+  // `workspaceId`: the chosen workspace when it is not the active one.
+  onLaunched: (session: Session, workspaceId: number | null) => void;
 }) {
-  const { projects, sessions, settings, activePanelId, theme } = useDashboardStore(
-    useShallow((s) => ({
-      projects: s.projects,
-      sessions: s.sessions,
-      settings: s.settings,
-      activePanelId: s.activePanelId,
-      theme: s.theme,
-    })),
-  );
+  const { projects, sessions, settings, activePanelId, theme, activeWorkspaceId } =
+    useDashboardStore(
+      useShallow((s) => ({
+        projects: s.projects,
+        sessions: s.sessions,
+        settings: s.settings,
+        activePanelId: s.activePanelId,
+        theme: s.theme,
+        activeWorkspaceId: s.activeWorkspaceId,
+      })),
+    );
+  // #3246 — the workspace this launch joins, per open: preselected to the
+  // active one, and only acted on when a session is started.
+  const [workspaceId, setWorkspaceId] = useState<number | null>(activeWorkspaceId);
   // The project stays changeable either way: a preselected project is a
   // starting point, not a binding (unlike the palette's project scope).
   const [projectId, setProjectId] = useState<number | null>(() =>
@@ -401,7 +417,11 @@ function LauncherNewSession({
   const { launch, launching, launchError } = useLaunchSession({
     target,
     launchTarget,
-    onLaunched,
+    onLaunched: (session) =>
+      onLaunched(
+        session,
+        phone && workspaceId !== null && workspaceId !== activeWorkspaceId ? workspaceId : null,
+      ),
   });
   const launchAgent = (agent: Launcher) =>
     launch(agent, {
@@ -614,6 +634,13 @@ function LauncherNewSession({
               }}
             />
           </div>
+          {phone && (
+            <LauncherWorkspaceRow
+              id={`${ids}-workspace`}
+              workspaceId={workspaceId}
+              onChange={setWorkspaceId}
+            />
+          )}
           {showHostChip && target && (
             <div className="launcher-form-row">
               <label htmlFor={`${ids}-host`} className="launcher-form-label">

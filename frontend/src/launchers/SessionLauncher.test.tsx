@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS } from "../api/index.js";
 import type { AppSettings, Launcher, Project } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { mockFetch } from "../test/mockFetch.js";
-import { makeSession } from "../test/fixtures.js";
+import { makeSession, makeWorkspace } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
 import { useDashboardStore } from "../store/index.js";
 import launcherCss from "../styles/session-launcher.css?raw";
@@ -73,6 +73,7 @@ function stubFetch(
     createSession?: () => Promise<Response>;
     branches?: unknown;
     branchesByProject?: Record<number, unknown>;
+    groups?: unknown[];
   } = {},
 ) {
   const empty = () => jsonResponse(200, []);
@@ -93,6 +94,7 @@ function stubFetch(
     "GET /api/opencode/models": empty,
     "GET /api/mcode/models": empty,
     "GET /api/sessions": empty,
+    "GET /api/groups": () => jsonResponse(200, opts.groups ?? []),
     "POST /api/sessions": ({ init }) => {
       if (opts.failCreate) return jsonResponse(503, { message: "Host is unreachable" });
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -145,7 +147,9 @@ function stubCoarsePointer() {
   );
 }
 
-function renderHost(overrides: { onLaunched?: () => void; onOpenSession?: () => void } = {}) {
+function renderHost(
+  overrides: { onLaunched?: () => void; onOpenSession?: () => void; phone?: boolean } = {},
+) {
   const onLaunched = overrides.onLaunched ?? vi.fn();
   const onOpenSession = overrides.onOpenSession ?? vi.fn();
   const utils = render(
@@ -153,7 +157,7 @@ function renderHost(overrides: { onLaunched?: () => void; onOpenSession?: () => 
       <button type="button">trigger</button>
       <SessionLauncherHost
         panels={[]}
-        phone={false}
+        phone={overrides.phone ?? false}
         onLaunched={onLaunched}
         onOpenSession={onOpenSession}
       />
@@ -235,9 +239,11 @@ describe("SessionLauncher — desktop dialog", () => {
     expect(onCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ command: "claude", model: "opusplan", skipPermissions: false }),
     );
-    expect(onLaunched).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }), {
-      half: "right",
-    });
+    expect(onLaunched).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 42 }),
+      { half: "right" },
+      null,
+    );
     expect(useDashboardStore.getState().launcherRequest).toBeNull();
   });
 
@@ -819,10 +825,15 @@ describe("SessionLauncher — opened from the palette or a split (#3054)", () =>
 
     await user.click(await screen.findByRole("button", { name: "Launch claude" }));
     await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
-    expect(onLaunched).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }), {
-      projectId: PROJECT.id,
-      split: { referencePanelId: "session-3", direction: "below" },
-    });
+    expect(onLaunched).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 42 }),
+      {
+        projectId: PROJECT.id,
+        split: { referencePanelId: "session-3", direction: "below" },
+      },
+      // No workspace chosen (#3246): the active one.
+      null,
+    );
   });
 });
 
@@ -1275,5 +1286,101 @@ describe("SessionLauncher — the fixed form (#3071)", () => {
     ).toEqual(["No projects yet", "Add project…"]);
     await user.selectOptions(project, "Add project…");
     expect(screen.getByRole("group", { name: "Add project" })).toBeInTheDocument();
+  });
+});
+
+// #3246 — on the phone the launcher names the workspace a new session joins.
+describe("SessionLauncher — phone Workspace row", () => {
+  const A = makeWorkspace({ id: 1, name: "Default" });
+  const B = makeWorkspace({ id: 2, name: "Review", groupId: 9, position: 0 });
+
+  beforeEach(() => {
+    stubCoarsePointer();
+    useDashboardStore.setState({
+      workspaces: [A, B],
+      groups: [{ id: 9, name: "Work", position: 0, createdAt: "2026-01-01T00:00:00.000Z" }],
+      activeWorkspaceId: A.id,
+    } as never);
+  });
+
+  it("shows on the phone with two workspaces, preselected to the active one, grouped like the picker", async () => {
+    stubFetch();
+    renderHost({ phone: true });
+    openLauncher();
+
+    const row = await screen.findByRole("combobox", { name: "Workspace" });
+    expect(row).toHaveValue(String(A.id));
+    expect(
+      within(row)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Work / Review", "Default"]);
+  });
+
+  it("lists a workspace whose group has not loaded yet, last, under its own name", async () => {
+    useDashboardStore.setState({ groups: [] });
+    stubFetch({ groups: [] });
+    renderHost({ phone: true });
+    openLauncher();
+
+    const row = await screen.findByRole("combobox", { name: "Workspace" });
+    expect(
+      within(row)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Default", "Review"]);
+  });
+
+  it("with one workspace, is not shown and loads no groups", async () => {
+    useDashboardStore.setState({ workspaces: [A], groups: [] });
+    const { fetchMock } = stubFetch();
+    renderHost({ phone: true });
+    openLauncher();
+
+    await screen.findByRole("radiogroup", { name: "Agent" });
+    expect(screen.queryByRole("combobox", { name: "Workspace" })).toBeNull();
+    const urls = fetchMock.mock.calls.map((call) => String((call as unknown[])[0]));
+    expect(urls.some((url) => url.startsWith("/api/groups"))).toBe(false);
+  });
+
+  it("is not shown off the phone (the fold's sheet, or the desktop dialog)", async () => {
+    stubFetch();
+    renderHost({ phone: false });
+    openLauncher();
+
+    await screen.findByRole("radiogroup", { name: "Agent" });
+    expect(screen.queryByRole("combobox", { name: "Workspace" })).toBeNull();
+  });
+
+  it("a launch with another workspace chosen passes it on; the active one passes null", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost({ phone: true });
+    openLauncher();
+
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Workspace" }), "2");
+    await user.click(await screen.findByRole("button", { name: /bash/ }));
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
+    expect(onLaunched).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }), null, B.id);
+
+    openLauncher();
+    await user.click(await screen.findByRole("button", { name: /bash/ }));
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(2));
+    expect(onLaunched).toHaveBeenLastCalledWith(expect.objectContaining({ id: 42 }), null, null);
+  });
+
+  it("the choice is per launch: closing without starting a session changes nothing", async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    const { onLaunched } = renderHost({ phone: true });
+    openLauncher();
+
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Workspace" }), "2");
+    act(() => useDashboardStore.getState().closeLauncher());
+    expect(useDashboardStore.getState().activeWorkspaceId).toBe(A.id);
+    expect(onLaunched).not.toHaveBeenCalled();
+
+    openLauncher();
+    expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveValue(String(A.id));
   });
 });

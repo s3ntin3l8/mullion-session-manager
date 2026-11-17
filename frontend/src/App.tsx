@@ -29,6 +29,7 @@ import { PhoneModeBar } from "./PhoneModeBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { SessionLauncherHost } from "./launchers/SessionLauncher.js";
+import { launchIntoWorkspace } from "./lib/launchIntoWorkspace.js";
 import type { SettingsSection } from "./Settings.js";
 import { SettingsLoadingFallback } from "./SettingsLoadingFallback.js";
 import { Dock } from "./Dock.js";
@@ -837,7 +838,13 @@ export function App() {
   // a reference pane closed in the meantime falls back to dockview's default
   // placement.
   const placeLaunchedSession = useCallback(
-    (session: Session, target: LauncherTarget | null) => {
+    (session: Session, target: LauncherTarget | null, workspaceId: number | null = null) => {
+      // #3246 — started on the phone into another workspace: it joins that
+      // one (and the phone switches to it), so it is not placed in this grid.
+      if (workspaceId !== null) {
+        launchIntoWorkspace(session, workspaceId);
+        return;
+      }
       const split = target?.split;
       if (!split || !dockviewApi) {
         openSessionOnHalf(session, target);
