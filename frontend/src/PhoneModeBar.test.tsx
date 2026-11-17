@@ -111,6 +111,69 @@ describe("PhoneModeBar", () => {
   });
 });
 
+// #3216 — a right-sidebar view ends above the bar, and the bar is the way out.
+describe("PhoneModeBar with a sidebar view open", () => {
+  const openView = (view: string) =>
+    act(() => useDashboardStore.getState().openRightSidebarView(view));
+
+  it("marks More as the active entry, not the mode under the view", () => {
+    render(<Harness />);
+    openView("git");
+    const bar = screen.getByRole("navigation", { name: "Mode" });
+    const more = within(bar).getByRole("button", { name: "More" });
+    expect(more).toHaveClass("active");
+    expect(more).toHaveAttribute("aria-current", "page");
+    expect(within(bar).getByRole("button", { name: "Workspace" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(within(bar).getByRole("button", { name: "Tasks" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    act(() => useDashboardStore.getState().closeRightSidebar());
+    expect(more).not.toHaveClass("active");
+    expect(more).not.toHaveAttribute("aria-current");
+  });
+
+  it("Workspace closes the view, also when Workspace is already the mode", async () => {
+    render(<Harness />);
+    openView("git");
+    await userEvent.click(screen.getByRole("button", { name: "Workspace" }));
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(false);
+    expect(state.viewMode).toBe("list");
+    expect(screen.getByRole("button", { name: "Workspace" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("Tasks closes the view and shows Tasks mode, also when it is already the mode", async () => {
+    render(<Harness />);
+    openView("files");
+    await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().viewMode).toBe("kanban");
+    openView("github");
+    await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().viewMode).toBe("kanban");
+  });
+
+  it("More opens the sheet, and another view from it replaces the open one", async () => {
+    render(<Harness />);
+    openView("git");
+    await userEvent.click(screen.getByRole("button", { name: "More" }));
+    const sheet = screen.getByRole("dialog", { name: "More" });
+    await userEvent.click(within(sheet).getByRole("button", { name: /^GitHub/ }));
+    const state = useDashboardStore.getState();
+    expect(state.rightSidebarOpen).toBe(true);
+    expect(state.rightSidebarView).toBe("github");
+    expect(screen.queryByRole("dialog", { name: "More" })).toBeNull();
+  });
+});
+
 describe("PhoneModeBar's more sheet", () => {
   const openMore = async () => {
     await userEvent.click(screen.getByRole("button", { name: "More" }));

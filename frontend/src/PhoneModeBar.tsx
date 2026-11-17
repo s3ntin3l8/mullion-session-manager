@@ -17,14 +17,28 @@ import { ChevronRightIcon, GearIcon, GridIcon, LayersIcon, OverflowIcon } from "
 // It replaces the phone's navigator drawer: Projects is the session picker in
 // the top bar, Tasks is this bar's Tasks mode, and Devices and Settings are in
 // the "more" sheet, which lists what the right rail lists on larger screens.
+//
+// A right-sidebar view opened from the sheet ends above this bar (#3216), and
+// the bar is the way out of it: while one is open, "more" is the active entry,
+// and Workspace or Tasks closes the view and shows that mode, the current one
+// included.
 export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const keyboardUp = useKeyboardUp();
   const tasksMode = useDashboardStore((s) => s.viewMode === "kanban");
+  const viewOpen = useDashboardStore((s) => s.rightSidebarOpen);
   const tasks = useDashboardStore((s) => s.tasks);
   // The rail's count (LeftRail.tsx): the one "needs you" definition, install-wide.
   const needsYou = useMemo(() => needsYouTasks(tasks).length, [tasks]);
   const [moreOpen, setMoreOpen] = useState(false);
-  const setViewMode = (mode: "list" | "kanban") => useDashboardStore.getState().setViewMode(mode);
+  const showMode = (mode: "list" | "kanban") => {
+    const store = useDashboardStore.getState();
+    // Closed explicitly: RightSidebar closes the view on a mode change, but a
+    // tap on the current mode changes nothing.
+    store.closeRightSidebar();
+    store.setViewMode(mode);
+  };
+  const workspaceActive = !viewOpen && !tasksMode;
+  const tasksActive = !viewOpen && tasksMode;
 
   return (
     <>
@@ -32,21 +46,21 @@ export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void })
         <nav className="phone-mode-bar" aria-label="Mode">
           <button
             type="button"
-            className={`phone-mode-btn${tasksMode ? "" : " active"}`}
-            aria-pressed={!tasksMode}
-            onClick={() => setViewMode("list")}
+            className={`phone-mode-btn${workspaceActive ? " active" : ""}`}
+            aria-pressed={workspaceActive}
+            onClick={() => showMode("list")}
           >
             <GridIcon size={17} aria-hidden="true" />
             Workspace
           </button>
           <button
             type="button"
-            className={`phone-mode-btn${tasksMode ? " active" : ""}`}
-            aria-pressed={tasksMode}
+            className={`phone-mode-btn${tasksActive ? " active" : ""}`}
+            aria-pressed={tasksActive}
             aria-label={
               needsYou > 0 ? `Tasks, ${needsYou} need${needsYou === 1 ? "s" : ""} you` : "Tasks"
             }
-            onClick={() => setViewMode("kanban")}
+            onClick={() => showMode("kanban")}
           >
             <LayersIcon size={17} aria-hidden="true" />
             Tasks{" "}
@@ -58,8 +72,11 @@ export function PhoneModeBar({ onOpenSettings }: { onOpenSettings: () => void })
           </button>
           <button
             type="button"
-            className="phone-mode-btn phone-mode-more"
+            className={`phone-mode-btn phone-mode-more${viewOpen ? " active" : ""}`}
             aria-label="More"
+            // The open view is one of the sheet's entries: "more" is where
+            // the screen is, as a pressed mode button marks the mode.
+            aria-current={viewOpen ? "page" : undefined}
             aria-haspopup="dialog"
             aria-expanded={moreOpen}
             onClick={() => setMoreOpen(true)}

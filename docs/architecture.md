@@ -724,7 +724,11 @@ otherwise the new session is a tab.
 
 **Phone** (under 700px): the top bar (`Toolbar.tsx`: the session switcher, the
 palette, the bell), the mode bar (`PhoneModeBar.tsx`) and its "⋯" sheet, which
-lists exactly the right rail's views (each opening full screen) and Settings.
+lists exactly the right rail's views and Settings. A view opens over the
+workspace down to the mode bar, which stays visible and is the way out
+(#3216): "⋯" shows as the active entry, Workspace or Tasks closes the view,
+and another view from the sheet replaces it. The view's head names it, with no
+back control of its own; a pushed detail (a task, a PR) keeps its Back.
 There is no drawer: the left sidebar still mounts, hidden, because it loads
 projects, sessions and their GitHub subscriptions. Android's back gesture
 closes the topmost sheet, then a detail, then the view

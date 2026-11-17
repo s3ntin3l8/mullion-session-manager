@@ -12,3 +12,8 @@ export const SidebarRepoTitleContext = createContext<((title: string | null) => 
 // The thin context strip under the drawer's header row ("GITHUB · 5 open PRs").
 // Null outside the drawer, where SidebarHeader renders the strip inline.
 export const SidebarStripSlotContext = createContext<HTMLElement | null>(null);
+
+// True inside the phone's full-screen view (#3216), whose own head already
+// names the view: SidebarHeader's strip drops the name there, and is not
+// rendered at all when the name is all it carries.
+export const SidebarPhoneContext = createContext(false);

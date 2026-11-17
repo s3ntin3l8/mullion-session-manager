@@ -1,12 +1,13 @@
 import { useLayoutEffect, useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
-import { ChevronLeftIcon, CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
+import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
 import { useCheckoutTarget } from "../hooks/useCheckoutTarget.js";
 import { useDashboardStore } from "../store/index.js";
 import { DEFAULT_RIGHT_SIDEBAR_VIEW } from "../store/constants.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 import {
+  SidebarPhoneContext,
   SidebarRepoTitleContext,
   SidebarStripSlotContext,
   SidebarToolbarSlotContext,
@@ -19,8 +20,10 @@ export interface RightSidebarPanelProps {
   followed: FollowedProject;
   actions: RightSidebarActions;
   onClose: () => void;
-  /** Phone (#3014): the view is a full screen with a header row that names it
-   * and a back control, in place of the close button. Back closes the view. */
+  /** Phone (#3014): the view fills the screen above the mode bar, with a
+   * header row that names it in place of the close button. There is no back
+   * control (#3216): the mode bar and the back gesture leave the view, and a
+   * pushed detail carries its own Back. */
   phone?: boolean;
   /** With `phone`: the name the header row shows. */
   title?: string;
@@ -62,18 +65,13 @@ export function RightSidebarPanel({
     <>
       {phone && (
         // Steps aside while a detail fills the header's detail slot: the
-        // detail's own header carries the back control then (right-sidebar.css).
+        // detail's own header carries the back control then (mobile.css).
         <div className="right-sidebar-phone-head">
-          <button
-            type="button"
-            className="right-sidebar-phone-back"
-            aria-label="Back"
-            title="Back"
-            onClick={onClose}
-          >
-            <ChevronLeftIcon size={18} />
-          </button>
-          <h2 className="right-sidebar-phone-title">{title ?? view.label}</h2>
+          {/* Focusable from script only: where focus lands as the view opens
+              or a detail is left, without raising the on-screen keyboard. */}
+          <h2 className="right-sidebar-phone-title" tabIndex={-1}>
+            {title ?? view.label}
+          </h2>
         </div>
       )}
       {/* One header row for every view: the project picker is the title, then
@@ -126,26 +124,28 @@ export function RightSidebarPanel({
         // (styles/motion.css, .motion-arrive). Only the content moves; the
         // sidebar itself, and any terminal in it, is at its final size at once.
         <div key={view.id} className="right-sidebar-body cmux-scroll motion-arrive">
-          <SidebarToolbarSlotContext.Provider value={toolbarSlot}>
-            <SidebarStripSlotContext.Provider value={stripSlot}>
-              <SidebarDetailSlotContext.Provider value={detailSlot}>
-                <SidebarRepoTitleContext.Provider value={setRepoTitle}>
-                  {view.hostGlobal ? (
-                    <view.Component actions={actions} />
-                  ) : (
-                    projectId != null && (
-                      <view.Component
-                        projectId={projectId}
-                        checkoutSessionId={checkoutSessionId}
-                        checkoutChoice={choice}
-                        actions={actions}
-                      />
-                    )
-                  )}
-                </SidebarRepoTitleContext.Provider>
-              </SidebarDetailSlotContext.Provider>
-            </SidebarStripSlotContext.Provider>
-          </SidebarToolbarSlotContext.Provider>
+          <SidebarPhoneContext.Provider value={phone}>
+            <SidebarToolbarSlotContext.Provider value={toolbarSlot}>
+              <SidebarStripSlotContext.Provider value={stripSlot}>
+                <SidebarDetailSlotContext.Provider value={detailSlot}>
+                  <SidebarRepoTitleContext.Provider value={setRepoTitle}>
+                    {view.hostGlobal ? (
+                      <view.Component actions={actions} />
+                    ) : (
+                      projectId != null && (
+                        <view.Component
+                          projectId={projectId}
+                          checkoutSessionId={checkoutSessionId}
+                          checkoutChoice={choice}
+                          actions={actions}
+                        />
+                      )
+                    )}
+                  </SidebarRepoTitleContext.Provider>
+                </SidebarDetailSlotContext.Provider>
+              </SidebarStripSlotContext.Provider>
+            </SidebarToolbarSlotContext.Provider>
+          </SidebarPhoneContext.Provider>
         </div>
       )}
     </>

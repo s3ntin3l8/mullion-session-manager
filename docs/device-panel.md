@@ -276,7 +276,7 @@ deliberately a **separate** implementation from `PtyManager`/
 
 **Wired into the dashboard UI (issue #1326, lifecycle rework).** The right
 sidebar has a **Devices** view (the rail's device icon on tablet and desktop;
-on the phone the mode bar's "⋯" sheet opens it full screen) listing every
+on the phone the mode bar's "⋯" sheet opens it above the mode bar) listing every
 device row that still exists — active _and_ stopped. It is host-global, so it
 shows no project picker. With zero devices it shows a short empty state that
 points at Settings → Devices (see below). If the first fetch of the list
