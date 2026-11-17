@@ -136,7 +136,7 @@ describe("session-scope reads of sessions and tasks", () => {
   it("a coordinator limited by crossProjectTargets sees only the listed ones", async () => {
     const w = await world();
     const other = project("other");
-    const sOther = session(other);
+    session(other);
     task(other, 9);
     app!.db
       .update(projects)
@@ -145,7 +145,6 @@ describe("session-scope reads of sessions and tasks", () => {
       .run();
     expect(projectIdsOf(await call(w.sOwn, "sessions.list"))).toEqual([w.own, other]);
     expect(projectIdsOf(await call(w.sOwn, "tasks.list"))).toEqual([w.own, other]);
-    expect(sOther).toBeGreaterThan(0);
   });
 
   it("session-scope replies carry none of the secret fields", async () => {
@@ -196,6 +195,24 @@ describe("session-scope reads of sessions and tasks", () => {
         ok: false,
         status: 403,
       });
+    }
+  });
+
+  it("kill and dock writes never reach another project from a coordinator", async () => {
+    const w = await world();
+    app!.db
+      .update(projects)
+      .set({ allowCrossProjectSpawn: true })
+      .where(eq(projects.id, w.own))
+      .run();
+    for (const [op, body] of [
+      ["sessions.kill", { id: w.sOpen }],
+      ["docks.start", { projectId: w.open, dockControlId: "x" }],
+      ["docks.stop", { projectId: w.open, dockControlId: "x" }],
+    ] as const) {
+      const r = await call(w.sOwn, op, body);
+      expect(r, op).toMatchObject({ ok: false });
+      expect([400, 403, 404], op).toContain((r as { status: number }).status);
     }
   });
 });

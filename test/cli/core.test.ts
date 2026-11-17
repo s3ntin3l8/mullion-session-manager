@@ -3552,7 +3552,7 @@ describe("runCommand", () => {
       const client = fakeClient({
         request: vi.fn(async (op: string) => {
           if (op === "ping") return { pong: true };
-          if (op === "sessions.list") return [];
+          if (op === "projects.list") return [];
           throw new Error("unexpected op");
         }),
       });
@@ -3569,7 +3569,7 @@ describe("runCommand", () => {
       const client = fakeClient({
         request: vi.fn(async (op: string) => {
           if (op === "ping") return { pong: true };
-          if (op === "sessions.list") return [];
+          if (op === "projects.list") return [];
           throw new Error("unexpected op");
         }),
       });
@@ -3583,7 +3583,7 @@ describe("runCommand", () => {
       const client = fakeClient({
         request: vi.fn(async (op: string) => {
           if (op === "ping") return { pong: true };
-          if (op === "sessions.list") return [];
+          if (op === "projects.list") return [];
           throw new Error("unexpected op");
         }),
       });
@@ -3592,7 +3592,7 @@ describe("runCommand", () => {
       expect(io.written.join("")).not.toContain("session:");
     });
 
-    it("reports session scope when sessions.list 403s", async () => {
+    it("reports session scope when projects.list 403s", async () => {
       const client = fakeClient({
         request: vi.fn(async (op: string) => {
           if (op === "ping") return { pong: true };

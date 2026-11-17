@@ -526,7 +526,7 @@ export function formatBrowserResult(action, result) {
 /** Enriches the server's flat "not permitted for this connection's scope"
  * 403 with what actually went wrong and how to fix it — the scope trap a
  * session-scoped connection (every session's own MULLION_HOOK_TOKEN) hits
- * on any full-scope-only op (sessions.list/create, projects.list/dock,
+ * on any full-scope-only op (sessions.create, projects.list/dock,
  * previews.*, agents.list). A bare "403 forbidden" here would send an agent
  * running inside a session down a debugging rabbit hole for something
  * that's actually just "this op needs an operator credential." */
@@ -539,10 +539,12 @@ export function formatError(err, client) {
         return (
           `${err.message} (connected via ${via}). ` +
           "This operation is operator-only: a session never holds full scope. " +
-          "Only the read-only `session list`, `task list` and `task get` work from a " +
-          "session; they cover other projects only when this project is a coordinator " +
-          "and the target project accepts it, and a project that is out of reach looks " +
-          "like one that does not exist."
+          "Of the reads that reach beyond your own session, only `session list`, " +
+          "`task list` and `task get` work; they cover other projects only when this " +
+          "project is a coordinator and the target project accepts it, and a project " +
+          "that is out of reach looks like one that does not exist. Ops that act on " +
+          "your own session (session get/children, your project's dock, device, " +
+          "browser, project actions) are unaffected."
         );
       }
       return (
@@ -1898,7 +1900,7 @@ async function runConfig(client, _args, _opts, io) {
     await client.request("ping", {});
     info.reachable = true;
     try {
-      await client.request("sessions.list", {});
+      await client.request("projects.list", {});
       info.scope = "full";
     } catch (err) {
       info.scope = err instanceof MullionSocketError && err.status === 403 ? "session" : "unknown";

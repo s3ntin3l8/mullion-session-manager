@@ -1210,7 +1210,7 @@ const setProjectTooling = {
 };
 
 // device.* ops (control-socket.ts) are reachable at session scope with no
-// full-scope requirement — unlike list_sessions/list_projects above, these
+// full-scope requirement — unlike list_projects above, these
 // work from inside a normal agent session, closing the "verify your own UI
 // change" loop the whole device panel feature exists for. `deviceId` is
 // always required (see control-socket.ts's own comment on why there's no
