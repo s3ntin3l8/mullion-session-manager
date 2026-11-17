@@ -98,7 +98,8 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
       within(menu)
         .getAllByRole("menuitem")
         .map((i) => i.textContent),
-    ).toEqual(["Rename", "Move up", "Move down", "Move to Infra", "Delete workspace"]);
+      // Order within a group is the row's handle's (#3217), not the menu's.
+    ).toEqual(["Rename", "Move to Infra", "Delete workspace"]);
 
     await user.click(within(menu).getByRole("menuitem", { name: "Rename" }));
     expect(screen.queryByRole("menu")).toBeNull();
@@ -132,7 +133,7 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     expect(search).toHaveFocus();
   });
 
-  it("moves a workspace up, down and into a group, focus following the row", async () => {
+  it("moves a workspace up, down (its handle's arrows) and into a group, focus following the row", async () => {
     stubPxWidth(1000);
     // Apply the order the way the store does, so a moved row re-renders.
     actions.reorderWorkspaces.mockImplementation(
@@ -148,13 +149,12 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
     const user = userEvent.setup();
     render(<App />);
     await user.click(chip());
-    const list = await openMenu(user, "Manage Alpha");
-    const up = screen.getByRole("menuitem", { name: "Move up" });
-    expect(up).toHaveAttribute("aria-disabled", "true");
-    // Inert: nothing happens, and the menu stays.
-    await user.click(up);
+    const list = screen.getByRole("dialog", { name: "Workspaces" });
+    within(list).getByRole("button", { name: "Reorder Alpha" }).focus();
+    // Already first: nothing moves.
+    await user.keyboard("{ArrowUp}");
     expect(actions.reorderWorkspaces).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("menuitem", { name: "Move down" }));
+    await user.keyboard("{ArrowDown}");
     expect(actions.reorderWorkspaces).toHaveBeenLastCalledWith(
       expect.arrayContaining([
         { id: 2, groupId: null, position: 0 },
@@ -162,14 +162,13 @@ describe("App: managing workspaces and projects without the sidebar (#3048)", ()
       ]),
     );
     await waitFor(() =>
-      expect(within(list).getByRole("button", { name: "Manage Alpha" })).toHaveFocus(),
+      expect(within(list).getByRole("button", { name: "Reorder Alpha" })).toHaveFocus(),
     );
+    // Now last: nothing moves.
+    await user.keyboard("{ArrowDown}");
+    expect(actions.reorderWorkspaces).toHaveBeenCalledTimes(1);
 
     await openMenu(user, "Manage Alpha");
-    expect(screen.getByRole("menuitem", { name: "Move down" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
     await user.click(screen.getByRole("menuitem", { name: "Move to Infra" }));
     // To the end of the group it joins.
     expect(actions.reorderWorkspaces).toHaveBeenLastCalledWith(

@@ -9,6 +9,8 @@ when you'd reach for it.
 - [`sessions.md`](sessions.md) — starting a session: the New session
   launcher (where, agent, model, permission override, shells and scripts) and
   how it relates to the command palette.
+- [`workspaces.md`](workspaces.md) — workspaces and groups: the rail's
+  workspace picker, reordering by drag or keyboard, moving between groups.
 - [`dock.md`](dock.md) — the Dock: a shared rail of per-project monitors
   (`dock.json`), Docker Compose service discovery, dev-server port
   auto-detection.
