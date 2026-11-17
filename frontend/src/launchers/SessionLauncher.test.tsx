@@ -1317,14 +1317,30 @@ describe("SessionLauncher — phone Workspace row", () => {
     ).toEqual(["Work / Review", "Default"]);
   });
 
-  it("is not shown with one workspace", async () => {
-    useDashboardStore.setState({ workspaces: [A] });
-    stubFetch();
+  it("lists a workspace whose group has not loaded yet, last, under its own name", async () => {
+    useDashboardStore.setState({ groups: [] });
+    stubFetch({ groups: [] });
+    renderHost({ phone: true });
+    openLauncher();
+
+    const row = await screen.findByRole("combobox", { name: "Workspace" });
+    expect(
+      within(row)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Default", "Review"]);
+  });
+
+  it("with one workspace, is not shown and loads no groups", async () => {
+    useDashboardStore.setState({ workspaces: [A], groups: [] });
+    const { fetchMock } = stubFetch();
     renderHost({ phone: true });
     openLauncher();
 
     await screen.findByRole("radiogroup", { name: "Agent" });
     expect(screen.queryByRole("combobox", { name: "Workspace" })).toBeNull();
+    const urls = fetchMock.mock.calls.map((call) => String((call as unknown[])[0]));
+    expect(urls.some((url) => url.startsWith("/api/groups"))).toBe(false);
   });
 
   it("is not shown off the phone (the fold's sheet, or the desktop dialog)", async () => {

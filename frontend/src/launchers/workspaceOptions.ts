@@ -21,11 +21,13 @@ export function workspaceOptions(
     }
   }
   for (const w of ungrouped) options.push({ value: String(w.id), label: w.name });
-  // A workspace whose group has not loaded yet is still listed, last.
+  // A workspace whose group is not known (the groups have not loaded yet, on
+  // the launcher's first open) is still listed, last and under its own name:
+  // with no group loaded there is no group name to give it. Once the groups
+  // load, the row re-renders in the picker's order.
+  const listed = new Set(options.map((o) => o.value));
   for (const w of all) {
-    if (!options.some((o) => o.value === String(w.id))) {
-      options.push({ value: String(w.id), label: w.name });
-    }
+    if (!listed.has(String(w.id))) options.push({ value: String(w.id), label: w.name });
   }
   return options;
 }

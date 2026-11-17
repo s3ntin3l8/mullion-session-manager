@@ -1,4 +1,5 @@
 import { useWorkspaceTree } from "../hooks/useWorkspaceTree.js";
+import { useDashboardStore } from "../store/index.js";
 import { Dropdown } from "../ui/primitives.js";
 import { workspaceOptions } from "./workspaceOptions.js";
 
@@ -7,17 +8,21 @@ import { workspaceOptions } from "./workspaceOptions.js";
 // Only on the phone, and only with more than one workspace: on the desk and
 // the fold the rail's workspace chip already shows and switches it.
 
-export function LauncherWorkspaceRow({
-  id,
-  workspaceId,
-  onChange,
-}: {
+interface LauncherWorkspaceRowProps {
   id: string;
   workspaceId: number | null;
   onChange: (workspaceId: number) => void;
-}) {
+}
+
+export function LauncherWorkspaceRow(props: LauncherWorkspaceRowProps) {
+  // Checked before the tree hook mounts: it loads the groups when none are in
+  // the store, which a row that never renders should not cost on every open.
+  const several = useDashboardStore((s) => s.workspaces.length > 1);
+  return several ? <WorkspaceRow {...props} /> : null;
+}
+
+function WorkspaceRow({ id, workspaceId, onChange }: LauncherWorkspaceRowProps) {
   const { workspaces, sortedGroups, groupWorkspaces, ungrouped } = useWorkspaceTree();
-  if (workspaces.length < 2) return null;
   const options = workspaceOptions(sortedGroups, groupWorkspaces, ungrouped, workspaces);
   return (
     <div className="launcher-form-row">

@@ -696,6 +696,41 @@ describe("App explicit split on the tablet", () => {
     expect(screen.queryByText(/pane cap/)).toBeNull();
   });
 
+  // #3246 — a session started on the phone with another workspace chosen
+  // joins that workspace: it is not placed in this grid, by the split or the
+  // normal open path, and its open is recorded for the chosen workspace only.
+  it("a launch into another workspace records its open there and adds no pane here", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const opened = vi.fn();
+    foldHarness.onOpenSession = opened;
+    await renderWithApi();
+
+    act(() => useDashboardStore.getState().requestSplit("session-1", "right", 7));
+    const target = useDashboardStore.getState().launcherRequest?.target ?? null;
+    act(() => foldHarness.launcher!.onLaunched(splitHarness.launch!, target, 2));
+
+    expect(splitHarness.api?.addPanel).not.toHaveBeenCalled();
+    expect(opened).not.toHaveBeenCalled();
+    expect(useDashboardStore.getState().showWorkspace).toHaveBeenCalledWith(2);
+    const posts = fetchMock.mock.calls
+      .map((call) => String((call as unknown[])[0]))
+      .filter((url) => url.includes("/pending-opens"));
+    expect(posts).toEqual(["/api/workspaces/2/pending-opens"]);
+    foldHarness.onOpenSession = () => {};
+  });
+
+  it("a launch with no workspace chosen opens in this grid as before", async () => {
+    const opened = vi.fn();
+    foldHarness.onOpenSession = opened;
+    await renderWithApi();
+
+    act(() => foldHarness.launcher!.onLaunched(splitHarness.launch!, null, null));
+    expect(opened).toHaveBeenCalledWith(splitHarness.launch);
+    expect(useDashboardStore.getState().showWorkspace).not.toHaveBeenCalled();
+    foldHarness.onOpenSession = () => {};
+  });
+
   it("an existing session opened from a split's launcher lands below the reference pane", async () => {
     await renderWithApi();
 
