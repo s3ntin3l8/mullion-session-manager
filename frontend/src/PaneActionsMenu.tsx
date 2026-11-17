@@ -12,7 +12,6 @@ import {
   GridIcon,
   KillIcon,
   ListIcon,
-  MoveIcon,
   OverflowIcon,
   RenameIcon,
   BotIcon,
@@ -33,7 +32,8 @@ import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange, visibleViewport } from "./hooks/useVisualViewportChange.js";
-import { useCoarsePointer, useLayoutContext } from "./lib/layoutTier.js";
+import { useCoarsePointer, useLayoutContext, useLayoutPresentationMode } from "./lib/layoutTier.js";
+import { isHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
 import { BottomSheet } from "./ui/BottomSheet.js";
 import { describeError } from "./lib/describeError.js";
 
@@ -122,6 +122,10 @@ export function PaneActionsMenu({
   // `requestSplit(referencePanelId, direction)` store action, this tab's own
   // `api.id` as the reference panel rather than the group's active one).
   const requestSplit = useDashboardStore((s) => s.requestSplit);
+  // #3214 — the two halves and the phone have no grid: no split, no moving
+  // between panes, no reset of pane sizes, and the Agent Browser is the right
+  // rail's Browser view there rather than a pane of its own.
+  const hasGrid = useLayoutPresentationMode() === "grid";
 
   const [overflowOpen, setOverflowOpen] = useState(false);
   // #3054 — under a coarse pointer the menu is a bottom sheet (rows of 44px
@@ -361,18 +365,25 @@ export function PaneActionsMenu({
   // closed since it's only ever read from the (conditionally rendered) menu
   // content — `canBalanceSiblingsOf` serializes the layout (`toJSON()`), so it
   // must not run on every render of the trigger button.
-  const canReset = overflowOpen && !!api.group && canBalanceSiblingsOf(containerApi, api.group.id);
+  const canReset =
+    overflowOpen && hasGrid && !!api.group && canBalanceSiblingsOf(containerApi, api.group.id);
+  // #3214 — Split right/down only while this pane's header is hiding its own
+  // split buttons, by the header's own width measurement
+  // (PaneHeaderActions.tsx publishes it per group in lib/paneHeaderSplit.ts),
+  // read fresh on every open like `canReset`.
+  const showSplit = overflowOpen && hasGrid && !!session && isHeaderSplitHidden(api.group?.id);
 
   // Tablet only: touch can't drag a tab between columns (the strip pans
   // instead — xterm.css), so offer the move as menu actions. Read fresh on
   // every open, like `canReset` above, since the group layout is live state.
   const ownGroup = api.group;
   const moveTargets =
-    overflowOpen && layout.tier === "tablet" && ownGroup
+    overflowOpen && hasGrid && layout.tier === "tablet" && ownGroup
       ? otherTiledGroups(containerApi, ownGroup)
       : [];
   const canSplitOut =
     overflowOpen &&
+    hasGrid &&
     layout.tier === "tablet" &&
     !!ownGroup &&
     ownGroup.api.location.type === "grid" &&
@@ -382,7 +393,7 @@ export function PaneActionsMenu({
   const menuItems = (
     <>
       {/* Hermes review, PR #613 — gated on `session`, not rendered
-            unconditionally like "Move" below. On desktop this component
+            unconditionally like "Reset pane sizes" below. On desktop this component
             only ever mounted for terminal panels (PaneTab.tsx's
             tabComponents mapping), so `session` was always present and
             this never mattered; the phone session switcher now renders this
@@ -439,21 +450,14 @@ export function PaneActionsMenu({
       )}
       {/* Issue: narrow headers overflow — PaneHeaderActions.tsx's
             header-level split buttons hide once their group gets too
-            narrow; this is the fallback entry point for a TERMINAL
-            pane that's cramped enough to need it (independent code
-            review, PR #709 — this menu only ever renders for terminal
-            panels, tabComponents in panels/registry.tsx, so a narrow
-            group made up of non-terminal panels — github/git/timeline/
-            browser — has no such fallback once its header buttons
-            hide; that's a pre-existing gap in this menu's own
-            coverage, not something this change introduces or closes).
-            Gated on `session`, same as Rename above: splitting is
-            meaningless for a pane whose session hasn't loaded yet.
+            narrow; these two are the fallback, listed only then
+            (`showSplit`, #3214) so the menu does not repeat buttons the
+            header already shows. Gated on `session`, same as Rename above.
             Reference panel is THIS tab's own `api.id`, not the group's
-            active one — this menu is opened from a specific tab, so
-            split acts relative to that tab regardless of which one in
-            the group happens to be active. */}
-      {session && (
+            active one — this menu is opened from a specific tab, so split
+            acts relative to that tab regardless of which one in the group
+            happens to be active. */}
+      {showSplit && session && (
         <button
           className="pane-tab-overflow-item"
           role="menuitem"
@@ -465,7 +469,7 @@ export function PaneActionsMenu({
           <span style={{ flex: 1 }}>Split right</span>
         </button>
       )}
-      {session && (
+      {showSplit && session && (
         <button
           className="pane-tab-overflow-item"
           role="menuitem"
@@ -477,20 +481,6 @@ export function PaneActionsMenu({
           <span style={{ flex: 1 }}>Split down</span>
         </button>
       )}
-      {/* aria-disabled, not the native `disabled` attribute — a
-            disabled button doesn't reliably carry an explanatory
-            `title` across engines (issue #1106, same fix applied to
-            KebabMenu.tsx). No onClick here at all, so there's nothing
-            for a click guard to intercept. */}
-      <button
-        className="pane-tab-overflow-item"
-        role="menuitem"
-        aria-disabled="true"
-        title="Drag the tab to move it between panes/workspaces"
-      >
-        <MoveIcon size={14} style={{ color: "var(--muted)" }} />
-        <span style={{ flex: 1 }}>Move (drag tab)</span>
-      </button>
       {/* Manual repair for the fold/unfold pane-skew bug
             (snapshotTiledGroupWidths/restoreTiledGroupWidths's own header
             comment in panelUtils.ts) — dockview's own maximize/exit cache
@@ -505,16 +495,15 @@ export function PaneActionsMenu({
             Disabled (not just a silent no-op click) whenever
             balanceSiblingsOf itself has nothing to balance — this
             pane has no siblings in its row or column, or the layout is
-            maximized — same
-            aria-disabled+explanatory-title pattern as "Move (drag tab)"
-            above, rather than leaving a user-invoked "repair my layout"
-            action clickable with no way to tell whether it did
-            anything. `canReset` (computed above, once, only while the
+            maximized — aria-disabled with an explanatory title, rather
+            than leaving a user-invoked "repair my layout" action
+            clickable with no way to tell whether it did anything. `canReset` (computed above, once, only while the
             menu is open) rather than re-deriving it here twice.
             aria-disabled, not `disabled` (issue #1106) — a disabled
             button doesn't reliably carry the explanatory `title`, so
             the guard against firing when `!canReset` moves into the
-            onClick handler itself instead. */}
+            onClick handler itself instead. Not offered at all where there
+            is no grid (#3214: the two halves and the phone). */}
       {moveTargets.map(({ group, number }) => (
         <button
           key={group.id}
@@ -540,20 +529,22 @@ export function PaneActionsMenu({
           <span style={{ flex: 1 }}>Move to new pane</span>
         </button>
       )}
-      <button
-        className="pane-tab-overflow-item"
-        role="menuitem"
-        aria-disabled={!canReset || undefined}
-        title={canReset ? undefined : "No neighbouring panes in this row or column to balance"}
-        onClick={() => {
-          if (!canReset) return;
-          const groupId = api.group?.id;
-          if (groupId) closeMenuAfterAction(() => balanceSiblingsOf(containerApi, groupId));
-        }}
-      >
-        <GridIcon size={14} style={{ color: "var(--muted)" }} />
-        <span style={{ flex: 1 }}>Reset pane sizes</span>
-      </button>
+      {hasGrid && (
+        <button
+          className="pane-tab-overflow-item"
+          role="menuitem"
+          aria-disabled={!canReset || undefined}
+          title={canReset ? undefined : "No neighbouring panes in this row or column to balance"}
+          onClick={() => {
+            if (!canReset) return;
+            const groupId = api.group?.id;
+            if (groupId) closeMenuAfterAction(() => balanceSiblingsOf(containerApi, groupId));
+          }}
+        >
+          <GridIcon size={14} style={{ color: "var(--muted)" }} />
+          <span style={{ flex: 1 }}>Reset pane sizes</span>
+        </button>
+      )}
       {session && (
         <button
           className="pane-tab-overflow-item"
@@ -566,7 +557,9 @@ export function PaneActionsMenu({
           <span style={{ flex: 1 }}>View timeline</span>
         </button>
       )}
-      {session && (
+      {/* #3214 — the halves and the phone show the Agent Browser as the
+            right rail's Browser view, which follows the active session. */}
+      {session && hasGrid && (
         <button
           className="pane-tab-overflow-item"
           role="menuitem"

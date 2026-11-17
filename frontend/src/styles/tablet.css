@@ -248,18 +248,6 @@
     min-height: 44px;
     padding: 0 12px;
   }
-  /* Independent code review, PR #621 (originally mobile.css) —
-     .view-mode-toggle/.hierarchy-toggle's own `.toolbar-icon-btn` override
-     (two-class selector, styles.css) outranks the plain `.toolbar-icon-btn`
-     bump above regardless of source order — CSS specificity, not cascade
-     position, decides here — so both toggles were silently staying at
-     26x26 without this. ViewModeToggle.tsx always renders in
-     .toolbar-actions and HierarchyToggle.tsx renders in the left sidebar
-     (Sidebar.tsx) — both need their own, equally-specific override. */
-  .hierarchy-toggle .toolbar-icon-btn {
-    width: 44px;
-    height: 44px;
-  }
   /* The card itself is a drag-and-drop reorder handle (out of scope on
      touch — see the plan's "Explicitly out of scope"), not a tap target;
      this only guards against its own padding/border squeezing the nested

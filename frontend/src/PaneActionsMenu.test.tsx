@@ -12,6 +12,30 @@ import {
   installFakeVisualViewport,
   uninstallFakeVisualViewport,
 } from "./test/fakeVisualViewport.js";
+import { clearHeaderSplitHidden, setHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
+
+// A matchMedia that answers width queries for a given viewport width, so
+// `layoutMode: "auto"` resolves the tier and band the real breakpoints give.
+function stubViewportWidth(width: number) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => {
+      const min = /min-width:\s*([\d.]+)px/.exec(query);
+      const max = /max-width:\s*([\d.]+)px/.exec(query);
+      const matches =
+        !query.includes("pointer") &&
+        (min !== null || max !== null) &&
+        (min === null || width >= Number(min[1])) &&
+        (max === null || width <= Number(max[1]));
+      return {
+        matches,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      };
+    }),
+  );
+}
 
 // Code review finding on PR #613 — PaneActionsMenu is now a standalone
 // component (api/params/containerApi/onRename/triggerClassName, not
@@ -344,7 +368,7 @@ describe("PaneActionsMenu", () => {
   });
 
   // Manual repair for the fold/unfold pane-skew bug — offered from every
-  // panel type (no `session` gate), same as "Move" above, since it acts on
+  // panel type (no `session` gate), since it acts on
   // the whole tiled grid rather than this specific pane.
   describe("Move between panes (tablet only)", () => {
     const openMenu = async (apiOverrides: Partial<DockviewPanelApi> = {}) => {
@@ -362,9 +386,15 @@ describe("PaneActionsMenu", () => {
       return user;
     };
     const ownGroup = { id: "g1", panels: [{}, {}], api: { location: { type: "grid" } } };
+    // 750px: the tablet tier, still presented as a grid (#3214).
+    const useGridTablet = () => {
+      layoutModeSetting = "auto";
+      stubViewportWidth(750);
+    };
+    afterEach(() => vi.unstubAllGlobals());
 
     it("offers one 'Move to other pane' for a single target and moves into it", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       const target = { id: "g2" };
       otherTiledGroups.mockReturnValue([{ group: target, number: 2 }]);
       const moveTo = vi.fn();
@@ -375,7 +405,7 @@ describe("PaneActionsMenu", () => {
     });
 
     it("numbers the targets when there are several", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       otherTiledGroups.mockReturnValue([
         { group: { id: "g2" }, number: 2 },
         { group: { id: "g3" }, number: 3 },
@@ -386,7 +416,7 @@ describe("PaneActionsMenu", () => {
     });
 
     it("splits a tab out into a new pane to the right when its group has several tabs", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       const moveTo = vi.fn();
       const user = await openMenu({ group: ownGroup, moveTo } as never);
       await user.click(screen.getByText("Move to new pane"));
@@ -394,7 +424,7 @@ describe("PaneActionsMenu", () => {
     });
 
     it("hides 'Move to new pane' for a group's only tab", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       await openMenu({
         group: { id: "g1", panels: [{}], api: { location: { type: "grid" } } },
         moveTo: vi.fn(),
@@ -403,11 +433,19 @@ describe("PaneActionsMenu", () => {
     });
 
     it("hides 'Move to new pane' for a floating group", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       await openMenu({
         group: { id: "g1", panels: [{}, {}], api: { location: { type: "floating" } } },
         moveTo: vi.fn(),
       } as never);
+      expect(screen.queryByText("Move to new pane")).toBeNull();
+    });
+
+    it("offers neither in the two halves (the tablet override)", async () => {
+      layoutModeSetting = "tablet";
+      otherTiledGroups.mockReturnValue([{ group: { id: "g2" }, number: 2 }]);
+      await openMenu({ group: ownGroup, moveTo: vi.fn() } as never);
+      expect(screen.queryByText("Move to other pane")).toBeNull();
       expect(screen.queryByText("Move to new pane")).toBeNull();
     });
 
@@ -500,10 +538,10 @@ describe("PaneActionsMenu", () => {
   // Hermes review, PR #613 — Rename and Kill must be GATED on session, not
   // just left to silently no-op: ungated, Rename opened an input whose
   // commit silently discarded the typed name, and Kill was a no-op button
-  // that looked destructive but did nothing. Only the always-disabled
-  // "Move" item is session-independent by design.
+  // that looked destructive but did nothing. "Reset pane sizes" is
+  // session-independent by design.
   describe("panel with no resolvable session (non-terminal panel)", () => {
-    it("hides Rename, the kill divider, and Kill session — shows only the disabled Move item", async () => {
+    it("hides Rename, the kill divider, and Kill session — shows only Reset pane sizes", async () => {
       const user = userEvent.setup();
       render(
         <PaneActionsMenu
@@ -523,9 +561,10 @@ describe("PaneActionsMenu", () => {
       // Rename/Kill above.
       expect(screen.queryByText("Split right")).not.toBeInTheDocument();
       expect(screen.queryByText("Split down")).not.toBeInTheDocument();
-      const moveItem = screen.getByText("Move (drag tab)").closest("button");
-      expect(moveItem).toHaveAttribute("aria-disabled", "true");
-      expect(moveItem).not.toBeDisabled();
+      expect(screen.queryByText("Move (drag tab)")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
+        "Reset pane sizes",
+      ]);
     });
 
     it("hides View timeline, Open Agent Browser, and Promote to worktree", async () => {
@@ -676,6 +715,90 @@ describe("PaneActionsMenu", () => {
 });
 
 // #719 — per-session mute toggle in the overflow menu.
+// #3214 — the whole item list per presentation: split entries only while the
+// pane's header hides its own split buttons, and no grid actions (split, move,
+// reset sizes, a browser pane) in the two halves or on the phone.
+describe("PaneActionsMenu — items per layout (#3214)", () => {
+  const GROUP = { id: "g-3214", panels: [{}], api: { location: { type: "grid" } } };
+
+  async function itemLabels(onClose?: () => void) {
+    projects = [{ id: 1 } as Project];
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi({ id: "session-1", group: GROUP } as never)}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        onClose={onClose}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+    await user.click(screen.getByTitle("More…"));
+    return screen.getAllByRole("menuitem").map((el) => el.textContent);
+  }
+
+  afterEach(() => clearHeaderSplitHidden(GROUP.id));
+
+  it("grid, header split buttons showing: no split entries", async () => {
+    setHeaderSplitHidden(GROUP.id, false);
+    expect(await itemLabels()).toEqual([
+      "Rename↵",
+      "Reset pane sizes",
+      "View timeline",
+      "Open Agent Browser",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Kill session",
+    ]);
+  });
+
+  it("grid, header split buttons hidden: the split entries are the fallback", async () => {
+    setHeaderSplitHidden(GROUP.id, true);
+    expect(await itemLabels()).toEqual([
+      "Rename↵",
+      "Split right",
+      "Split down",
+      "Reset pane sizes",
+      "View timeline",
+      "Open Agent Browser",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Kill session",
+    ]);
+  });
+
+  it("the two halves: no grid actions, Close pane kept", async () => {
+    layoutModeSetting = "tablet";
+    setHeaderSplitHidden(GROUP.id, true);
+    otherTiledGroups.mockReturnValue([{ group: { id: "g2" }, number: 2 }]);
+    expect(await itemLabels(vi.fn())).toEqual([
+      "Rename↵",
+      "View timeline",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Close pane",
+      "Kill session",
+    ]);
+  });
+
+  it("the phone: no grid actions", async () => {
+    layoutModeSetting = "phone";
+    setHeaderSplitHidden(GROUP.id, true);
+    expect(await itemLabels()).toEqual([
+      "Rename↵",
+      "View timeline",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Kill session",
+    ]);
+  });
+
+  it("never lists Move (drag tab)", async () => {
+    expect(await itemLabels()).not.toContain("Move (drag tab)");
+  });
+});
+
 describe("PaneActionsMenu — mute notifications (#719)", () => {
   it("offers 'Mute notifications' and toggles the session on click", async () => {
     const user = userEvent.setup();

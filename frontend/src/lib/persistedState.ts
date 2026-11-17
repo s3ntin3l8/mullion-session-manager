@@ -57,7 +57,6 @@ export const STORAGE_KEYS = {
   // #3010 — which panes show on which half between 800 and 1099px, per
   // workspace (lib/foldHalves.ts). Device-local: never in the saved layout.
   foldHalves: "crs.foldHalves",
-  hierarchicalView: "crs.hierarchicalView",
   dockCollapsed: "crs.dockCollapsed",
   dockHeight: "crs.dockHeight",
   dockManualProjects: "crs.dockManualProjects",

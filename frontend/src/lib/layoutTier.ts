@@ -216,3 +216,18 @@ export function resolveLayoutPresentation(layoutMode: LayoutMode): LayoutPresent
   if (resolveLayoutTier(layoutMode) === "phone") return "phone";
   return resolveLayoutBand(layoutMode) === "rails-halves" ? "halves" : "grid";
 }
+
+/**
+ * Live-subscribed presentation, the hook counterpart of
+ * resolveLayoutPresentation: composed from the live tier and band so it
+ * follows a width crossing or a layoutMode change. #3214 — the pane menu
+ * offers grid actions (split, move between panes, reset sizes, open a browser
+ * pane) only where there is a grid.
+ */
+export function useLayoutPresentationMode(): LayoutPresentation {
+  const layoutMode = useDashboardStore((s) => s.settings.layoutMode);
+  const tier = useLayoutTier(layoutMode);
+  const band = useLayoutBand(layoutMode);
+  if (tier === "phone") return "phone";
+  return band === "rails-halves" ? "halves" : "grid";
+}
