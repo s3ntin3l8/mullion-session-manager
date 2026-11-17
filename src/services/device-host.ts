@@ -109,7 +109,7 @@ class RemoteDeviceHost implements DeviceHost {
   }
 
   kinds(): Promise<DeviceKind[] | null> {
-    return this.client.resolveDeviceKinds();
+    return this.client.devices.kinds();
   }
 
   async getOrCreate(row: DeviceRow): Promise<SpawnedDevice> {
@@ -122,7 +122,7 @@ class RemoteDeviceHost implements DeviceHost {
       port: row.kind === "emulator" ? row.port : null,
       reservedPorts: reservedPortsOnHost(this.app, this.hostId, row.id),
     };
-    const res = await this.client.spawnDevice(spec);
+    const res = await this.client.devices.spawn(spec);
     // The agent has no database: the port its emulator holds is persisted here,
     // from the answer, so a later spawn (after an agent restart) can reattach.
     if (row.kind === "emulator" && res.port !== null && res.port !== row.port) {
@@ -132,16 +132,16 @@ class RemoteDeviceHost implements DeviceHost {
   }
 
   terminate(id: number, kind: DeviceKind): Promise<void> {
-    return this.client.terminateDevice(String(id), kind);
+    return this.client.devices.terminate(String(id), kind);
   }
 
   async info(id: number): Promise<DeviceInfo | undefined> {
-    const live = await this.client.liveDevices();
+    const live = await this.client.devices.live();
     return live.find((d) => d.id === String(id));
   }
 
   action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
-    return this.client.deviceAction(String(id), action);
+    return this.client.devices.action(String(id), action);
   }
 }
 
@@ -167,7 +167,7 @@ export interface LiveLookup {
 }
 
 /**
- * Live info for many rows at once: one `liveDevices()` per agent host rather
+ * Live info for many rows at once: one `devices.live()` per agent host rather
  * than one request per row, and a host that is down marks its rows unreachable
  * instead of failing the whole listing.
  */
@@ -188,7 +188,7 @@ export async function liveInfoForRows(
     [...remoteHosts].map(async (hostId) => {
       let live: DeviceInfo[] | null = null;
       try {
-        live = await getRemoteHostClient(app, hostId).liveDevices();
+        live = await getRemoteHostClient(app, hostId).devices.live();
       } catch (err) {
         app.log.warn({ err, hostId }, "device list: host did not answer");
       }

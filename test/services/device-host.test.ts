@@ -24,13 +24,14 @@ vi.mock("node:child_process", async (importOriginal) => {
   return mockChildProcessSpawn(actual);
 });
 
-const client = {
-  resolveDeviceKinds: vi.fn(),
-  spawnDevice: vi.fn(),
-  liveDevices: vi.fn(),
-  terminateDevice: vi.fn(),
-  deviceAction: vi.fn(),
+const devices = {
+  kinds: vi.fn(),
+  spawn: vi.fn(),
+  live: vi.fn(),
+  terminate: vi.fn(),
+  action: vi.fn(),
 };
+const client = { devices };
 vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, getRemoteHostClient: () => client };
@@ -58,7 +59,7 @@ describe("DeviceHost", () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.DEVICE_ENABLED = "true";
-    for (const fn of Object.values(client)) fn.mockReset();
+    for (const fn of Object.values(devices)) fn.mockReset();
   });
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
@@ -98,11 +99,11 @@ describe("DeviceHost", () => {
         .prepare("UPDATE devices SET port = ?, status = ? WHERE id = ?")
         .run(port, status, row.id);
     }
-    client.spawnDevice.mockResolvedValue({ info: info(mine.id), port: 5554 });
+    client.devices.spawn.mockResolvedValue({ info: info(mine.id), port: 5554 });
 
     await getDeviceHost(app, mac).getOrCreate(getDeviceRow(app, mine.id)!);
 
-    expect(client.spawnDevice).toHaveBeenCalledWith({
+    expect(client.devices.spawn).toHaveBeenCalledWith({
       id: String(mine.id),
       kind: "emulator",
       avdName: "a",
@@ -117,30 +118,30 @@ describe("DeviceHost", () => {
     const app = await buildTestAppOnPlatform("linux");
     const mac = host(app, "mac");
     const row = emulator(app, mac);
-    client.spawnDevice.mockResolvedValue({ info: info(row.id), port: 5554 });
+    client.devices.spawn.mockResolvedValue({ info: info(row.id), port: 5554 });
     const remote = getDeviceHost(app, mac);
 
     await remote.getOrCreate(row);
     expect(getDeviceRow(app, row.id)!.port).toBe(5554);
 
     // A reattach sends the persisted port back, and the agent answers the same one.
-    client.spawnDevice.mockClear();
+    client.devices.spawn.mockClear();
     await remote.getOrCreate(getDeviceRow(app, row.id)!);
-    expect(client.spawnDevice.mock.calls[0][0].port).toBe(5554);
+    expect(client.devices.spawn.mock.calls[0][0].port).toBe(5554);
     expect(getDeviceRow(app, row.id)!.port).toBe(5554);
   });
 
   it("routes terminate, action and info to the remote client", async () => {
     const app = await buildTestAppOnPlatform("linux");
     const remote = getDeviceHost(app, host(app, "mac"));
-    client.terminateDevice.mockResolvedValue(undefined);
-    client.deviceAction.mockResolvedValue({ ok: true });
-    client.liveDevices.mockResolvedValue([info(7)]);
+    client.devices.terminate.mockResolvedValue(undefined);
+    client.devices.action.mockResolvedValue({ ok: true });
+    client.devices.live.mockResolvedValue([info(7)]);
 
     await remote.terminate(7, "emulator");
-    expect(client.terminateDevice).toHaveBeenCalledWith("7", "emulator");
+    expect(client.devices.terminate).toHaveBeenCalledWith("7", "emulator");
     await expect(remote.action(7, { action: "tap", x: 1, y: 2 })).resolves.toEqual({ ok: true });
-    expect(client.deviceAction).toHaveBeenCalledWith("7", { action: "tap", x: 1, y: 2 });
+    expect(client.devices.action).toHaveBeenCalledWith("7", { action: "tap", x: 1, y: 2 });
     await expect(remote.info(7)).resolves.toEqual(info(7));
     await expect(remote.info(8)).resolves.toBeUndefined();
   });
@@ -163,15 +164,15 @@ describe("DeviceHost", () => {
     const a2 = emulator(app, mac);
     const b1 = emulator(app, host(app, "down"));
     const localRow = emulator(app, "local");
-    client.liveDevices.mockImplementation(async () => {
-      if (client.liveDevices.mock.calls.length === 2) throw new Error("ECONNREFUSED");
+    client.devices.live.mockImplementation(async () => {
+      if (client.devices.live.mock.calls.length === 2) throw new Error("ECONNREFUSED");
       return [info(a1.id)];
     });
     // Both hosts share one fake client, so make the first call "mac" and the second "down".
     const rows = [a1, a2, b1, localRow].map((r) => getDeviceRow(app, r.id)!);
     const lives = await liveInfoForRows(app, rows);
 
-    expect(client.liveDevices).toHaveBeenCalledTimes(2);
+    expect(client.devices.live).toHaveBeenCalledTimes(2);
     expect(lives.get(a1.id)).toEqual({ live: info(a1.id), unreachable: false });
     expect(lives.get(a2.id)).toEqual({ live: undefined, unreachable: false });
     expect(lives.get(b1.id)).toEqual({ live: undefined, unreachable: true });

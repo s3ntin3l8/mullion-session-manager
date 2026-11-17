@@ -283,9 +283,9 @@ export async function proxyToRemoteDevice(
   }
   if (deviceSocket.readyState !== deviceSocket.OPEN) return;
 
-  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["openDeviceWs"]>;
+  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["devices"]["openSocket"]>;
   try {
-    upstream = getRemoteHostClient(app, hostId).openDeviceWs(String(deviceId), {
+    upstream = getRemoteHostClient(app, hostId).devices.openSocket(String(deviceId), {
       kind: current.kind,
       ...(current.avdName !== null ? { avdName: current.avdName } : {}),
       ...(current.serial !== null ? { serial: current.serial } : {}),

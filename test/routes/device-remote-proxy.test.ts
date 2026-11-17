@@ -41,13 +41,13 @@ class MockSocket extends EventEmitter {
   }
 }
 
-const openDeviceWs = vi.fn();
+const openSocket = vi.fn();
 const getOrCreate = vi.fn();
 const getDeviceRowMock = vi.fn();
 
 vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof RemoteHostClientModule>();
-  return { ...actual, getRemoteHostClient: vi.fn(() => ({ openDeviceWs })) };
+  return { ...actual, getRemoteHostClient: vi.fn(() => ({ devices: { openSocket } })) };
 });
 vi.mock("../../src/services/device-host.js", async (importOriginal) => {
   const actual = await importOriginal<typeof DeviceHostModule>();
@@ -92,13 +92,13 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
   let upstream: MockSocket;
 
   beforeEach(() => {
-    openDeviceWs.mockReset();
+    openSocket.mockReset();
     getOrCreate.mockReset().mockResolvedValue({ info: undefined, port: 5560 });
     getDeviceRowMock.mockReset().mockReturnValue(ROW);
     browser = new MockSocket();
     upstream = new MockSocket();
     upstream.readyState = MockSocket.CONNECTING;
-    openDeviceWs.mockReturnValue(upstream);
+    openSocket.mockReturnValue(upstream);
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -112,7 +112,7 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
   it("get-or-creates the device first, then opens the upstream with the row's identity", async () => {
     await start();
     expect(getOrCreate).toHaveBeenCalledWith(ROW);
-    expect(openDeviceWs).toHaveBeenCalledWith("7", {
+    expect(openSocket).toHaveBeenCalledWith("7", {
       kind: "emulator",
       avdName: "dev35",
       label: "Pixel",
@@ -249,7 +249,7 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
 
       const browser2 = new MockSocket();
       const upstream2 = new MockSocket();
-      openDeviceWs.mockReturnValue(upstream2);
+      openSocket.mockReturnValue(upstream2);
       await proxyToRemoteDevice(fakeApp(), browser2 as unknown as WebSocket, ROW);
       upstream2.open();
       upstream2.emit("error", new Error("boom"));
@@ -277,7 +277,7 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
         message: "Scope dead",
       });
       expect(browser.closeSpy).toHaveBeenCalledTimes(1);
-      expect(openDeviceWs).not.toHaveBeenCalled();
+      expect(openSocket).not.toHaveBeenCalled();
     });
 
     it("opens no upstream when the browser closed while getOrCreate was pending", async () => {
@@ -286,12 +286,12 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
         return { info: undefined, port: null };
       });
       await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
-      expect(openDeviceWs).not.toHaveBeenCalled();
+      expect(openSocket).not.toHaveBeenCalled();
       expect(browser.sendSpy).not.toHaveBeenCalled();
     });
 
     it("answers an upgrade that throws synchronously as an unreachable host", async () => {
-      openDeviceWs.mockImplementation(() => {
+      openSocket.mockImplementation(() => {
         throw new Error("nope");
       });
       await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);

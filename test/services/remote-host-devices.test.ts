@@ -1,16 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
+import type { WebSocket as NodeWebSocket } from "ws";
 import {
   DEVICE_REQUEST_TIMEOUT_MS,
-  deviceAction,
-  deviceWsTarget,
-  liveDevices,
-  resolveDeviceKinds,
-  spawnDevice,
-  terminateDevice,
+  createDevicesClient,
 } from "../../src/services/remote-host-devices.js";
 import { HostRequestError } from "../../src/services/remote-host-errors.js";
 
-// The request builders behind RemoteHostClient's device methods (#3200): what
+// The devices facet behind RemoteHostClient.devices (#3200, #3301): what
 // path, body and timeout each call uses. The primary-side behaviour built on
 // them is in device-host.test.ts.
 
@@ -24,12 +20,17 @@ const SPEC = {
   reservedPorts: [],
 };
 
+const unusedOpenInbound = () => {
+  throw new Error("unexpected openInbound call");
+};
+
 describe("remote-host-devices", () => {
   it("gives a spawn, a teardown and an action longer than the client's default timeout", async () => {
     const request = vi.fn().mockResolvedValue({});
-    await spawnDevice(request, SPEC);
-    await terminateDevice(request, "7", "emulator");
-    await deviceAction(request, "7", { action: "tap", x: 1, y: 2 });
+    const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
+    await devices.spawn(SPEC);
+    await devices.terminate("7", "emulator");
+    await devices.action("7", { action: "tap", x: 1, y: 2 });
 
     expect(DEVICE_REQUEST_TIMEOUT_MS).toBeGreaterThan(5_000);
     expect(request.mock.calls.map(([path, , timeout]) => [path, timeout])).toEqual([
@@ -46,24 +47,31 @@ describe("remote-host-devices", () => {
       .fn()
       .mockResolvedValueOnce({ devices: [] })
       .mockResolvedValueOnce({ deviceKinds: ["physical"] });
-    await expect(liveDevices(request)).resolves.toEqual([]);
-    await expect(resolveDeviceKinds(request)).resolves.toEqual(["physical"]);
+    const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
+    await expect(devices.live()).resolves.toEqual([]);
+    await expect(devices.kinds()).resolves.toEqual(["physical"]);
     expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1]);
   });
 
   it("answers null for an agent that predates the kinds route, and rethrows anything else", async () => {
     const old = vi.fn().mockRejectedValue(new HostRequestError("h", 404, "nope"));
-    await expect(resolveDeviceKinds(old)).resolves.toBeNull();
+    await expect(
+      createDevicesClient({ request: old, openInbound: unusedOpenInbound }).kinds(),
+    ).resolves.toBeNull();
     const broken = vi.fn().mockRejectedValue(new HostRequestError("h", 500, "boom"));
-    await expect(resolveDeviceKinds(broken)).rejects.toThrow();
+    await expect(
+      createDevicesClient({ request: broken, openInbound: unusedOpenInbound }).kinds(),
+    ).rejects.toThrow();
   });
 
   it("builds the socket target with only the query values that are set", () => {
-    expect(deviceWsTarget("7", { kind: "physical", serial: "1.2.3.4:5555" })).toBe(
+    const openInbound = vi.fn((target: string) => target as unknown as NodeWebSocket);
+    const devices = createDevicesClient({ request: vi.fn(), openInbound });
+    devices.openSocket("7", { kind: "physical", serial: "1.2.3.4:5555" });
+    devices.openSocket("7", { kind: "emulator", avdName: "a b", port: "5554" });
+    expect(openInbound.mock.calls.map(([target]) => target)).toEqual([
       "/internal/ws/device/7?kind=physical&serial=1.2.3.4%3A5555",
-    );
-    expect(deviceWsTarget("7", { kind: "emulator", avdName: "a b", port: "5554" })).toBe(
       "/internal/ws/device/7?kind=emulator&avdName=a+b&port=5554",
-    );
+    ]);
   });
 });
