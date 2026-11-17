@@ -51,6 +51,42 @@ export const BROWSER_TARGET_SCHEMA = {
   },
 } as const;
 
+// Issue #3200 — the agent's device routes. Ids are the primary's numeric
+// `devices.id`, as a string.
+export const DEVICE_ID_PARAMS_SCHEMA = {
+  type: "object",
+  required: ["id"],
+  properties: { id: { type: "string", pattern: "^[0-9]{1,18}$" } },
+} as const;
+
+export const DEVICE_KIND_SCHEMA = { type: "string", enum: ["emulator", "physical"] } as const;
+
+export const DEVICE_SPAWN_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "kind", "avdName", "serial", "label", "port", "reservedPorts"],
+  properties: {
+    id: { type: "string", pattern: "^[0-9]{1,18}$" },
+    kind: DEVICE_KIND_SCHEMA,
+    avdName: { type: ["string", "null"], maxLength: 256 },
+    serial: { type: ["string", "null"], maxLength: 256 },
+    label: { type: ["string", "null"], maxLength: 256 },
+    port: { type: ["integer", "null"], minimum: 1, maximum: 65535 },
+    reservedPorts: {
+      type: "array",
+      maxItems: 1024,
+      items: { type: "integer", minimum: 1, maximum: 65535 },
+    },
+  },
+} as const;
+
+export const DEVICE_TERMINATE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind"],
+  properties: { kind: DEVICE_KIND_SCHEMA },
+} as const;
+
 export const SESSION_ID_PARAMS_SCHEMA = {
   type: "object",
   required: ["id"],

@@ -44,6 +44,7 @@ import {
   verify,
 } from "../services/request-signature.js";
 import { registerBrowserRoutes } from "./internal-browser.js";
+import { registerDeviceRoutes } from "./internal-devices.js";
 export { buildAgentConfig } from "./internal-config.js";
 import { registerConfigRoutes } from "./internal-config.js";
 import { registerGitRoutes } from "./internal-git.js";
@@ -623,6 +624,7 @@ export async function internalRoutes(app: FastifyInstance) {
   );
 
   registerBrowserRoutes(app, INTERNAL_RATE_LIMIT);
+  registerDeviceRoutes(app, INTERNAL_RATE_LIMIT);
 
   // No project lookup here — dev-server-status is a live TCP/HTTP probe of
   // this agent's own loopback, not a DB read (this agent has no DB; see
