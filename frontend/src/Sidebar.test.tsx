@@ -1752,7 +1752,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
     });
   });
 
-  it("marks a session whose terminal pane is already open, in words and in the accessible name", () => {
+  it("marks a session whose terminal pane is already open by a heavier title and in the accessible name", () => {
     sessions = [
       makeSession({ id: 7, projectId: 1, command: "claude code" }),
       makeSession({ id: 8, projectId: 1, command: "npm run build" }),
@@ -1762,9 +1762,11 @@ describe("sidebar workspace scope (issue #1877)", () => {
     const openRow = screen.getByRole("button", {
       name: "Open session claude code, already open in this workspace",
     });
-    expect(openRow.querySelector(".session-open-label")?.textContent).toBe("open");
+    // #3286 — the word "open" is gone; the title's weight carries it.
+    expect(openRow.querySelector(".session-name")).toHaveClass("open");
+    expect(openRow).not.toHaveTextContent(/\bopen\b/);
     const closedRow = screen.getByRole("button", { name: "Open session npm run build" });
-    expect(closedRow.querySelector(".session-open-label")).toBeNull();
+    expect(closedRow.querySelector(".session-name")).not.toHaveClass("open");
   });
 
   it("activates an already-open session through onOpenSession, the path that focuses the existing pane", async () => {
@@ -1789,7 +1791,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
   it("does not mark sessions when no open-session set is passed (phone)", () => {
     sessions = [makeSession({ id: 7, projectId: 1, command: "claude code" })];
     renderSidebar({ openSessionIds: null });
-    expect(document.querySelector(".session-open-label")).toBeNull();
+    expect(document.querySelector(".session-name.open")).toBeNull();
     expect(screen.getByRole("button", { name: "Open session claude code" })).toBeInTheDocument();
   });
 
@@ -1803,7 +1805,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
     const openRow = screen.getByRole("button", {
       name: "Open session session-0, already open in this workspace",
     });
-    expect(openRow.querySelector(".session-open-label")?.textContent).toBe("open");
+    expect(openRow.querySelector(".session-name")).toHaveClass("open");
   });
 });
 

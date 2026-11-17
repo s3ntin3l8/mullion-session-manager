@@ -272,7 +272,7 @@ describe("SessionRow", () => {
       const badge = document.querySelector(".session-host-badge");
       expect(badge).not.toBeNull();
       expect(badge?.closest(".session-status-label")).toBeNull();
-      expect(badge?.closest(".session-status-group")).not.toBeNull();
+      expect(badge?.closest(".session-meta-line")).not.toBeNull();
     });
 
     // Issue #1852 — the placement decision's own words are the answer to
@@ -350,6 +350,140 @@ describe("SessionRow", () => {
       expect(screen.getByText("mac-mini")).toBeInTheDocument();
       expect(screen.getByText("unreachable")).toBeInTheDocument();
       expect(screen.getByText("parked")).toBeInTheDocument();
+    });
+  });
+
+  // Issue #3286 — the title gets line 1 to itself; status, host and branch
+  // move to a dim second line, joined by " · ", each part left out with its
+  // separator when it does not apply.
+  describe("the meta line (issue #3286)", () => {
+    const metaLine = () => document.querySelector(".session-meta-line");
+
+    it("shows only the status for a local idle session", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, sessionStatus: "idle", sessionStatusSeverity: "dormant" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Idle");
+      expect(metaLine()?.querySelector(".session-meta-sep")).toBeNull();
+      expect(metaLine()?.querySelector(".session-status-label")).toHaveClass("idle");
+      // Line 1 holds the title, not the status.
+      const strip = document.querySelector(".session-item-row");
+      expect(strip?.querySelector(".session-name")).toHaveTextContent("claude code");
+      expect(strip?.querySelector(".session-status-label")).toBeNull();
+    });
+
+    it("shows status · host for a remote session, the name alone when its host is online", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "online" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · mac-mini");
+      expect(screen.queryByText("online")).not.toBeInTheDocument();
+    });
+
+    it("shows a remote host's state after its name when it is not online", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const host = metaLine()?.querySelector(".session-host-badge");
+      expect(host?.textContent).toBe("mac-miniunreachable");
+    });
+
+    it("shows a parked online host's state", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "online", drained: true })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.querySelector(".session-host-badge")).toHaveTextContent("parked");
+    });
+
+    it("shows status · branch for a session with a branch", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, liveBranch: "feat/two-lines" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · feat/two-lines");
+    });
+
+    it("shows status · host · branch in that order", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "local", liveBranch: "main" }}
+          project={PROJECT}
+          spansHosts
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · this machine · main");
+    });
+
+    it("keeps the attention tone on the status word", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, sessionStatus: "finished", sessionStatusSeverity: "done" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.querySelector(".session-status-label")).toHaveClass("finished");
+    });
+
+    it("keeps the awaiting-data and stale-hooks indicators with the status word", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, stateRestored: false, staleHooks: true }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const label = metaLine()?.querySelector(".session-status-label");
+      expect(label?.textContent?.startsWith("?")).toBe(true);
+      expect(label?.querySelector(".session-stale-icon")).not.toBeNull();
+    });
+
+    it("drops the word 'open' for an open session; the title is heavier and the name says it", () => {
+      render(
+        <SessionRow
+          session={SESSION}
+          project={PROJECT}
+          openInWorkspace
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const row = screen.getByRole("button", {
+        name: "Open session claude code, already open in this workspace",
+      });
+      expect(row).not.toHaveTextContent(/\bopen\b/);
+      expect(row.querySelector(".session-name")).toHaveClass("open");
     });
   });
 

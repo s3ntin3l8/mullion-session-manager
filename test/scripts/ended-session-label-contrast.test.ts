@@ -81,17 +81,12 @@ function endedRow(rowClass: string): {
 } {
   const row = ["session-item", rowClass];
   return {
-    // Sidebar.tsx wraps the label in `.session-status-group`, inside
-    // Header.tsx's `.session-item-row`, inside `.session-item`. Header.test.tsx
+    // Since #3286 SessionRow.tsx puts the label in `.session-meta-line`, the
+    // row's second line, a direct child of `.session-item`. Header.test.tsx
     // renders that nesting; this chain is the same shape. The exited tone is
     // the one an ended session actually paints (sessionStatus.ts).
     // `.status-killed` is not a row class `rowClassNameForSeverity` returns.
-    label: chain([
-      row,
-      ["session-item-row"],
-      ["session-status-group"],
-      ["session-status-label", "exited"],
-    ]),
+    label: chain([row, ["session-meta-line"], ["session-status-label", "exited"]]),
     name: chain([row, ["session-item-row"], ["session-name"]]),
     nowLine: chain([row, ["session-now-line"]]),
   };

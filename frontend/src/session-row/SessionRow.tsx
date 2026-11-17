@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import type { Project, Session } from "../api/index.js";
 import { deriveNowLine } from "../lib/sessionNowLine.js";
@@ -140,7 +140,9 @@ export function SessionRow({
   // instead of just not knowing this prop exists at all.
   depth?: number;
   // Issue #1877 — this session's terminal pane is already in the current
-  // workspace layout. The row says so in words; the click is still `onOpen`,
+  // workspace layout. The title is set in a heavier weight (#3286 removed the
+  // word "open" that used to say so) and the accessible name says it in
+  // words; the click is still `onOpen`,
   // which is App's onOpenSession and focuses that pane instead of adding
   // another. Optional so the board's session lane (which has no workspace
   // layout of its own) stays unmarked.
@@ -412,39 +414,79 @@ export function SessionRow({
   // does, so this row subscribes to that one host. Local sessions have no
   // badge and get no status.
   const remoteHost = useDashboardStore((s) => selectRemoteHost(s.hosts, session.resolvedHostId));
-  const statusLabel = (
-    <span className="session-status-group">
-      <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
-        {showUnknownIndicator && (
-          <span title="Awaiting data… — session state not yet restored after restart">?</span>
-        )}
-        {statusLabelText}
-        {showStaleIndicator && (
-          <span
-            className="session-stale-icon"
-            title={`Session launched with Mullion ${session.restoredVersion ?? "unknown"}, restart to pick up new capabilities`}
-          >
-            &#9201;
-          </span>
-        )}
-      </span>
-      {/* The host badge is a SIBLING of the status label, not a child of it:
-          the label ellipsis-overflows its own box (overflow: hidden), so a
-          badge inside it would be clipped by a long status detail. */}
-      {hostBadge && (
+  // Issue #3286 — the row's second line: the status word, the host and the
+  // branch, joined by " · ". The title used to share one line with all of
+  // these and kept about four characters in a 300px sidebar; this line takes
+  // them off it. A part that does not apply is left out together with its
+  // separator. The status word keeps its tone colour (`.session-status-label
+  // <tone>`), so attention, finished and error still stand out in the dim
+  // line, and idle reads as dim.
+  //
+  // A remote host that is not online carries its state after its name
+  // (HostStatusLabel); an online one is the name alone, since "online" is the
+  // case that needs no saying. The host is shown exactly where the badge is
+  // (describeHostBadge decides): a remote session always has one.
+  const showHostStatus =
+    remoteHost != null && !(remoteHost.health === "online" && remoteHost.drained !== true);
+  const metaParts: { key: string; node: React.ReactNode }[] = [
+    {
+      key: "status",
+      node: (
+        <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
+          {showUnknownIndicator && (
+            <span title="Awaiting data… — session state not yet restored after restart">?</span>
+          )}
+          {statusLabelText}
+          {showStaleIndicator && (
+            <span
+              className="session-stale-icon"
+              title={`Session launched with Mullion ${session.restoredVersion ?? "unknown"}, restart to pick up new capabilities`}
+            >
+              &#9201;
+            </span>
+          )}
+        </span>
+      ),
+    },
+  ];
+  if (hostBadge) {
+    metaParts.push({
+      key: "host",
+      // The host is a SIBLING of the status label, not a child of it: the
+      // label ellipsis-overflows its own box (overflow: hidden), so a host
+      // inside it would be clipped by a long status detail.
+      node: (
         <span className="session-host-badge" title={hostBadge.title}>
           <HostsIcon size={10} />
           <span className="session-host-badge-name">{hostBadge.name}</span>
+          {showHostStatus && remoteHost && <HostStatusLabel host={remoteHost} />}
         </span>
-      )}
-      {remoteHost && <HostStatusLabel host={remoteHost} />}
-      {openInWorkspace && (
-        // The word is the signal — a colour on the row would not say
-        // "this pane is already open". aria-label below repeats it: that
-        // attribute replaces the row's contents for a screen reader.
-        <span className="session-open-label">open</span>
-      )}
-    </span>
+      ),
+    });
+  }
+  if (displayBranch) {
+    metaParts.push({
+      key: "branch",
+      node: (
+        <span className="session-meta-branch" title={displayBranch}>
+          {displayBranch}
+        </span>
+      ),
+    });
+  }
+  const metaLine = (
+    <div className="session-meta-line">
+      {metaParts.map((part, i) => (
+        <Fragment key={part.key}>
+          {i > 0 && (
+            <span className="session-meta-sep" aria-hidden="true">
+              {" · "}
+            </span>
+          )}
+          {part.node}
+        </Fragment>
+      ))}
+    </div>
   );
 
   const onDragStart = useCallback(
@@ -514,7 +556,8 @@ export function SessionRow({
           showAgentFallback={showAgentFallback}
           agentBinary={agentBinary}
           dot={dot}
-          statusLabel={statusLabel}
+          metaLine={metaLine}
+          openInWorkspace={openInWorkspace}
           quotaBadge={
             <QuotaBadge quota={runwayQuota} command={session.command} model={session.model} />
           }
