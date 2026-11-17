@@ -641,7 +641,7 @@ export function TaskCard({
           which otherwise looks identical to a genuinely stuck claimed task
           whose session was reaped. This is the "waiting for a slot" tell,
           following the same hint pattern as the ready/disabled case above. */}
-      {task.status === "claimed" && task.sessionId === null && task.retryHostId === null && (
+      {task.status === "claimed" && task.sessionId === null && !task.retryHostId && (
         <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
       )}
       {/* #3194 — a retry waiting for its ORIGINAL host: its branch is there
@@ -649,7 +649,7 @@ export function TaskCard({
           is never failed for waiting. The reason is on the card above (the
           dispatch notice); this is the operator's way out — abandon that
           branch (it stays on that host, with its commits) and start over. */}
-      {task.status === "claimed" && task.retryHostId !== null && (
+      {task.status === "claimed" && Boolean(task.retryHostId) && (
         <button
           type="button"
           className="task-card-hint task-card-start-fresh"

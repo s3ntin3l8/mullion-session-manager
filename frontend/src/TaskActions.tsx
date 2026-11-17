@@ -257,7 +257,7 @@ export function TaskActions({
   // anywhere else — and it is deliberately never failed for waiting). The
   // operator's way out is "Start fresh": abandon that branch (it stays on
   // that host, with its commits) and run the task from scratch.
-  if (task.status === "claimed" && task.retryHostId !== null) {
+  if (task.status === "claimed" && Boolean(task.retryHostId)) {
     return (
       <div className="task-detail-actions">
         <button
