@@ -4,12 +4,51 @@
 
 /* ───────── Lanes ───────── */
 .task-board-lanes {
+  /* The containing block of the centred empty-state note below (#3243). */
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
+}
+
+/* The board's empty states (UnifiedBoard.tsx, #3243): no tasks, filters that
+   match nothing, the load error with its Retry. Centred over the lanes area,
+   which still holds the empty columns (the board's shape, and its drop
+   targets), so the note is laid over them rather than pushing them down. Only
+   the note itself takes the pointer; the rest of the area stays the columns'. */
+.task-board-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  pointer-events: none;
+}
+.task-board-empty-note.ui-empty-state-note {
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 360px;
+  text-align: center;
+  pointer-events: auto;
+}
+/* A refresh that failed while tasks are on screen: a centred line above the
+   columns, not a note over the cards it would hide. */
+.task-board-stale-note.ui-empty-state-note {
+  height: auto;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
 }
 .task-board-body--facets > .task-board-lanes {
   flex: 1;
@@ -255,6 +294,13 @@
    it), it lists one section per status instead, active ones first. */
 .task-board-lanes--stacked {
   overflow-x: hidden;
+}
+/* The stacked sections are full-width rows the centred note would lie on,
+   so here the note is in the flow after them (UnifiedBoard.tsx) and centred
+   in the space left below them. */
+.task-board-lanes--stacked > .task-board-empty {
+  position: static;
+  flex: 1 0 auto;
 }
 .stacked-board {
   display: flex;

@@ -217,6 +217,19 @@ describe("UnifiedBoard stacked layout", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
+  // #3243: the stacked sections are full-width rows, so the centred empty
+  // note follows them in the flow instead of lying on top of them.
+  it("puts the empty-state note after the stacked sections", () => {
+    tasks = [];
+    boardWidth = 378;
+    renderBoard();
+    expect(layout()).toBe("stacked");
+    const lanes = document.querySelector(".task-board-lanes--stacked");
+    const note = screen.getByText("No tasks yet.").closest(".task-board-empty");
+    expect(note?.parentElement).toBe(lanes);
+    expect(lanes?.lastElementChild).toBe(note);
+  });
+
   it("lists active statuses first, Backlog and Done collapsed, each with a count", () => {
     boardWidth = 378;
     renderBoard();
