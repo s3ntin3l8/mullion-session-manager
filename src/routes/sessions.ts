@@ -60,6 +60,7 @@ import {
   adapterHasResumeSessionArgs,
   commandIsOpencode,
   commandModelCli,
+  commandModelShortFlag,
 } from "../services/hook-adapters/index.js";
 import { extractModelFlag } from "../services/hook-adapters/shared.js";
 import { isControlSocketRequest } from "../services/internal-request.js";
@@ -733,10 +734,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         // skips it), so it is the model that runs: record it, not the default
         // (the quota badge and model display read sessions.model).
         resolvedModel =
-          extractModelFlag(
-            request.body.command,
-            modelCli === "codex" || modelCli === "mcode" ? "-m" : undefined,
-          ) ??
+          extractModelFlag(request.body.command, commandModelShortFlag(request.body.command)) ??
           explicitModel ??
           resolveCliModel(app, modelCli, { issueBody: null }) ??
           undefined;

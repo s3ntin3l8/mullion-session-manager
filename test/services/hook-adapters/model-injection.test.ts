@@ -49,6 +49,10 @@ describe("extractModelFlag", () => {
     expect(extractModelFlag("claude --model 'opusplan'")).toBe("opusplan");
     expect(extractModelFlag('claude --model "opusplan" --resume')).toBe("opusplan");
   });
+  it("takes the last occurrence, as a CLI's own argv parser does", () => {
+    expect(extractModelFlag("claude --model A --model B")).toBe("B");
+    expect(extractModelFlag("codex -m a --model b", "-m")).toBe("b");
+  });
   it("is undefined when the command carries no model flag", () => {
     expect(extractModelFlag("agy")).toBeUndefined();
     expect(extractModelFlag("agy --modelx foo")).toBeUndefined();

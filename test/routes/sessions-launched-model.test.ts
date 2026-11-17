@@ -81,6 +81,55 @@ describe("POST /api/sessions records the model that launches", () => {
     await app.close();
   });
 
+  it("records the command's own flag over an explicit model in the body", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "claude --model opusplan", model: "sonnet" },
+    });
+
+    expect(res.statusCode).toBe(201);
+    // The flag on the command is what launches, so it is what is recorded.
+    expect(res.json().model).toBe("opusplan");
+
+    await app.close();
+  });
+
+  it("records the --model of an agy command", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "agy --model gemini-4-argon-medium" },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().model).toBe("gemini-4-argon-medium");
+
+    await app.close();
+  });
+
+  it("records the -m model of an mcode command", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "mcode -m openai/gpt-5" },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().model).toBe("openai/gpt-5");
+
+    await app.close();
+  });
+
   it("still records an explicit model for a command with no model flag", async () => {
     const app = await buildApp();
     const projectId = await createProject(app);
