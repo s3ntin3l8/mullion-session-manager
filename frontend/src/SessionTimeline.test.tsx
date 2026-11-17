@@ -270,10 +270,12 @@ describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
 });
 
 describe("SessionTimeline (issue #212)", () => {
-  it("shows a not-found message when the session isn't tracked", () => {
+  it("shows a not-found message when the session isn't tracked and has no history", async () => {
     sessions = [];
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
-    expect(screen.getByText("Session not found.")).toBeInTheDocument();
+    // Only once the history fetch has resolved empty: no flash while it loads.
+    expect(screen.queryByText("Session not found.")).not.toBeInTheDocument();
+    expect(await screen.findByText("Session not found.")).toBeInTheDocument();
   });
 
   it("still renders persisted history for a session that has left the live store", async () => {

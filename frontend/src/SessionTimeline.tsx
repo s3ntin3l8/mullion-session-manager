@@ -577,7 +577,7 @@ export function SessionTimeline({
   // persisted history is still worth showing, so only a session with neither a
   // store row nor any history is "not found".
   const hasHistory = sessionIds.some((id) => (historyBySession[id]?.rows.length ?? 0) > 0);
-  if (sessions.length === 0 && !hasHistory) {
+  if (sessions.length === 0 && !hasHistory && !anyLoading) {
     return <div className="session-timeline-empty">Session not found.</div>;
   }
 

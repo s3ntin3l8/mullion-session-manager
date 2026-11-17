@@ -258,7 +258,7 @@ async function runSync(
         repo,
         issueNumber,
         extra.resumeAt
-          ? `Paused: the agent hit its provider usage limit. It resumes automatically after ${extra.resumeAt.toISOString()}.`
+          ? `Paused: the agent hit its provider usage limit. It resumes automatically after ${extra.resumeAt.toISOString().replace(/\.\d{3}Z$/, "Z")}.`
           : "Paused: the agent hit its provider usage limit. It resumes automatically after the reset.",
       );
       lastProgressCommentAt.delete(task.id);

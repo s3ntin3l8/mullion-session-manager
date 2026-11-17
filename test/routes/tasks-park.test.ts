@@ -50,11 +50,11 @@ describe("tasks route: rate-limit park fields", () => {
         .values({ projectId, command: "codex", status: "killed", taskId: row.id, name })
         .returning({ id: sessions.id })
         .get().id;
-    const first = mk(`Task #${row.id} · worker`);
+    mk(`Task #${row.id} · worker`);
     mk(`Task #${row.id} · review`);
     const second = mk(`Task #${row.id} · worker`);
 
-    const expected = { rateLimitUntil: reset.toISOString(), workerSessionIds: [second, first] };
+    const expected = { rateLimitUntil: reset.toISOString(), workerSessionIds: [second] };
     const list = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as {
       id: number;
     }[];

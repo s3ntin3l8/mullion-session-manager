@@ -151,13 +151,13 @@ const TASK_ROW_COLUMNS = {
   // #2940 — a rate-limit park leaves the task `ready` until this reset; the
   // board and sidebar read it to say so instead of reading as a plain queued task.
   rateLimitUntil: tasks.rateLimitUntil,
-  // The task's most recent worker sessions, newest first (comma list, parsed by
+  // The task's latest worker session (comma list, parsed by
   // withWorkerSessionIds). A park or return clears `sessionId`, so the task
   // timeline falls back to these. Worker vs. review is the "· worker" name
   // every spawn path gives its session (no role column exists).
   workerSessionIdsRaw: sql<
     string | null
-  >`(select group_concat(id) from (select id from sessions where sessions.task_id = ${tasks.id} and sessions.name like '% · worker' order by id desc limit 3))`,
+  >`(select group_concat(id) from (select id from sessions where sessions.task_id = ${tasks.id} and sessions.name like '% · worker' order by id desc limit 1))`,
   githubSyncError: tasks.githubSyncError,
   // Workflow-change approval gate — raw `{ sha, files }` JSON while a push is
   // held for the operator (parsed client-side; the approved sha is

@@ -77,7 +77,7 @@ describe("task-github-sync rate_limited (#2940)", () => {
       "test-owner",
       "test-repo",
       5,
-      expect.stringContaining("2026-11-16T23:38:00.000Z"),
+      expect.stringContaining("2026-11-16T23:38:00Z"),
     );
   });
 

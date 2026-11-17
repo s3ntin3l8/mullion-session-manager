@@ -564,9 +564,7 @@ export function TaskDetail({
 
       {task.body && <div className="task-detail-body">{task.body}</div>}
 
-      {/* #1997 — a queued task's last dispatch error: it is still being
-          retried, so this reads as waiting, not as the terminal failure
-          below. */}
+      {/* #2940 — parked until the provider usage limit resets; resumes by itself. */}
       {isRateLimitParked(task) && task.rateLimitUntil && (
         <div className="task-detail-dispatch">
           <ClockIcon size={12} />
@@ -576,6 +574,9 @@ export function TaskDetail({
         </div>
       )}
 
+      {/* #1997 — a queued task's last dispatch error: it is still being
+          retried, so this reads as waiting, not as the terminal failure
+          below. */}
       {task.status === "claimed" && task.failureReason && (
         <div className="task-detail-dispatch">
           <ClockIcon size={12} />
@@ -728,10 +729,7 @@ export function TaskDetail({
           surface="task"
           params={{
             // A park or return clears `sessionId`; the last worker sessions keep the history visible.
-            sessionIds:
-              task.sessionId !== null
-                ? [task.sessionId]
-                : (task.workerSessionIds ?? []).slice(0, 1),
+            sessionIds: task.sessionId !== null ? [task.sessionId] : (task.workerSessionIds ?? []),
           }}
         />
       </div>
