@@ -289,6 +289,7 @@ describe("parkRateLimitedTask (#2940)", () => {
       expect(ok).toBe(true);
       const row = load();
       expect(row.status).toBe("ready");
+      expect(row.rateLimitMessage).toBe(AGY("5h30m"));
       expect(row.rateLimitUntil?.getTime()).toBe(
         Math.floor((errorAt + 5.5 * 3600_000) / 1000) * 1000,
       );
@@ -308,6 +309,16 @@ describe("parkRateLimitedTask (#2940)", () => {
       expect(row.failureReason).toContain("Individual quota reached");
       expect(row.failureReason).toContain("24h park limit");
       expect(sessionStatus()).toBe("killed");
+      await app.close();
+    });
+
+    it("leaves a beyond-cap task on grace when the session cannot be terminated", async () => {
+      const { app, projectId, session, task, load, sessionStatus, backend } = await agySetup();
+      stopFailure(app, session.id, AGY("102h16m12s"));
+      backend.terminate.mockRejectedValueOnce(new Error("host down"));
+      expect(await parkRateLimitedTask(app, task, session.id, projectId)).toBe(false);
+      expect(load().status).toBe("in_progress");
+      expect(sessionStatus()).toBe("active");
       await app.close();
     });
 

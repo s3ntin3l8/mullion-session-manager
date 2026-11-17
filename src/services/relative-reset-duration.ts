@@ -2,7 +2,7 @@
 // hook's `error` text ("... Resets in 102h16m12s."), not as a date. Pure:
 // `base` is the instant the message was produced, injectable for tests.
 
-const RESETS_IN = /\bResets in\s+(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?(?![\w])/i;
+const RESETS_IN = /\bResets in\s+(?:(\d+)h)?(?:\s*(\d+)m)?(?:\s*(\d+)s)?(?![\w])/i;
 
 /**
  * The instant a "Resets in 102h16m12s" style message says the quota

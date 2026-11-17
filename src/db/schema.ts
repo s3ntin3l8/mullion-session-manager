@@ -1622,8 +1622,8 @@ export const tasks = sqliteTable(
     rateLimitUntil: integer("rate_limit_until", { mode: "timestamp" }),
     // #3234 — the provider's own message for the latest rate_limit stop_failure
     // (agy: "... Resets in 102h16m12s."), kept beside lastRateLimitAt because the
-    // session's in-memory copy is TTL-cleared. Written by recordRateLimitEvent;
-    // read by parkRateLimitedTask and shown on the card. Cleared on (re)claim.
+    // session's in-memory copy is TTL-cleared. Written by parkRateLimitedTask (the
+    // park and the beyond-cap give-up) and shown on the card. Cleared on (re)claim.
     rateLimitMessage: text("rate_limit_message"),
     // #667 — dependency-aware auto-claim. Snapshot of GitHub's
     // `issue_dependencies_summary.total_blocked_by`, written on every

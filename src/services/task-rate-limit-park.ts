@@ -101,10 +101,6 @@ export async function parkRateLimitedTask(
   const row = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
   if (!row) return false;
 
-  const maxParkMs = resolveTaskMasterConfig(app).rateLimitMaxParkHours * 3_600_000;
-  if (reset.getTime() - Date.now() > maxParkMs) {
-    return failBeyondCap(app, task, row, projectId, reset, message);
-  }
   if (row.status === "active") {
     try {
       await resolveBackend(app, resolveSessionHostId(app, row)).terminate(String(sessionId));
@@ -115,6 +111,13 @@ export async function parkRateLimitedTask(
       );
       return false;
     }
+  }
+
+  // #3234 — beyond the cap: the same terminate guard has already run, so a
+  // live process is never left under a removed worktree.
+  const maxParkMs = resolveTaskMasterConfig(app).rateLimitMaxParkHours * 3_600_000;
+  if (reset.getTime() - Date.now() > maxParkMs) {
+    return failBeyondCap(app, task, row, projectId, reset, message);
   }
 
   let killed: Awaited<ReturnType<typeof killSession>>;
@@ -177,7 +180,7 @@ export async function parkRateLimitedTask(
 
 /** #3234 — the reset is beyond the park cap: fail the task, naming the quota
  * and when it returns. Runs behind the same guards as the park (in_progress,
- * inside grace, a turn already over, per the caller). Reuses the no-commits
+ * inside grace, a turn already over, and the session terminated first). Reuses the no-commits
  * failure path, so the WIP is salvaged, the session killed and the issue told.
  * Not a success flag from `failReviewingGate` (it returns void): the row is
  * re-read to see whether the task actually failed. */

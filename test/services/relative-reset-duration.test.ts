@@ -17,6 +17,8 @@ describe("parseRelativeResetDuration (#3234)", () => {
     ["Resets in 45s", 45],
     ["resets in 1h2s", 3602],
     ["Quota hit. Resets in 2h30m, sorry", 9000],
+    ["Resets in 1h 30m", 5400],
+    ["Resets in 30m 10s", 1810],
   ])("parses %s", (text, seconds) => {
     expect(parseRelativeResetDuration(text, BASE)?.getTime()).toBe(BASE.getTime() + seconds * 1000);
   });
