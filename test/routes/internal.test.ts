@@ -2580,7 +2580,7 @@ describe("internal routes (agent role, issue #26)", () => {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ baseRef: "origin/main", sha: expectedSha });
+      expect(res.json()).toEqual({ baseRef: "origin/main", sha: expectedSha, fetched: true });
 
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -2600,7 +2600,7 @@ describe("internal routes (agent role, issue #26)", () => {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ baseRef: "HEAD", sha: null });
+      expect(res.json()).toEqual({ baseRef: "HEAD", sha: null, fetched: true });
 
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(notARepo, { recursive: true, force: true });

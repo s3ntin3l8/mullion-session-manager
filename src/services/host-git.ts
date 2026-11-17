@@ -15,7 +15,7 @@
 import type { GitIdentity } from "./git-env.js";
 import type { FastifyInstance } from "fastify";
 import { getGitStatus, isGitRepo, type GitStatus } from "./git-status.js";
-import { listBranches, resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
+import { listBranches, resolveDefaultBaseRefWithFetch, resolveCommitSha } from "./git-refs.js";
 import type { GitBranchInfo } from "../shared/types.js";
 import { pushBranch, type PushResult } from "./git-push.js";
 import { parseGitRemote, parseRemoteUrl, type GitHubRepoRef } from "./git-remote.js";
@@ -240,7 +240,7 @@ export async function resolveHostBranches(
 }
 
 /**
- * `{ baseRef, sha }` for `cwd` on whichever host owns it — wraps
+ * `{ baseRef, sha, fetched }` for `cwd` on whichever host owns it — wraps
  * `resolveDefaultBaseRef` + `resolveCommitSha` locally, `/internal/git-base-ref`
  * remotely. Never fails locally (both wrapped functions have their own
  * never-throws, worst-case-"HEAD"/null contract); only ever returns
@@ -250,11 +250,11 @@ export async function resolveHostBaseRef(
   app: FastifyInstance,
   hostId: string,
   cwd: string,
-): Promise<HostGitResult<{ baseRef: string; sha: string | null }>> {
+): Promise<HostGitResult<{ baseRef: string; sha: string | null; fetched?: boolean }>> {
   if (hostId === LOCAL_HOST_ID) {
-    const baseRef = await resolveDefaultBaseRef(cwd);
+    const { ref: baseRef, fetched } = await resolveDefaultBaseRefWithFetch(cwd);
     const sha = await resolveCommitSha(cwd, baseRef);
-    return { ok: true, value: { baseRef, sha } };
+    return { ok: true, value: { baseRef, sha, fetched } };
   }
   return viaGit(app, hostId, (client) => client.resolveHostBaseRef(cwd));
 }

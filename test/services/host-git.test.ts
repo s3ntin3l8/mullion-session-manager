@@ -23,7 +23,7 @@ vi.mock("../../src/services/git-status.js", () => ({
   isGitRepo: mockIsGitRepo,
 }));
 vi.mock("../../src/services/git-refs.js", () => ({
-  resolveDefaultBaseRef: mockResolveDefaultBaseRef,
+  resolveDefaultBaseRefWithFetch: mockResolveDefaultBaseRef,
   resolveCommitSha: mockResolveCommitSha,
 }));
 vi.mock("../../src/services/git-push.js", () => ({
@@ -199,14 +199,17 @@ describe("host-git.ts", () => {
 
   describe("resolveHostBaseRef", () => {
     it("local: resolves the default base ref then pins it to a commit SHA", async () => {
-      mockResolveDefaultBaseRef.mockResolvedValue("origin/main");
+      mockResolveDefaultBaseRef.mockResolvedValue({ ref: "origin/main", fetched: false });
       mockResolveCommitSha.mockResolvedValue("deadbeef");
 
       const result = await resolveHostBaseRef(fakeApp, "local", "/project");
 
       expect(mockResolveDefaultBaseRef).toHaveBeenCalledWith("/project");
       expect(mockResolveCommitSha).toHaveBeenCalledWith("/project", "origin/main");
-      expect(result).toEqual({ ok: true, value: { baseRef: "origin/main", sha: "deadbeef" } });
+      expect(result).toEqual({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeef", fetched: false },
+      });
     });
 
     it("remote: proxies to the remote client's own base-ref route", async () => {

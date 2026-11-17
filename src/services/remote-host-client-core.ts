@@ -928,7 +928,9 @@ export class RemoteHostClient {
    * comment. Never throws for a git-level failure: a non-repo cwd resolves
    * `{ baseRef: "HEAD", sha: null }`, the same last-resort fallback the
    * local path produces. */
-  resolveHostBaseRef(cwd: string): Promise<{ baseRef: string; sha: string | null }> {
+  resolveHostBaseRef(
+    cwd: string,
+  ): Promise<{ baseRef: string; sha: string | null; fetched?: boolean }> {
     return this.request(
       `/internal/git-base-ref?cwd=${encodeURIComponent(cwd)}`,
       undefined,

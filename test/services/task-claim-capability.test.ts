@@ -170,6 +170,60 @@ describe("a task's Capability: requirement (#3151)", () => {
     return session;
   }
 
+  // A failed `git fetch origin` on the placement host must not silently cut the
+  // task's worktree from whatever stale base the clone already had.
+  describe("the placement host's fetch of origin", () => {
+    it("releases the claim, recording why, and cuts no worktree when the fetch failed", async () => {
+      const { app, task, fakeBackend } = await setup("fetch-failed", "Build it.");
+      try {
+        vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+          ok: true,
+          value: { baseRef: "origin/main", sha: "45d4e272", fetched: false },
+        });
+
+        const outcome = await claimAndDispatch(app, task.id);
+
+        expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+        const row = getTask(app, task.id);
+        expect(row.status).toBe("claimed");
+        expect(row.sessionId).toBeNull();
+        expect(row.failureReason).toContain("could not fetch origin on host");
+        expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("still claims when the host's response carries no fetched flag (an older agent)", async () => {
+      const { app, task, fakeBackend } = await setup("fetch-unknown", "Build it.");
+      try {
+        const outcome = await claimAndDispatch(app, task.id);
+
+        expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
+        expect(fakeBackend.createWorktree).toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("claims when the fetch succeeded", async () => {
+      const { app, task, fakeBackend } = await setup("fetch-ok", "Build it.");
+      try {
+        vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+          ok: true,
+          value: { baseRef: "origin/main", sha: "deadbeefcafe", fetched: true },
+        });
+
+        const outcome = await claimAndDispatch(app, task.id);
+
+        expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
+        expect(fakeBackend.createWorktree).toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
   it("Capability: xcode lands the task on the host that has it, not the idle one that lacks it", async () => {
     const { app, mac, task } = await setup("req-cap", "Capability: XCode\nBuild the iOS target.");
     try {

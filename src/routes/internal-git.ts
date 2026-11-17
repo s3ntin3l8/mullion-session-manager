@@ -15,7 +15,7 @@ import {
   listBranches,
   listRemoteBranches,
   listWorktrees,
-  resolveDefaultBaseRef,
+  resolveDefaultBaseRefWithFetch,
   resolveDefaultBaseRefForPicker,
   resolveCommitSha,
 } from "../services/git-refs.js";
@@ -480,9 +480,9 @@ export function registerGitRoutes(app: FastifyInstance): void {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      const baseRef = await resolveDefaultBaseRef(resolvedCwd);
+      const { ref: baseRef, fetched } = await resolveDefaultBaseRefWithFetch(resolvedCwd);
       const sha = await resolveCommitSha(resolvedCwd, baseRef);
-      return { baseRef, sha };
+      return { baseRef, sha, fetched };
     },
   );
 
