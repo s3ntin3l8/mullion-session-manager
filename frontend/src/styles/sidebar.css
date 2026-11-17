@@ -884,22 +884,21 @@
 
    Since issue #3286 the label lives in `.session-meta-line` (SessionRow.tsx),
    the row's second line and a direct child of `.session-item`. Fading every
-   other direct child of the row, and every direct child of the
-   `.session-item-row` title strip, keeps the name, the dot, the now line and
-   the actions at half strength — the same fade the whole row used to have —
-   so an ended session still reads as quieter than a live one. The meta line
-   is already dim and carries no opacity of its own, so nothing on it is
-   multiplied by the row fade.
+   other direct child of the row (the `.session-item-row` title strip, the now
+   line, the details) keeps the name, the dot and the actions at half
+   strength — the same fade the whole row used to have — so an ended session
+   still reads as quieter than a live one. The meta line is exempt as a whole:
+   it is already dim, and its host and branch stay at full strength with the
+   label rather than being multiplied by the fade (the host badge's old
+   `opacity: 0.75` is gone for the same reason).
 
    Only `.status-exited`. `rowClassNameForSeverity` never returns
    `.status-killed` — a killed session is filtered out before a row is
    built — so a killed half of this rule could not match. */
-.session-item.status-exited > :not(.session-item-row):not(.session-meta-line),
-.session-item.status-exited .session-item-row > :not(.session-meta-line) {
+.session-item.status-exited > :not(.session-meta-line) {
   opacity: 0.5;
 }
-.session-item.status-exited:hover > :not(.session-item-row):not(.session-meta-line),
-.session-item.status-exited:hover .session-item-row > :not(.session-meta-line) {
+.session-item.status-exited:hover > :not(.session-meta-line) {
   opacity: 0.7;
 }
 /* Issue #319 — a session whose status can't be confirmed by its agent's
@@ -1039,6 +1038,8 @@
   display: flex;
   align-items: center;
   min-width: 0;
+  /* Keep equal to .session-now-line's indent: the row's continuation lines
+     line up under the title. */
   padding-left: 22px;
   font-size: 0.65625rem;
   line-height: 1.3;
@@ -1049,6 +1050,32 @@
   flex-shrink: 0;
   max-width: 60%;
   font-size: inherit;
+}
+/* The tone colours are tuned for the flat sidebar. On this line the status
+   word is always on show at 10.5px, often over a tinted row (active,
+   hovered, attention, finished), and there most tones fall under AA's 4.5:1:
+   light --g on the active+hovered row is 3.42:1, dark --r on the attention
+   row 3.41:1. Mixing each tone 30% toward --fg darkens it in the light
+   theme and lightens it in the dark one, so one rule set lifts every tone
+   past 4.5:1 on every row tint in both themes; the hue stays recognisable.
+   test/scripts/session-meta-line-contrast.test.ts pins the ratios. */
+.session-meta-line > .session-status-label.attention {
+  color: color-mix(in srgb, var(--ring) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.working {
+  color: color-mix(in srgb, var(--g) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.error {
+  color: color-mix(in srgb, var(--r) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.plan {
+  color: color-mix(in srgb, var(--o) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.permission {
+  color: color-mix(in srgb, var(--p) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.finished {
+  color: color-mix(in srgb, var(--c) 70%, var(--fg));
 }
 .session-meta-sep {
   flex-shrink: 0;
@@ -1164,6 +1191,7 @@
   font-size: 0.6875rem;
   font-style: italic;
   color: var(--dim);
+  /* Keep equal to .session-meta-line's indent (#3286). */
   padding-left: 22px;
   white-space: nowrap;
   overflow: hidden;

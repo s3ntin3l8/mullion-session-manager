@@ -469,6 +469,23 @@ describe("SessionRow", () => {
       expect(label?.querySelector(".session-stale-icon")).not.toBeNull();
     });
 
+    it("says line 2 in the row's accessible name, host state included", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini", liveBranch: "main" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Open session claude code, Working, mac-mini unreachable, main",
+        }),
+      ).toBeInTheDocument();
+    });
+
     it("drops the word 'open' for an open session; the title is heavier and the name says it", () => {
       render(
         <SessionRow
@@ -480,7 +497,7 @@ describe("SessionRow", () => {
         />,
       );
       const row = screen.getByRole("button", {
-        name: "Open session claude code, already open in this workspace",
+        name: "Open session claude code, Working, already open in this workspace",
       });
       expect(row).not.toHaveTextContent(/\bopen\b/);
       expect(row.querySelector(".session-name")).toHaveClass("open");

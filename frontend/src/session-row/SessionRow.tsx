@@ -4,6 +4,7 @@ import type { Project, Session } from "../api/index.js";
 import { deriveNowLine } from "../lib/sessionNowLine.js";
 import { describeHostBadge, selectRemoteHost } from "../lib/hostBadge.js";
 import { HostStatusLabel } from "../HostStatusLabel.js";
+import { hostStatusWords } from "../lib/hostStatusWords.js";
 import {
   formatStatusLabel,
   isStatusReachable,
@@ -428,9 +429,14 @@ export function SessionRow({
   // (describeHostBadge decides): a remote session always has one.
   const showHostStatus =
     remoteHost != null && !(remoteHost.health === "online" && remoteHost.drained !== true);
-  const metaParts: { key: string; node: React.ReactNode }[] = [
+  // `text` is what the part says, for the row's aria-label below: that
+  // attribute replaces the row's contents for a screen reader, so it has to
+  // carry line 2 too, or the status word and host would be visible but
+  // unspoken (and axe's label-content-name-mismatch fires).
+  const metaParts: { key: string; text: string; node: React.ReactNode }[] = [
     {
       key: "status",
+      text: statusLabelText,
       node: (
         <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
           {showUnknownIndicator && (
@@ -450,8 +456,10 @@ export function SessionRow({
     },
   ];
   if (hostBadge) {
+    const hostState = showHostStatus && remoteHost ? hostStatusWords(remoteHost) : null;
     metaParts.push({
       key: "host",
+      text: hostState ? `${hostBadge.name} ${hostState}` : hostBadge.name,
       // The host is a SIBLING of the status label, not a child of it: the
       // label ellipsis-overflows its own box (overflow: hidden), so a host
       // inside it would be clipped by a long status detail.
@@ -467,6 +475,7 @@ export function SessionRow({
   if (displayBranch) {
     metaParts.push({
       key: "branch",
+      text: displayBranch,
       node: (
         <span className="session-meta-branch" title={displayBranch}>
           {displayBranch}
@@ -536,11 +545,9 @@ export function SessionRow({
         // hand for its nested reason field.
         role="button"
         tabIndex={0}
-        aria-label={
-          openInWorkspace
-            ? `Open session ${title}, already open in this workspace`
-            : `Open session ${title}`
-        }
+        aria-label={`Open session ${title}, ${metaParts.map((p) => p.text).join(", ")}${
+          openInWorkspace ? ", already open in this workspace" : ""
+        }`}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {

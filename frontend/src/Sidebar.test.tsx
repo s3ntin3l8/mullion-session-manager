@@ -1760,12 +1760,13 @@ describe("sidebar workspace scope (issue #1877)", () => {
     renderSidebar({ workspaceProjectIds: [1], openSessionIds: [7] });
 
     const openRow = screen.getByRole("button", {
-      name: "Open session claude code, already open in this workspace",
+      name: /^Open session claude code, .*, already open in this workspace$/,
     });
     // #3286 — the word "open" is gone; the title's weight carries it.
     expect(openRow.querySelector(".session-name")).toHaveClass("open");
     expect(openRow).not.toHaveTextContent(/\bopen\b/);
-    const closedRow = screen.getByRole("button", { name: "Open session npm run build" });
+    const closedRow = screen.getByRole("button", { name: /^Open session npm run build, / });
+    expect(closedRow.getAttribute("aria-label")).not.toMatch(/already open/);
     expect(closedRow.querySelector(".session-name")).not.toHaveClass("open");
   });
 
@@ -1780,7 +1781,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
 
     await user.click(
       screen.getByRole("button", {
-        name: "Open session already tiled, already open in this workspace",
+        name: /^Open session already tiled, .*, already open in this workspace$/,
       }),
     );
 
@@ -1792,7 +1793,8 @@ describe("sidebar workspace scope (issue #1877)", () => {
     sessions = [makeSession({ id: 7, projectId: 1, command: "claude code" })];
     renderSidebar({ openSessionIds: null });
     expect(document.querySelector(".session-name.open")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open session claude code" })).toBeInTheDocument();
+    const row = screen.getByRole("button", { name: /^Open session claude code, / });
+    expect(row.getAttribute("aria-label")).not.toMatch(/already open/);
   });
 
   it("marks an already-open session on the virtualized path too", () => {
@@ -1803,7 +1805,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
     renderSidebar({ workspaceProjectIds: [1], openSessionIds: [1000] });
 
     const openRow = screen.getByRole("button", {
-      name: "Open session session-0, already open in this workspace",
+      name: /^Open session session-0, .*, already open in this workspace$/,
     });
     expect(openRow.querySelector(".session-name")).toHaveClass("open");
   });
