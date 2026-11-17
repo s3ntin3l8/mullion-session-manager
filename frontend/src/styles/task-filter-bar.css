@@ -6,13 +6,50 @@
   display: flex;
   flex-direction: column;
   flex: none;
+  /* The New task button's compact form below queries this, not the
+     viewport, so it also holds when a sidebar narrows the board (#3213). */
+  container: task-filter-bar / inline-size;
 }
+/* The controls wrap inside their own cluster; New task sits beside it, so it
+   stays on the first line however many lines the controls take (#3213). */
 .task-filter-row {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+.task-filter-controls {
+  display: flex;
   align-items: center;
   flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
-.task-filter-spacer {
-  flex: 1;
+/* Top-aligned, so it stays level with the controls' first line when they
+   wrap: as tall as that line's tallest item, the quick views group, it is
+   centred on it the way align-items: center centred it before. */
+.task-filter-row > .tasks-panel-new-btn {
+  flex: none;
+  box-sizing: border-box;
+  min-height: 28px;
+}
+/* Narrower than the row needs with the label: New task becomes a "+" with
+   the same name and title (TaskFilterBar.tsx). */
+@container task-filter-bar (max-width: 920px) {
+  .task-filter-row > .tasks-panel-new-btn {
+    padding: 4px 7px;
+  }
+  .task-filter-row .tasks-panel-new-label {
+    display: none;
+  }
+}
+@media (pointer: coarse) {
+  @container task-filter-bar (max-width: 920px) {
+    .task-filter-row > .tasks-panel-new-btn {
+      min-width: 44px;
+      min-height: 44px;
+      justify-content: center;
+    }
+  }
 }
 .task-pop {
   position: relative;

@@ -1225,6 +1225,121 @@ export function App() {
     />
   ) : null;
 
+  // The shell banners (backend down, session expired, workspaces not
+  // loaded, resource alerts, update, Codex hook trust). On the two halves
+  // (#3213) they go above both halves, between the rails, rather than
+  // inside .grid-area, which there is only the left half; elsewhere they
+  // stay at the top of the grid area.
+  const halvesBand = layoutPresentation === "halves";
+  const shellBanners = (
+    <>
+      {/* Whole-backend-down — design States doc section 04. Docked at
+          the top of the grid area, rest of the UI dimmed (not
+          disabled) beneath it via .grid-area-body.dimmed, matching the
+          design's "frozen body" — a visual cue, not an actual input
+          lock, so nothing gets destructively stuck if this signal
+          itself turns out wrong. Reuses the existing live-refresh poll
+          (store.ts) rather than a separate health-check mechanism.
+          Gated on !sessionExpired below it: a gateway forward-auth
+          session expiry (self-hosted behind Traefik + Authentik or
+          similar) also fails every request this poll makes, but it
+          isn't "the backend is down" — the process is fine, only the
+          gateway is rejecting the request — so it gets its own banner
+          instead of this one asserting a cause that isn't true. */}
+      {!backendReachable && !sessionExpired && (
+        <div className="backend-down-banner">
+          <ServerRackIcon size={16} style={{ color: "var(--r)" }} />
+          <span className="backend-down-title">Mullion server unreachable</span>
+          <span className="backend-down-subtext">retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…</span>
+          <button
+            className="backend-down-reconnect"
+            disabled={reconnecting}
+            onClick={() => {
+              setReconnecting(true);
+              useDashboardStore
+                .getState()
+                .refreshSessions()
+                .catch(() => {
+                  // Surfaced through backendReachable/sessionExpired
+                  // themselves (both already drive their own banner) —
+                  // nothing further to do with the rejection here,
+                  // just don't let it become an unhandled rejection.
+                })
+                .finally(() => setReconnecting(false));
+            }}
+          >
+            {reconnecting ? "Reconnecting…" : "Reconnect"}
+          </button>
+        </div>
+      )}
+      {/* A gateway forward-auth session expiry that survived
+          api/client.ts's own silent top-level reload attempt (its
+          guard already fired once this session — see
+          AuthExpiredError's doc comment) — the one case where recovery
+          genuinely needs the user, so it gets an explicit action
+          rather than another silent reload. */}
+      {sessionExpired && (
+        <div className="backend-down-banner">
+          <WarningTriangleIcon size={16} style={{ color: "var(--o)" }} />
+          <span className="backend-down-title">Session expired</span>
+          <span className="backend-down-subtext">sign in again to continue</span>
+          <button className="backend-down-reconnect" onClick={() => window.location.reload()}>
+            Sign in
+          </button>
+        </div>
+      )}
+      {/* Issue #1638 — the mount load gave up. workspacesLoaded stays
+          false (an unknown list must not bootstrap a second Default),
+          so without this the grid is just empty. Not .backend-down-banner:
+          a dead backend already shows that red bar, and its Reconnect
+          does not retry this load, so this stays but reads as secondary. */}
+      {workspaceLoadFailed && (
+        <div className="workspace-load-banner" role="alert">
+          <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
+          <span className="backend-down-title">Couldn't load workspaces</span>
+          <span className="backend-down-subtext">retry, or come back online</span>
+          <button
+            className="workspace-load-retry"
+            onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      <ResourceAlertBanner onOpenStorage={() => openSettings("storage")} />
+      {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
+        <ActionBanner
+          icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
+          title={`v${currentVersion} → v${updateCheck.latestVersion} available`}
+          subtext="Click for details"
+          onOpen={() => openSettings("server")}
+          onDismiss={() => useDashboardStore.getState().dismissUpdate()}
+          dismissTitle="Dismiss until next version"
+        />
+      )}
+      {/* Codex `/hooks` trust pending (issue #259) — same dismissible,
+          click-through-to-Settings shape as the update banner above.
+          Mullion cannot grant this trust on the user's behalf (that's
+          the whole point of Codex's gate), so this only informs and
+          links to the one-time manual step. */}
+      {shouldShowCodexHookTrustBanner({
+        codexSessionActive,
+        codexHookTrust,
+        dismissedCodexHookTrustVersion,
+        currentVersion,
+      }) && (
+        <ActionBanner
+          icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
+          title="Codex hooks not yet trusted"
+          subtext="Run /hooks in a Codex session to enable status updates · Click for details"
+          onOpen={() => openSettings("launchers")}
+          onDismiss={() => useDashboardStore.getState().dismissCodexHookTrust()}
+          dismissTitle="Dismiss until next version"
+        />
+      )}
+    </>
+  );
+
   return (
     <div
       data-tier={layoutTier}
@@ -1271,7 +1386,7 @@ export function App() {
           mobileSessionSlot={mobileSessionSwitcher}
         />
       )}
-      <div className="app-body">
+      <div className={`app-body${halvesBand ? " app-body--halves" : ""}`}>
         {!isMobile && (
           <LeftRail
             onToggleSidebar={leftSidebarDocked ? toggleSidebar : undefined}
@@ -1325,6 +1440,7 @@ export function App() {
             {sidebar}
           </div>
         )}
+        {halvesBand && <div className="shell-banners">{shellBanners}</div>}
         <div
           className={`grid-area${foldHalves ? " fold-half fold-half-left" : ""}${
             foldHalves && rightHalfOnScreen && focusedHalf === "left" ? " focused" : ""
@@ -1335,112 +1451,7 @@ export function App() {
           onPointerDownCapture={foldHalves ? onUseLeftHalf : undefined}
           onFocusCapture={foldHalves ? onUseLeftHalf : undefined}
         >
-          {/* Whole-backend-down — design States doc section 04. Docked at
-              the top of the grid area, rest of the UI dimmed (not
-              disabled) beneath it via .grid-area-body.dimmed, matching the
-              design's "frozen body" — a visual cue, not an actual input
-              lock, so nothing gets destructively stuck if this signal
-              itself turns out wrong. Reuses the existing live-refresh poll
-              (store.ts) rather than a separate health-check mechanism.
-              Gated on !sessionExpired below it: a gateway forward-auth
-              session expiry (self-hosted behind Traefik + Authentik or
-              similar) also fails every request this poll makes, but it
-              isn't "the backend is down" — the process is fine, only the
-              gateway is rejecting the request — so it gets its own banner
-              instead of this one asserting a cause that isn't true. */}
-          {!backendReachable && !sessionExpired && (
-            <div className="backend-down-banner">
-              <ServerRackIcon size={16} style={{ color: "var(--r)" }} />
-              <span className="backend-down-title">Mullion server unreachable</span>
-              <span className="backend-down-subtext">
-                retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…
-              </span>
-              <button
-                className="backend-down-reconnect"
-                disabled={reconnecting}
-                onClick={() => {
-                  setReconnecting(true);
-                  useDashboardStore
-                    .getState()
-                    .refreshSessions()
-                    .catch(() => {
-                      // Surfaced through backendReachable/sessionExpired
-                      // themselves (both already drive their own banner) —
-                      // nothing further to do with the rejection here,
-                      // just don't let it become an unhandled rejection.
-                    })
-                    .finally(() => setReconnecting(false));
-                }}
-              >
-                {reconnecting ? "Reconnecting…" : "Reconnect"}
-              </button>
-            </div>
-          )}
-          {/* A gateway forward-auth session expiry that survived
-              api/client.ts's own silent top-level reload attempt (its
-              guard already fired once this session — see
-              AuthExpiredError's doc comment) — the one case where recovery
-              genuinely needs the user, so it gets an explicit action
-              rather than another silent reload. */}
-          {sessionExpired && (
-            <div className="backend-down-banner">
-              <WarningTriangleIcon size={16} style={{ color: "var(--o)" }} />
-              <span className="backend-down-title">Session expired</span>
-              <span className="backend-down-subtext">sign in again to continue</span>
-              <button className="backend-down-reconnect" onClick={() => window.location.reload()}>
-                Sign in
-              </button>
-            </div>
-          )}
-          {/* Issue #1638 — the mount load gave up. workspacesLoaded stays
-              false (an unknown list must not bootstrap a second Default),
-              so without this the grid is just empty. Not .backend-down-banner:
-              a dead backend already shows that red bar, and its Reconnect
-              does not retry this load, so this stays but reads as secondary. */}
-          {workspaceLoadFailed && (
-            <div className="workspace-load-banner" role="alert">
-              <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="backend-down-title">Couldn't load workspaces</span>
-              <span className="backend-down-subtext">retry, or come back online</span>
-              <button
-                className="workspace-load-retry"
-                onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
-              >
-                Retry
-              </button>
-            </div>
-          )}
-          <ResourceAlertBanner onOpenStorage={() => openSettings("storage")} />
-          {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
-            <ActionBanner
-              icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
-              title={`v${currentVersion} → v${updateCheck.latestVersion} available`}
-              subtext="Click for details"
-              onOpen={() => openSettings("server")}
-              onDismiss={() => useDashboardStore.getState().dismissUpdate()}
-              dismissTitle="Dismiss until next version"
-            />
-          )}
-          {/* Codex `/hooks` trust pending (issue #259) — same dismissible,
-              click-through-to-Settings shape as the update banner above.
-              Mullion cannot grant this trust on the user's behalf (that's
-              the whole point of Codex's gate), so this only informs and
-              links to the one-time manual step. */}
-          {shouldShowCodexHookTrustBanner({
-            codexSessionActive,
-            codexHookTrust,
-            dismissedCodexHookTrustVersion,
-            currentVersion,
-          }) && (
-            <ActionBanner
-              icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
-              title="Codex hooks not yet trusted"
-              subtext="Run /hooks in a Codex session to enable status updates · Click for details"
-              onOpen={() => openSettings("launchers")}
-              onDismiss={() => useDashboardStore.getState().dismissCodexHookTrust()}
-              dismissTitle="Dismiss until next version"
-            />
-          )}
+          {!halvesBand && shellBanners}
           <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
             {foldHalves && leftHalfPane && (
               <HalfHeader

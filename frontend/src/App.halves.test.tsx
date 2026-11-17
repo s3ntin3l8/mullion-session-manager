@@ -134,6 +134,40 @@ describe("App two halves", () => {
     useDashboardStore.setState({ viewMode: "list", rightSidebarOpen: false });
   });
 
+  // #3213 — the shell banners span both halves, above them, not the left one.
+  it("shows the update banner above both halves, not inside the left half", async () => {
+    const { container } = await renderHalves();
+    act(() =>
+      useDashboardStore.setState({
+        currentVersion: "1.0.0",
+        dismissedUpdateVersion: null,
+        updateCheck: {
+          currentVersion: "1.0.0",
+          latestVersion: "1.1.0",
+          updateAvailable: true,
+          releaseUrl: null,
+          assetUrl: null,
+          checksumUrl: null,
+        } as never,
+      }),
+    );
+    const banner = screen.getByText("v1.0.0 → v1.1.0 available");
+    expect(container.querySelector(".fold-half-left")).not.toContainElement(banner);
+    const host = container.querySelector(".shell-banners");
+    expect(host).toContainElement(banner);
+    expect(host?.parentElement).toHaveClass("app-body", "app-body--halves");
+
+    // Outside the halves it stays at the top of the grid area.
+    cleanup();
+    stubWidth("tablet");
+    const wide = render(<App />);
+    const gridBanner = screen.getByText("v1.0.0 → v1.1.0 available");
+    expect(wide.container.querySelector(".grid-area")).toContainElement(gridBanner);
+    expect(wide.container.querySelector(".shell-banners")).toBeNull();
+    expect(wide.container.querySelector(".app-body")).not.toHaveClass("app-body--halves");
+    useDashboardStore.setState({ updateCheck: null });
+  });
+
   it("points the key bar at the focused half", async () => {
     await renderHalves(true);
     // The fake grid reports no active panel on ready; the left half's is set here.

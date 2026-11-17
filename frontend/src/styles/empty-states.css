@@ -180,6 +180,11 @@
 .kanban-unified-tasks {
   display: flex;
   flex-direction: column;
+  /* .kanban-unified-main is a flex row: without a grow this is only as wide
+     as its content, so on a board with no lanes (no tasks, or none matching)
+     the filter bar and its border stopped where the buttons did (#3213). */
+  flex: 1 1 auto;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
 }
