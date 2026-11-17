@@ -27,6 +27,14 @@ describe("Stop on a quota-exhausted turn, as agy really sends it (issue #3233)",
     );
   });
 
+  it("matches the reason in any case, not only all-upper or all-lower", () => {
+    const result = (mapAgyEvent("Stop", {
+      terminationReason: "Error",
+      error: CAPTURED_STOP.error,
+    }) ?? []) as Array<{ kind: string; errorType?: string }>;
+    expect(result.find((m) => m.kind === "stop_failure")?.errorType).toBe("rate_limit");
+  });
+
   it("does not turn a normal upper-case completion into a failure", () => {
     const result = (mapAgyEvent("Stop", { terminationReason: "COMPLETE", fullyIdle: true }) ??
       []) as Array<{ kind: string }>;

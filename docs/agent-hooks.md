@@ -1133,7 +1133,7 @@ The live mcode processes were unaffected.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
-`terminationReason` is `"error"`, compared case-insensitively: agy sends `"ERROR"`), `PreToolUse`
+`terminationReason` matches `"error"` case-insensitively (agy sends `"ERROR"`)), `PreToolUse`
 on `run_command`
 (observational only — `git_branch`/`cwd_changed` for worktree/branch
 detection; issue #264 removed the `review_gate` it used to also emit, since
