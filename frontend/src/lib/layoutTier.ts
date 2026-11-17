@@ -212,7 +212,24 @@ export function useLayoutBand(layoutMode: LayoutMode): LayoutBand {
  */
 export type LayoutPresentation = "phone" | "halves" | "grid";
 
+/** The one rule from tier and band to presentation; every caller composes it. */
+export function presentationFor(tier: LayoutTier, band: LayoutBand): LayoutPresentation {
+  if (tier === "phone") return "phone";
+  return band === "rails-halves" ? "halves" : "grid";
+}
+
 export function resolveLayoutPresentation(layoutMode: LayoutMode): LayoutPresentation {
-  if (resolveLayoutTier(layoutMode) === "phone") return "phone";
-  return resolveLayoutBand(layoutMode) === "rails-halves" ? "halves" : "grid";
+  return presentationFor(resolveLayoutTier(layoutMode), resolveLayoutBand(layoutMode));
+}
+
+/**
+ * Live-subscribed presentation, the hook counterpart of
+ * resolveLayoutPresentation: composed from the live tier and band so it
+ * follows a width crossing or a layoutMode change. #3214 — the pane menu
+ * offers grid actions (split, move between panes, reset sizes, open a browser
+ * pane) only where there is a grid.
+ */
+export function useLayoutPresentationMode(): LayoutPresentation {
+  const layoutMode = useDashboardStore((s) => s.settings.layoutMode);
+  return presentationFor(useLayoutTier(layoutMode), useLayoutBand(layoutMode));
 }

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
+import { isHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
 import type { IDockviewHeaderActionsProps } from "dockview";
 
 // PaneHeaderActions reads `requestSplit` off the store, and the sessions
@@ -17,7 +18,9 @@ vi.mock("./store/index.js", () => {
   return { useDashboardStore };
 });
 
-function makeProps(overrides: { activePanel?: { id: string; params?: unknown } | undefined } = {}) {
+function makeProps(
+  overrides: { activePanel?: { id: string; params?: unknown } | undefined; groupId?: string } = {},
+) {
   return {
     api: {},
     containerApi: {},
@@ -27,7 +30,7 @@ function makeProps(overrides: { activePanel?: { id: string; params?: unknown } |
         ? overrides.activePanel
         : { id: "session-1", params: { sessionId: 1 } },
     isGroupActive: true,
-    group: {},
+    group: overrides.groupId ? { id: overrides.groupId } : {},
     headerPosition: "top",
   } as unknown as IDockviewHeaderActionsProps;
 }
@@ -150,6 +153,33 @@ describe("PaneHeaderActions", () => {
 
     expect(screen.queryByTitle("Split right")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Split down")).not.toBeInTheDocument();
+  });
+
+  // #3214 — the pane menu lists its own split entries only while this header
+  // hides its buttons, so the header publishes its measurement per group.
+  it("publishes whether its split buttons are hidden for its group, and clears it on unmount", () => {
+    const { unmount } = renderInHeader(makeProps({ groupId: "g-pub" }));
+    expect(isHeaderSplitHidden("g-pub")).toBe(false);
+
+    act(() => {
+      resizeCallback(
+        [{ contentRect: { width: 150 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    });
+    expect(isHeaderSplitHidden("g-pub")).toBe(true);
+
+    act(() => {
+      resizeCallback(
+        [{ contentRect: { width: 400 } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    });
+    expect(isHeaderSplitHidden("g-pub")).toBe(false);
+
+    unmount();
+    // No header measuring it any more: the menu falls back to listing them.
+    expect(isHeaderSplitHidden("g-pub")).toBe(true);
   });
 
   // Independent code review (PR #709) — verified against the real

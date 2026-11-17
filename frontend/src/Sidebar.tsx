@@ -34,7 +34,6 @@ import {
   subscribeDockManualProjectIds,
 } from "./dock/dockHelpers.js";
 import { taskLinkedSessionIds } from "./boardLanes.js";
-import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
 import { columnForSession } from "./kanban.js";
@@ -138,7 +137,6 @@ export function Sidebar({
     showTaskSessions,
     settings,
     settingsLoaded,
-    hierarchicalView,
     projectsLoaded,
     projectsError,
     activeWorkspaceId,
@@ -152,7 +150,6 @@ export function Sidebar({
       showTaskSessions: s.showTaskSessions,
       settings: s.settings,
       settingsLoaded: s.settingsLoaded,
-      hierarchicalView: s.hierarchicalView,
       // The three states an empty project list can be in — still loading,
       // loaded-and-empty, and failed. Without these, "Welcome to Mullion"
       // covered all three, so a failed fetch looked like a fresh install
@@ -483,10 +480,7 @@ export function Sidebar({
       // ProjectSection's own `rows.map(...)` below the threshold (see that
       // component's matching comment).
       const filtered = filteredSessionsByProject.get(project.id) ?? [];
-      const hRows = hierarchicalView
-        ? buildHierarchicalRows(filtered)
-        : filtered.map((session) => ({ session, depth: 0 }));
-      for (const { session, depth } of hRows) {
+      for (const { session, depth } of buildHierarchicalRows(filtered)) {
         rows.push({ key: `s-${session.id}`, type: "session", session, project, depth });
       }
     }
@@ -514,7 +508,6 @@ export function Sidebar({
     filteredSessionsByProject,
     filterActive,
     collapseVersion,
-    hierarchicalView,
   ]);
 
   return (
@@ -539,7 +532,6 @@ export function Sidebar({
               </span>
             </span>
           )}
-          <HierarchyToggle />
           <button
             className="toolbar-icon-btn"
             style={{ width: 22, height: 22 }}
@@ -708,7 +700,6 @@ export function Sidebar({
                   onSessionEnded={onSessionEnded}
                   onOpenLauncher={() => onOpenProjectLauncher(project.id)}
                   onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
-                  hierarchicalView={hierarchicalView}
                   forceExpanded={filterActive}
                   openSessionIds={openSessionIdSet}
                 />
@@ -1026,7 +1017,6 @@ export function ProjectSection({
   onSessionEnded,
   onOpenLauncher,
   onOpenProjectSetup,
-  hierarchicalView,
   forceExpanded = false,
   openSessionIds = null,
 }: {
@@ -1048,7 +1038,6 @@ export function ProjectSection({
   onSessionEnded: (session: Session) => void;
   onOpenLauncher: () => void;
   onOpenProjectSetup: () => void;
-  hierarchicalView: boolean;
   // U3 — set by Sidebar while its search/chip filter is active: reveals a
   // matching session inside an otherwise manually-collapsed project rather
   // than leaving it hidden behind a stale collapse state the user set
@@ -1086,16 +1075,10 @@ export function ProjectSection({
     setProjectCollapsedPersisted(project.id, next);
   };
 
-  // Phase 5 (Track B, issue #195 5.5b) — flat mode keeps today's exact
-  // depth-0 order; hierarchical mode nests children under their parent (see
-  // buildHierarchicalRows's own doc comment for the orphan rule).
-  const rows = useMemo(
-    () =>
-      hierarchicalView
-        ? buildHierarchicalRows(sessions)
-        : sessions.map((session) => ({ session, depth: 0 })),
-    [sessions, hierarchicalView],
-  );
+  // Children nest under their parent (see buildHierarchicalRows's own doc
+  // comment for the orphan rule). #3214: the only grouping; the flat view
+  // and its toggle are gone.
+  const rows = useMemo(() => buildHierarchicalRows(sessions), [sessions]);
 
   return (
     <div className="project-row">

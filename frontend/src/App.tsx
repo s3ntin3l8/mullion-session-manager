@@ -63,6 +63,7 @@ import { RightSidebar } from "./right-sidebar/RightSidebar.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import {
   isCompactTier,
+  presentationFor,
   resolveLayoutTier,
   useCoarsePointer,
   useLayoutBand,
@@ -423,11 +424,7 @@ export function App() {
   // #3010 — the two halves between 800 and 1099px: one pane per half, a
   // device-local view of the workspace (see useFoldHalves). Workspace mode
   // only for the UI; the presentation itself also holds under the board.
-  const layoutPresentation: LayoutPresentation = isMobile
-    ? "phone"
-    : layoutBand === "rails-halves"
-      ? "halves"
-      : "grid";
+  const layoutPresentation: LayoutPresentation = presentationFor(layoutTier, layoutBand);
   const foldHalves = layoutPresentation === "halves" && viewMode !== "kanban";
   const halvesState = useDashboardStore((s) =>
     s.activeWorkspaceId === null

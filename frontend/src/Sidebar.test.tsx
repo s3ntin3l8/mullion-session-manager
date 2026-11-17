@@ -31,7 +31,7 @@ import { useDashboardStore } from "./store/index.js";
 // selector(state), .getState() -> whole state, plus setState so a test can
 // publish a host-health change) since Sidebar reads the store the same ways
 // across its own body and the child components it mounts (ProjectHeader,
-// SessionRow, HierarchyToggle).
+// SessionRow).
 let workspaceCounter = 0;
 let projects: Project[];
 let sessions: Session[];
@@ -63,7 +63,6 @@ const deleteSession = vi.fn().mockResolvedValue(undefined);
 const renameSession = vi.fn().mockResolvedValue(undefined);
 const subscribeToGitHubProject = vi.fn();
 const unsubscribeFromGitHubProject = vi.fn();
-const setHierarchicalView = vi.fn();
 const setViewMode = vi.fn();
 // The app-wide failure channel (store/slices/toasts.ts) — the sidebar
 // reports a failed rename through it.
@@ -82,8 +81,6 @@ function storeState() {
     setShowTaskSessions,
     settings: { sessions: { confirmBeforeKill: false }, projectRoots: [] },
     settingsLoaded: true,
-    hierarchicalView: false,
-    setHierarchicalView,
     viewMode,
     setViewMode,
     theme: "dark",
@@ -386,6 +383,32 @@ describe("blocked tasks in the sidebar (issue #2437)", () => {
     renderSidebar();
     expect(screen.queryByRole("region", { name: "Blocked tasks" })).toBeNull();
     expect(screen.queryByText("Wait on the API")).toBeNull();
+  });
+});
+
+// #3214 — hierarchical is the only grouping: no store flag, no toggle.
+describe("Sidebar session grouping (#3214)", () => {
+  it("nests a child under its parent without any store flag", () => {
+    sessions = [
+      makeSession({ id: 2, command: "child task", parentSessionId: 1 }),
+      makeSession({ id: 3, command: "unrelated" }),
+      makeSession({ id: 1, command: "parent agent" }),
+    ];
+    renderSidebar();
+    const parent = screen.getByText("parent agent").closest(".session-item") as HTMLElement;
+    const child = screen.getByText("child task").closest(".session-item") as HTMLElement;
+    // The child follows its parent directly, one level in.
+    const rows = Array.from(document.querySelectorAll(".session-item"));
+    expect(rows.indexOf(child)).toBe(rows.indexOf(parent) + 1);
+    expect(child.style.getPropertyValue("--session-depth")).toBe("1");
+    expect(parent.style.getPropertyValue("--session-depth")).toBe("");
+  });
+
+  it("renders no Session grouping control", () => {
+    renderSidebar();
+    expect(screen.queryByRole("group", { name: "Session grouping" })).toBeNull();
+    expect(screen.queryByTitle("Flat view")).toBeNull();
+    expect(screen.queryByTitle("Hierarchical view")).toBeNull();
   });
 });
 

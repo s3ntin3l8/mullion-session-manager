@@ -266,9 +266,8 @@
   flex-wrap: wrap;
   gap: 5px;
 }
-/* Same on/off shape as .toolbar-icon-btn.active (HierarchyToggle's own
-   segmented toggle) — a text pill instead of an icon square, since each
-   chip needs its own label. */
+/* Same on/off shape as .toolbar-icon-btn.active — a text pill instead of
+   an icon square, since each chip needs its own label. */
 .sidebar-filter-chip {
   padding: 3px 9px;
   border: 1px solid var(--border);

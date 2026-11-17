@@ -53,9 +53,7 @@ import type { FoldHalvesState, Half, LastUsed } from "../lib/foldHalves.js";
 // dockview grid area (App.tsx) — see that file's own comment for why it
 // lives there rather than inside the sidebar (a global, cross-project board
 // needs more width than the sidebar's SIDEBAR_MAX_WIDTH affords). Client-only
-// UI preference (localStorage, no backend field) — same for
-// hierarchicalView below (Phase 5 Track B, issue #195 5.5b: flat
-// vs hierarchical child-session nesting).
+// UI preference (localStorage, no backend field).
 //
 // The two values are also the app's two first-level modes (#3009): "list" is
 // Workspace mode (the grid, the left sidebar, the Dock) and "kanban" is Tasks
@@ -747,10 +745,6 @@ export interface UiSlice {
    *  (#3014): the phone's back gesture then returns to Tasks, reopening the
    *  task the switch came from. Cleared by any other mode change. */
   crossLinkReturn: { taskId: number | null } | null;
-  // Phase 5 (Track B, issue #195 5.5b) — see ViewMode's own doc comment.
-  // Only meaningful in "list" viewMode — the unified board's ad-hoc lane
-  // cards (UnifiedBoard.tsx) always render flat regardless of this flag.
-  hierarchicalView: boolean;
   // Local-only presentation order for Kanban cards within a column (issue
   // #211) — there's no backend field for card order in Phase 1 (a session
   // has no `position` column, unlike workspaces/groups), so this is kept as
@@ -795,7 +789,7 @@ export interface UiSlice {
   // falling back to first-available/create-default when that happens. Kept
   // in the ui slice (not workspaces) — it's a client-only preference
   // (localStorage-backed set/read, no server round trip), the same shape as
-  // sidebarWidth/viewMode/hierarchicalView below rather than the
+  // sidebarWidth/viewMode below rather than the
   // workspaces slice's server-backed CRUD.
   activeWorkspaceId: number | null;
   setActiveWorkspaceId: (id: number | null) => void;
@@ -902,7 +896,6 @@ export interface UiSlice {
    *  the right half is not also mounted in the grid. */
   foldHalvesActive: boolean;
   setFoldHalvesActive: (active: boolean) => void;
-  setHierarchicalView: (value: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
   // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,
   // reusing reorder.ts's computeReorder for the actual reindex math) —

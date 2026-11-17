@@ -12,7 +12,10 @@ it:
   half), the empty workspace's "Launch a session" under a touch pointer, on the
   phone the session switcher's "New session", and a pane's **Split right** /
   **Split down** (with the pane's project preselected; the session, or an
-  existing one opened from the touch sheet, lands beside that pane).
+  existing one opened from the touch sheet, lands beside that pane). Those two
+  are buttons in the pane's header, and pane menu entries only while the
+  header is too narrow to show them; the two halves and the phone have no
+  split.
 - **The command palette** (⌘K / Ctrl+K, and the left rail's command box) —
   commands, sessions and workspaces. It starts no session itself. Its first
   entry, **New session…**, opens the launcher on the palette's project, so

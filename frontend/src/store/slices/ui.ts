@@ -25,7 +25,6 @@ import {
 import {
   clampRightSidebarWidth,
   readStoredActiveWorkspaceId,
-  readStoredHierarchicalView,
   readStoredRightSidebarWidth,
   readStoredSidebarWidth,
   readStoredViewMode,
@@ -278,7 +277,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
     crossLinkReturn: null,
-    hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
     launcherRequest: null,
     openSessionRequest: null,
@@ -612,11 +610,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
     setFoldHalvesActive: (active) => {
       if (get().foldHalvesActive !== active) set({ foldHalvesActive: active });
-    },
-
-    setHierarchicalView: (value) => {
-      writeBool(STORAGE_KEYS.hierarchicalView, value);
-      set({ hierarchicalView: value });
     },
 
     setKanbanColumnOrder: (columnId, order) => {
