@@ -468,7 +468,7 @@ function workflowRefusalDetail(stderr: string): string {
     .split("\n")
     .map((l) => l.replace(/^remote:\s*/, "").trim())
     .find((l) => WORKFLOW_PERMISSION_REFUSAL.test(l));
-  const quoted = line ? ` ("${line.slice(0, 300)}")` : "";
+  const quoted = line ? ` ("${line.length > 300 ? `${line.slice(0, 300)}…` : line}")` : "";
   return `GitHub refused the push over workflow permission, which the approval check did not see${quoted}. The usual cause is a branch behind the default branch's workflow changes: rebase it onto the default branch, or push it manually`;
 }
 
@@ -524,9 +524,10 @@ async function pushForPromotion(
     recordGithubSyncError(app, task.id, forbidden);
     return { ok: false, reason: "push-forbidden", detail: forbidden };
   }
-  const detail = WORKFLOW_PERMISSION_REFUSAL.test(value.detail ?? "")
-    ? workflowRefusalDetail(value.detail ?? "")
-    : (value.detail ?? "Failed to push the task's branch");
+  const stderr = value.detail ?? "";
+  const detail = WORKFLOW_PERMISSION_REFUSAL.test(stderr)
+    ? workflowRefusalDetail(stderr)
+    : stderr || "Failed to push the task's branch";
   recordGithubSyncError(app, task.id, detail);
   return { ok: false, reason: "push-failed", detail };
 }
