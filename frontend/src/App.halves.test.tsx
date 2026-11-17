@@ -90,7 +90,12 @@ describe("App two halves", () => {
     cleanup();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
-    useDashboardStore.setState({ foldHalves: {}, focusedHalf: "left", activePanelId: null });
+    useDashboardStore.setState({
+      foldHalves: {},
+      focusedHalf: "left",
+      activePanelId: null,
+      updateCheck: null,
+    });
   });
 
   async function renderHalves(coarse = false, api = makeApi()) {
@@ -131,6 +136,66 @@ describe("App two halves", () => {
     // The halves' widths still hold: the sidebar docks on the right half.
     expect(app).toHaveClass("halves-band");
     expect(tasks.container.querySelector(".right-sidebar-panel.docked")).toHaveClass("half");
+    useDashboardStore.setState({ viewMode: "list", rightSidebarOpen: false });
+  });
+
+  // #3213 — the shell banners span both halves, above them, not the left one.
+  it("shows the update banner above both halves, not inside the left half", async () => {
+    const { container } = await renderHalves();
+    act(() =>
+      useDashboardStore.setState({
+        currentVersion: "1.0.0",
+        dismissedUpdateVersion: null,
+        updateCheck: {
+          currentVersion: "1.0.0",
+          latestVersion: "1.1.0",
+          updateAvailable: true,
+          releaseUrl: null,
+          assetUrl: null,
+          checksumUrl: null,
+        } as never,
+      }),
+    );
+    const banner = screen.getByText("v1.0.0 → v1.1.0 available");
+    expect(container.querySelector(".fold-half-left")).not.toContainElement(banner);
+    const host = container.querySelector(".shell-banners");
+    expect(host).toContainElement(banner);
+    expect(host?.parentElement).toHaveClass("app-body", "app-body--halves");
+
+    // Outside the halves it stays at the top of the grid area.
+    cleanup();
+    stubWidth("tablet");
+    const wide = render(<App />);
+    const gridBanner = screen.getByText("v1.0.0 → v1.1.0 available");
+    expect(wide.container.querySelector(".grid-area")).toContainElement(gridBanner);
+    expect(wide.container.querySelector(".shell-banners")).toBeNull();
+    expect(wide.container.querySelector(".app-body")).not.toHaveClass("app-body--halves");
+  });
+
+  // #3213 — Tasks mode on the halves band is not foldHalves (the board has no
+  // fold-half classes), but its banners still span both halves.
+  it("shows the update banner above both halves in Tasks mode too", async () => {
+    useDashboardStore.setState({
+      viewMode: "kanban",
+      rightSidebarOpen: true,
+      currentVersion: "1.0.0",
+      dismissedUpdateVersion: null,
+      updateCheck: {
+        currentVersion: "1.0.0",
+        latestVersion: "1.1.0",
+        updateAvailable: true,
+        releaseUrl: null,
+        assetUrl: null,
+        checksumUrl: null,
+      } as never,
+    });
+    const { container } = await renderHalves();
+    expect(container.querySelector(".app")).not.toHaveClass("fold-halves");
+    const gridArea = container.querySelector(".grid-area");
+    expect(gridArea).not.toHaveClass("fold-half");
+    const banner = screen.getByText("v1.0.0 → v1.1.0 available");
+    expect(gridArea).not.toContainElement(banner);
+    expect(container.querySelector(".app-body--halves > .shell-banners")).toContainElement(banner);
     useDashboardStore.setState({ viewMode: "list", rightSidebarOpen: false });
   });
 

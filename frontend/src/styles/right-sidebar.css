@@ -349,6 +349,41 @@
    split evenly with the grid, so the seam sits in the middle (on a foldable,
    on the hinge). Not the stored width, no resize handle, and the width is
    never animated (a terminal reflows on every step; docs/motion.md). */
+/* The shell banners span both halves (#3213): the body becomes a grid whose
+   first row, between the two rails, holds them above the halves. The rails
+   run the full height beside them, and the left half (.grid-area) takes the
+   right half's column too while nothing shows there. The halves stay equal
+   (1fr each), and the key bar and the halves' focus outlines are untouched:
+   the banners are in neither half. */
+.app-body.app-body--halves {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.app-body--halves > .left-rail {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+.app-body--halves > .shell-banners {
+  grid-column: 2 / 4;
+  grid-row: 1;
+  min-width: 0;
+}
+.app-body--halves > .grid-area {
+  grid-column: 2 / 4;
+  grid-row: 2;
+}
+.app-body--halves > .grid-area:has(~ .right-sidebar-panel) {
+  grid-column: 2;
+}
+.app-body--halves > .right-sidebar-panel {
+  grid-column: 3;
+  grid-row: 2;
+}
+.app-body--halves > .right-rail {
+  grid-column: 4;
+  grid-row: 1 / -1;
+}
 .app.halves-band .grid-area,
 .app.halves-band .right-sidebar-panel.docked.half {
   flex: 1 1 0;

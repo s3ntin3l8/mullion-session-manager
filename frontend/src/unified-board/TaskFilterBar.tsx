@@ -47,9 +47,18 @@ export function TaskFilterBar({
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   const newBtn = (
-    <button type="button" className="tasks-panel-new-btn" onClick={onToggleCreate}>
-      <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-      New task
+    // Named and titled "New task" either way: where the filter row is too
+    // narrow for the label (#3213, a container query in task-filter-bar.css)
+    // it shows only the "+".
+    <button
+      type="button"
+      className="tasks-panel-new-btn"
+      aria-label="New task"
+      title="New task"
+      onClick={onToggleCreate}
+    >
+      <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} aria-hidden="true" />
+      <span className="tasks-panel-new-label">New task</span>
     </button>
   );
   const newForm = creating && (
@@ -185,50 +194,53 @@ export function TaskFilterBar({
   return (
     <div className="task-filter-bar">
       <div className="tasks-panel-toolbar task-filter-row">
-        <button
-          type="button"
-          className={`task-pop-btn task-facets-toggle${facetsShown ? " active" : ""}`}
-          aria-label="Facets panel"
-          aria-pressed={facetsShown}
-          title="Show or hide the facets panel (state, projects, epics)"
-          onClick={() => api.setFacets(facetsShown ? "off" : "on")}
-        >
-          <SidebarToggleIcon size={14} aria-hidden="true" />
-        </button>
-        {showProjects && (
-          <FilterPopover
-            ariaLabel="Projects"
-            buttonLabel={`Projects: ${projectSummary}${api.followActive ? " (following the sidebar)" : ""}`}
-            label={projectSummary}
-            active={filters.projectIds.length > 0}
+        {/* Everything but New task wraps inside this cluster, so New task
+            stays on the row's first line at the right (#3213). */}
+        <div className="task-filter-controls">
+          <button
+            type="button"
+            className={`task-pop-btn task-facets-toggle${facetsShown ? " active" : ""}`}
+            aria-label="Facets panel"
+            aria-pressed={facetsShown}
+            title="Show or hide the facets panel (state, projects, epics)"
+            onClick={() => api.setFacets(facetsShown ? "off" : "on")}
           >
-            {projectsPanel}
+            <SidebarToggleIcon size={14} aria-hidden="true" />
+          </button>
+          {showProjects && (
+            <FilterPopover
+              ariaLabel="Projects"
+              buttonLabel={`Projects: ${projectSummary}${api.followActive ? " (following the sidebar)" : ""}`}
+              label={projectSummary}
+              active={filters.projectIds.length > 0}
+            >
+              {projectsPanel}
+            </FilterPopover>
+          )}
+          {quickViews}
+          <FilterPopover
+            ariaLabel="Filter"
+            buttonLabel={filterDims > 0 ? `Filter ${filterDims} active` : "Filter"}
+            label={
+              <>
+                <FilterIcon size={12} aria-hidden="true" />
+                Filter
+                {filterDims > 0 && (
+                  <>
+                    {" "}
+                    <span className="task-view-n">{filterDims}</span>
+                  </>
+                )}
+              </>
+            }
+            active={filterDims > 0}
+          >
+            {filterPanel}
           </FilterPopover>
-        )}
-        {quickViews}
-        <FilterPopover
-          ariaLabel="Filter"
-          buttonLabel={filterDims > 0 ? `Filter ${filterDims} active` : "Filter"}
-          label={
-            <>
-              <FilterIcon size={12} aria-hidden="true" />
-              Filter
-              {filterDims > 0 && (
-                <>
-                  {" "}
-                  <span className="task-view-n">{filterDims}</span>
-                </>
-              )}
-            </>
-          }
-          active={filterDims > 0}
-        >
-          {filterPanel}
-        </FilterPopover>
-        <FilterPopover ariaLabel="Display" label="Display">
-          {displayPanel}
-        </FilterPopover>
-        <span className="task-filter-spacer" />
+          <FilterPopover ariaLabel="Display" label="Display">
+            {displayPanel}
+          </FilterPopover>
+        </div>
         {newBtn}
       </div>
       {filterDims > 0 && (
