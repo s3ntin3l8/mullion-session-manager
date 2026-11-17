@@ -216,6 +216,7 @@ split across two cells.
 | `bundle.remove`            | full            | `POST /api/bundle-sync/remove`                                                        | `bundle remove`                                                     | — (no MCP wrapper)                                    |
 | `tasks.list`               | full            | `GET /api/tasks`                                                                      | `task list [--status <s>] [--project <id>]`                         | `list_tasks`                                          |
 | `tasks.get`                | full            | `GET /api/tasks/:id`                                                                  | `task get <id>`                                                     | `get_task`                                            |
+| `tasks.push`               | full, session   | `POST /api/sessions/:id/task-push`                                                    | `task push`                                                         | `push_task_branch`                                    |
 
 † **`dock start`/`start_dock_session`** call `docks.start` (#2494): the server
 resolves the control from the project's `.crs/dock.json`, launches it through

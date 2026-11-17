@@ -1491,8 +1491,6 @@ const bundleCommands = {
   },
 };
 
-// #2102 — a Task Master worker pushes its branch through Mullion (the gated
-// path, bot identity) instead of with its own git credentials.
 const TASK_LIST_SPEC = { status: "string", project: "string" };
 
 const taskCommands = {
@@ -1514,6 +1512,8 @@ const taskCommands = {
     const result = await client.request("tasks.get", { taskId: id });
     return { json: result };
   },
+  // #2102 — a Task Master worker pushes its branch through Mullion (the gated
+  // path, bot identity) instead of with its own git credentials.
   async push(client, _args, opts) {
     const body = {};
     if (opts.session !== undefined) body.sessionId = opts.session;
