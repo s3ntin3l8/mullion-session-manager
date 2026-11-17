@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { SearchInput, Segmented } from "../ui/primitives.js";
-import type { EpicOption, FacetsSetting } from "./taskFilters.js";
+import type { EpicOption, FacetsSetting, HostOption } from "./taskFilters.js";
 import { NO_EPIC } from "./taskFilters.js";
 
 // The contents of the board's three menus (#2840): the project picker, the Filter menu
@@ -160,6 +160,9 @@ export function FilterMenuPanel({
   agentOpts,
   selectedAgents,
   onToggleAgent,
+  hostOpts = [],
+  selectedHosts = [],
+  onToggleHost,
   text,
   onText,
 }: {
@@ -170,6 +173,10 @@ export function FilterMenuPanel({
   agentOpts: Array<{ value: string; count: number }>;
   selectedAgents: string[];
   onToggleAgent: (value: string) => void;
+  /** Omit `onToggleHost` to hide the host facet (no remote host registered). */
+  hostOpts?: HostOption[];
+  selectedHosts?: string[];
+  onToggleHost?: (value: string) => void;
   text: string;
   onText: (value: string) => void;
 }) {
@@ -204,6 +211,36 @@ export function FilterMenuPanel({
           ))}
         </>
       )}
+      {onToggleHost && (
+        <HostChecklist hostOpts={hostOpts} selected={selectedHosts} onToggle={onToggleHost} />
+      )}
+    </>
+  );
+}
+
+export function HostChecklist({
+  hostOpts,
+  selected,
+  onToggle,
+}: {
+  hostOpts: HostOption[];
+  selected: string[];
+  onToggle: (value: string) => void;
+}) {
+  if (hostOpts.length === 0) return null;
+  return (
+    <>
+      <div className="task-pop-h">Host</div>
+      {hostOpts.map((o) => (
+        <CheckItem
+          key={o.value}
+          checked={selected.includes(o.value)}
+          onChange={() => onToggle(o.value)}
+          count={o.count}
+        >
+          {o.label}
+        </CheckItem>
+      ))}
     </>
   );
 }

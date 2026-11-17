@@ -1,4 +1,5 @@
-import type { Task } from "../api/index.js";
+import type { Host, Task } from "../api/index.js";
+import { hostDisplayName } from "../lib/hostBadge.js";
 import { commandToBinary } from "../cliLogos.js";
 import { needsYouReason, taskBucket } from "../github/taskMasterSummary.js";
 import { isAwaitingMerge } from "./awaitingMerge.js";
@@ -32,6 +33,10 @@ export function isQuickView(value: unknown): value is QuickView {
  * contain a "#" after a repo slug), so it can share the key list with real epics. */
 export const NO_EPIC = "__none__";
 
+/** "Not placed yet" in the host filter: a task with no worker session. Never a valid
+ * host id (those are "local" or a UUID), so it shares the id list with real hosts. */
+export const NO_HOST = "__unplaced__";
+
 /** The facets panel: always shown, never shown, or shown on a wide window / many projects. */
 export type FacetsSetting = "off" | "on" | "auto";
 
@@ -57,6 +62,8 @@ export interface TaskFilters {
   epicKeys: string[];
   /** Agent labels (see `agentLabel`). Empty = every agent. */
   agents: string[];
+  /** Host ids of the worker session (`resolvedHostId`), plus NO_HOST. Empty = every host. */
+  hosts: string[];
   text: string;
   showArchived: boolean;
 }
@@ -66,6 +73,7 @@ export const NO_FILTERS: TaskFilters = {
   view: "all",
   epicKeys: [],
   agents: [],
+  hosts: [],
   text: "",
   showArchived: false,
 };
@@ -80,6 +88,22 @@ export function epicKeyOf(task: Task): string | null {
 export function agentLabel(task: Task): string {
   if (task.agentCommand) return commandToBinary(task.agentCommand);
   return task.agent ?? "auto";
+}
+
+/** The worker session's slice the host lookup needs. */
+type HostSession = { id: number; resolvedHostId: string };
+
+/** The task's host id: its worker session's resolved host, else NO_HOST. The one
+ * session→host lookup the facet, its options and its tokens share. */
+export function taskHostId(
+  task: Pick<Task, "sessionId">,
+  sessions: readonly HostSession[] | ReadonlyMap<number, HostSession>,
+): string {
+  if (task.sessionId === null) return NO_HOST;
+  const s = Array.isArray(sessions)
+    ? sessions.find((x) => x.id === task.sessionId)
+    : (sessions as ReadonlyMap<number, HostSession>).get(task.sessionId);
+  return s?.resolvedHostId || NO_HOST;
 }
 
 export function matchesQuickView(task: Task, view: QuickView): boolean {
@@ -112,7 +136,13 @@ export function matchesText(task: Task, text: string): boolean {
 }
 
 /** Every filter except the quick view: the set the quick-view counts are taken over. */
-export function scopeTasks(tasks: Task[], f: TaskFilters): Task[] {
+export function scopeTasks(
+  tasks: Task[],
+  f: TaskFilters,
+  sessions: readonly HostSession[] = [],
+): Task[] {
+  const sessionsById = f.hosts.length > 0 ? new Map(sessions.map((s) => [s.id, s])) : null;
+  const hostSet = f.hosts.length > 0 ? new Set(f.hosts) : null;
   const epics = f.epicKeys.length > 0 ? new Set(f.epicKeys) : null;
   const agents = f.agents.length > 0 ? new Set(f.agents) : null;
   const projects = f.projectIds.length > 0 ? new Set(f.projectIds) : null;
@@ -121,6 +151,7 @@ export function scopeTasks(tasks: Task[], f: TaskFilters): Task[] {
     if (projects && !projects.has(t.projectId)) return false;
     if (epics && !epics.has(epicKeyOf(t) ?? NO_EPIC)) return false;
     if (agents && !agents.has(agentLabel(t))) return false;
+    if (hostSet && sessionsById && !hostSet.has(taskHostId(t, sessionsById))) return false;
     return matchesText(t, f.text);
   });
 }
@@ -211,6 +242,36 @@ export function agentOptions(tasks: Task[]): Array<{ value: string; count: numbe
     .sort((a, b) => a.value.localeCompare(b.value));
 }
 
+export interface HostOption {
+  value: string;
+  label: string;
+  count: number;
+}
+
+/** One option per host that has a task on it, plus "Not placed yet"; sorted by label,
+ * the unplaced bucket last. A selected host with no tasks keeps no option (callers
+ * show it from the filter itself). */
+export function hostOptions(
+  tasks: Task[],
+  sessions: readonly HostSession[],
+  hosts: readonly Host[],
+): HostOption[] {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const counts = new Map<string, number>();
+  for (const t of tasks) {
+    const id = taskHostId(t, byId);
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const out = [...counts.entries()].map(([value, count]) => ({
+    value,
+    label: value === NO_HOST ? "Not placed yet" : hostDisplayName(value, hosts),
+    count,
+  }));
+  return out.sort((a, b) =>
+    a.value === NO_HOST ? 1 : b.value === NO_HOST ? -1 : a.label.localeCompare(b.label),
+  );
+}
+
 /** How many filter dimensions are active, for the phone Filter button's badge. */
 export function activeFilterCount(f: TaskFilters, hideDone: boolean): number {
   return (
@@ -218,6 +279,7 @@ export function activeFilterCount(f: TaskFilters, hideDone: boolean): number {
     (f.view !== "all" ? 1 : 0) +
     (f.epicKeys.length > 0 ? 1 : 0) +
     (f.agents.length > 0 ? 1 : 0) +
+    (f.hosts.length > 0 ? 1 : 0) +
     (f.text.trim() !== "" ? 1 : 0) +
     (f.showArchived ? 1 : 0) +
     (hideDone ? 1 : 0)

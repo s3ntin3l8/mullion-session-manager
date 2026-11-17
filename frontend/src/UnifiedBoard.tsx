@@ -127,6 +127,7 @@ export function UnifiedBoard({
     tasksError,
     sessions,
     projects,
+    hosts,
     taskMasterEnabled,
     hideEndedSessions,
     kanbanOrder,
@@ -138,6 +139,7 @@ export function UnifiedBoard({
       tasksError: s.tasksError,
       sessions: s.sessions,
       projects: s.projects,
+      hosts: s.hosts,
       taskMasterEnabled: s.taskMasterEnabled,
       hideEndedSessions: s.hideEndedSessions,
       kanbanOrder: s.kanbanOrder,
@@ -166,7 +168,7 @@ export function UnifiedBoard({
   // combination of filters produced `visibleTasks`.
   // The project the right sidebar follows, for the project picker's "follow" option (#2858).
   const followedProjectId = useDashboardStore((s) => s.followedProjectId);
-  const filterApi = useTaskFilters(tasks, projects, followedProjectId);
+  const filterApi = useTaskFilters(tasks, projects, followedProjectId, sessions, hosts ?? []);
   const { visibleTasks, filters, effectiveHideDone: hideDone, density } = filterApi;
   // #2841 — grouping into lanes needs width and a second axis; phone shows one status
   // column at a time and stays flat.

@@ -1,15 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { makeTask } from "../test/fixtures.js";
+import { makeHost, makeTask } from "../test/fixtures.js";
 import {
   FACETS_AUTO_MIN_PROJECTS,
   FACETS_AUTO_MIN_WIDTH,
   NO_EPIC,
   NO_FILTERS,
+  NO_HOST,
   activeFilterCount,
   agentLabel,
   agentOptions,
   epicOptions,
   facetsOpen,
+  hostOptions,
+  taskHostId,
   isFacetsSetting,
   isQuickView,
   matchesQuickView,
@@ -263,11 +266,57 @@ describe("activeFilterCount", () => {
           view: "blocked",
           epicKeys: ["a", "b"],
           agents: ["claude"],
+          hosts: ["local"],
           text: " x ",
           showArchived: true,
         },
         true,
       ),
-    ).toBe(7);
+    ).toBe(8);
+  });
+});
+
+describe("host filter", () => {
+  const sessions = [
+    { id: 10, resolvedHostId: "local" },
+    { id: 11, resolvedHostId: "h-mac" },
+    { id: 12, resolvedHostId: "h-mac" },
+  ];
+  const hosts = [makeHost({ id: "h-mac", name: "mac-mini" })];
+  const hostTasks = [
+    makeTask({ id: 1, sessionId: 10 }),
+    makeTask({ id: 2, sessionId: 11 }),
+    makeTask({ id: 3, sessionId: 12 }),
+    makeTask({ id: 4, sessionId: null }),
+    makeTask({ id: 5, sessionId: 99 }),
+  ];
+  const ids = (hs: string[]) =>
+    scopeTasks(hostTasks, { ...NO_FILTERS, hosts: hs }, sessions).map((t) => t.id);
+
+  it("matches the worker session's resolved host", () => {
+    expect(ids([])).toEqual([1, 2, 3, 4, 5]);
+    expect(ids(["h-mac"])).toEqual([2, 3]);
+    expect(ids(["local", "h-mac"])).toEqual([1, 2, 3]);
+  });
+
+  it("puts a task with no (or an unknown) worker session in the unplaced bucket", () => {
+    expect(ids([NO_HOST])).toEqual([4, 5]);
+    expect(taskHostId(hostTasks[3], sessions)).toBe(NO_HOST);
+  });
+
+  it("a host id that no longer exists matches nothing", () => {
+    expect(ids(["gone"])).toEqual([]);
+  });
+
+  it("hostOptions labels by host name, counts, and lists unplaced last", () => {
+    expect(hostOptions(hostTasks, sessions, hosts)).toEqual([
+      { value: "h-mac", label: "mac-mini", count: 2 },
+      { value: "local", label: "this machine", count: 1 },
+      { value: NO_HOST, label: "Not placed yet", count: 2 },
+    ]);
+  });
+
+  it("counts as one active filter", () => {
+    expect(activeFilterCount({ ...NO_FILTERS, hosts: ["a", "b"] }, false)).toBe(1);
   });
 });
