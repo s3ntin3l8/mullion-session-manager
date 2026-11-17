@@ -298,7 +298,7 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
     }
   });
 
-  it("gives up a retry whose origin state could not be confirmed, and still offers Start fresh", async () => {
+  it("gives up a retry whose origin state could not be confirmed, and still records the host it waits for", async () => {
     const { app, mac, task } = await setupWaitingRetry("give-up-unconfirmed", "unknown");
     try {
       const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();

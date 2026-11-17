@@ -16,7 +16,7 @@ vi.mock("../../src/services/settings.js", async (importOriginal) => {
     ...actual,
     getStoredSettings: () => ({
       ...actual.DEFAULT_SETTINGS,
-      hosts: { heartbeatSeconds: storedHeartbeat.seconds },
+      hosts: { heartbeatSeconds: storedHeartbeat.seconds, staleAfterDays: 30 },
     }),
   };
 });
@@ -25,7 +25,6 @@ import { startHostHeartbeat } from "../../src/services/host-heartbeat.js";
 
 function mockApp(): FastifyInstance {
   return {
-    db: {},
     log: { error: vi.fn(), warn: vi.fn() },
     config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
   } as unknown as FastifyInstance;

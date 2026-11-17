@@ -450,6 +450,8 @@ export interface AppSettings {
   hosts: {
     // HOST_HEARTBEAT_INTERVAL_SECONDS. 0 disables the heartbeat.
     heartbeatSeconds: number;
+    // Days since last successful contact before offering cleanup; 0 disables it.
+    staleAfterDays: number;
   };
   // Non-secret half of the Hermes review relay (services/hermes-review.ts):
   // an agent's `request_review` asks the Mullion server to POST a review

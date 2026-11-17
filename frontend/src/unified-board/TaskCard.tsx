@@ -24,7 +24,7 @@ import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { epicColourVar, epicUrl } from "./taskLanes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
-import { reviewRunState } from "../taskStatusModel.js";
+import { isRateLimitParked, rateLimitResumeText, reviewRunState } from "../taskStatusModel.js";
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
 // (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
@@ -530,6 +530,13 @@ export function TaskCard({
           host, a worktree git cannot cut, a required host that is not
           eligible yet) is still retried, so this is a waiting notice, not the
           terminal failure above. Cleared when the task dispatches. */}
+      {/* #2940 — parked until the provider's usage limit resets; resumes by itself. */}
+      {isRateLimitParked(task) && task.rateLimitUntil && (
+        <div className="task-card-dispatch-reason" title={task.failureReason ?? undefined}>
+          <ClockIcon size={11} />
+          Rate limited · resumes {rateLimitResumeText(task.rateLimitUntil)}
+        </div>
+      )}
       {task.status === "claimed" && task.failureReason && (
         <div className="task-card-dispatch-reason" title={task.failureReason}>
           <ClockIcon size={11} />
@@ -659,11 +666,13 @@ export function TaskCard({
         !task.failureReason && (
           <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
         )}
-      {/* #3194 — a retry waiting for its ORIGINAL host: its branch is there
-          and not on origin, so the retry cannot start anywhere else, and it
-          is never failed for waiting. The reason is on the card above (the
-          dispatch notice); this is the operator's way out — abandon that
-          branch (it stays on that host, with its commits) and start over. */}
+      {/* #3194 — a retry waiting for its ORIGINAL host: the card offers
+          "Start fresh" for ANY wait for that host, because the operator is
+          the only one who can abandon the preserved branch (it stays on that
+          host, with its commits) and start over. Only a wait whose branch is
+          CONFIRMED stranded on that host — not on origin — is never failed
+          for waiting; every other wait keeps the dispatch give-up. The reason
+          is on the card above (the dispatch notice). */}
       {task.status === "claimed" && Boolean(task.retryHostId) && (
         <button
           type="button"

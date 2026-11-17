@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "0cb7f3d8-eb51-4d3b-8a55-0c593c66ea07",
+  "id": "8fe49480-c832-4f22-a7eb-7af9e267d350",
   "prevId": "008e5fcd-20f9-4a38-a14d-40c918171890",
   "tables": {
     "bridges": {
@@ -606,6 +606,13 @@
         },
         "session_expires_at": {
           "name": "session_expires_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
@@ -2796,13 +2803,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "retry_host_id": {
-          "name": "retry_host_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "workflow_change": {
           "name": "workflow_change",

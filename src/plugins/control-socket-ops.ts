@@ -7,10 +7,6 @@ import { crossProjectAllowed } from "../services/cross-project.js";
 import { DEFAULT_MESSAGE_TTL_MS, provenanceLabel } from "../services/session-message-queue.js";
 import { compileOutputMatcher } from "../services/output-wait.js";
 import { parseWaitTimeout } from "../services/session-wait.js";
-import {
-  CONTROL_SOCKET_VIA_HEADER,
-  CONTROL_SOCKET_VIA_TOKEN,
-} from "../services/internal-request.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { deliverPrompt } from "../services/session-prompt.js";
@@ -27,9 +23,16 @@ import {
   resolveParentSessionId,
   resolveTargetProjectId,
 } from "../services/control-session-authority.js";
-import type { OpContext, OpSpec, ReplyPayload, Route, Scope } from "./control-socket-core.js";
+import type {
+  DeclaredResolver,
+  OpContext,
+  OpSpec,
+  ReplyPayload,
+  Route,
+} from "./control-socket-core.js";
 import { findRunningDockSession } from "../services/dock-control.js";
 import { dockConfigOps } from "./control-socket-dock-config.js";
+import { taskOps } from "./control-socket-tasks.js";
 import {
   STREAM_UNAVAILABLE,
   bad,
@@ -39,8 +42,12 @@ import {
   injectRoute,
   json,
   jsonHeaders,
+  owned,
+  pinned,
   requireChannel,
+  routeOp,
   streamSlotError,
+  unscoped,
   MAX_WAITS_PER_CONNECTION,
 } from "./control-socket-core.js";
 import type { WaitBodyOpts } from "./control-socket-support.js";
@@ -68,80 +75,7 @@ import {
   runWait,
 } from "./control-socket-support.js";
 
-type ResolveFn = (ctx: OpContext) => Route | ReplyPayload | Promise<Route | ReplyPayload>;
-
-/**
- * A resolver that has DECLARED how it relates to session scope — the tagged
- * union `routeOp` requires for any op listing "session" in its scopes:
- *  - `pinned`: the resolver verifies the request's target against the
- *    connection's own session/project pin (resolveTargetSessionId & co).
- *  - `unscoped`: the target is deliberately NOT pinned to the connection
- *    (a host-global read, or an explicit resource id by design) — a
- *    reviewed, greppable opt-out rather than an accident.
- *  - `owned`: the target may be the connection's own session OR a child it
- *    spawned (resolveOwnedSessionId) — wider than `pinned`, but still
- *    bounded by the parent_session_id relationship, never an arbitrary id.
- * `routeOp`'s full-only overload also takes a bare function, because
- * `injectRoute` already structurally enforces full scope there; the
- * session-reachable overload does not, so an op can't list "session" with a
- * resolver that silently pins nothing (#1546).
- */
-export interface DeclaredResolver {
-  readonly target: "pinned" | "unscoped" | "owned";
-  readonly run: ResolveFn;
-}
-
-/** Declares that `run` pins its target to the connection's own session/project. */
-export const pinned = (run: ResolveFn): DeclaredResolver => ({ target: "pinned", run });
-
-/** Declares that `run` deliberately does not pin its target. */
-export const unscoped = (run: ResolveFn): DeclaredResolver => ({ target: "unscoped", run });
-
-/** Declares that `run` limits its target to the connection's own session or
- * one of that session's children (resolveOwnedSessionId). */
-export const owned = (run: ResolveFn): DeclaredResolver => ({ target: "owned", run });
-
-type FullOnlyScopes = readonly ["full"];
-type SessionReachableScopes =
-  readonly ["full", "session"] | readonly ["session", "full"] | readonly ["session"];
-
-/**
- * Declarative request/response op: `resolve` turns the request into either a
- * `Route` to forward or an early `ReplyPayload` (validation / pin failure).
- * The runner picks `injectRoute` for full-scope-only ops (structural
- * enforcement) and `injectAndShape` for ops that list "session" — whose
- * resolver the type system forces to be declared `pinned`/`unscoped`.
- */
-export function routeOp(scopes: FullOnlyScopes, resolve: ResolveFn | DeclaredResolver): OpSpec;
-export function routeOp(scopes: SessionReachableScopes, resolve: DeclaredResolver): OpSpec;
-export function routeOp(scopes: readonly Scope[], resolve: ResolveFn | DeclaredResolver): OpSpec {
-  const fullOnly = scopes.length === 1 && scopes[0] === "full";
-  const run = typeof resolve === "function" ? resolve : resolve.run;
-  return {
-    scopes,
-    handler: async (ctx) => {
-      const resolved = await run(ctx);
-      if (!("method" in resolved)) {
-        ctx.reply(resolved);
-        return;
-      }
-      const opts = {
-        method: resolved.method,
-        url: resolved.url,
-        headers: {
-          ...(resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app)),
-          // Marks a CLI/agent-originated request so routes that audit their
-          // caller (DELETE /api/sessions/:id) can tell it from a browser one.
-          [CONTROL_SOCKET_VIA_HEADER]: CONTROL_SOCKET_VIA_TOKEN,
-        },
-        ...(resolved.payload !== undefined ? { payload: resolved.payload } : {}),
-      };
-      ctx.reply(
-        await (fullOnly ? injectRoute(ctx.app, ctx.conn, opts) : injectAndShape(ctx.app, opts)),
-      );
-    },
-  };
-}
+export { routeOp, pinned, unscoped, owned, type DeclaredResolver };
 
 /** The shared body of `sessions.wait_for_output` / `docks.wait_for_output`:
  * the caller has already pinned `id` to a session it may wait on. */
@@ -281,6 +215,7 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
 
 export const OPS: Record<string, OpSpec> = {
   ...dockConfigOps,
+  ...taskOps,
   ping: {
     scopes: ["full", "session"],
     handler: ({ reply }) => {

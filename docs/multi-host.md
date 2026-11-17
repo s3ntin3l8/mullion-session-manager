@@ -185,7 +185,8 @@ in `machine_credential`.
   active session. A row that carries a machine identity is never offered on
   hostname alone, addressed or not, so two agents that share a hostname are not
   flagged; and an outbound-only agent that lost its state (a new identity, no
-  address) leaves its old row unflagged, to be removed by hand. The one
+  address) leaves its old row unmatched by duplicate detection. It can still be
+  offered for cleanup after a long absence, as described below. The one
   exception to "an identity-bearing row is never matched" is the advertised
   `baseUrl`: two rows that both carry a machine identity and advertise the same
   URL **are** flagged (once the older is offline with no active session), because
@@ -196,6 +197,19 @@ in `machine_credential`.
   delete (with its confirmation, and its refusal while projects still
   reference the host). Two live agents sharing a URL are not flagged. Nothing
   is deleted automatically.
+- **Hosts offline for a long time.** Settings → Hosts also shows a "Not seen for
+  N days" badge when a remote host is offline, has no active session, and its
+  persisted last successful contact is older than `hosts.staleAfterDays` (30
+  days by default; 0 never flags hosts). This works for outbound-only hosts
+  without matching a replacement identity. The setting is editable beside the
+  health check interval. Successful heartbeats save last-seen time at most once
+  per host per hour, and the API falls back to that saved time after a primary
+  restart. Existing remote rows start their age at upgrade time, so upgrading
+  does not immediately flag them all. "Remove stale hosts" lists these hosts
+  with unchecked selection boxes: only hosts the operator selects are removed,
+  using the normal delete flow. A host that owns projects still shows the
+  existing confirmation to delete the host and its projects. Nothing is deleted,
+  parked or hidden automatically; the local host is never offered for removal.
 - **Shared per-host token.** If a second agent claims a row with the same
   per-host token, the incumbent's credential moves to the grace slot and
   the primary logs a warning; the displaced agent converges onto the new
@@ -1401,9 +1415,11 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
   "lacks": the previous reading is kept (and a warning logged), while a clean
   non-zero exit is a real "lacks". The agent logs at info, once per change,
   which step failed (`simctl missing`, `first launch incomplete`,
-  `no simulator runtime`). It does **not** promise swiftlint, xcbeautify,
-  fastlane, CocoaPods or an Android SDK, or that Homebrew tools are on a
-  session's `PATH`, so a task on an `xcode` host can still fail in a build.
+  `no simulator runtime`); Settings → Hosts shows the `Xcode` chip when present
+  (and does not show the failing-step reason). It does **not** promise
+  swiftlint, xcbeautify, fastlane, CocoaPods or an Android SDK, or that
+  Homebrew tools are on a session's `PATH`, so a task on an `xcode` host can
+  still fail in a build.
   Nothing is spawned on any other platform. The checklist is in
   [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 - `android-emulator`: the device panel's emulator support is enabled and
@@ -1435,8 +1451,8 @@ re-running the shell, and never with a variable's value:
 `interactiveResolve` is `ok` or `fallback`; the `reason` for a fallback is one of
 `disabled` (`MULLION_RESOLVE_INTERACTIVE_ENV=0`), `unsupported-shell`, `timeout`,
 `spawn-failed`, `unparseable` or `pending` (not resolved yet). `path` is the PATH
-a new session gets. `recoveredKeys` lists names only and stays empty until the
-SDK-environment recovery config (#3152) lands.
+a new session gets. `recoveredKeys` lists the recovered variable names (never
+their values) configured by `SESSION_ENV_RECOVER_KEYS`.
 
 The primary reads it beside the capabilities (same TTL) and `GET /api/hosts`
 returns it as `sessionEnv`. As with capabilities, a 404 (an older agent) means

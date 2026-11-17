@@ -252,11 +252,12 @@ export function TaskActions({
     );
   }
 
-  // #3194 — a retry that is WAITING for its original host (the preserved
-  // branch is on that host and not on origin, so the retry cannot start
-  // anywhere else — and it is deliberately never failed for waiting). The
-  // operator's way out is "Start fresh": abandon that branch (it stays on
-  // that host, with its commits) and run the task from scratch.
+  // #3194 — a retry that is WAITING for its original host. "Start fresh" is
+  // offered for ANY such wait, because the operator is the only one who can
+  // abandon the preserved branch (it stays on that host, with its commits)
+  // and run the task from scratch. Only a wait whose branch is CONFIRMED
+  // stranded on that host — not on origin — is deliberately never failed for
+  // waiting; every other wait keeps the dispatch give-up.
   if (task.status === "claimed" && Boolean(task.retryHostId)) {
     return (
       <div className="task-detail-actions">

@@ -4,6 +4,8 @@ import { eq, and, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
+import { parseHostCwds, serializeHostCwds } from "./host-cwds.js";
+import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 // Used only inside listHosts (call time). The constant lives in its own
 // module because the pairing flow needs it too, and importing host-pairing.ts
 // from here was an import cycle between two services with nothing else to do
@@ -30,6 +32,7 @@ export interface HostSummary {
   isLocal: boolean;
   hasToken: boolean;
   createdAt: Date;
+  lastSeenAt: Date | null;
   // Issue #245 / roadmap 7.1 — "manual" (created via Settings -> Add host,
   // including every pre-#245 row, which has origin === null in the DB) vs
   // "enrolled" (auto-created by an agent's own registration call against
@@ -162,6 +165,7 @@ function toSummary(row: HostRow): HostSummary {
     isLocal: row.id === LOCAL_HOST_ID,
     hasToken: row.authTokenEnc !== null && row.authTokenEnc !== "",
     createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
     origin: row.origin === "enrolled" ? "enrolled" : "manual",
     platform: row.platform,
     drained: row.drained,
@@ -228,6 +232,24 @@ function reportedHostname(row: HostRow): string | null {
   }
 }
 
+/** Hosts with an active session, including sessions inheriting their project's host. */
+export function activeSessionHostIds(app: FastifyInstance): Set<string> {
+  // A session runs on its own host when it has one, else its project's.
+  const busy = new Set<string>();
+  const active = app.db
+    .select({ sessionHost: sessions.hostId, projectHost: projects.hostId })
+    .from(sessions)
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
+    .where(eq(sessions.status, "active"))
+    .all();
+  for (const a of active) {
+    const id = a.sessionHost ?? a.projectHost;
+    if (id) busy.add(id);
+  }
+
+  return busy;
+}
+
 /**
  * Issue #2582 — flags probable duplicate rows left by an agent that lost its
  * identity (its state file did not survive a restart) and so re-enrolled as a
@@ -241,6 +263,7 @@ function reportedHostname(row: HostRow): string | null {
 export function findPossibleDuplicates(
   app: FastifyInstance,
   healthOf: (hostId: string) => string,
+  busy: ReadonlySet<string> = activeSessionHostIds(app),
 ): Map<string, string[]> {
   const enrolled = app.db
     .select()
@@ -250,19 +273,6 @@ export function findPossibleDuplicates(
     .filter((r) => r.id !== LOCAL_HOST_ID);
   const result = new Map<string, string[]>();
   if (enrolled.length < 2) return result;
-
-  // A session runs on its own host when it has one, else its project's.
-  const busy = new Set<string>();
-  const active = app.db
-    .select({ sessionHost: sessions.hostId, projectHost: projects.hostId })
-    .from(sessions)
-    .leftJoin(projects, eq(sessions.projectId, projects.id))
-    .where(eq(sessions.status, "active"))
-    .all();
-  for (const a of active) {
-    const id = a.sessionHost ?? a.projectHost;
-    if (id) busy.add(id);
-  }
 
   const stale = enrolled.filter((r) => healthOf(r.id) === "offline" && !busy.has(r.id));
   for (const newer of enrolled) {
@@ -395,8 +405,48 @@ export function deleteHost(app: FastifyInstance, id: string, opts: { cascade?: b
   if (projectCount > 0 && !opts.cascade) {
     throw new HostHasProjectsError(id, projectCount);
   }
-  const deleted = app.db.delete(hosts).where(eq(hosts.id, id)).returning().all();
-  if (deleted.length === 0) throw new UnknownHostError(id);
+  app.db.transaction((tx) => {
+    const deleted = tx.delete(hosts).where(eq(hosts.id, id)).returning().all();
+    if (deleted.length === 0) throw new UnknownHostError(id);
+
+    // Mappings are JSON rather than foreign keys, including declined hosts
+    // that have no cwd entry. Remove those references atomically with the host.
+    const mappedProjects = tx
+      .select({ id: projects.id, hostCwds: projects.hostCwds, hostCwdsMeta: projects.hostCwdsMeta })
+      .from(projects)
+      .where(or(isNotNull(projects.hostCwds), isNotNull(projects.hostCwdsMeta)))
+      .all();
+    for (const project of mappedProjects) {
+      const map = parseHostCwds(project.hostCwds);
+      const meta = parseHostCwdsMeta(project.hostCwdsMeta);
+      const hasMapping = Object.hasOwn(map, id);
+      const hasMeta =
+        meta.auto.includes(id) || meta.declined.includes(id) || meta.managed.includes(id);
+      if (!hasMapping && !hasMeta) continue;
+
+      tx.update(projects)
+        .set({
+          ...(hasMapping
+            ? {
+                hostCwds: serializeHostCwds(
+                  Object.fromEntries(Object.entries(map).filter(([hostId]) => hostId !== id)),
+                ),
+              }
+            : {}),
+          ...(hasMeta
+            ? {
+                hostCwdsMeta: serializeHostCwdsMeta({
+                  auto: meta.auto.filter((hostId) => hostId !== id),
+                  declined: meta.declined.filter((hostId) => hostId !== id),
+                  managed: meta.managed.filter((hostId) => hostId !== id),
+                }),
+              }
+            : {}),
+        })
+        .where(eq(projects.id, project.id))
+        .run();
+    }
+  });
   // The unreachable-host log throttle keys by host id; a removed host never
   // recovers, so nothing else would ever clear its entries.
   forgetHostWarnings(id);

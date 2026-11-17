@@ -541,6 +541,48 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
     }
   });
 
+  it("Start fresh works for a wait whose branch origin state could not be confirmed", async () => {
+    const { app, mac, task } = await setup("retry-start-fresh-unconfirmed", {
+      originalOnline: false,
+      branchOnOrigin: false,
+    });
+    try {
+      // The origin lookup cannot even be MADE — a local-only repository, a
+      // project with no GitHub token. The branch's whereabouts are UNKNOWN,
+      // so the retry waits for its original host (the work may be there) and
+      // the wait KEEPS the 6-hour give-up: only a CONFIRMED-stranded branch
+      // is exempt from it.
+      vi.spyOn(hostGitModule, "resolveRepoRef").mockResolvedValue(null);
+
+      await retryTask(app, task.id);
+      await vi.waitFor(() => {
+        expect(getTask(app, task.id).retryHostId).toBe(mac);
+      });
+      expect(getTask(app, task.id).retryStrandedOnHost).toBe(false);
+      expect(getTask(app, task.id).branchName).toBe(BRANCH);
+
+      // "Start fresh" is offered for this wait too — it is exactly the wait
+      // that would otherwise never end.
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-fresh` });
+      expect(res.statusCode).toBe(202);
+
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.resumeQueued).toBe(false);
+      expect(row.retryHostId).toBeNull();
+      expect(row.retryStrandedOnHost).toBe(false);
+      // The preserved branch is abandoned — the row moves to a branch of its
+      // own, and the old one stays on the host that holds it.
+      expect(row.branchName).not.toBeNull();
+      expect(row.branchName).not.toBe(BRANCH);
+      expect(row.worktreePath).not.toBe(
+        `${MAC_CWD}/.mullion-worktrees/mullion-task-9001-retry-replaces`,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("Start fresh refuses a task that is not waiting for a host", async () => {
     const { app, task } = await setup("retry-start-fresh-not-waiting", {
       originalOnline: false,

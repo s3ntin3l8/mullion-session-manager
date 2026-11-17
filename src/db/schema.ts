@@ -62,6 +62,8 @@ export const hosts = sqliteTable("hosts", {
   sessionIdEnc: text("session_id_enc"),
   sessionSecretEnc: text("session_secret_enc"),
   sessionExpiresAt: integer("session_expires_at", { mode: "timestamp" }),
+  // Historical successful contact; live health remains in the heartbeat tracker.
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
   // "manual" (today's Settings -> Add host flow) | "enrolled" (agent-
   // initiated registration, #245). Null for every pre-#245 row and for
   // "local" — only ever set by the registration route itself.

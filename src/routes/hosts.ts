@@ -1,3 +1,4 @@
+import { getStoredSettings } from "../services/settings.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { listLeakedBrowserCloses } from "../services/session-browsers.js";
 import { closeAgentChannel } from "./agent-channel.js";
@@ -14,6 +15,7 @@ import {
   hasLiveMachineIdentity,
   listHosts,
   findPossibleDuplicates,
+  activeSessionHostIds,
   mintHostToken,
   revokeMachineIdentity,
   updateHost,
@@ -190,9 +192,13 @@ export async function hostsRoute(app: FastifyInstance) {
   // "pending", which this route never hits since /api/hosts itself is a
   // primary-only route.
   app.get("/api/hosts", async () => {
+    const busy = activeSessionHostIds(app);
+    const { staleAfterDays } = getStoredSettings(app.db).hosts;
+    const now = Date.now();
     const duplicates = findPossibleDuplicates(
       app,
       (id) => app.hostHeartbeatTracker?.getHealth(id).status ?? "pending",
+      busy,
     );
     // Issue #2641 — browsers the primary gave up closing, by host. (Listing
     // also prunes pending closes of hosts that no longer exist, #2687.)
@@ -262,7 +268,14 @@ export async function hostsRoute(app: FastifyInstance) {
         platform: host.id === LOCAL_HOST_ID ? process.platform : host.platform,
         health: health.status,
         healthReason: health.reason ?? null,
-        lastSeenAt: toIso(health.lastSeenAt),
+        lastSeenAt: toIso(health.lastSeenAt ?? host.lastSeenAt?.getTime() ?? null),
+        stale:
+          host.id !== LOCAL_HOST_ID &&
+          health.status === "offline" &&
+          !busy.has(host.id) &&
+          staleAfterDays > 0 &&
+          host.lastSeenAt !== null &&
+          now - host.lastSeenAt.getTime() > staleAfterDays * 86400_000,
         lastCheckedAt: toIso(health.lastCheckedAt),
         capacity,
         // Issue #2582 — older offline rows this one probably replaced.

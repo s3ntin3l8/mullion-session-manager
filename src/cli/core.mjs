@@ -8,6 +8,7 @@
 // real process-level wiring lives in mullion.mjs.
 
 import { createDockCommands } from "./dock-commands.mjs";
+import { createTaskCommands } from "./task-commands.mjs";
 import fs from "node:fs";
 import { buildBrowserCommands } from "./browser-commands.mjs";
 import { execFileSync } from "node:child_process";
@@ -1491,18 +1492,11 @@ const bundleCommands = {
   },
 };
 
-// #2102 — a Task Master worker pushes its branch through Mullion (the gated
-// path, bot identity) instead of with its own git credentials.
-const taskCommands = {
-  async push(client, _args, opts) {
-    const body = {};
-    if (opts.session !== undefined) body.sessionId = opts.session;
-    // A push can take as long as the git remote (plus the lease pre-fetch).
-    client.requestTimeoutMs = TASK_PUSH_REQUEST_TIMEOUT_MS;
-    const result = await client.request("tasks.push", body);
-    return { json: result, text: `pushed; pull request: ${result.prUrl}` };
-  },
-};
+const taskCommands = createTaskCommands({
+  extractFlags,
+  requireOne,
+  taskPushTimeoutMs: TASK_PUSH_REQUEST_TIMEOUT_MS,
+});
 
 const eventsCommands = {
   async tail(client, args, _opts, io) {
@@ -1966,6 +1960,13 @@ Commands:
   preview create|get|delete|list
   dock start|stop|list
   device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
+  task list [--status <s>] [--project <id>]
+  task get <id>
+  task retry <id> [--agent <a>] [--review-agent <r>]
+  task start <id> [--agent <a>] [--review-agent <r>]
+  task close <id> [--reason <text>]
+  task archive <id>
+  task unarchive <id>
   task push        push your Task Master branch through Mullion (gated; never git push)
   bundle status|resync|remove
   events tail [--children]

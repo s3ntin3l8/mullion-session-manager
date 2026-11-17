@@ -47,6 +47,7 @@ import type {
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
 import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
+import type { HostSettings } from "./host-types.js";
 import type { UpdateStatus } from "./update-types.js";
 import type {
   PlacementCapability,
@@ -2307,6 +2308,12 @@ export interface Task {
   // While status is "claimed", `failureReason` is the LAST dispatch error
   // (the task is still queued and being retried), not a terminal failure.
   dispatchFailingSince: string | null;
+  // #2940 — set while a rate-limited worker is parked: the task sits `ready`
+  // until this provider reset, then is claimed again automatically.
+  rateLimitUntil?: string | null;
+  // The task's latest worker session (an array of at most one) — what the task
+  // timeline shows once a park/return has cleared `sessionId`.
+  workerSessionIds?: number[];
   // #485 — the most recent GitHub sync or promotion failure (e.g. an
   // under-scoped token's 403), independent of task status and cleared the
   // next time any sync for this task succeeds. Null means no known problem,
@@ -2605,9 +2612,7 @@ export interface AppSettings {
     pollQuietSeconds: number;
     pollStaleThresholdSeconds: number;
   };
-  hosts: {
-    heartbeatSeconds: number;
-  };
+  hosts: HostSettings;
   // Non-secret half of the Hermes review relay — the key itself is
   // write-only via api.setHermesKey and never part of settings.
   reviewRelay: {

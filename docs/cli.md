@@ -67,6 +67,14 @@ mullion review [--pr <n>] [--repo <owner/name>] [--branch <b>] [--force]
 mullion review status [--pr <n>] [--repo <owner/name>] [--branch <b>]
 mullion review stop <runId>
 mullion preview create|get|delete|list
+mullion task list [--status <s>] [--project <id>]
+mullion task get <id>
+mullion task retry <id> [--agent <a>] [--review-agent <r>]
+mullion task start <id> [--agent <a>] [--review-agent <r>]
+mullion task close <id> [--reason <text>]
+mullion task archive <id>
+mullion task unarchive <id>
+mullion task push
 mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
                stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
@@ -236,6 +244,29 @@ $M browser screenshot $S --out /tmp/shot.png
 - `preview delete <slug>`
 - `preview list` — lists every registered preview on the host (previews are
   host-global, not scoped to a session or project).
+
+### task
+
+- `task list [--status <s>] [--project <id>]` — lists Task Master tasks, one
+  line per task (`id`, `status`, `title`). Full-scope only.
+- `task get <id>` — fetches one task by id; default rendering is the task
+  JSON (identical with or without `--json`). Full-scope only.
+- `task retry <id> [--agent <a>] [--review-agent <r>]` — retries a `failed`
+  task (re-queues a resume, which syncs the GitHub label, or resets a
+  branchless task to `ready`). Prints `<id>\t<status>`, or the full task with
+  `--json`. Full-scope only.
+- `task start <id> [--agent <a>] [--review-agent <r>]` — claims/enqueues a
+  `ready` task (`POST /api/tasks/:id/claim`). Prints `<id>\t<status>`, or the
+  full task with `--json`. Full-scope only.
+- `task close <id> [--reason <text>]` — gives up on a `reviewing` task
+  (`POST /api/tasks/:id/give-up`), marking it `failed`. Prints `<id>\t<status>`,
+  or the full task with `--json`. Full-scope only.
+- `task archive <id>` / `task unarchive <id>` — archives or unarchives a
+  finished (`done`/`failed`) task. Prints `<id>\t<status>\tarchived|unarchived`,
+  or the full task with `--json`. Full-scope only.
+- `task push` — pushes the current Task Master task's branch and opens its
+  pull request (`tasks.push`; reachable at full or session scope for the
+  caller's own task).
 
 ### dock
 

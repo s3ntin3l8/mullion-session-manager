@@ -1316,7 +1316,20 @@ export async function dispatchQueuedRetry(
       const detail = `could not prepare a checkout on ${workerHostId}: ${failedJob.detail ?? "the clone failed"}`;
       app.db
         .update(tasks)
-        .set({ failureReason: detail, dispatchFailingSince: new Date(), dispatchHeld: false })
+        .set({
+          failureReason: detail,
+          dispatchFailingSince: new Date(),
+          dispatchHeld: false,
+          // The retry is being RE-PLACED, not waiting for its original host:
+          // the branch is on origin (that is the only reason it may leave the
+          // original host at all), so nothing is stranded there. The markers
+          // of an original-host wait are cleared with it — a stale one would
+          // keep offering "Start fresh" on a task that is not waiting for a
+          // host, and would keep the give-up exemption this wait must not
+          // have (failing it frees something: the branch is on origin).
+          retryHostId: null,
+          retryStrandedOnHost: false,
+        })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
         .run();
       app.log.warn({ taskId, hostId: workerHostId }, `task retry: ${detail}`);

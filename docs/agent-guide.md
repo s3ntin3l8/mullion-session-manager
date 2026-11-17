@@ -104,31 +104,34 @@ enough for everything a session needs to do to itself — get/rename/logs,
 the full `browser` surface, `project actions`, `events tail`, and your own
 MCP tools. It is **never** enough for **full-scope** ops:
 
-| Op                                                  | Scope                               |
-| --------------------------------------------------- | ----------------------------------- |
-| `session get/rename/logs/scrollback`, `attach`      | full or session                     |
-| `session children` / `list_child_sessions`          | full or session                     |
-| `session wait` / `wait_for_session`                 | session: children only; full: any   |
-| `session wait-output` / `wait_for_output`           | session: children only; full: any   |
-| `session prompt` / `prompt_session`                 | session: children only; full: any   |
-| `session message` / `message_session`               | session only; coordinator + consent |
-| `session kill <child>` / `kill_child_session`       | session: children only; full: any   |
-| `attach` stream frames — `input`/`resize`/`detach`  | full or session                     |
-| `session list/create`                               | **full only**                       |
-| `session spawn-child` / `spawn_child_session`       | full or session                     |
-| `project actions`                                   | full or session                     |
-| `project targets` / `list_spawn_targets`            | full or session; coordinators only  |
-| `project list`, `project dock`                      | **full only**                       |
-| `project get_tooling`                               | full or session                     |
-| `project set_tooling`                               | **full only**                       |
-| `preview create/get/delete/list`                    | **full only**                       |
-| `dock start/stop/list` (`docks.*`)                  | full or session; own project only   |
-| `agents list`                                       | **full only**                       |
-| `device list/get/action/start/terminate/discovered` | full or session                     |
-| `device create` (an emulator)                       | full or session                     |
-| `device delete/pair/pair-and-connect`               | **full only**                       |
-| `bundle status/resync/remove`                       | **full only**                       |
-| `browser` (any action), `events tail`               | full or session                     |
+| Op                                                                                                       | Scope                               |
+| -------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `session get/rename/logs/scrollback`, `attach`                                                           | full or session                     |
+| `session children` / `list_child_sessions`                                                               | full or session                     |
+| `session wait` / `wait_for_session`                                                                      | session: children only; full: any   |
+| `session wait-output` / `wait_for_output`                                                                | session: children only; full: any   |
+| `session prompt` / `prompt_session`                                                                      | session: children only; full: any   |
+| `session message` / `message_session`                                                                    | session only; coordinator + consent |
+| `session kill <child>` / `kill_child_session`                                                            | session: children only; full: any   |
+| `attach` stream frames — `input`/`resize`/`detach`                                                       | full or session                     |
+| `session list/create`                                                                                    | **full only**                       |
+| `session spawn-child` / `spawn_child_session`                                                            | full or session                     |
+| `project actions`                                                                                        | full or session                     |
+| `project targets` / `list_spawn_targets`                                                                 | full or session; coordinators only  |
+| `project list`, `project dock`                                                                           | **full only**                       |
+| `project get_tooling`                                                                                    | full or session                     |
+| `project set_tooling`                                                                                    | **full only**                       |
+| `preview create/get/delete/list`                                                                         | **full only**                       |
+| `task list/get` / `list_tasks` / `get_task`                                                              | **full only**                       |
+| `task retry/start/close/archive/unarchive` / `retry_task` / `start_task` / `close_task` / `archive_task` | **full only**                       |
+| `task push` / `push_task_branch`                                                                         | full or session; own task only      |
+| `dock start/stop/list` (`docks.*`)                                                                       | full or session; own project only   |
+| `agents list`                                                                                            | **full only**                       |
+| `device list/get/action/start/terminate/discovered`                                                      | full or session                     |
+| `device create` (an emulator)                                                                            | full or session                     |
+| `device delete/pair/pair-and-connect`                                                                    | **full only**                       |
+| `bundle status/resync/remove`                                                                            | **full only**                       |
+| `browser` (any action), `events tail`                                                                    | full or session                     |
 
 (This mirrors `docs/socket-api.md`'s Ops table exactly — that's the
 authoritative source if it and this table ever drift; check there for
@@ -205,7 +208,7 @@ pair-and-connect`, the three ops above with no MCP tool at all.
 **From inside a session, the full-scope-only MCP tools
 (`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
 `create_preview`/`delete_preview`/`list_previews`/`set_project_tooling`/
-`delete_device`) reply with a scope error, same as the CLI's own** — they're
+`delete_device`/`list_tasks`/`get_task`/`retry_task`/`start_task`/`close_task`/`archive_task`) reply with a scope error, same as the CLI's own** — they're
 there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
 set, not for you. `get_scrollback` and `get_session_transcript` (both default to your own session),
 `list_actions` (defaults to your own project), `get_project_tooling`
