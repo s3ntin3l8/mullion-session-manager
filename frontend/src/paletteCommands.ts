@@ -2,6 +2,7 @@ import type { SettingsSection } from "./settings/settingsSections.js";
 import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import type { ComponentType, CSSProperties } from "react";
 import {
+  BotIcon,
   CheckIcon,
   DeviceIcon,
   DockIcon,
@@ -18,6 +19,7 @@ import {
 } from "./ui/icons.js";
 import { DOCK_UNAVAILABLE, type DockUnavailableReason } from "./lib/dockAvailability.js";
 import type { Session } from "./api/index.js";
+import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 
 type CommandIcon = ComponentType<{ size?: number; style?: CSSProperties }>;
 
@@ -94,6 +96,11 @@ export interface PaletteCommandOpeners {
   hosts?: () => void;
   settings?: () => void;
   timeline?: (session: Session) => void;
+  // The pane menu's "Open Agent Browser" for the active session: the
+  // session's server-side browser, the one its agent drives (#3215).
+  // CommandPalette decides where it opens (a grid pane, or the right
+  // sidebar's Browser view in the companion bands).
+  agentBrowser?: (session: Session) => void;
   // "New workspace". `.run()` starts the palette's name step, so a caller
   // that invokes the command directly does not miss it. The `prompt` flag
   // only tells the palette to stay open while the name is typed — it is not
@@ -269,7 +276,9 @@ export function buildPaletteCommands({
       {
         id: "preview",
         movesFocus: true,
-        title: "Preview",
+        // #3215: every embedded-browser entry says "preview", so none can be
+        // mistaken for the session's Agent Browser below.
+        title: "Open preview browser",
         subtitle: "Choose a preview target for this project",
         icon: GlobeIcon,
         keywords: ["preview", "dev server", "browser"],
@@ -332,10 +341,10 @@ export function buildPaletteCommands({
       },
       ...favoriteUrls.map((u): PaletteCommand => ({
         id: `url-${u.id}`,
-        title: u.label,
+        title: `Preview: ${u.label}`,
         subtitle: u.url,
         icon: GlobeIcon,
-        keywords: [u.label, u.url],
+        keywords: [u.label, u.url, "preview"],
         placement: "top",
         run: () => open.browserUrl(id, u.url, u.label),
       })),
@@ -379,10 +388,11 @@ export function buildPaletteCommands({
     {
       id: "blank-browser",
       movesFocus: true,
-      title: "New preview tab",
+      title: "New blank preview browser",
       subtitle: "Embed any external site — type an address directly",
       icon: GlobeIcon,
-      keywords: ["preview", "browser", "website"],
+      // The old title, so a search learned from it still finds the row.
+      keywords: ["preview", "browser", "website", "new preview tab"],
       placement: "search",
       run: () => open.blankBrowser(),
     },
@@ -459,7 +469,7 @@ export function buildPaletteCommands({
   if (open.timeline && activeSession) {
     const openTimeline = open.timeline;
     const session = activeSession;
-    const label = session.name || session.lastTitle || session.command;
+    const label = sessionPaneTitle(session);
     commands.push({
       id: "session-timeline",
       title: "Session timeline",
@@ -468,6 +478,23 @@ export function buildPaletteCommands({
       keywords: ["timeline", "events", "history", label],
       placement: "search",
       run: () => openTimeline(session),
+    });
+  }
+
+  if (open.agentBrowser && activeSession) {
+    const openAgentBrowser = open.agentBrowser;
+    const session = activeSession;
+    // The same rule as the pane it opens (openBrowserPanePanel) and the
+    // timeline row above: a session's tab title.
+    const label = sessionPaneTitle(session);
+    commands.push({
+      id: "agent-browser",
+      title: `Open Agent Browser: ${label}`,
+      subtitle: "The browser this session's agent drives",
+      icon: BotIcon,
+      keywords: ["agent browser", "browser", "automation", label],
+      placement: "search",
+      run: () => openAgentBrowser(session),
     });
   }
 

@@ -33,6 +33,7 @@ import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useDismissExit } from "./hooks/usePresence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
+import { COMPANION_BANDS, useCurrentLayoutBand, viewInBand } from "./right-sidebar/viewBands.js";
 import {
   ACTIVE_TERMINAL_FOCUS_SELECTOR,
   WORKSPACE_FOCUS_FALLBACK_SELECTOR,
@@ -175,6 +176,12 @@ interface CommandPaletteProps {
   // Pane menu's "View timeline" for the active session. Omitted from the
   // list when there is no active session pane.
   onOpenTimeline?: (session: Session) => void;
+  // Pane menu's "Open Agent Browser" (panelUtils' openBrowserPanePanel) for
+  // the active session, #3215. Where the Agent Browser is a right-sidebar
+  // view instead of a pane (the phone and the rails bands, viewBands.ts), the
+  // command opens that view and this is not called. Omitted from the list
+  // when there is no active session pane.
+  onOpenAgentBrowser?: (session: Session) => void;
   // Issue #28: same section, opening a browser preview pane for this
   // project's dev server.
   onOpenBrowser: (projectId: number) => void;
@@ -225,6 +232,7 @@ export function CommandPalette({
   onOpenHosts,
   onOpenSettings,
   onOpenTimeline,
+  onOpenAgentBrowser,
   onOpenBlankBrowser,
   onToggleRightSidebar,
   onOpenBrowserUrl,
@@ -495,6 +503,7 @@ export function CommandPalette({
   // The non-launcher commands (paletteCommands.ts): the empty-query view
   // lists the `top` ones and drills into the `project` ones; a typed query
   // searches them all (useCommandSearch).
+  const layoutBand = useCurrentLayoutBand();
   const activeSession =
     sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed") ?? null;
   const commands = buildPaletteCommands({
@@ -532,6 +541,15 @@ export function CommandPalette({
       hosts: onOpenHosts,
       settings: onOpenSettings,
       timeline: onOpenTimeline,
+      agentBrowser: onOpenAgentBrowser
+        ? (session) => {
+            if (viewInBand({ bands: COMPANION_BANDS }, layoutBand)) {
+              useDashboardStore.getState().openRightSidebarView("browser", session.projectId);
+            } else {
+              onOpenAgentBrowser(session);
+            }
+          }
+        : undefined,
       goToPr: (projectId, number) =>
         useDashboardStore.getState().openRightSidebarPr(projectId, number),
       prune: (projectId) => useDashboardStore.getState().openRightSidebarPrune(projectId),

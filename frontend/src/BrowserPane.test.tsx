@@ -117,6 +117,27 @@ describe("BrowserPane", () => {
     expect(input.value).toBe("https://example.com/page");
   });
 
+  // #3215: a session with no page yet reports about:blank. The address bar
+  // shows its placeholder, and Go/Enter on it sends nothing, so the server's
+  // non-http(s) refusal never surfaces as an error toast.
+  it("shows a fresh about:blank page as an empty address and never navigates to it", () => {
+    const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+    openSocket();
+    emitControlMessage({ type: "url", url: "about:blank" });
+
+    const input = container.querySelector<HTMLInputElement>(".browser-panel-address")!;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("https://example.com");
+
+    fireEvent.click(container.querySelector(".browser-panel-go")!);
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "  ABOUT:BLANK " } });
+    fireEvent.click(container.querySelector(".browser-panel-go")!);
+
+    expect(fakeSocket.send).not.toHaveBeenCalled();
+    expect(container.querySelector(".browser-pane-error-toast")).toBeNull();
+  });
+
   it("calls onTitleChange on a title control message", () => {
     const onTitleChange = vi.fn();
     render(<BrowserPane params={{ sessionId: 1 }} onTitleChange={onTitleChange} />);

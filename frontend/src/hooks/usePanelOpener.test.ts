@@ -419,6 +419,24 @@ describe("usePanelOpener — onOpenTimeline", () => {
   });
 });
 
+describe("usePanelOpener — onOpenAgentBrowser (#3215)", () => {
+  it("opens the session's Agent Browser pane", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenAgentBrowser(SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "browserPane-1", component: "browserPane" }),
+    );
+  });
+
+  it("no-ops when dockviewApi is null", () => {
+    const { result } = setup({ dockviewApi: null });
+    expect(() => result.current.onOpenAgentBrowser(SESSION)).not.toThrow();
+  });
+});
+
 // One test per project-scoped panel kind — proves the config table
 // (usePanelOpener.ts's GITHUB_CONFIG/etc.) reaches
 // openOrFocusProjectPanel correctly. The open-or-focus/float-if-tiled

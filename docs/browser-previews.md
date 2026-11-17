@@ -14,20 +14,31 @@ separate flag:
   is served over https (see "Why the proxy exists" below) and buys framing
   sites that refuse direct embedding.
 
+**Preview browser or Agent Browser?** The preview browser on this page is
+an iframe in _your_ browser: open it from the command palette ("Open preview
+browser" for a project target, "New blank preview browser" for any URL,
+"Preview: <label>" for a saved URL) or from a project's Preview menu. It is
+not the **Agent Browser** ([browser-automation.md](browser-automation.md)),
+the session's server-side Chromium its agent drives, which opens from a
+session pane's menu or the palette's "Open Agent Browser: <session>" (on the
+phone and the rails layouts, the right sidebar's Browser view).
+
 There are two kinds of preview, in either mode:
 
 - **Project preview** — one per project (opening it again reuses the same
   slug in proxy mode). Resolves to the project's configured dev-server
   URL/port.
-- **External preview** — any URL you paste via "New preview tab", validated
+- **External preview** — any URL you paste via "New preview tab" (the
+  palette's "New blank preview browser"), validated
   against SSRF guards at creation time in proxy mode (see Security below);
   direct-embed mode has no server-side fetch, so there's nothing to
   validate — the guard simply doesn't apply.
 
 Open a preview using **Preview ▾** in a project's Dock header (see [`dock.md`](dock.md)'s UI reference), the command palette
-("Preview: `<project>`" for the project preview, or "New preview tab" for
-an empty pane with the address bar focused, for typing an arbitrary URL
-directly).
+("Open preview browser" to choose a preview target for the project,
+"New blank preview browser" for an empty pane with the address bar focused,
+for typing an arbitrary URL directly, or "Preview: `<label>`" for a saved
+URL).
 
 ## The Browser view in the right sidebar (below 1100px)
 
