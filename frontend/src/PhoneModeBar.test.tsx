@@ -72,7 +72,7 @@ afterEach(() => {
 describe("PhoneModeBar", () => {
   it("has five entries, in order, each an icon over its label", () => {
     render(<Harness />);
-    const bar = screen.getByRole("navigation", { name: "Mode" });
+    const bar = screen.getByRole("navigation", { name: "Primary" });
     const buttons = within(bar).getAllByRole("button");
     expect(buttons.map((b) => b.querySelector(".phone-mode-label")?.textContent)).toEqual([
       "Workspace",
@@ -141,6 +141,22 @@ describe("PhoneModeBar", () => {
     expect(document.activeElement).toBe(newBtn);
   });
 
+  it("leaves focus on Workspace when a mode switch closes the form New opened", async () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(true);
+    const workspace = screen.getByRole("button", { name: "Workspace" });
+    fireEvent.click(workspace);
+    expect(useDashboardStore.getState().newTaskFormOpen).toBe(false);
+    expect(document.activeElement).toBe(workspace);
+    // Back in Tasks, a later close does not pull focus to New either.
+    fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+    act(() => useDashboardStore.getState().setNewTaskFormOpen(true));
+    act(() => useDashboardStore.getState().setNewTaskFormOpen(false));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Tasks" }));
+  });
+
   it("does not take focus when the form closes without New having opened it", () => {
     useDashboardStore.setState({ viewMode: "kanban", newTaskFormOpen: true });
     render(
@@ -199,7 +215,7 @@ describe("PhoneModeBar", () => {
 
   it("switches between the two modes", async () => {
     render(<Harness />);
-    const bar = screen.getByRole("navigation", { name: "Mode" });
+    const bar = screen.getByRole("navigation", { name: "Primary" });
     const workspace = within(bar).getByRole("button", { name: "Workspace" });
     const tasks = within(bar).getByRole("button", { name: "Tasks" });
     expect(workspace).toHaveAttribute("aria-pressed", "true");
@@ -241,16 +257,16 @@ describe("PhoneModeBar", () => {
     Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
     render(<Harness />);
     await act(flushRaf);
-    expect(screen.getByRole("navigation", { name: "Mode" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Primary" })).toBeInTheDocument();
     // Android with resizes-content: the layout viewport shrinks with it.
     stubClientHeight(450);
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
-    expect(screen.queryByRole("navigation", { name: "Mode" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
     stubClientHeight(800);
     act(() => vv.resizeTo(800, 0));
     await act(flushRaf);
-    expect(screen.getByRole("navigation", { name: "Mode" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Primary" })).toBeInTheDocument();
   });
 
   it("keeps Inbox's sheet open while the keyboard is up (the bar hides, it does not unmount)", async () => {
@@ -263,7 +279,7 @@ describe("PhoneModeBar", () => {
     stubClientHeight(450);
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
-    expect(screen.queryByRole("navigation", { name: "Mode" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
   });
 
@@ -294,9 +310,57 @@ describe("PhoneModeBar", () => {
     expect(document.activeElement).toBe(newBtn);
   });
 
+  it("returns focus to Inbox when its sheet closed while the keyboard hid the bar", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(800, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    render(<Harness />);
+    await act(flushRaf);
+    const inbox = screen.getByRole("button", { name: /^Inbox/ });
+    fireEvent.click(inbox);
+    // A field in the sheet raises the keyboard; the bar hides.
+    stubClientHeight(450);
+    act(() => vv.resizeTo(450, 0));
+    await act(flushRaf);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Notifications" }), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+    // The sheet's own restore cannot reach a hidden trigger; jsdom would let
+    // it, so the focus a real browser leaves on <body> is set here.
+    (document.activeElement as HTMLElement | null)?.blur();
+    document.body.focus();
+    stubClientHeight(800);
+    act(() => vv.resizeTo(800, 0));
+    await act(flushRaf);
+    expect(document.activeElement).toBe(inbox);
+  });
+
+  it("leaves focus where it is when the bar returns after Inbox closed and focus moved on", async () => {
+    stubClientHeight(800);
+    const vv = new FakeVisualViewport(800, 0);
+    Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
+    render(
+      <>
+        <Harness />
+        <input aria-label="Elsewhere" />
+      </>,
+    );
+    await act(flushRaf);
+    fireEvent.click(screen.getByRole("button", { name: /^Inbox/ }));
+    stubClientHeight(450);
+    act(() => vv.resizeTo(450, 0));
+    await act(flushRaf);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Notifications" }), { key: "Escape" });
+    const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
+    elsewhere.focus();
+    stubClientHeight(800);
+    act(() => vv.resizeTo(800, 0));
+    await act(flushRaf);
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
   it("carries the class the safe-area rule targets", () => {
     render(<Harness />);
-    expect(screen.getByRole("navigation", { name: "Mode" })).toHaveClass("phone-mode-bar");
+    expect(screen.getByRole("navigation", { name: "Primary" })).toHaveClass("phone-mode-bar");
   });
 });
 
@@ -308,7 +372,7 @@ describe("PhoneModeBar with a sidebar view open", () => {
   it("marks More as the active entry, not the mode under the view", () => {
     render(<Harness />);
     openView("git");
-    const bar = screen.getByRole("navigation", { name: "Mode" });
+    const bar = screen.getByRole("navigation", { name: "Primary" });
     const more = within(bar).getByRole("button", { name: "More" });
     expect(more).toHaveClass("active");
     expect(more).toHaveAttribute("aria-current", "true");

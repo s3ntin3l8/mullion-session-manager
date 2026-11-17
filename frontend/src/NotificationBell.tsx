@@ -372,7 +372,9 @@ export function NotificationBell({
   placement = "below",
   triggerClassName = "toolbar-icon-btn",
   label,
+  labelClassName,
   iconSize = 17,
+  onOpenChange,
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -404,8 +406,13 @@ export function NotificationBell({
   // tab bar's "Inbox" entry, #3288). Without one the trigger is icon-only and
   // named "Notifications".
   label?: string;
+  // The visible label's class (the tab bar's own label style).
+  labelClassName?: string;
   // The bell's size: the tab bar's entries draw theirs at 20.
   iconSize?: number;
+  // Told when the feed opens or closes (the phone tab bar returns focus to
+  // its Inbox entry itself when the sheet closed while the bar was hidden).
+  onOpenChange?: (open: boolean) => void;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -421,6 +428,16 @@ export function NotificationBell({
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   const [open, setOpen] = useState(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current === open) return;
+    wasOpen.current = open;
+    onOpenChangeRef.current?.(open);
+  }, [open]);
   // Sheet only: which sessions' groups the feed shows.
   const [filter, setFilter] = useState<"needs" | "all">("all");
   const [pos, setPos] = useState<NotifPanelPosition | null>(null);
@@ -643,7 +660,7 @@ export function NotificationBell({
         {/* The label before the badge, so "Inbox 3" reads in the name's order. */}
         {label && (
           <>
-            <span className="phone-mode-label">{label}</span>{" "}
+            <span className={labelClassName}>{label}</span>{" "}
           </>
         )}
         {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}

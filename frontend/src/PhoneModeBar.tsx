@@ -63,10 +63,29 @@ export function PhoneModeBar({
   // keyboard, which hides the bar, so the return waits for it).
   const returnFocusToNew = useRef(false);
   useEffect(() => {
+    // A mode change closes the form too (setViewMode); focus then belongs to
+    // whatever made the change, not to New.
+    if (!tasksMode) returnFocusToNew.current = false;
     if (newTaskFormOpen || keyboardUp || !returnFocusToNew.current) return;
     returnFocusToNew.current = false;
     newRef.current?.focus();
-  }, [newTaskFormOpen, keyboardUp]);
+  }, [tasksMode, newTaskFormOpen, keyboardUp]);
+  // The Inbox sheet's own focus return cannot reach its trigger while the bar
+  // is hidden (a field in the sheet had the keyboard up as it closed): focus
+  // falls to <body>. Set then, and Inbox takes focus back once the bar shows,
+  // unless something else has taken it meanwhile.
+  const navRef = useRef<HTMLElement>(null);
+  const returnFocusToInbox = useRef(false);
+  const onInboxOpenChange = (open: boolean) => {
+    returnFocusToInbox.current = !open && keyboardUp;
+  };
+  useEffect(() => {
+    if (keyboardUp || !returnFocusToInbox.current) return;
+    returnFocusToInbox.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    navRef.current?.querySelector<HTMLElement>(".phone-mode-inbox")?.focus();
+  }, [keyboardUp]);
 
   const showMode = (mode: "list" | "kanban", button: HTMLButtonElement) => {
     const store = useDashboardStore.getState();
@@ -102,7 +121,7 @@ export function PhoneModeBar({
       {/* Hidden rather than unmounted while the keyboard is up: Inbox's
           NotificationBell owns the feed's sheet, which must stay open while
           a field in it raises the keyboard. */}
-      <nav className="phone-mode-bar" aria-label="Mode" hidden={keyboardUp}>
+      <nav ref={navRef} className="phone-mode-bar" aria-label="Primary" hidden={keyboardUp}>
         <button
           type="button"
           className={`phone-mode-btn${workspaceActive ? " active" : ""}`}
@@ -154,7 +173,9 @@ export function PhoneModeBar({
           sheet
           triggerClassName="phone-mode-btn phone-mode-inbox"
           label="Inbox"
+          labelClassName="phone-mode-label"
           iconSize={20}
+          onOpenChange={onInboxOpenChange}
         />
         <button
           type="button"
