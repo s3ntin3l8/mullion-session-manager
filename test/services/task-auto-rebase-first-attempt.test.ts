@@ -145,7 +145,12 @@ describe("a first auto-rebase attempt and the task's idle original worker", () =
   it("terminates the idle worker before the rebase worker replaces it", async () => {
     const { app, task, worker, projectId } = await setup("p-first-rebase");
     const terminate = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
-    vi.spyOn(lifecycle, "createSessionRecord").mockImplementation(async () => {
+    app.db
+      .update(tasks)
+      .set({ modelOverride: "claude-opus-5-5" })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const create = vi.spyOn(lifecycle, "createSessionRecord").mockImplementation(async () => {
       const [row] = app.db
         .insert(sessions)
         .values({ projectId, command: "claude", cwd: "/tmp", status: "active" })
@@ -156,6 +161,11 @@ describe("a first auto-rebase attempt and the task's idle original worker", () =
 
     await reconcileTasks(app);
 
+    // The rebase worker is still the task's worker, so it keeps the task's model.
+    expect(create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ model: "claude-opus-5-5" }),
+    );
     expect(terminate).toHaveBeenCalledWith(String(worker.id));
     const oldRow = app.db.select().from(sessions).where(eq(sessions.id, worker.id)).get()!;
     expect(oldRow.status).toBe("killed");

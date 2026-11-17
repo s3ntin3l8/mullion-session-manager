@@ -529,6 +529,8 @@ describe("isClaudeModelAlias / validateClaudeSmallModel (#2032)", () => {
   });
 });
 
+const NO_OVERRIDES = { modelOverride: null, smallModelOverride: null, body: null };
+
 describe("resolveWorkerSpawnModels", () => {
   beforeEach(() => {
     mockGetStoredSettings.mockReset();
@@ -541,7 +543,7 @@ describe("resolveWorkerSpawnModels", () => {
   });
 
   it("gives an agy worker the install default when the task has no override", () => {
-    expect(resolveWorkerSpawnModels(mockApp(), "agy", { body: null })).toEqual({
+    expect(resolveWorkerSpawnModels(mockApp(), "agy", NO_OVERRIDES)).toEqual({
       model: "gemini-4-hydrogen-medium",
       smallModel: undefined,
     });
@@ -549,13 +551,15 @@ describe("resolveWorkerSpawnModels", () => {
 
   it("prefers the task override", () => {
     expect(
-      resolveWorkerSpawnModels(mockApp(), "agy", { modelOverride: "gemini-4-argon", body: null })
-        .model,
+      resolveWorkerSpawnModels(mockApp(), "agy", {
+        ...NO_OVERRIDES,
+        modelOverride: "gemini-4-argon",
+      }).model,
     ).toBe("gemini-4-argon");
   });
 
   it("returns nothing for a command with no model concept", () => {
-    expect(resolveWorkerSpawnModels(mockApp(), "bash", { body: null })).toEqual({
+    expect(resolveWorkerSpawnModels(mockApp(), "bash", NO_OVERRIDES)).toEqual({
       model: undefined,
       smallModel: undefined,
     });

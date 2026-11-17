@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { tasks } from "../db/schema.js";
 import { getStoredSettings } from "./settings.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import {
@@ -309,11 +310,7 @@ export function explicitModelError(
 export function resolveWorkerSpawnModels(
   app: FastifyInstance,
   command: string,
-  task: {
-    modelOverride?: string | null;
-    smallModelOverride?: string | null;
-    body: string | null;
-  },
+  task: Pick<typeof tasks.$inferSelect, "modelOverride" | "smallModelOverride" | "body">,
 ): { model: string | undefined; smallModel: string | undefined } {
   const cli = commandModelCli(command);
   const model = commandIsOpencode(command)
@@ -323,7 +320,7 @@ export function resolveWorkerSpawnModels(
         role: "implementer",
       })
     : cli !== null
-      ? resolveCliModel(app, cli, { taskModel: task.modelOverride ?? null, issueBody: task.body })
+      ? resolveCliModel(app, cli, { taskModel: task.modelOverride, issueBody: task.body })
       : null;
   const smallModel = commandIsOpencode(command)
     ? resolveOpenCodeSmallModel(app, {

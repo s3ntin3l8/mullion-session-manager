@@ -181,6 +181,24 @@ describe("reseedTaskIfSessionExited", () => {
     );
   });
 
+  it("re-seeds with the issue body's Model: and SmallModel: tiers too", async () => {
+    const { task } = insertTaskWithSession("exited");
+    app.db
+      .update(tasks)
+      .set({ body: "Spec\n\nModel: claude-sonnet-5-5\nSmallModel: claude-haiku-5-5\n" })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    mockSuccessfulSpawn();
+
+    await reseedTaskIfSessionExited(app, row, project, "prompt text", "test reject");
+
+    expect(mockCreateSessionRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ model: "claude-sonnet-5-5", smallModel: "claude-haiku-5-5" }),
+    );
+  });
+
   it("without force: does nothing at all when the previous session is still active", async () => {
     const { task } = insertTaskWithSession("active");
 
