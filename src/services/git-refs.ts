@@ -304,7 +304,10 @@ export async function resolveDefaultBaseRefWithFetch(
   cwd: string,
 ): Promise<{ ref: string; fetched: boolean }> {
   // Nothing to fetch (not a repo): not a fetch failure, so `fetched` stays true.
-  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) {
+  // The repo probe goes through git rather than `existsSync(path.join(cwd,
+  // ".git"))`: `cwd` is the same already-validated value, and a git probe
+  // keeps this a spawn-cwd use instead of a filesystem-path sink.
+  if (!isSafeAbsolutePath(cwd) || (await runGit(cwd, ["rev-parse", "--git-dir"])) === null) {
     return { ref: "HEAD", fetched: true };
   }
 
