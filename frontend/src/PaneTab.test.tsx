@@ -94,6 +94,8 @@ const clearPanelNew = vi.fn((id: string) => {
 function storeState() {
   return {
     sessions: [session, ...extraSessions],
+    // #3285 — the timeline/browser openers name the pane by the session's task.
+    tasks: [],
     // Issue #1727 — the fleet's hosts, for the per-session host badge.
     hosts,
     projects,
@@ -892,9 +894,13 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByTitle("More…"));
       await userEvent.click(screen.getByText("View timeline"));
 
-      expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session, {
-        tier: "desktop",
-      });
+      expect(openTimelinePanel).toHaveBeenCalledWith(
+        props.containerApi,
+        session,
+        { tier: "desktop" },
+        // The session's title context (#3285): none, it has no task or number.
+        undefined,
+      );
     });
   });
 
