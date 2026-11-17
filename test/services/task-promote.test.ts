@@ -715,7 +715,7 @@ describe("promoteTaskToPR", () => {
       expect(result).toMatchObject({
         ok: false,
         reason: "push-failed",
-        detail: expect.stringContaining("cannot report workflow changes"),
+        detail: expect.stringMatching(/^(?!.*host agent).*ci\.yml.*behind the default branch/s),
       });
       cleanup(remote, cwd);
     });

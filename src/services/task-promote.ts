@@ -456,6 +456,22 @@ async function resolveBaseBranch(
   return base === "HEAD" ? null : base;
 }
 
+const WORKFLOW_PERMISSION_REFUSAL = /without `?workflows?`? (permission|scope)/;
+
+/** The sync error for a push GitHub refused over workflow permission. The
+ * gate already cleared this branch (it would have held it otherwise), so the
+ * host CAN report workflow changes: do not blame it. Quote GitHub's own line,
+ * the only way to tell a branch that is merely behind the default branch's
+ * workflow changes from one that really edits them. */
+function workflowRefusalDetail(stderr: string): string {
+  const line = stderr
+    .split("\n")
+    .map((l) => l.replace(/^remote:\s*/, "").trim())
+    .find((l) => WORKFLOW_PERMISSION_REFUSAL.test(l));
+  const quoted = line ? ` ("${line.length > 300 ? `${line.slice(0, 300)}…` : line}")` : "";
+  return `GitHub refused the push over workflow permission, which the approval check did not see${quoted}. The usual cause is a branch behind the default branch's workflow changes: rebase it onto the default branch, or push it manually`;
+}
+
 /** The push every caller below shares, once preparePromotion (and, on the
  * create sub-path, resolveBaseBranch) has already succeeded. `pushBranch`
  * is idempotent (a plain `git push -u origin <branch>`, no `--force` — see
@@ -508,9 +524,10 @@ async function pushForPromotion(
     recordGithubSyncError(app, task.id, forbidden);
     return { ok: false, reason: "push-forbidden", detail: forbidden };
   }
-  const detail = /without `?workflows?`? (permission|scope)/.test(value.detail ?? "")
-    ? "This branch changes .github/workflows/ and this host cannot report workflow changes for approval — push it manually, or update the host agent"
-    : (value.detail ?? "Failed to push the task's branch");
+  const stderr = value.detail ?? "";
+  const detail = WORKFLOW_PERMISSION_REFUSAL.test(stderr)
+    ? workflowRefusalDetail(stderr)
+    : stderr || "Failed to push the task's branch";
   recordGithubSyncError(app, task.id, detail);
   return { ok: false, reason: "push-failed", detail };
 }
