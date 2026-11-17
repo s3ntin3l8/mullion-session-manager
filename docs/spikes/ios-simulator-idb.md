@@ -11,8 +11,7 @@ throwaway venv.
 ## Verdict
 
 **Go**, with `idb_companion` as the video and input engine and `simctl` for
-lifecycle, screenshot, logs and clipboard. Two things are not yet proven and
-must be closed in #3203 (see "Not tested").
+lifecycle, screenshot, logs and clipboard. Two smaller things remain for #3203 (see "Not tested").
 
 ## Findings
 
@@ -71,13 +70,43 @@ AVCC conversion and no `description`, with SPS+PPS sent in front of each IDR.
   companion process and restart it on every boot, which fits the plan's
   "restarted on reattach".
 
+## Node gRPC prototype (direct to `idb_companion`, no Python)
+
+`@grpc/grpc-js` + `@grpc/proto-loader` against `idb.proto` from
+facebook/idb (`keepCase: true`), service `idb.CompanionService`, in a throwaway
+directory outside the repo. Verified against a second throwaway simulator.
+
+- **Video:** `video_stream` is a bidirectional stream. Send
+  `{start:{fps:30, format:"H264", compression_quality:1, scale_factor:1,
+avg_bitrate:0, key_frame_rate:<s>}}`; responses carry
+  `payload.data` byte chunks (a chunk is not a NAL: buffer and split on
+  `00 00 00 01`). `payload.compression` frames can appear and carry no data.
+  First bytes arrived 193 ms after connect on a warm companion (1.5 s on the
+  first ever stream) and led with `7,8,5,1`.
+- **`key_frame_rate` is the IDR interval in seconds.** 0 and 4 gave an IDR every
+  ~122 frames (4 s default), 1 gave one every ~31 frames. The driver can set
+  `1` so a new client waits at most ~1 s for a keyframe, at some bitrate cost,
+  or keep the default and cache the last SPS+PPS+IDR group.
+- **Touch:** `hid` is a client-streaming call. Held open, repeated
+  `{press:{action:{touch:{point:{x,y}}}, direction:"DOWN"}}` at moving points
+  (21 events, 16 ms apart) followed by `direction:"UP"` **scrolled Settings.app
+  like a finger drag** (screenshot before/after differ; list moved ~500 pt). So a
+  live pointer maps to `DOWN` on pointerdown and on every pointermove, `UP` on
+  pointerup. `HIDSwipe` also exists but is for scripted gestures. Points, not
+  pixels. Buttons go through `press.action.button` (`HOME`, `LOCK`, `SIDE_BUTTON`,
+  `SIRI`, …) and keys through `press.action.key.keycode`.
+- **Latency:** first video frame above 3 KB arrived ~141 ms after the first touch
+  was written. That is a rough upper bound on glass-to-glass (it includes the
+  16 ms spacing and frame batching), well within interactive use.
+- The first prototype run produced no visible effect while the app was still
+  settling after launch; wait for the foreground app before the first gesture.
+
 ## Not tested (carry into #3203)
 
-1. **Direct gRPC `hid` touch down/move/up from Node.** Only the CLI path was
-   measured. The latency conclusion above is why this matters; if gRPC proves
-   impractical, a long-lived Python `idb` process is the fallback.
-2. **Sustained CPU and latency under real use** (only a ~65 s idle-ish run, not
-   glass-to-glass latency).
+1. **Sustained CPU and latency under real use** over minutes, not seconds, plus
+   several companions at once.
+2. **Multi-touch** (`HIDPinch` exists; separate-finger touch events were not
+   explored).
 
 ## Fallback
 
@@ -91,5 +120,6 @@ heavier than a brew-installed companion.
 - Cache the latest SPS+PPS+IDR so a new client decodes immediately, instead of
   waiting up to 4 s (#3203).
 - Convert px to points with the `density` from `describe` (#3203, #3204).
-- Treat the `fb-idb` Python client as dev-only; production talks gRPC to the
-  companion (#3203).
+- Talk gRPC to the companion from Node (proven here); the `fb-idb` Python
+  client is dev-only (#3203).
+- Pointer events map to `hid` DOWN/DOWN…/UP on one held stream (#3204).
