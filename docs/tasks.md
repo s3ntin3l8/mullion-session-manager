@@ -176,9 +176,12 @@ remaining }`) is modeled on `git-worktree.ts`'s own
   acceptable either. Resolved explicitly, per row: only force-deletes once
   a fresh `getPullRequestByNumber` read confirms the task's PR actually
   merged; otherwise the branch is reported skipped with its reason
-  (`no-pr`/`not-merged`/`merge-check-failed`/`rate-limited`/the
+  (`no-pr`/`not-merged`/`merge-check-failed`/`rate-limited`/`no-host-path`/the
   `DeleteBranchReason` a local `git branch -D` itself can fail with) and
-  **left alone** — a branch failure never blocks the row deletion, which
+  **left alone**. A placed task's branch is deleted in the worker's clone
+  (that host's mapped project path), not the primary's; `no-host-path` means
+  that host has no mapped path, so the branch is left alone rather than
+  deleted against a guessed one. A branch failure never blocks the row deletion, which
   already committed by the time the branch check runs. Branch deletes run
   strictly serially (never `Promise.all`), the same posture every other
   bulk git operation in this codebase takes — concurrent git operations
@@ -728,7 +731,11 @@ non-Abandon-path task) are not gated either way.
   row is gone, teardown is best-effort: any live worker/review session is
   killed, the worktree is force-removed (not the clean-check-gated removal
   every automatic cleanup path uses — the whole point of Abandon is to
-  discard whatever's there), and the branch is force-deleted last. A
+  discard whatever's there), and the branch is force-deleted last. Both
+  happen on the host the worker ran on, using that host's mapped project
+  path. When that host has no mapped path, Abandon leaves the worktree and
+  the branch in place (it does not guess a path) and still answers `204`;
+  only a server-side warning records the skip. A
   leftover session/worktree/branch after a teardown failure is a cleanup
   gap, not a correctness problem, since the task row itself is already
   gone. When the host's connection drops after the worktree removal or the

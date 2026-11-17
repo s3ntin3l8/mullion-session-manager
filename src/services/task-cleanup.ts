@@ -55,7 +55,10 @@ export function cleanupTaskWorktree(
   });
 }
 
-export type CleanupProject = { id?: number; cwd: string; hostId: string; hostCwds?: string | null };
+// Module-private: the only consumers are in this file. Callers pass a ProjectRow,
+// which satisfies it structurally, so exporting it would be public surface with
+// no importer.
+type CleanupProject = { id?: number; cwd: string; hostId: string; hostCwds?: string | null };
 
 // Issue #1724 — the worktree lives on the host its worker session was
 // PLACED on, which is not necessarily the project's own host. The
@@ -91,7 +94,7 @@ export function resolveCleanupTarget(
   if (cwdOnHost === null) {
     app.log.warn(
       { projectId: project.id, hostId },
-      "task cleanup: no path for this project on that host — the worktree there cannot be removed",
+      "task cleanup: no path for this project on that host — the worktree or branch there cannot be removed",
     );
     return null;
   }
