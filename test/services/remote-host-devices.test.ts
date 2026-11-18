@@ -42,6 +42,18 @@ describe("remote-host-devices", () => {
     expect(JSON.parse(request.mock.calls[1][1].body)).toEqual({ kind: "emulator" });
   });
 
+  it("names the platform in a teardown only for a non-Android device", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
+    await devices.terminate("7", "emulator", "android");
+    await devices.terminate("8", "emulator", "ios");
+    expect(JSON.parse(request.mock.calls[0][1].body)).toEqual({ kind: "emulator" });
+    expect(JSON.parse(request.mock.calls[1][1].body)).toEqual({
+      kind: "emulator",
+      platform: "ios",
+    });
+  });
+
   it("leaves the cheap reads on the default timeout", async () => {
     const request = vi
       .fn()
@@ -114,9 +126,11 @@ describe("remote-host-devices", () => {
     const devices = createDevicesClient({ request: vi.fn(), openInbound });
     devices.openSocket("7", { kind: "physical", serial: "1.2.3.4:5555" });
     devices.openSocket("7", { kind: "emulator", avdName: "a b", port: "5554" });
+    devices.openSocket("8", { kind: "emulator", platform: "ios", udid: "U-1" });
     expect(openInbound.mock.calls.map(([target]) => target)).toEqual([
       "/internal/ws/device/7?kind=physical&serial=1.2.3.4%3A5555",
       "/internal/ws/device/7?kind=emulator&avdName=a+b&port=5554",
+      "/internal/ws/device/8?kind=emulator&platform=ios&udid=U-1",
     ]);
   });
 });

@@ -129,6 +129,7 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     adbServerPort: app.config.DEVICE_ADB_SERVER_PORT,
     emulatorPath: app.config.DEVICE_EMULATOR_PATH,
     scrcpyServerPath: app.config.DEVICE_SCRCPY_SERVER_PATH,
+    idbCompanionPath: app.config.DEVICE_IDB_COMPANION_PATH || undefined,
     videoMaxSize: app.config.DEVICE_VIDEO_MAX_SIZE,
     videoMaxFps: app.config.DEVICE_VIDEO_MAX_FPS,
     videoBitRate: app.config.DEVICE_VIDEO_BIT_RATE,

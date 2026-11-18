@@ -48,6 +48,30 @@ export function findActivePhysicalOwner(
   return owner;
 }
 
+/** The id of the ACTIVE iOS row that already holds this simulator ON THIS HOST,
+ * if any. A UDID names a simulator only on the Mac whose CoreSimulator owns it,
+ * so two hosts may each hold the same UDID. Two active rows for one simulator
+ * would each run a companion against it and fight over its HID connection. */
+export function findActiveIosOwner(
+  app: FastifyInstance,
+  udid: string,
+  hostId: string = LOCAL_HOST_ID,
+): { id: number } | undefined {
+  const [owner] = app.db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(
+      and(
+        eq(devices.status, "active"),
+        eq(devices.platform, "ios"),
+        eq(devices.udid, udid),
+        eq(devices.hostId, hostId),
+      ),
+    )
+    .all();
+  return owner;
+}
+
 export function insertDevice(app: FastifyInstance, values: NewDevice): DeviceRow {
   const [row] = app.db.insert(devices).values(values).returning().all();
   return row;

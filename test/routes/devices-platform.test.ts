@@ -13,7 +13,7 @@ import { listDeviceRows } from "../../src/services/device-store.js";
 
 // `devices.platform` / `devices.udid` through the REST API (#3202): an Android
 // device reads back as such, each platform takes only its own fields, and iOS
-// is refused until a driver exists (#1943). Nothing here boots a device.
+// is refused where the host cannot run it (#1943). Nothing here boots a device.
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 vi.mock("node:child_process", async (importOriginal) => {
@@ -72,15 +72,23 @@ describe("devices platform and udid (#3202)", () => {
     expect(res.json()).toMatchObject({ platform: "android", udid: null });
   });
 
-  it("answers 400 for an iOS device until a driver exists, and inserts no row", async () => {
+  it("answers 400 for a shape-valid iOS device on a host that cannot run one, and inserts no row", async () => {
+    // A Linux host has no iOS Simulator (the enabled path is test/routes/devices-ios.test.ts).
     const app = await buildTestAppOnPlatform("linux");
     const res = await create(app, {
       platform: "ios",
       udid: "0F4A9B7E-1111-2222-3333-444455556666",
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().message).toBe("iOS Simulator devices are not supported yet");
+    expect(res.json().message).toMatch(/iOS Simulator is not available on this host/);
     expect(listDeviceRows(app)).toHaveLength(0);
+  });
+
+  it("requires a udid for an iOS device", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const res = await create(app, { platform: "ios" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/udid is required for an ios device/);
   });
 
   it.each([

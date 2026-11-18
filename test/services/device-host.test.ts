@@ -125,11 +125,28 @@ describe("DeviceHost", () => {
     expect(client.devices.spawn.mock.calls[0][0]).not.toHaveProperty("platform");
     expect(client.devices.spawn.mock.calls[0][0]).not.toHaveProperty("udid");
 
+    client.devices.kinds.mockResolvedValue({ deviceKinds: [], platforms: ["ios"] });
     await remote.getOrCreate({ ...row, platform: "ios", udid: "UDID-1" });
     expect(client.devices.spawn.mock.calls[1][0]).toMatchObject({
       platform: "ios",
       udid: "UDID-1",
     });
+  });
+
+  it("refuses to send an iOS spec to a host that does not report ios, or does not report at all", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const row = { ...emulator(app, mac), platform: "ios" as const, udid: "UDID-1" };
+    const remote = getDeviceHost(app, mac);
+
+    // An agent that predates `platforms` is Android-only (the client reports it so).
+    client.devices.kinds.mockResolvedValue({ deviceKinds: ["emulator"], platforms: ["android"] });
+    await expect(remote.getOrCreate(row)).rejects.toThrow(
+      new RegExp(`Host ${mac} does not support iOS simulators`),
+    );
+    client.devices.kinds.mockResolvedValue(null);
+    await expect(remote.getOrCreate(row)).rejects.toThrow(/does not support iOS simulators/);
+    expect(client.devices.spawn).not.toHaveBeenCalled();
   });
 
   it("persists the port a remote emulator reports, and not an unchanged one", async () => {

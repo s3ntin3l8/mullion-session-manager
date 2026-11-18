@@ -23,7 +23,9 @@ import type {
   DeviceInfo,
   DeviceKind,
   DeviceLiveStatus,
+  DevicePlatform,
 } from "./device-drivers/types.js";
+import { createIdbIosEngine, IosDevice, type IosEngineFactory } from "./ios-device.js";
 
 // Defined in device-drivers/types.ts so the driver seam does not import this
 // module back; re-exported here, where every existing caller imports them.
@@ -243,6 +245,14 @@ export interface DeviceManagerOptions {
    * died independently of Mullion (a host reboot, a crash) while its row
    * stayed `status: "active"`. */
   initialPorts?: number[];
+  /** Absolute path of `idb_companion` (DEVICE_IDB_COMPANION_PATH), for the iOS
+   * Simulator engine. Without it (and without `iosEngineFactory`) an iOS spawn
+   * is refused. */
+  idbCompanionPath?: string;
+  /** Builds the engine of one iOS Simulator device. Defaults to an
+   * IosSimulatorDriver with an IdbCompanion; tests inject a fake so no real
+   * simulator is involved. */
+  iosEngineFactory?: IosEngineFactory;
 }
 
 export interface DeviceSpawnOptions {
@@ -269,6 +279,10 @@ export interface DeviceSpawnOptions {
    * persisted value here would be wrong. Always null for `kind: "physical"`
    * — a physical device has no emulator port pool slot to reserve. */
   port: number | null;
+  /** Which engine runs the device; absent means "android". */
+  platform?: DevicePlatform;
+  /** The iOS Simulator's UDID. Required for `platform: "ios"`, ignored otherwise. */
+  udid?: string | null;
 }
 
 /** Runs an adb-server call, rewording a refused connection into something an
@@ -1076,6 +1090,10 @@ export class DeviceManager {
   }
 
   private devices = new Map<string, Device>();
+  /** The iOS Simulator devices, beside the Android ones. They never touch the
+   * scope backend, the port pool or adb: a simulator is supervised by
+   * CoreSimulator, and its identity is its UDID. */
+  private iosDevices = new Map<string, IosDevice>();
   private serverClient: AdbServerClient;
   private allocatedPorts = new Set<number>();
 
@@ -1182,27 +1200,64 @@ export class DeviceManager {
     this.allocatedPorts.add(port);
   }
 
-  get(id: string): Device | undefined {
-    return this.devices.get(id);
+  get(id: string): Device | IosDevice | undefined {
+    return this.devices.get(id) ?? this.iosDevices.get(id);
   }
 
   /** The platform-neutral handle on a live device: what routes/device.ts and
-   * routes/devices.ts talk to, so neither imports adb/scrcpy types. Built on
-   * `get`/`getOrCreate` (which still return the Android `Device`) so there is
-   * one place that decides which engine a device runs on. Every device is
-   * Android until `devices.platform` lands (#3202). */
+   * routes/devices.ts talk to, so neither imports adb/scrcpy types. Two engines
+   * sit behind it: an Android `Device` (adb/scrcpy, wrapped in `AndroidDriver`)
+   * and an `IosDevice` (simctl + idb, whose driver is returned as is). The
+   * row's `platform` picks the engine in `getOrCreate`; `get` and `getDriver`
+   * look the id up in whichever registry holds it. */
   getDriver(id: string): DeviceDriver | undefined {
-    const device = this.get(id);
+    const ios = this.iosDevices.get(id);
+    if (ios) return ios.driver;
+    const device = this.devices.get(id);
     return device ? new AndroidDriver(device) : undefined;
   }
 
   /** `getOrCreate` that returns the driver (see `getDriver`). */
   async getOrCreateDriver(opts: DeviceSpawnOptions): Promise<DeviceDriver> {
-    return new AndroidDriver(await this.getOrCreate(opts));
+    const device = await this.getOrCreate(opts);
+    return device instanceof IosDevice ? device.driver : new AndroidDriver(device);
   }
 
   list(): DeviceInfo[] {
-    return [...this.devices.values()].map((d) => d.toInfo());
+    return [...this.devices.values(), ...this.iosDevices.values()].map((d) => d.toInfo());
+  }
+
+  /**
+   * Get-or-create for an iOS Simulator (#1943). Same fire-and-forget shape as
+   * the Android branches: the simulator's boot continues in the background and
+   * the outcome is read from `get(id).toInfo()`. A simulator that is still
+   * Booted from before a Mullion or agent restart is reattached (the driver
+   * boots only a Shutdown one) and gets a fresh companion; the driver, not this
+   * method, tracks whether this process booted it.
+   */
+  private getOrCreateIos(opts: DeviceSpawnOptions): IosDevice {
+    this.assertEnabled("ios-simulator");
+    const udid = opts.udid;
+    if (!udid) throw new Error(`iOS device ${opts.id} has no simulator UDID`);
+    const existing = this.iosDevices.get(opts.id);
+    if (existing && existing.isAlive) return existing;
+
+    const factory =
+      this.opts.iosEngineFactory ??
+      (this.opts.idbCompanionPath ? createIdbIosEngine(this.opts.idbCompanionPath) : null);
+    if (!factory) {
+      throw new Error("iOS Simulator devices need DEVICE_IDB_COMPANION_PATH (idb_companion)");
+    }
+    // A failed or exited one is replaced; stop what it left behind (its
+    // companion) first. Best effort: the driver shuts a simulator down only if
+    // this process booted it.
+    existing?.kill().catch(() => undefined);
+    const device = new IosDevice(factory({ id: opts.id, udid, label: opts.label }));
+    this.iosDevices.set(opts.id, device);
+    device.start().catch((err) => {
+      this.opts.onSpawnError?.(opts.id, err instanceof Error ? err : new Error(String(err)));
+    });
+    return device;
   }
 
   /** Idempotent, same shape as PtyManager.getOrCreate: creates only if
@@ -1235,7 +1290,10 @@ export class DeviceManager {
    * nothing to reattach to and nothing to reconcile against a systemd
    * listing; connectPhysical() is unconditionally the right (and only)
    * thing to do for every call with this kind. */
-  async getOrCreate(opts: DeviceSpawnOptions): Promise<Device> {
+  async getOrCreate(opts: DeviceSpawnOptions & { platform?: "android" }): Promise<Device>;
+  async getOrCreate(opts: DeviceSpawnOptions): Promise<Device | IosDevice>;
+  async getOrCreate(opts: DeviceSpawnOptions): Promise<Device | IosDevice> {
+    if (opts.platform === "ios") return this.getOrCreateIos(opts);
     this.assertEnabled(opts.kind === "physical" ? "physical" : "emulator");
     const existing = this.devices.get(opts.id);
     if (existing && existing.isAlive) return existing;
@@ -1405,7 +1463,18 @@ export class DeviceManager {
    * connected to the host's adb server (re-adding it later hits the
    * AlreadyConnectedError path connectPhysical() already treats as
    * success). */
-  async kill(id: string, kind: DeviceKind): Promise<void> {
+  async kill(id: string, kind: DeviceKind, platform: DevicePlatform = "android"): Promise<void> {
+    // An iOS device is stopped through its engine and NEVER through the scope
+    // backend: it has no scope, and the fallback below would resolve a unit
+    // name for an id that never had one. With nothing in memory there is
+    // nothing to stop, and a simulator this process did not boot is not ours
+    // to shut down.
+    const ios = this.iosDevices.get(id);
+    if (ios) {
+      await ios.kill();
+      return;
+    }
+    if (platform === "ios") return;
     const device = this.devices.get(id);
     if (device) {
       await device.kill();
@@ -1418,9 +1487,14 @@ export class DeviceManager {
   /** kill() plus dropping this manager's own reference — the in-memory-map
    * half of PtyManager.terminate(); the DB row deletion is the route's own
    * job, same split routes/sessions.ts's killSession keeps today. */
-  async terminate(id: string, kind: DeviceKind): Promise<void> {
-    await this.kill(id, kind);
+  async terminate(
+    id: string,
+    kind: DeviceKind,
+    platform: DevicePlatform = "android",
+  ): Promise<void> {
+    await this.kill(id, kind, platform);
     this.devices.delete(id);
+    this.iosDevices.delete(id);
   }
 
   async killAll(): Promise<void> {
@@ -1429,9 +1503,10 @@ export class DeviceManager {
     // no-in-memory-Device fallback path and is never actually consulted
     // here — passed through anyway (rather than a placeholder) so this
     // reads correctly on its own, without relying on that fact.
-    await Promise.all(
-      [...this.devices.entries()].map(([id, device]) => this.kill(id, device.kind)),
-    );
+    await Promise.all([
+      ...[...this.devices.entries()].map(([id, device]) => this.kill(id, device.kind)),
+      ...[...this.iosDevices.keys()].map((id) => this.kill(id, "emulator", "ios")),
+    ]);
   }
 
   /** Pairs with a device over adb wireless debugging (Android 11+'s

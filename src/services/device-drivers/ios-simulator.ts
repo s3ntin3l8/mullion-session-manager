@@ -155,6 +155,9 @@ export class IosSimulatorDriver implements DeviceDriver {
   private pollTimer: NodeJS.Timeout | null = null;
   private polling = false;
   private exited = false;
+  /** Bumped by stop(). A start() snapshots it and abandons itself when it
+   * moved, so a Stop that lands mid-boot is never undone by the late boot. */
+  private teardownEpoch = 0;
   private readonly exitListeners = new Set<() => void>();
   /** Per listener: has it received a keyframe since its last configuration? A
    * delta is never delivered before one. */
@@ -238,6 +241,7 @@ export class IosSimulatorDriver implements DeviceDriver {
   /** Boots the simulator (an already Booted one counts as success), waits for
    * it to finish booting and starts the liveness poll. */
   async start(): Promise<void> {
+    const epoch = this.teardownEpoch;
     this.status = "booting";
     this.error = null;
     try {
@@ -245,6 +249,7 @@ export class IosSimulatorDriver implements DeviceDriver {
       // after a failed start must not forget a boot this process already did,
       // and the poll ends ownership when the simulator leaves Booted.
       if (!(await this.isBooted())) {
+        if (epoch !== this.teardownEpoch) return;
         try {
           await this.simctl(["boot", this.udid], { timeoutMs: BOOT_TIMEOUT_MS });
           this.bootedByUs = true;
@@ -253,8 +258,10 @@ export class IosSimulatorDriver implements DeviceDriver {
           if (!/current state: Booted/i.test(errorText(err))) throw err;
         }
       }
+      if (epoch !== this.teardownEpoch) return await this.abandonStart();
       await this.simctl(["bootstatus", this.udid, "-b"], { timeoutMs: BOOT_TIMEOUT_MS });
     } catch (err) {
+      if (epoch !== this.teardownEpoch) return await this.abandonStart();
       this.status = "error";
       this.error = errorText(err);
       // Ownership must be observed for as long as the flag is set: a boot of
@@ -262,6 +269,8 @@ export class IosSimulatorDriver implements DeviceDriver {
       if (this.bootedByUs) this.startPolling();
       throw err;
     }
+    // A stop() during bootstatus: do not resurrect the device.
+    if (epoch !== this.teardownEpoch) return await this.abandonStart();
     this.alive = true;
     this.exited = false;
     // With a companion the status is `streaming` only once the first keyframe
@@ -271,9 +280,30 @@ export class IosSimulatorDriver implements DeviceDriver {
     if (this.companion) await this.startVideo(this.companion);
   }
 
+  /** A stop() landed while start() was in flight. stop() could not shut down a
+   * boot that had not returned yet, so finish that here, then stay exited. */
+  private async abandonStart(): Promise<void> {
+    if (this.bootedByUs) {
+      try {
+        await this.simctl(["shutdown", this.udid]);
+      } catch (err) {
+        if (!/current state: Shutdown/i.test(errorText(err))) {
+          this.log.warn(
+            "iOS simulator %s: shutdown after a cancelled start failed: %s",
+            this.udid,
+            errorText(err),
+          );
+          return;
+        }
+      }
+      this.bootedByUs = false;
+    }
+  }
+
   /** Shuts the simulator down ONLY when this process booted it; never
    * deletes or erases. */
   async stop(): Promise<void> {
+    this.teardownEpoch++;
     this.stopPolling();
     this.stopVideo();
     try {

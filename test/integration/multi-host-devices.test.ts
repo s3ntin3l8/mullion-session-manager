@@ -245,7 +245,7 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(ok.json().platforms).toEqual(["android"]);
     });
 
-    it("refuses a spawn for an iOS device: there is no iOS engine on an agent yet (#3202)", async () => {
+    it("refuses a spawn for an iOS device when the agent has no iOS Simulator available", async () => {
       const res = await agent.app.inject({
         method: "POST",
         url: "/internal/devices",
@@ -263,7 +263,7 @@ describe("devices on an agent host (issue #3200)", () => {
         },
       });
       expect(res.statusCode).toBe(400);
-      expect(res.json().message).toMatch(/iOS devices are not supported on this agent/);
+      expect(res.json().message).toMatch(/iOS Simulator is not available on this host/);
     });
 
     it("refuses a device socket whose port is outside 1-65535 or whose kind is unknown", async () => {
