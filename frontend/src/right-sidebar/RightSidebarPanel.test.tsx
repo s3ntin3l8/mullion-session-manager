@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+import { useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RightSidebarPanel } from "./RightSidebarPanel.js";
 import { SidebarHeader } from "./SidebarHeader.js";
@@ -104,5 +105,64 @@ describe("RightSidebarPanel on the phone", () => {
     expect(document.querySelector(".right-sidebar-strip-slot")!.textContent).toBe("Stub");
     await userEvent.click(screen.getByRole("button", { name: "Close sidebar" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("RightSidebarPanel detail slot", () => {
+  it("mounts the view once the header's slots exist, so a detail never remounts into them", () => {
+    const mounted = vi.fn();
+    const unmounted = vi.fn();
+    function Detail() {
+      useEffect(() => {
+        mounted();
+        return unmounted;
+      }, []);
+      return <DetailHeader title="#7" onBack={() => {}} />;
+    }
+    renderPanel(
+      stubView(() => <Detail />),
+      false,
+    );
+    const slot = document.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    expect(within(slot).getByRole("button", { name: "Back" })).toBeInTheDocument();
+    expect(mounted).toHaveBeenCalledTimes(1);
+    expect(unmounted).not.toHaveBeenCalled();
+  });
+
+  it("lands focus on the panel when a detail closes and nothing else takes it", async () => {
+    function Switch() {
+      const [open, setOpen] = useState(true);
+      return open ? <DetailHeader title="#7" onBack={() => setOpen(false)} /> : <div>list</div>;
+    }
+    renderPanel(
+      stubView(() => <Switch />),
+      false,
+    );
+    const slot = document.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    within(slot).getByRole("button", { name: "Back" }).focus();
+    await userEvent.click(within(slot).getByRole("button", { name: "Back" }));
+    expect(screen.getByText("list")).toBeInTheDocument();
+    expect(document.activeElement).toBe(document.querySelector(".right-sidebar-panel"));
+  });
+
+  it("leaves focus alone when it already sits outside the closing detail", async () => {
+    function Switch() {
+      const [open, setOpen] = useState(true);
+      return open ? <DetailHeader title="#7" onBack={() => setOpen(false)} /> : <div>list</div>;
+    }
+    renderPanel(
+      stubView(() => <Switch />),
+      false,
+    );
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    const slot = document.querySelector<HTMLElement>(".right-sidebar-detail-slot")!;
+    // Back is clicked without taking focus, as a pointer on a non-focusing
+    // surface would; focus stays on the rail-like control outside the panel.
+    outside.focus();
+    act(() => within(slot).getByRole("button", { name: "Back" }).click());
+    expect(screen.getByText("list")).toBeInTheDocument();
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
   });
 });

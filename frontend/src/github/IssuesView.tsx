@@ -384,6 +384,7 @@ function IssueRow({
     issue.labels.length > 0 || issue.taskStatus || task || issue.triage || pills.length || queued;
   return (
     <SidebarRow
+      rowKey={`issue:${issue.number}`}
       className={originClass(issueOrigin(issue, link))}
       lead={<span className={`gh-issue-glyph${done ? " gh-issue-glyph--done" : ""}`} aria-hidden />}
       title={issue.title}

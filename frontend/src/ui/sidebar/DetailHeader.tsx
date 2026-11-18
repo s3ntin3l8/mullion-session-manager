@@ -26,6 +26,21 @@ export function DetailHeader({ onBack, backLabel = "Back", ...rest }: DetailHead
     panel.setAttribute("data-sidebar-detail", "");
     return () => panel.removeAttribute("data-sidebar-detail");
   }, [slot]);
+  // Leaving a detail unmounts the focused Back button (and the list the opener
+  // sat in), which would drop focus to <body>. The list that owns the opener
+  // moves focus to its row; this is the fallback for one that does not, so
+  // keyboard focus lands on the panel rather than nowhere. Declared after the
+  // mark above: its cleanup (which un-hides the list) runs first.
+  useLayoutEffect(() => {
+    const panel = slot?.closest<HTMLElement>(".right-sidebar-panel");
+    if (!panel) return;
+    return () => {
+      const active = document.activeElement;
+      if (active && active !== document.body && !slot?.contains(active)) return;
+      panel.tabIndex = -1;
+      panel.focus({ preventScroll: true });
+    };
+  }, [slot]);
   const header = (
     <ViewHeader
       {...rest}

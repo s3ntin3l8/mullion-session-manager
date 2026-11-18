@@ -1,18 +1,29 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { useDashboardStore } from "../store/index.js";
 import { api } from "../api/index.js";
 import type * as ApiModule from "../api/index.js";
-import type { GitHubPROrWithChecks, GitHubPRsStatus, GitHubStatus } from "../api/index.js";
+import type {
+  GitHubPROrWithChecks,
+  GitHubPRsStatus,
+  GitHubStatus,
+  ProjectReleaseStatus,
+} from "../api/index.js";
 
 vi.mock("../api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
   return {
     ...actual,
-    api: { ...actual.api, getProjectGitHub: vi.fn(), getProjectGitHubPRs: vi.fn() },
+    api: {
+      ...actual.api,
+      getProjectGitHub: vi.fn(),
+      getProjectGitHubPRs: vi.fn(),
+      getProjectRelease: vi.fn(),
+      getProjectIssues: vi.fn(),
+    },
   };
 });
 
@@ -65,6 +76,7 @@ const unsubscribe = vi.fn();
 beforeEach(() => {
   vi.mocked(api.getProjectGitHub).mockResolvedValue(status());
   vi.mocked(api.getProjectGitHubPRs).mockResolvedValue(prsStatus([pr(1)]));
+  vi.mocked(api.getProjectRelease).mockResolvedValue(null as unknown as ProjectReleaseStatus);
   useDashboardStore.setState({
     prsByProject: {},
     prsRefreshTriggerByProject: {},
@@ -114,6 +126,64 @@ describe("GitHubSidebarView", () => {
     expect(container.querySelector(".sb-strip")).toHaveTextContent("GitHub1 open PR");
     const header = screen.getByText("Pull requests").closest("button, div")!;
     expect(header.textContent).toContain("1");
+  });
+
+  it("counts the PRs the panel lists, leaving the release PR to the Release section", async () => {
+    vi.mocked(api.getProjectGitHubPRs).mockResolvedValue(prsStatus([pr(1), pr(2)]));
+    vi.mocked(api.getProjectRelease).mockResolvedValue({
+      detection: { kind: "not-configured" },
+      pr: { number: 2, title: "chore: release", htmlUrl: "https://github.com/o/r/pull/2" },
+      conventionalTitlesWarning: false,
+    } as unknown as ProjectReleaseStatus);
+    const { container } = renderView();
+    await screen.findByText("PR title 1");
+    await vi.waitFor(() =>
+      expect(container.querySelector(".sb-strip")).toHaveTextContent("GitHub1 open PR"),
+    );
+    expect(screen.queryByText("2 open PRs")).toBeNull();
+  });
+
+  it("returns focus to the row that opened a PR when it closes", async () => {
+    useDashboardStore.setState({ githubOpenPrByProject: { 4: 1 } });
+    renderView();
+    // The detail (not the loading skeleton) is up, and nothing in it is the row.
+    await screen.findByRole("button", { name: "Back" });
+    expect(screen.queryByText("PR title 1")).toBeNull();
+    act(() => useDashboardStore.getState().setGithubOpenPr(4, null));
+    const title = await screen.findByText("PR title 1");
+    expect(document.activeElement).toBe(title.closest("button"));
+    expect(document.activeElement).toHaveAttribute("data-row-key", "pr:1");
+  });
+
+  it("returns focus to the row that opened an issue when it closes", async () => {
+    vi.mocked(api.getProjectIssues).mockResolvedValue({
+      issues: [
+        {
+          number: 7,
+          title: "Crash on start",
+          htmlUrl: "https://github.com/o/r/issues/7",
+          author: "x",
+          labels: [],
+          assignees: [],
+          commentCount: 0,
+          milestone: null,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-02T00:00:00Z",
+        },
+      ],
+      page: 1,
+      hasMore: false,
+      labels: [],
+      taskMasterEnabled: false,
+      taskLabel: "mullion-task",
+    } as unknown as Awaited<ReturnType<typeof api.getProjectIssues>>);
+    useDashboardStore.setState({ githubOpenIssueByProject: { 4: 7 } });
+    renderView();
+    await screen.findByRole("button", { name: "Back" });
+    act(() => useDashboardStore.getState().setGithubOpenIssue(4, null));
+    const title = await screen.findByText("Crash on start");
+    expect(document.activeElement).toBe(title.closest("button"));
+    expect(document.activeElement).toHaveAttribute("data-row-key", "issue:7");
   });
 
   it("falls back to the live status' PRs when the PR cache is empty", async () => {

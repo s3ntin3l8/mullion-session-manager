@@ -97,6 +97,12 @@
   background: var(--r);
 }
 
+.right-sidebar-panel:focus {
+  /* Focus lands here, programmatically, when a detail closes with nowhere
+     better to go; it is a landing place, not a control. */
+  outline: none;
+}
+
 /* One horizontal inset for header, project picker, toolbar and view bodies so
    every view's content lines up on the same left edge. */
 .right-sidebar-panel {

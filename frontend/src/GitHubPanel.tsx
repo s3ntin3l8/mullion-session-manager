@@ -5,7 +5,7 @@ import { OriginFilter } from "./ui/sidebar/OriginFilter.js";
 import { PrDetailView } from "./github/PrDetailView.js";
 import { PrRow } from "./github/PrRow.js";
 import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
-import { useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SidebarRepoTitleContext } from "./right-sidebar/sidebarToolbarSlot.js";
 import { api } from "./api/index.js";
 import type {
@@ -332,6 +332,7 @@ export function GitHubPanel({
   params,
   embedded = false,
   onExternalLink,
+  onPrCount,
 }: {
   params: GitHubPanelParams;
   // Rendered inside the right sidebar: the drawer owns scrolling and padding.
@@ -339,6 +340,9 @@ export function GitHubPanel({
   // Reports where "open on GitHub" should go for whatever is showing (the
   // repo, or the open PR / issue), for a host that renders that link itself.
   onExternalLink?: (link: { url: string; label: string } | null) => void;
+  // Reports how many PRs the list's PR section shows (the open release PR is
+  // the Release section's, not counted), for a host that names the count.
+  onPrCount?: (count: number) => void;
 }) {
   const [releaseStatus, setReleaseStatus] = useState<ProjectReleaseStatus | null | undefined>(
     undefined,
@@ -422,6 +426,29 @@ export function GitHubPanel({
     onExternalLink?.(externalUrl === null ? null : { url: externalUrl, label: externalLabel });
   }, [onExternalLink, externalUrl, externalLabel]);
 
+  // The open release PR belongs to the Release section, not the PR list.
+  const releasePrNumber = releaseStatus?.pr?.number ?? null;
+  const prs = (effectivePrs?.prs ?? []).filter((pr) => pr.number !== releasePrNumber);
+  const prCount = prs.length;
+  useEffect(() => {
+    onPrCount?.(prCount);
+  }, [onPrCount, prCount]);
+
+  // Closing a PR or issue brings the list back; focus returns to the row that
+  // opened it (the detail's Back button, where focus was, is gone), else the
+  // panel's own fallback in DetailHeader stands.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const openedRef = useRef<string | null>(null);
+  const openKey =
+    openPr !== null ? `pr:${openPr}` : openIssue !== null ? `issue:${openIssue}` : null;
+  useLayoutEffect(() => {
+    const was = openedRef.current;
+    openedRef.current = openKey;
+    if (openKey !== null || was === null) return;
+    const row = rootRef.current?.querySelector<HTMLElement>(`[data-row-key="${was}"]`);
+    row?.focus({ preventScroll: true });
+  }, [openKey]);
+
   // Subscribe to real-time GitHub WS updates for this project
   useEffect(() => {
     subscribeToGitHubProject(params.projectId);
@@ -478,9 +505,6 @@ export function GitHubPanel({
     );
   }
 
-  // The open release PR belongs to the Release section, not this list.
-  const releasePrNumber = releaseStatus?.pr?.number ?? null;
-  const prs = (effectivePrs?.prs ?? []).filter((pr) => pr.number !== releasePrNumber);
   const visiblePrs = sortPrsByAttention(prs).filter((pr) =>
     matchesOrigin(prOriginFilter, prOrigin(pr, links.byPr.get(pr.number))),
   );
@@ -489,7 +513,7 @@ export function GitHubPanel({
     ((effectivePrs && prs.length === 0) || (!effectivePrs && status)) && statusPulls.length === 0;
 
   return (
-    <div className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
+    <div ref={rootRef} className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
       {status && !inSidebar && (
         // The repo's own open-on-GitHub icon; a PR's detail view owns its header
         // (and the PR's URL) while it is open, an issue's does the same.

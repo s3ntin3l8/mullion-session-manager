@@ -116,7 +116,9 @@ export function RightSidebarPanel({
         )}
       </div>
       <div className="right-sidebar-strip-slot" ref={setStripSlot} />
-      {!inBand ? null : projectId == null && !hostGlobal ? (
+      {!inBand ? null : toolbarSlot === null ||
+        stripSlot === null ||
+        detailSlot === null ? null : projectId == null && !hostGlobal ? (
         <div className="github-panel-empty-row">No projects yet.</div>
       ) : (
         // Keyed by the view (#3015): a view arriving, or one view replacing

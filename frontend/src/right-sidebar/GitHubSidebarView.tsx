@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { GitHubPanel } from "../GitHubPanel.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
-import { usePrList } from "../hooks/useGitHubData.js";
 import { useDashboardStore } from "../store/index.js";
 import { RefreshIcon } from "../ui/icons.js";
 import { ExternalLinkOwnedContext } from "../ui/sidebar/index.js";
@@ -13,8 +12,12 @@ import type { RightSidebarViewProps } from "./views.js";
 // whatever is showing and pop-out to a full dock panel sit behind the ⋯ menu.
 export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps) {
   const [link, setLink] = useState<{ url: string; label: string } | null>(null);
-  // The same list the panel renders (the live store wins over the cached fetch).
-  const prCount = usePrList(projectId)?.prs.length ?? 0;
+  // What the panel's PR section shows, which leaves the release PR out.
+  // Keyed by project: this view is not remounted on a project switch, and the
+  // new project's panel reports only after its first paint.
+  const [reported, setReported] = useState<{ projectId: number; count: number } | null>(null);
+  const onPrCount = useCallback((count: number) => setReported({ projectId, count }), [projectId]);
+  const prCount = reported?.projectId === projectId ? reported.count : 0;
   return (
     <div className="github-sidebar-view">
       <SidebarHeader
@@ -47,7 +50,13 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
       <ExternalLinkOwnedContext.Provider value={true}>
         {/* Keyed on the project: the panel's own state (the release row, the open
             PR) belongs to one repo and must not carry over to the next. */}
-        <GitHubPanel key={projectId} params={{ projectId }} embedded onExternalLink={setLink} />
+        <GitHubPanel
+          key={projectId}
+          params={{ projectId }}
+          embedded
+          onExternalLink={setLink}
+          onPrCount={onPrCount}
+        />
       </ExternalLinkOwnedContext.Provider>
     </div>
   );
