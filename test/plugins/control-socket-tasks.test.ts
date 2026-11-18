@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildTestApp } from "../helpers/app.js";
-import { dispatch, type ConnectionState } from "../../src/plugins/control-socket.js";
+import { makeConnectionState } from "../helpers/control-socket.js";
+import { dispatch } from "../../src/plugins/control-socket.js";
 import { projects, tasks } from "../../src/db/schema.js";
 import { insertTask } from "../../src/services/task-store.js";
 import { eq } from "drizzle-orm";
@@ -14,20 +15,6 @@ vi.mock("../../src/services/task-github-sync.js", async (importOriginal) => {
     syncTaskTransition: (...args: unknown[]) => mockSyncTaskTransition(...args),
   };
 });
-
-function makeConn(scope: "full" | "session", sessionId: string | null = null) {
-  const frames: Array<Record<string, unknown>> = [];
-  const conn: ConnectionState = {
-    send: (m) => frames.push(m),
-    onClose: () => () => {},
-    socket: null,
-    scope,
-    sessionId,
-    openChannels: new Map(),
-    activeWaits: 0,
-  };
-  return { conn, frames };
-}
 
 describe("tasks.list and tasks.get control-socket ops (#3165)", () => {
   let app: FastifyInstance | null = null;
@@ -76,7 +63,7 @@ describe("tasks.list and tasks.get control-socket ops (#3165)", () => {
       status: "ready",
     });
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, { id: 1, op: "tasks.list" });
     expect(frames[0].ok).toBe(true);
     expect((frames[0].result as Array<{ id: number }>).length).toBe(3);
@@ -95,7 +82,7 @@ describe("tasks.list and tasks.get control-socket ops (#3165)", () => {
   it("tasks.list session scope: a caller whose session is not active gets 403", async () => {
     app = await buildTestApp();
     await app.ready();
-    const { conn, frames } = makeConn("session", "1");
+    const { conn, frames } = makeConnectionState("session", "1");
     await dispatch(app, conn, { id: 1, op: "tasks.list" });
     expect(frames[0]).toMatchObject({ id: 1, ok: false, status: 403 });
   });
@@ -113,7 +100,7 @@ describe("tasks.list and tasks.get control-socket ops (#3165)", () => {
       status: "ready",
     })!;
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, { id: 1, op: "tasks.get", body: { taskId: task.id } });
     expect(frames[0].ok).toBe(true);
     expect(frames[0].result).toMatchObject({
@@ -132,7 +119,7 @@ describe("tasks.list and tasks.get control-socket ops (#3165)", () => {
   it("tasks.get session scope: rejects out-of-scope caller with 403", async () => {
     app = await buildTestApp();
     await app.ready();
-    const { conn, frames } = makeConn("session", "1");
+    const { conn, frames } = makeConnectionState("session", "1");
     await dispatch(app, conn, { id: 1, op: "tasks.get", body: { taskId: "1" } });
     expect(frames[0]).toMatchObject({ id: 1, ok: false, status: 403 });
   });
@@ -178,7 +165,7 @@ describe("tasks.retry/start/close/archive/unarchive control-socket ops (#3173)",
       .where(eq(tasks.id, task.id))
       .run();
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, { id: 1, op: "tasks.retry", body: { taskId: task.id } });
     expect(frames[0]).toMatchObject({
       id: 1,
@@ -211,7 +198,7 @@ describe("tasks.retry/start/close/archive/unarchive control-socket ops (#3173)",
       .where(eq(tasks.id, task.id))
       .run();
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, { id: 1, op: "tasks.retry", body: { taskId: task.id } });
     expect(frames[0]).toMatchObject({
       id: 1,
@@ -241,7 +228,7 @@ describe("tasks.retry/start/close/archive/unarchive control-socket ops (#3173)",
       status: "ready",
     })!;
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, { id: 1, op: "tasks.retry", body: { taskId: task.id } });
     expect(frames[0]).toMatchObject({
       id: 1,
@@ -273,7 +260,7 @@ describe("tasks.retry/start/close/archive/unarchive control-socket ops (#3173)",
       status: "done",
     })!;
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, { id: 1, op: "tasks.start", body: { taskId: readyTask.id } });
     expect(frames[0]).toMatchObject({
       id: 1,
@@ -311,7 +298,7 @@ describe("tasks.retry/start/close/archive/unarchive control-socket ops (#3173)",
       status: "ready",
     })!;
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, {
       id: 1,
       op: "tasks.close",
@@ -354,7 +341,7 @@ describe("tasks.retry/start/close/archive/unarchive control-socket ops (#3173)",
       status: "in_progress",
     })!;
 
-    const { conn, frames } = makeConn("full");
+    const { conn, frames } = makeConnectionState("full");
     await dispatch(app, conn, { id: 1, op: "tasks.archive", body: { taskId: doneTask.id } });
     expect(frames[0]).toMatchObject({
       id: 1,
@@ -386,7 +373,7 @@ describe("tasks.retry/start/close/archive/unarchive control-socket ops (#3173)",
     await app.ready();
     const ops = ["tasks.retry", "tasks.start", "tasks.close", "tasks.archive", "tasks.unarchive"];
     for (let i = 0; i < ops.length; i++) {
-      const { conn, frames } = makeConn("session", "1");
+      const { conn, frames } = makeConnectionState("session", "1");
       await dispatch(app, conn, { id: i + 1, op: ops[i], body: { taskId: "1" } });
       expect(frames[0]).toMatchObject({ id: i + 1, ok: false, status: 403 });
     }

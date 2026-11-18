@@ -8,8 +8,8 @@ import { AGENT_CHANNEL_AUTH_HEADER } from "../../src/services/agent-channel-tunn
 
 // Issue #2451 — the internal API's auth gate accepts a request replayed from
 // the outbound agent channel only with the process-local token, and the token
-// alone is enough (no bearer, no signature). Its own file: routes/internal.test.ts
-// is over the file-size ratchet.
+// alone is enough (no bearer, no signature). Kept in its own file for its
+// no-static-token enrolled-agent env setup.
 
 const { buildApp } = await import("../../src/app.js");
 

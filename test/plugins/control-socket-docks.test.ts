@@ -5,7 +5,8 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildTestApp } from "../helpers/app.js";
-import { dispatch, type ConnectionState } from "../../src/plugins/control-socket.js";
+import { makeConnectionState } from "../helpers/control-socket.js";
+import { dispatch } from "../../src/plugins/control-socket.js";
 import { projects, sessions } from "../../src/db/schema.js";
 
 // #2494 — a session may list/start/stop the dock controls of its OWN project
@@ -68,20 +69,6 @@ vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
   };
 });
 
-function sinkConn(scope: "full" | "session", sessionId: string | null) {
-  const frames: Record<string, unknown>[] = [];
-  const conn: ConnectionState = {
-    send: (message) => void frames.push(message),
-    onClose: () => () => {},
-    socket: null,
-    scope,
-    sessionId,
-    openChannels: new Map(),
-    activeWaits: 0,
-  };
-  return { conn, frames };
-}
-
 describe("docks.* ops (#2494)", () => {
   let cwdA: string;
   let cwdB: string;
@@ -124,7 +111,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("lists the caller's own project's controls, nothing running", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.list", body: {} });
     expect(frames[0]).toMatchObject({ ok: true, status: 200 });
     const result = frames[0].result as { id: string; running: unknown }[];
@@ -136,7 +123,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("starts a control with its cwd/env, tags the session, and refuses a second start", async () => {
     const { app, projectA, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, {
       id: 1,
       op: "docks.start",
@@ -164,7 +151,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("restarts a control whose row is active but whose process already died", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "logs" } });
     const stale = (frames[0].result as { sessionId: number }).sessionId;
     launch.live = "exited";
@@ -178,7 +165,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("start with a branch runs the control in a branch worktree", async () => {
     const { app, agentSession } = await setup();
-    const { conn } = sinkConn("session", agentSession);
+    const { conn } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, {
       id: 1,
       op: "docks.start",
@@ -190,7 +177,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("stops a running control, and stopping a stopped one is a no-op", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "logs" } });
     const sessionId = (frames[0].result as { sessionId: number }).sessionId;
     await dispatch(app, conn, { id: 2, op: "docks.stop", body: { dockControlId: "logs" } });
@@ -204,7 +191,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("refuses another project at session scope, without launching", async () => {
     const { app, projectB, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     for (const op of ["docks.list", "docks.start", "docks.stop"]) {
       await dispatch(app, conn, {
         id: 1,
@@ -218,7 +205,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("an unknown control is a 404, and the docker-sourced path stays out", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "nope" } });
     await dispatch(app, conn, { id: 2, op: "docks.stop", body: { dockControlId: "nope" } });
     await dispatch(app, conn, { id: 3, op: "docks.start", body: {} });
@@ -228,7 +215,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("session scope still cannot create a dock session or list/kill dock sessions", async () => {
     const { app, projectA, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, {
       id: 1,
       op: "sessions.create",
@@ -244,7 +231,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("full scope names the project explicitly", async () => {
     const { app, projectB } = await setup();
-    const { conn, frames } = sinkConn("full", null);
+    const { conn, frames } = makeConnectionState("full", null);
     await dispatch(app, conn, { id: 1, op: "docks.list", body: {} });
     await dispatch(app, conn, { id: 2, op: "docks.list", body: { projectId: String(projectB) } });
     expect(frames.map((f) => f.status)).toEqual([400, 200]);
@@ -270,7 +257,7 @@ describe("docks.* ops (#2494)", () => {
   describe("logs, wait and switch (#3049)", () => {
     async function running(controlId = "dev-server") {
       const ctx = await setup();
-      const { conn, frames } = sinkConn("session", ctx.agentSession);
+      const { conn, frames } = makeConnectionState("session", ctx.agentSession);
       await dispatch(ctx.app, conn, {
         id: 1,
         op: "docks.start",
@@ -384,7 +371,7 @@ describe("docks.* ops (#2494)", () => {
 
     it("docks.start accepts a worktreePath and refuses one outside the project", async () => {
       const { app, agentSession } = await setup();
-      const { conn, frames } = sinkConn("session", agentSession);
+      const { conn, frames } = makeConnectionState("session", agentSession);
       await dispatch(app, conn, {
         id: 15,
         op: "docks.start",

@@ -11,7 +11,7 @@ import type * as ChildProcess from "node:child_process";
 // (untracked, remote-hosted, wrong kind/status), since those don't need a
 // real PtyManager session at all. Proving the non-null case needs an
 // actual dock session with buffered PTY output, which needs the same
-// node-pty/child_process mocking test/routes/internal.test.ts uses — kept
+// node-pty/child_process mocking test/helpers/internal-routes.ts uses — kept
 // in its own file (Hermes review, PR #49) rather than pulling that heavier
 // mock setup into every other, unrelated test in projects.test.ts.
 const fakePtyChildren: FakePty[] = [];

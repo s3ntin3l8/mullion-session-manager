@@ -5,9 +5,9 @@
   "recordedAtMeaning": "the commit whose tree these sizes were measured from — the fork point this branch started from. The baseline is the RECORD of the giants and the fallback reference when there is no git reference commit; when there is one, the guard measures against the reference commit instead, and that already absorbs the default branch's own growth.",
   "counts": {
     "production": 11,
-    "test": 41,
+    "test": 39,
     "tooling": 0,
-    "total": 52
+    "total": 50
   },
   "files": {
     "frontend/src/api/types.ts": 1467,
@@ -37,12 +37,10 @@
     "test/hooks/forwarder-core.test.ts": 2413,
     "test/hooks/opencode-plugin.test.ts": 1866,
     "test/mcp/client.test.ts": 1282,
-    "test/plugins/control-socket.test.ts": 5875,
     "test/plugins/hooks.test.ts": 1500,
     "test/plugins/preview-proxy.test.ts": 1243,
     "test/routes/browser-automation.test.ts": 1342,
     "test/routes/hosts.test.ts": 1366,
-    "test/routes/internal.test.ts": 5721,
     "test/routes/project-setup.test.ts": 1488,
     "test/routes/projects-docker.test.ts": 1225,
     "test/routes/projects.test.ts": 2838,
