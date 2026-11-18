@@ -1,4 +1,11 @@
 import type { Session } from "./api/index.js";
+import {
+  selectSessionTitleContexts,
+  sessionTitle,
+  sessionTitleIsAgentTitle,
+} from "./lib/sessionDisplay.js";
+import type { SessionTitleContext } from "./lib/sessionDisplay.js";
+import { useDashboardStore } from "./store/index.js";
 
 // Split out of App.tsx (same rationale as attention.ts) so these pure
 // title-formatting rules stay unit-testable without pulling in App.tsx's
@@ -13,22 +20,32 @@ export function formatPaneTitle(title: string, projectName: string | undefined):
   return projectName ? `${title} · ${projectName}` : title;
 }
 
-// Title a terminal panel gets at `addPanel` time (issue #69). Order of
-// precedence:
-//  1. An explicit rename (nameLocked) always wins — that's the whole point
-//     of pinning.
-//  2. Otherwise, seed from `session.lastTitle` (the backend's last-seen OSC
-//     title, refreshed on the ~4s session poll) if present — covers
-//     reopening a pane for a session that's already running a program:
-//     xterm's onTitleChange won't re-fire on its own since no new OSC
-//     sequence is emitted, so without this the tab would show the stale
-//     launch name/command until the program next retitles itself.
-//  3. Otherwise, the launch-pattern name (CommandPalette) or raw command,
-//     same as before this fix — live OSC updates take it from here.
-export function initialPaneTitle(session: Session, projectName: string | undefined): string {
-  if (session.nameLocked && session.name) return session.name;
-  if (session.lastTitle) return formatPaneTitle(session.lastTitle, projectName);
-  return session.name || session.command;
+// A terminal tab's title (issues #69, #3292): the session's one title order
+// (`sessionTitle`, #3285) — the user's name, the task title, the agent's
+// terminal title (`lastTitle`; for a live update the caller passes the OSC
+// title in it), the worktree branch, the numbered launch name. Only a title
+// from the agent's own terminal step gets the " · project" suffix, as before;
+// a name, a task title, a branch or a launch name stands alone.
+export function paneTabTitle(
+  session: Session,
+  projectName: string | undefined,
+  ctx?: SessionTitleContext,
+): string {
+  const title = sessionTitle(session, ctx);
+  return sessionTitleIsAgentTitle(session, ctx) ? formatPaneTitle(title, projectName) : title;
+}
+
+// Title a terminal panel gets at `addPanel` time. `lastTitle` seeds it for a
+// session that is already running a program (xterm's onTitleChange will not
+// re-fire on its own); live OSC updates take it from there. `ctx` defaults to
+// the store's task link and number for the session.
+export function initialPaneTitle(
+  session: Session,
+  projectName: string | undefined,
+  ctx?: SessionTitleContext,
+): string {
+  const resolved = ctx ?? selectSessionTitleContexts(useDashboardStore.getState()).get(session.id);
+  return paneTabTitle(session, projectName, resolved);
 }
 
 // The pane-tab/sidebar branch sub-label (issue #96) — "main" or "main *"

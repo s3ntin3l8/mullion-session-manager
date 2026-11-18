@@ -9,8 +9,12 @@ import type { UsePostWorkspaceSwitchHighlightParams } from "./usePostWorkspaceSw
 
 let highlightedPanelId: string | null = null;
 
+// initialPaneTitle reads the task link and number of the session from the store.
+const noSessions: never[] = [];
+const noTasks: never[] = [];
+
 function storeState() {
-  return { highlightedPanelId };
+  return { highlightedPanelId, sessions: noSessions, tasks: noTasks };
 }
 
 vi.mock("../store/index.js", () => {

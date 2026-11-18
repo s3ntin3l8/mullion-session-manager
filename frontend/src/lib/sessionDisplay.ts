@@ -56,6 +56,16 @@ export function sessionTitle(session: Session, ctx?: SessionTitleContext): strin
   return fromLaunch && ctx?.number && ctx.number > 1 ? `${title} ${ctx.number}` : title;
 }
 
+/**
+ * Whether the resolved title is the agent's own terminal title (step 3), the
+ * only step a pane tab suffixes with " · project" (#3292).
+ */
+export function sessionTitleIsAgentTitle(session: Session, ctx?: SessionTitleContext): boolean {
+  const { title, fromLaunch } = unnumberedTitle(session, ctx?.taskTitle);
+  if (fromLaunch || !session.lastTitle || title !== session.lastTitle) return false;
+  return !(session.nameLocked && session.name) && !ctx?.taskTitle;
+}
+
 /** Whether the resolved title is the session's raw command (unnumbered). */
 export function sessionTitleIsCommand(session: Session, ctx?: SessionTitleContext): boolean {
   const { title, fromLaunch } = unnumberedTitle(session, ctx?.taskTitle);

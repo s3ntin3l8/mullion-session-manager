@@ -1621,10 +1621,10 @@ export function stripSessionPanelTitles(serialized: SerializedDockview): Seriali
 
 // Companion to stripSessionPanelTitles: re-derives each restored terminal
 // panel's title the same way a freshly-opened one gets it (openSessionPanel/
-// buildPanelBase's own `initialPaneTitle(session, projectName)` — session
-// name if locked, else `session.lastTitle` (the backend's last-seen OSC
-// title, issue #69), else the bare command), since the persisted blob no
-// longer carries it. Call this once, right after `dockviewApi.fromJSON(...)`
+// buildPanelBase's own `initialPaneTitle(session, projectName)` — the
+// session title order of #3285: the user's name, the task title, the agent's
+// last-seen terminal title (`lastTitle`, issue #69), the worktree branch, the
+// numbered launch name), since the persisted blob no longer carries it. Call this once, right after `dockviewApi.fromJSON(...)`
 // — a live terminal reconnecting will overwrite it again in real time via
 // TerminalPanelWrapper's own (now-throttled) onTitleChange, same as it
 // always did; this only covers the gap between restore and that first live

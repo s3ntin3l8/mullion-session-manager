@@ -23,7 +23,8 @@ import { PaneTab } from "../PaneTab.js";
 import { Spinner } from "../ui/Spinner.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Session } from "../api/index.js";
-import { formatPaneTitle } from "../paneTitle.js";
+import { paneTabTitle } from "../paneTitle.js";
+import { selectSessionTitleContexts } from "../lib/sessionDisplay.js";
 import { openSessionPanel } from "../panelUtils.js";
 import { openTerminalPath } from "../lib/openTerminalPath.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
@@ -168,6 +169,28 @@ export function makePanelWrapper<
 // stays intact, it just doesn't repaint on every single OSC frame.
 const OSC_TITLE_THROTTLE_MS = 1000;
 
+type DashboardState = ReturnType<typeof useDashboardStore.getState>;
+
+// A terminal tab's title from the store (#3292). `osc` is the latest live OSC
+// title, if any; `seeded` the agent title the tab was seeded with (undefined:
+// the session was not listed yet, so the live value stands in).
+function tabTitleFor(
+  state: DashboardState,
+  sessionId: number,
+  osc: string | null,
+  seeded: string | null | undefined,
+): string | null {
+  const session = state.sessions.find((s) => s.id === sessionId);
+  if (!session) return null;
+  const projectName = state.projects.find((p) => p.id === session.projectId)?.name;
+  const lastTitle = osc ?? (seeded === undefined ? session.lastTitle : seeded);
+  return paneTabTitle(
+    { ...session, lastTitle },
+    projectName,
+    selectSessionTitleContexts(state).get(sessionId),
+  );
+}
+
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too.
 function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
@@ -182,17 +205,51 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // useDashboardStore selectors + a dep-array effect) so the always-current
   // nameLocked flag gates every OSC event without re-subscribing TerminalPane
   // on every store change.
+  // The latest live OSC title; it feeds only the agent-title step of the
+  // session's title order (#3292), so a locked name or a task title is never
+  // overwritten by it.
+  const oscTitleRef = useRef<string | null>(null);
+  // Until the first live OSC title, the agent title stays at the value the
+  // tab was seeded with: the ~4s session poll refreshes `lastTitle` with the
+  // agent's elapsed-second counter, and following it would repaint (and
+  // autosave) the tab on every poll — the storm the throttle below prevents.
+  // Seeded once, lazily, from the store (undefined: the session was not
+  // listed yet, so the live value stands in), so the selector below stays pure.
+  const seededLastTitleRef = useRef<string | null | undefined>(
+    useDashboardStore.getState().sessions.find((s) => s.id === sessionId)?.lastTitle,
+  );
+  const resolveTabTitle = useCallback(
+    (state: DashboardState): string | null =>
+      tabTitleFor(state, sessionId, oscTitleRef.current, seededLastTitleRef.current),
+    [sessionId],
+  );
+  // The title the tab shows. The tab was seeded with the store's title at
+  // addPanel time, so the first value is the baseline, not a change.
+  const lastStoreTitleRef = useRef<string | null>(
+    tabTitleFor(useDashboardStore.getState(), sessionId, null, undefined),
+  );
   const applyTitle = useCallback(
     (oscTitle: string) => {
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session || session.nameLocked) return; // pinned by an explicit rename
-      const projectName = projects.find((p) => p.id === session.projectId)?.name;
-      props.api.setTitle(formatPaneTitle(oscTitle, projectName));
+      oscTitleRef.current = oscTitle;
+      const title = resolveTabTitle(useDashboardStore.getState());
+      // A title the tab already shows (a locked name, a task title) is not
+      // re-applied: no repaint, no layout-change event.
+      if (title === null || title === lastStoreTitleRef.current) return;
+      lastStoreTitleRef.current = title;
+      props.api.setTitle(title);
       lastAppliedAtRef.current = Date.now();
     },
-    [props.api, sessionId],
+    [props.api, resolveTabTitle],
   );
+  // Re-title when the session's task link or number changes (e.g. the first
+  // `claude` ends and `claude 2` becomes the only one). The selector yields a
+  // string, so a store change that leaves the title alone does not re-render.
+  const storeTitle = useDashboardStore(resolveTabTitle);
+  useEffect(() => {
+    if (storeTitle === lastStoreTitleRef.current) return;
+    lastStoreTitleRef.current = storeTitle;
+    if (storeTitle !== null) props.api.setTitle(storeTitle);
+  }, [storeTitle, props.api]);
   // Trailing-edge throttle: the first title in any OSC_TITLE_THROTTLE_MS
   // window applies immediately (lastAppliedAtRef starts at 0, so the very
   // first call in this panel's lifetime is always instant — no delay before
