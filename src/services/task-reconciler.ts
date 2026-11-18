@@ -4586,6 +4586,11 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
     // advisory review that re-parks if there was nothing to find; that's
     // the safer direction to be wrong in.
     if (task.lastReviewedHeadSha !== null && pr.headSha === task.lastReviewedHeadSha) continue;
+    // Exception: an inconclusive-review flag with no baseline (cold cache when it
+    // was set) has no push to detect and would otherwise be undone next tick,
+    // restarting a review Mullion stopped. Retry review still clears it.
+    if (task.lastReviewedHeadSha === null && task.needsHumanReason === "review-inconclusive")
+      continue;
 
     // Narrowed by the query's own `isNotNull(tasks.autoReturnCapAnnouncedAt)`
     // filter above — TypeScript can't see that across the two queries.

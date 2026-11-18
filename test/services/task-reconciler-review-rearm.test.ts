@@ -891,15 +891,34 @@ describe("reconcileTasks — review round cap and re-arm", () => {
         await app.close();
       });
 
+      it("keeps the flag across ticks when the reviewed head baseline is unknown", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+          prNumber: 9,
+          lastReviewedHeadSha: null,
+        });
+
+        await reconcileTasks(app);
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.needsHumanReason).toBe("review-inconclusive");
+        expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+        expect(row.reviewSessionId).not.toBeNull();
+        await app.close();
+      });
+
       it("does not flag while an automatic re-arm is still left", async () => {
         const app = await buildApp();
         const { task } = await createStalledInconclusiveTask(app, {
-          lastReviewVerdictAt: new Date(Date.now() - 60_000),
+          lastReviewVerdictAt: new Date(Date.now() - 61 * 60_000),
         });
 
         await reconcileTasks(app);
 
         const row = await getTask(app, task.id);
+        expect(row.inconclusiveReviewRearmCount).toBe(1);
         expect(row.needsHumanReason).toBeNull();
         expect(row.autoReturnCapAnnouncedAt).toBeNull();
         await app.close();

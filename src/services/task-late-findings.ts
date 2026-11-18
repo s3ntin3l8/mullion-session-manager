@@ -21,6 +21,8 @@ import {
 } from "./task-late-findings-cache.js";
 import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
 import { postReviewFindingsComment } from "./task-github-sync.js";
+import { resolveRepoRef } from "./host-git.js";
+import { getPRsStatus } from "./github.js";
 
 /**
  * A review session whose findings were ingested as `inconclusive` (it died or
@@ -314,9 +316,28 @@ async function flagExhaustedInconclusiveReviews(app: FastifyInstance): Promise<v
     .all();
 
   for (const { task, project } of rows) {
+    // Baseline the head this round reviewed (best effort, from the poller's
+    // cache) so `reannounceCappedTasksAfterHumanPush` re-arms only on a
+    // genuine later push; a null baseline is treated there as "unknown" and
+    // would undo this flag on the next tick (it also skips this reason when
+    // the cache was cold and the baseline stays null).
+    let headSha: string | null = null;
+    if (task.lastReviewedHeadSha === null && task.prNumber !== null) {
+      try {
+        const repoRef = await resolveRepoRef(app, project);
+        const cached = repoRef ? getPRsStatus(repoRef.owner, repoRef.repo) : null;
+        headSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha ?? null;
+      } catch {
+        headSha = null;
+      }
+    }
     const flagged = app.db
       .update(tasks)
-      .set({ autoReturnCapAnnouncedAt: new Date(), needsHumanReason: "review-inconclusive" })
+      .set({
+        autoReturnCapAnnouncedAt: new Date(),
+        needsHumanReason: "review-inconclusive",
+        ...(headSha !== null ? { lastReviewedHeadSha: headSha } : {}),
+      })
       .where(
         and(
           eq(tasks.id, task.id),

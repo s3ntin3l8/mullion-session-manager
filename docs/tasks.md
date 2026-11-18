@@ -636,6 +636,9 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
   anyway** (it applies to that commit only; a new push voids it). If it is
   required, fix the cause on the base branch and update the PR's branch, which
   re-arms the task.
+- `review-inconclusive` — both review attempts (the first and the automatic
+  re-run) ended without a verdict. Click **Retry review**, or review the PR by
+  hand.
 - `rebase-exhausted` — the PR conflicts with main and the auto-rebase budget
   (two attempts) is spent. Rebase it by hand, or **Reject** it: Reject resets
   the budget, so a fresh conflict can be auto-rebased again.
