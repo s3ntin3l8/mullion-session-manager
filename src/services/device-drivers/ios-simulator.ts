@@ -838,12 +838,6 @@ export class IosSimulatorDriver implements DeviceDriver {
         break;
       }
     }
-    if (
-      this.recentLiveBatches.length === 1 &&
-      now - this.recentLiveBatches[0]!.at > LAST_LIVE_BATCH_MAX_AGE_MS
-    ) {
-      this.recentLiveBatches.shift();
-    }
   }
 
   private drainRecentLiveBatches(stream: HidStream): {
@@ -995,7 +989,11 @@ export class IosSimulatorDriver implements DeviceDriver {
         this.hidStream = null;
         const closeErr = await this.closeLiveStreamForAction(prev);
         if (closeErr && isInvalidatedHidError(closeErr)) {
-          await this.restartForStaleHid();
+          try {
+            await this.restartForStaleHid();
+          } catch (err) {
+            return { ok: false, invalidated: false, err };
+          }
           const retryClient = this.companion?.client;
           if (!retryClient) {
             return {
@@ -1006,7 +1004,11 @@ export class IosSimulatorDriver implements DeviceDriver {
           }
           activeClient = retryClient;
           if (batches.length > 0) {
-            await activeClient.hidOnce(batches.flat(), { timeoutMs: HID_ONCE_TIMEOUT_MS });
+            try {
+              await activeClient.hidOnce(batches.flat(), { timeoutMs: HID_ONCE_TIMEOUT_MS });
+            } catch (err) {
+              this.log.warn("iOS HID live-batch replay failed before action; continuing", err);
+            }
           }
         }
       }

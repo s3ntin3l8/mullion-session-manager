@@ -703,6 +703,106 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     });
     await driver.stop();
   });
+
+  function invalidateHidOnEnd(c: ReturnType<typeof fakeCompanion>) {
+    const origHid = c.handle.client!.hid.bind(c.handle.client);
+    c.handle.client!.hid = () => {
+      const stream = origHid() as unknown as FakeHidStream;
+      stream.end = () => {
+        stream.ended = true;
+        stream.emit("status", {
+          code: 13,
+          details: "The dtuhidd connection has been invalidated",
+        });
+      };
+      return stream as unknown as ReturnType<typeof origHid>;
+    };
+  }
+
+  it("maps a failing live-batch replay to DeviceActionError and still sends the action", async () => {
+    const c = fakeCompanion();
+    invalidateHidOnEnd(c);
+    const hidOnceCalls: IdbHidEvent[][] = [];
+    c.handle.client!.hidOnce = async (events: IdbHidEvent[]) => {
+      hidOnceCalls.push(events);
+      throw new Error("14 UNAVAILABLE: connect failed: Connection refused");
+    };
+
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+
+    await expect(driver.tap(300, 600)).rejects.toMatchObject({
+      name: "DeviceActionError",
+      statusCode: 502,
+    });
+    expect(c.handle.restart).toHaveBeenCalledTimes(2);
+    expect(hidOnceCalls).toHaveLength(2);
+    expect(hidOnceCalls[0]).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+    ]);
+    expect(hidOnceCalls[1]).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "UP" } },
+    ]);
+
+    await driver.stop();
+  });
+
+  it("continues with the one-shot action when only the live-batch replay fails", async () => {
+    const c = fakeCompanion();
+    invalidateHidOnEnd(c);
+    const hidOnceCalls: IdbHidEvent[][] = [];
+    const origHidOnce = c.handle.client!.hidOnce.bind(c.handle.client);
+    c.handle.client!.hidOnce = async (events: IdbHidEvent[]) => {
+      hidOnceCalls.push(events);
+      if (hidOnceCalls.length === 1) {
+        throw new Error("14 UNAVAILABLE: transient replay failure");
+      }
+      return origHidOnce(events);
+    };
+
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+
+    await expect(driver.tap(300, 600)).resolves.toBeUndefined();
+    expect(hidOnceCalls).toHaveLength(2);
+    expect(hidOnceCalls[1]).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "UP" } },
+    ]);
+
+    await driver.stop();
+  });
 });
 
 describe("IosSimulatorDriver input (fake idb_companion)", () => {
