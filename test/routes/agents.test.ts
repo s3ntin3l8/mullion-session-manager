@@ -10,7 +10,7 @@ const tmpDb = path.join(os.tmpdir(), `agents-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
 
 // Fake at the true I/O boundary (child_process), same convention as
-// test/services/agent-detect.test.ts and test/services/pty-manager.test.ts
+// test/services/agent-detect.test.ts and test/helpers/pty-manager-harness.ts
 // — mocking a sibling export within agent-detect.ts itself wouldn't work
 // here since getCachedAgents() calls detectAgents() as a same-module local
 // binding, which ESM mocking can't intercept.

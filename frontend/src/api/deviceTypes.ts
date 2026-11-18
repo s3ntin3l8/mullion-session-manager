@@ -71,3 +71,13 @@ export interface PairAndConnectBody {
   pairingCode: string;
   name?: string;
 }
+
+// Mirrors src/routes/devices.ts's DeviceHostEntry 1:1 — one host that could
+// hold a device (`GET /api/devices/hosts`). "unsupported" is an agent that
+// predates the device routes; "unreachable" is one that did not answer.
+export interface DeviceHostEntry {
+  hostId: string;
+  name: string;
+  status: "ok" | "unsupported" | "unreachable";
+  deviceKinds: DeviceKind[];
+}

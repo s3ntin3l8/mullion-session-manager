@@ -76,10 +76,10 @@ const errorOf = (s: unknown) => new Promise<Error>((res) => (s as Stream).once("
 function openAll(app: FastifyInstance) {
   const client = getRemoteHostClient(app, HOST);
   return [
-    client.openAttach({ id: "s1", cwd: "/w", command: "bash", cols: 80, rows: 24 }),
-    client.openEventsStream({ cursors: true }),
-    client.openControlRelayStream(),
-    client.openSshAgentStream(),
+    client.streams.attach({ id: "s1", cwd: "/w", command: "bash", cols: 80, rows: 24 }),
+    client.streams.events({ cursors: true }),
+    client.streams.controlRelay(),
+    client.streams.sshAgent(),
   ];
 }
 

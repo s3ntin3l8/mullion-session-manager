@@ -50,7 +50,7 @@ class MockSocket extends EventEmitter {
 }
 
 const openEventsStreamMock = vi.fn();
-const getRemoteHostClientMock = vi.fn(() => ({ openEventsStream: openEventsStreamMock }));
+const getRemoteHostClientMock = vi.fn(() => ({ streams: { events: openEventsStreamMock } }));
 vi.mock("../../src/services/remote-host-client.js", () => ({
   getRemoteHostClient: (...args: unknown[]) => getRemoteHostClientMock(...(args as [])),
 }));
@@ -438,7 +438,9 @@ describe("startRemoteEventSubscriber", () => {
     expect(() => startRemoteEventSubscriber(app, vi.fn()).reconcile()).not.toThrow();
     expect(app.log.warn).toHaveBeenCalled();
 
-    getRemoteHostClientMock.mockImplementation(() => ({ openEventsStream: openEventsStreamMock }));
+    getRemoteHostClientMock.mockImplementation(() => ({
+      streams: { events: openEventsStreamMock },
+    }));
     openEventsStreamMock.mockReturnValue(new MockSocket());
     vi.advanceTimersByTime(1_000);
     expect(getRemoteHostClientMock).toHaveBeenCalledTimes(2);

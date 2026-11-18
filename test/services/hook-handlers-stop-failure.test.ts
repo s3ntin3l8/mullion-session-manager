@@ -1,8 +1,9 @@
 // The stop_failure handler's own derivation of the session's error detail
 // (hook-handlers.ts).
 //
-// Its own file: test/services/pty-manager.test.ts is at the file-size
-// ratchet's ceiling (scripts/check-max-file-lines.mjs), so it cannot grow.
+// Its own file: it exercises src/services/hook-handlers.ts's derivation
+// directly, against a fake session context rather than a real Session — the
+// Session-side behaviour lives in test/services/pty-manager-*.test.ts.
 //
 // Issue #2505 — the detail this handler derives is what the "no commits"
 // failure reason quotes (checkReviewingGate, task-reconciler.ts). A provider

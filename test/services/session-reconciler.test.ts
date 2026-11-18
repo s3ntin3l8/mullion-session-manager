@@ -465,7 +465,7 @@ describe("reconcileExitedSessions", () => {
   // seed stashed for this id (the promote flow) can never be picked up by a
   // SessionStart hook again — discard it rather than leaking it forever.
   // Deliberately NOT covered by plain kill()'s own behavior (see
-  // pty-manager.test.ts's own coverage of that): this asserts the
+  // pty-manager-lifecycle.test.ts's own coverage of that): this asserts the
   // reconciler's explicit discardPendingSeed() call, independent of
   // whatever kill() itself does or doesn't clear.
   it("discards a stashed seed once a session is confirmed exited (B9)", async () => {

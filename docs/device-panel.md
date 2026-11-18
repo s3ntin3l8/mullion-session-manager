@@ -384,6 +384,13 @@ flag yet, so the panel shows them as not running until
 [#3270](https://github.com/s3ntin3l8/mullion-session-manager/issues/3270)), and a mutating call answers 503 (or 502 when the request may have
 been delivered), like every other forwarded host call.
 
+`GET /api/devices/hosts` lists the hosts that could hold a device (the primary
+and each registered agent) as `{hostId, name, status, deviceKinds}`: `status` is
+`ok`, `unsupported` (an agent that predates the kinds route) or `unreachable`
+(it did not answer within 5 s, or answered with an error). Each agent is asked in parallel and its answer
+is cached for 10 s; `features.deviceKinds` in `/api/server-info` still reports
+only the primary's own kinds.
+
 Not covered yet, each tracked on its own issue: pairing and mDNS discovery
 still run on the primary only, so a physical device on an agent host is added
 by its adb address ([#3271](https://github.com/s3ntin3l8/mullion-session-manager/issues/3271));
@@ -606,7 +613,7 @@ expose them.
 
 ## 3. REST API
 
-`src/routes/devices.ts` — `GET/POST /api/devices`, `POST /api/devices/pair`,
+`src/routes/devices.ts` — `GET/POST /api/devices`, `GET /api/devices/hosts`, `POST /api/devices/pair`,
 `POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
 `GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/start`,
 `POST /api/devices/:id/stop`, `POST /api/devices/:id/action` (body:

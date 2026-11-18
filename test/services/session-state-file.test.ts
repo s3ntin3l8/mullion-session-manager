@@ -21,7 +21,7 @@ import { SessionStateFile, stateFilePath } from "../../src/services/session-stat
 // making the class generic. The state-file BEHAVIOR tests that exercise the
 // real Session shape (restore-on-construction, A8 kill()/terminate()
 // lifecycle, the 30s ceiling under continuous churn, etc.) already live in
-// pty-manager.test.ts and are unchanged by this extraction — see this PR's
+// the pty-manager suite and are unchanged by this extraction — see this PR's
 // description.
 
 type FakeState = { n: number };

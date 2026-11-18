@@ -12,7 +12,7 @@ import {
 } from "../helpers/sessions-routes.js";
 import { describe, expect, it, vi } from "vitest";
 // Session creation spawns real OS processes (systemd-run, dtach) via
-// PtyManager — faked here the same way as test/services/pty-manager.test.ts,
+// PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
 // systemd --user session existing in CI. See that file for why.
 //

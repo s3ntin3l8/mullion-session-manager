@@ -13,7 +13,7 @@ export type RemoteWaitOutputResult =
   | { matched: false; gone: true; outputOffset: number }
   | { notRunning: true };
 
-// spawn() and openAttach() both target the same session — same id/cwd/
+// spawn() and streams.attach() both target the same session — same id/cwd/
 // command/size — just over HTTP vs. WS; kept as one shared shape rather
 // than two field-for-field-identical interfaces.
 export interface SessionTarget {
@@ -25,19 +25,19 @@ export interface SessionTarget {
   skipPermissions?: boolean;
   // Task Master's initial-turn prompt (see pty-manager.ts's
   // CreateSessionOptions.initialPrompt) — only meaningful for spawn(), not
-  // openAttach() (attaching never re-spawns), but kept on the shared
+  // streams.attach() (attaching never re-spawns), but kept on the shared
   // SessionTarget shape rather than splitting it for one optional field.
   initialPrompt?: string;
   // Issue #678 — the promote flow's seed prompt, for spawn() only (same
-  // "meaningless for openAttach" posture as initialPrompt above — attaching
+  // "meaningless for streams.attach" posture as initialPrompt above — attaching
   // never re-spawns, so there's nothing to inject context into here).
   seedPrompt?: string;
   // Issue: per-project briefing storage (a follow-up PR) — for spawn() only,
-  // same "meaningless for openAttach" posture as seedPrompt immediately
+  // same "meaningless for streams.attach" posture as seedPrompt immediately
   // above. See CreateSessionOptions.briefingOverride's own doc comment
   // (pty-manager.ts) for the full multi-host reasoning this exists for.
   briefingOverride?: string;
-  // Issue #937 — for spawn() only, same "meaningless for openAttach"
+  // Issue #937 — for spawn() only, same "meaningless for streams.attach"
   // posture as seedPrompt/briefingOverride above. See
   // CreateSessionOptions.workflowConventionsText's own doc comment
   // (pty-manager.ts) — already fully resolved on the primary before this is
@@ -55,7 +55,7 @@ export interface SessionTarget {
   // Issue #958 — same posture as `model` above, for opencode's
   // `small_model` config key.
   smallModel?: string;
-  // Issue #884 — for spawn() only, same "meaningless for openAttach"
+  // Issue #884 — for spawn() only, same "meaningless for streams.attach"
   // posture as seedPrompt/briefingOverride above. See
   // CreateSessionOptions.injectAgentGuide/injectProjectBriefing's own doc
   // comments (pty-manager.ts) for the full multi-host reasoning.
@@ -83,7 +83,7 @@ export interface SessionTarget {
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES
-  // matter for openAttach(): a re-bootstrap on the agent side (its own
+  // matter for streams.attach(): a re-bootstrap on the agent side (its own
   // attachSocketToSession -> getOrCreate, internal.ts's /internal/ws/attach)
   // must reproduce the same env the original spawn used, and the agent has
   // nowhere else to read it from — it's DB-less, so it never saw the

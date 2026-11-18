@@ -72,7 +72,7 @@ export function plainNodePtyMock() {
 }
 
 /** The listener-capturing `node-pty` mock (see test/routes/sessions.test.ts
- * and test/services/pty-manager.test.ts for the hand-rolled originals):
+ * and test/helpers/pty-manager-harness.ts for the hand-rolled originals):
  * every `spawn()` call is recorded in `spawnedPtys`, in call order, with its
  * registered onData/onExit listeners reachable so a test can push
  * synthetic output through a specific session's PTY, or simulate it
@@ -81,7 +81,7 @@ export function plainNodePtyMock() {
  * `kill()` itself fires `emitExit(0)`, matching real node-pty (a killed
  * process reports its own exit — see pty-manager.ts's kill() doc comment on
  * the onExit-during-kill() re-entrancy that guards against) and
- * test/services/pty-manager.test.ts's own hand-rolled `FakePty.kill()`. This
+ * test/helpers/pty-manager-harness.ts's own hand-rolled `FakePty.kill()`. This
  * is a deliberate behavior *upgrade* over the two hand-rolled mocks this
  * helper replaced in test/routes/sessions.test.ts and
  * test/routes/events.test.ts, whose `kill()` was previously a bare no-op spy

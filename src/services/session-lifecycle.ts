@@ -80,7 +80,7 @@ import {
 // caller used. Not a security boundary (a full-scope caller can already
 // achieve an arbitrary env var via `command` composition, e.g. `FOO=bar
 // claude`) — the real constraint is transport, not intent:
-// remote-host-client.ts's openAttach() has nowhere to put `env` but the WS
+// remote-host-client.ts's `streams.attach()` has nowhere to put `env` but the WS
 // upgrade's query string (a GET has no body, and the `ws` package exposes
 // no custom-body-on-upgrade option), which shares Node's 16 KB
 // --max-http-header-size with the request line, the Bearer token, and the

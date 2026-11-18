@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 
 // BrowserManager launches real Chromium via Playwright — CI has no browser
 // available (see deploy/README.md's Playwright prerequisites), so
-// chromium.launch is faked the same way test/services/pty-manager.test.ts
+// chromium.launch is faked the same way test/helpers/pty-manager-harness.ts
 // fakes node-pty: hand-written Fake* classes standing in for Playwright's
 // real Browser/BrowserContext/Page, with every launched instance collected
 // for assertions. Never launch a real Chromium in a unit test.
