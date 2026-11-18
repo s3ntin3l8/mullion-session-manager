@@ -6,6 +6,7 @@ import type { SessionBackend } from "./session-backend.js";
 import { discoverTurnStarted } from "./session-turn-start.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import { broadcastTaskEvent } from "./task-events.js";
+import { insertSessionEvents } from "./event-history.js";
 import { registerTaskTransitionListener } from "./task-state.js";
 
 const startedLocalWorkers = new WeakSet<object>();
@@ -129,8 +130,22 @@ export async function checkWorkerStarted(
       )
       .run();
     if (!changed.changes) return;
-    const note = `Worker has not started a turn after ${timeoutMinutes} minutes. Check its terminal for a startup prompt.\nLast rendered screen lines:\n${screen}`;
-    app.pty.get(String(session.id))?.emitTaskStartupNote?.(note);
+    const note = `${screen}\nWorker has not started a turn after ${timeoutMinutes} minutes. Check its terminal for a startup prompt.`;
+    if (!hostId || hostId === "local") {
+      app.pty.get(String(session.id))?.emitTaskStartupNote?.(note);
+    } else {
+      // Remote sessions have no Session in the primary's PtyManager. Persist
+      // the diagnostic here; seq 0 stays outside the host's positive sequence.
+      insertSessionEvents(app.db, [
+        {
+          sessionId: session.id,
+          seq: 0,
+          kind: "status_change",
+          ts: now.getTime(),
+          payload: { reason: "worker-not-started", note },
+        },
+      ]);
+    }
     app.log.info({ taskId: task.id, sessionId: session.id, note }, "task worker has not started");
     broadcastTaskEvent({
       taskId: task.id,

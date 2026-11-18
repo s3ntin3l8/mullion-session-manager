@@ -42,6 +42,7 @@ const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const render = await import("../../src/services/scrollback-render.js");
 const { recordTaskTransition } = await import("../../src/services/task-state.js");
+const { querySessionEvents } = await import("../../src/services/event-history.js");
 
 describe("reconcileTasks — worker never started", () => {
   setupReconcilerTestLifecycle("task-worker-start");
@@ -122,6 +123,7 @@ describe("reconcileTasks — worker never started", () => {
     expect((await getTask(app, taskId)).needsHumanReason).toBe("worker-not-started");
     expect((await getTask(app, taskId)).status).toBe("in_progress");
     expect(note).toHaveBeenCalledWith(expect.stringContaining("Trust these hooks?"));
+    expect(note.mock.calls[0][0]).toMatch(/^Codex \/hooks trust screen\nTrust these hooks\?/);
     expect(reconcilerMocks.mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
     await reconcileTasks(app);
     expect(note).toHaveBeenCalledTimes(1);
@@ -183,10 +185,15 @@ describe("reconcileTasks — worker never started", () => {
     expect((await getTask(app, taskId)).needsHumanReason).toBeNull();
     await app.close();
   });
-  it.each(["empty", "user", "unsupported", "partial", "throw"] as const)(
+  it.each(["empty", "screen-unavailable", "user", "unsupported", "partial", "throw"] as const)(
     "reads a remote worker's transcript: %s",
     async (mode) => {
       const { app, taskId, sessionId } = await setup();
+      vi.mocked(app.pty.get).mockRestore();
+      // The shared fixture initially spawns locally. A remote worker has no
+      // entry in the primary's PtyManager, so discard that fixture-only PTY.
+      app.pty.kill(String(sessionId));
+      expect(app.pty.get(String(sessionId))).toBeUndefined();
       const host = await app.inject({
         method: "POST",
         url: "/api/hosts",
@@ -207,7 +214,8 @@ describe("reconcileTasks — worker never started", () => {
               });
             if (prop === "getRenderedScrollback")
               return async () => {
-                throw new Error("screen unavailable");
+                if (mode === "screen-unavailable") throw new Error("screen unavailable");
+                return "Codex /hooks trust screen\nTrust these hooks?\n";
               };
             if (prop === "getTranscript")
               return async () => {
@@ -228,9 +236,30 @@ describe("reconcileTasks — worker never started", () => {
         });
       });
       await reconcileTasks(app);
+      const shouldFlag = mode === "empty" || mode === "screen-unavailable";
       expect((await getTask(app, taskId)).needsHumanReason).toBe(
-        mode === "empty" ? "worker-not-started" : null,
+        shouldFlag ? "worker-not-started" : null,
       );
+      const notes = () =>
+        querySessionEvents(app.db, { sessionId }).events.filter(
+          (event) => event.payload?.reason === "worker-not-started",
+        );
+      expect(notes()).toHaveLength(shouldFlag ? 1 : 0);
+      if (shouldFlag) {
+        expect(notes()[0]).toMatchObject({
+          kind: "status_change",
+          payload: {
+            note: expect.stringMatching(
+              mode === "empty"
+                ? /^Codex \/hooks trust screen\nTrust these hooks\?/
+                : /^\(screen unavailable\)/,
+            ),
+          },
+        });
+        await reconcileTasks(app);
+        expect(notes()).toHaveLength(1);
+        expect(reconcilerMocks.mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      }
       await app.close();
     },
   );
