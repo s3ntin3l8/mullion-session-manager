@@ -1,0 +1,537 @@
+import { EventEmitter } from "node:events";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { performDeviceAction } from "../../../src/services/device-drivers/actions.js";
+import { IdbCompanion } from "../../../src/services/device-drivers/idb-companion.js";
+import type { IdbGrpcClient, IdbHidEvent } from "../../../src/services/device-drivers/idb-grpc.js";
+import { parseDeviceInput } from "../../../src/services/device-drivers/input.js";
+import {
+  HID_KEY_LEFT_GUI,
+  HID_KEY_LEFT_SHIFT,
+  HID_KEY_V,
+} from "../../../src/services/device-drivers/ios-hid.js";
+import {
+  IosSimulatorDriver,
+  type IdbCompanionHandle,
+  type SimctlRunner,
+} from "../../../src/services/device-drivers/ios-simulator.js";
+import { DeviceActionError } from "../../../src/services/device-drivers/types.js";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const FAKE_COMPANION_SCRIPT = path.resolve(here, "./fake-idb-companion.mjs");
+const UDID = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9";
+
+const bootedSimctl: SimctlRunner = async (args) =>
+  args[0] === "list"
+    ? Buffer.from(JSON.stringify({ devices: { rt: [{ udid: UDID, state: "Booted" }] } }))
+    : Buffer.alloc(0);
+
+class FakeVideoStream extends EventEmitter {
+  write() {
+    return true;
+  }
+  end() {}
+  cancel() {}
+}
+
+class FakeHidStream extends EventEmitter {
+  written: IdbHidEvent[] = [];
+  ended = false;
+  cancelled = false;
+  constructor(
+    private readonly onWrite?: (event: IdbHidEvent, stream: FakeHidStream) => Error | null,
+  ) {
+    super();
+  }
+  write(event: IdbHidEvent, cb?: (err?: Error | null) => void) {
+    const err = this.onWrite?.(event, this) ?? null;
+    if (err) {
+      cb?.(err);
+      return false;
+    }
+    this.written.push(event);
+    cb?.(null);
+    return true;
+  }
+  end() {
+    this.ended = true;
+  }
+  cancel() {
+    this.cancelled = true;
+  }
+}
+
+function fakeCompanion(options?: {
+  onHidWrite?: (event: IdbHidEvent, streamIndex: number) => Error | null;
+}) {
+  const hidStreams: FakeHidStream[] = [];
+  const describe = vi.fn(async () => ({
+    target_description: {
+      udid: UDID,
+      name: "iPhone 17 (Fake)",
+      state: "Booted",
+      target_type: "simulator",
+      os_version: "iOS 26.5",
+      architecture: "arm64",
+      screen_dimensions: {
+        width: 1206,
+        height: 2622,
+        density: 3,
+        width_points: 402,
+        height_points: 874,
+      },
+    },
+  }));
+  const client = {
+    videoStream: () => new FakeVideoStream(),
+    hid: () => {
+      const idx = hidStreams.length;
+      const stream = new FakeHidStream((ev) => options?.onHidWrite?.(ev, idx) ?? null);
+      hidStreams.push(stream);
+      return stream;
+    },
+    describe,
+    close: vi.fn(),
+  } as unknown as IdbGrpcClient;
+
+  const exitListeners = new Set<() => void>();
+  const handle = {
+    client,
+    isRunning: true,
+    start: vi.fn(async () => {
+      handle.isRunning = true;
+    }),
+    restart: vi.fn(async () => {}),
+    onExit: (l: () => void) => {
+      exitListeners.add(l);
+      return () => void exitListeners.delete(l);
+    },
+  } satisfies IdbCompanionHandle;
+
+  return { handle, hidStreams, describe };
+}
+
+describe("parseDeviceInput (iOS button and hidKey)", () => {
+  it("accepts valid button and hidKey messages", () => {
+    for (const button of ["home", "lock", "side", "siri"] as const) {
+      expect(parseDeviceInput({ type: "button", button })).toEqual({ type: "button", button });
+    }
+    expect(parseDeviceInput({ type: "hidKey", usage: 0x04, action: "down" })).toEqual({
+      type: "hidKey",
+      usage: 0x04,
+      action: "down",
+    });
+    expect(parseDeviceInput({ type: "hidKey", usage: 0xffff, action: "up" })).toEqual({
+      type: "hidKey",
+      usage: 0xffff,
+      action: "up",
+    });
+    expect(parseDeviceInput({ type: "hidKey", usage: 0, action: "down" })).toEqual({
+      type: "hidKey",
+      usage: 0,
+      action: "down",
+    });
+  });
+
+  it("rejects malformed button and hidKey messages", () => {
+    expect(parseDeviceInput({ type: "button", button: "power" })).toBeNull();
+    expect(parseDeviceInput({ type: "button" })).toBeNull();
+    expect(parseDeviceInput({ type: "hidKey", usage: -1, action: "down" })).toBeNull();
+    expect(parseDeviceInput({ type: "hidKey", usage: 0x10000, action: "down" })).toBeNull();
+    expect(parseDeviceInput({ type: "hidKey", usage: 4.5, action: "down" })).toBeNull();
+    expect(parseDeviceInput({ type: "hidKey", usage: "4", action: "down" })).toBeNull();
+    expect(parseDeviceInput({ type: "hidKey", usage: 4, action: "press" })).toBeNull();
+  });
+});
+
+describe("IosSimulatorDriver input (in-process companion)", () => {
+  it("opens the hid stream lazily, converts 1206x2622 -> 402x874, and sends tap DOWN then UP", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+    expect(driver.hasLiveControl).toBe(true);
+    expect(c.hidStreams).toHaveLength(0);
+
+    await driver.input({
+      type: "tap",
+      x: 603,
+      y: 1311,
+      videoWidth: 1206,
+      videoHeight: 2622,
+    });
+
+    expect(c.describe).toHaveBeenCalledTimes(1);
+    expect(c.hidStreams).toHaveLength(1);
+    expect(c.hidStreams[0]!.written).toEqual([
+      { press: { action: { touch: { point: { x: 201, y: 437 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 201, y: 437 } } }, direction: "UP" } },
+    ]);
+    await driver.stop();
+  });
+
+  it("keeps one hid stream open for a drag (DOWN at moving points then UP) and reuses describe", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 1,
+    });
+    await driver.input({
+      type: "touchMove",
+      x: 300,
+      y: 900,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 1,
+    });
+    await driver.input({
+      type: "touchUp",
+      x: 300,
+      y: 1200,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 1,
+    });
+
+    expect(c.describe).toHaveBeenCalledTimes(1);
+    expect(c.hidStreams).toHaveLength(1);
+    expect(c.hidStreams[0]!.written).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 300 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 400 } } }, direction: "UP" } },
+    ]);
+    await driver.stop();
+  });
+
+  it("drops coordinate messages with videoWidth or videoHeight of 0", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({ type: "tap", x: 10, y: 10, videoWidth: 0, videoHeight: 2622 });
+    await driver.input({
+      type: "touchDown",
+      x: 10,
+      y: 10,
+      videoWidth: 1206,
+      videoHeight: 0,
+      pointerId: 0,
+    });
+    await driver.input({
+      type: "scroll",
+      x: 10,
+      y: 10,
+      videoWidth: 0,
+      videoHeight: 0,
+      scrollX: 0,
+      scrollY: 1,
+    });
+
+    expect(c.hidStreams).toHaveLength(0);
+    await driver.stop();
+  });
+
+  it("sends scroll as a short HID swipe from scaled (x, y)", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({
+      type: "scroll",
+      x: 603,
+      y: 1311,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      scrollX: 0,
+      scrollY: -2,
+    });
+
+    expect(c.hidStreams[0]!.written).toEqual([
+      {
+        swipe: {
+          start: { x: 201, y: 437 },
+          end: { x: 201, y: 357 },
+          duration: 0.15,
+        },
+      },
+    ]);
+    await driver.stop();
+  });
+
+  it("types upper case and punctuation with exact Shift key sequences and refuses non-ASCII with 400", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.text("A!");
+    expect(c.hidStreams[0]!.written).toEqual([
+      // 'A': Left Shift DOWN, 'a' (0x04) DOWN, 'a' UP, Left Shift UP
+      { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: 0x04 } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: 0x04 } }, direction: "UP" } },
+      { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "UP" } },
+      // '!': Left Shift DOWN, '1' (0x1e) DOWN, '1' UP, Left Shift UP
+      { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: 0x1e } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: 0x1e } }, direction: "UP" } },
+      { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "UP" } },
+    ]);
+
+    const err = await driver.text("café").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DeviceActionError);
+    expect((err as DeviceActionError).statusCode).toBe(400);
+    expect((err as Error).message).toContain("é");
+
+    await driver.stop();
+  });
+
+  it("maps button, hidKey, and clipboard (pbcopy + Cmd+V)", async () => {
+    const c = fakeCompanion();
+    const simctlCalls: Array<{ args: string[]; input?: string }> = [];
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: async (args, opts) => {
+        simctlCalls.push({ args, input: opts?.input });
+        return bootedSimctl(args, opts);
+      },
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({ type: "button", button: "home" });
+    await driver.input({ type: "button", button: "side" });
+    await driver.input({ type: "hidKey", usage: 0x28, action: "down" });
+    await driver.input({ type: "clipboard", text: "hello" });
+
+    expect(simctlCalls.find((call) => call.args[0] === "pbcopy")).toEqual({
+      args: ["pbcopy", UDID],
+      input: "hello",
+    });
+    expect(c.hidStreams[0]!.written).toEqual([
+      { press: { action: { button: { button: "HOME" } }, direction: "DOWN" } },
+      { press: { action: { button: { button: "HOME" } }, direction: "UP" } },
+      { press: { action: { button: { button: "SIDE_BUTTON" } }, direction: "DOWN" } },
+      { press: { action: { button: { button: "SIDE_BUTTON" } }, direction: "UP" } },
+      { press: { action: { key: { keycode: 0x28 } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: HID_KEY_LEFT_GUI } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: HID_KEY_V } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: HID_KEY_V } }, direction: "UP" } },
+      { press: { action: { key: { keycode: HID_KEY_LEFT_GUI } }, direction: "UP" } },
+    ]);
+    await driver.stop();
+  });
+
+  it("supports one-shot tap, swipe (with durationMs), and text; keeps key false", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    expect(driver.supports("tap")).toBe(true);
+    expect(driver.supports("swipe")).toBe(true);
+    expect(driver.supports("text")).toBe(true);
+    expect(driver.supports("key")).toBe(false);
+
+    await driver.start();
+    await performDeviceAction(driver, { action: "tap", x: 300, y: 600 });
+    await performDeviceAction(driver, {
+      action: "swipe",
+      x1: 300,
+      y1: 1800,
+      x2: 300,
+      y2: 600,
+      durationMs: 250,
+    });
+
+    expect(c.hidStreams[0]!.written).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "UP" } },
+      { swipe: { start: { x: 100, y: 600 }, end: { x: 100, y: 200 }, duration: 0.25 } },
+    ]);
+    await driver.stop();
+  });
+
+  it("retries once after companion restart on stale HID, and surfaces second failure appropriately", async () => {
+    // Case 1: first HID stream fails with invalidated error, second succeeds.
+    const c1 = fakeCompanion({
+      onHidWrite: (_ev, streamIdx) =>
+        streamIdx === 0
+          ? new Error(
+              "13 INTERNAL: The dtuhidd connection (com.apple.coredevice.feature.remote.hid.digitizer) has been invalidated",
+            )
+          : null,
+    });
+    const d1 = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c1.handle,
+    });
+    await d1.start();
+    expect(c1.handle.restart).toHaveBeenCalledTimes(1);
+
+    await d1.tap(300, 600);
+    expect(c1.handle.restart).toHaveBeenCalledTimes(2);
+    expect(c1.hidStreams).toHaveLength(2);
+    expect(c1.hidStreams[1]!.written).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "UP" } },
+    ]);
+    await d1.stop();
+
+    // Case 2: both attempts fail -> 502 for one-shot action, logged drop for live input.
+    const warn = vi.fn();
+    const c2 = fakeCompanion({
+      onHidWrite: () => new Error("The dtuhidd connection has been invalidated"),
+    });
+    const d2 = new IosSimulatorDriver({
+      id: "2",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c2.handle,
+      log: { warn },
+    });
+    await d2.start();
+
+    await expect(d2.tap(300, 600)).rejects.toMatchObject({ statusCode: 502 });
+    await expect(d2.input({ type: "button", button: "home" })).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    await d2.stop();
+  });
+});
+
+describe("IosSimulatorDriver input (fake idb_companion)", () => {
+  const dirs: string[] = [];
+  const companions: IdbCompanion[] = [];
+
+  afterEach(async () => {
+    await Promise.all(companions.map((c) => c.stop()));
+    companions.length = 0;
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs.length = 0;
+  });
+
+  it("records tap, drag, text, button, and stale-HID retry over real gRPC", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-hid-test-"));
+    dirs.push(dir);
+    const hidLog = path.join(dir, "hid.jsonl");
+    const staleMarker = path.join(dir, "stale");
+    writeFileSync(staleMarker, "1");
+
+    const companion = new IdbCompanion({
+      udid: UDID,
+      executablePath: FAKE_COMPANION_SCRIPT,
+      killStaleCompanions: async () => {},
+      spawn: (cmd, args, opts) =>
+        spawn(process.execPath, [cmd, ...args], {
+          ...opts,
+          env: {
+            ...process.env,
+            FAKE_IDB_HID_LOG: hidLog,
+            FAKE_IDB_STALE_HID_MARKER: staleMarker,
+          },
+        }) as unknown as ChildProcess,
+    });
+    companions.push(companion);
+
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion,
+    });
+
+    await driver.start();
+
+    // First input hits stale HID marker; allow the loopback gRPC error to arrive
+    // so the next input restarts the companion and writes to the fresh stream.
+    await driver.input({ type: "tap", x: 603, y: 1311, videoWidth: 1206, videoHeight: 2622 });
+    await new Promise((r) => setTimeout(r, 50));
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+    await driver.input({
+      type: "touchUp",
+      x: 300,
+      y: 900,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+    await driver.input({ type: "button", button: "home" });
+    await driver.text("A");
+
+    // Allow the gRPC server to flush the final data frames before reading the log.
+    await new Promise((r) => setTimeout(r, 100));
+    await driver.stop();
+
+    const recorded = readFileSync(hidLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as IdbHidEvent);
+
+    expect(recorded).toMatchObject([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 300 } } }, direction: "UP" } },
+      { press: { action: { button: { button: "HOME" } }, direction: "DOWN" } },
+      { press: { action: { button: { button: "HOME" } }, direction: "UP" } },
+      { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: 0x04 } }, direction: "DOWN" } },
+      { press: { action: { key: { keycode: 0x04 } }, direction: "UP" } },
+      { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "UP" } },
+    ]);
+  }, 15_000);
+});

@@ -1,7 +1,10 @@
 import { CLIPBOARD_MAX_BYTES } from "../device-defaults.js";
 import type {
+  ButtonInput,
   ClipboardInput,
+  DeviceButton,
   DeviceInput,
+  HidKeyInput,
   KeyEventInput,
   ScrollInput,
   TapInput,
@@ -23,6 +26,13 @@ function isFiniteNumber(v: unknown): v is number {
 const MAX_META_STATE = 0xffffffff;
 function isValidMetaState(v: unknown): v is number {
   return isFiniteNumber(v) && Number.isInteger(v) && v >= 0 && v <= MAX_META_STATE;
+}
+
+const MAX_HID_USAGE = 0xffff;
+const VALID_BUTTONS = new Set<DeviceButton>(["home", "lock", "side", "siri"]);
+
+function isValidHidUsage(v: unknown): v is number {
+  return isFiniteNumber(v) && Number.isInteger(v) && v >= 0 && v <= MAX_HID_USAGE;
 }
 
 export function parseDeviceInput(value: unknown): DeviceInput | null {
@@ -123,6 +133,19 @@ export function parseDeviceInput(value: unknown): DeviceInput | null {
       return { type: "back" };
     case "rotate":
       return { type: "rotate" };
+    case "button": {
+      const m = v as Partial<ButtonInput>;
+      return typeof m.button === "string" && VALID_BUTTONS.has(m.button as DeviceButton)
+        ? { type: "button", button: m.button as DeviceButton }
+        : null;
+    }
+    case "hidKey": {
+      const m = v as Partial<HidKeyInput>;
+      if (!isValidHidUsage(m.usage) || (m.action !== "down" && m.action !== "up")) {
+        return null;
+      }
+      return { type: "hidKey", usage: m.usage, action: m.action };
+    }
     default:
       return null;
   }

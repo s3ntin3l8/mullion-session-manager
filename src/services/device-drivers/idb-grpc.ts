@@ -184,9 +184,15 @@ export function createIdbGrpcClient(port: number): IdbGrpcClient {
     },
 
     hid() {
-      // Pass a no-op callback as required by grpc-js for client-streaming
-      // calls; stream errors still surface on the returned ClientWritableStream.
-      return client.hid(() => undefined);
+      // grpc-js delivers non-OK server statuses to the client-streaming
+      // callback rather than emitting `error` on the writable stream; forward
+      // them onto the stream when a listener is attached.
+      const stream = client.hid((err: grpc.ServiceError | null) => {
+        if (!err) return;
+        if (stream.listenerCount("error") > 0) stream.destroy(err);
+        else stream.destroy();
+      });
+      return stream;
     },
 
     describe(options: IdbDescribeOptions = {}): Promise<IdbTargetDescriptionResponse> {

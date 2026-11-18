@@ -2,7 +2,19 @@ import { execFile } from "node:child_process";
 import { CLIPBOARD_MAX_BYTES } from "../device-defaults.js";
 import { pngDimensions } from "../screenshot-image.js";
 import { AnnexBPacketizer, GOP_BUFFER_MAX_BYTES, GopBuffer } from "./annexb.js";
-import type { IdbGrpcClient, IdbVideoStreamResponse } from "./idb-grpc.js";
+import type {
+  IdbGrpcClient,
+  IdbHidEvent,
+  IdbScreenDimensions,
+  IdbVideoStreamResponse,
+} from "./idb-grpc.js";
+import {
+  buttonToHidEvents,
+  cmdVToHidEvents,
+  isInvalidatedHidError,
+  scaleToPoints,
+  textToHidEvents,
+} from "./ios-hid.js";
 import {
   DeviceActionError,
   type DeviceActionName,
@@ -89,6 +101,9 @@ export interface IdbCompanionHandle {
 const KEYFRAME_RESTART_MIN_INTERVAL_MS = 5000;
 const STREAM_REOPEN_DELAY_MS = 1000;
 const MAX_STREAM_REOPEN_FAILURES = 5;
+const DESCRIBE_TIMEOUT_MS = 5000;
+const SCROLL_POINTS_PER_UNIT = 40;
+const SCROLL_SWIPE_DURATION_SEC = 0.15;
 
 /** idb `video_stream` start request: H.264, an IDR about every 4 s
  * (idb's default; `1` would give ~1 s, docs/spikes/ios-simulator-idb.md). */
@@ -102,6 +117,7 @@ const VIDEO_STREAM_START = {
 } as const;
 
 type VideoStream = ReturnType<IdbGrpcClient["videoStream"]>;
+type HidStream = ReturnType<IdbGrpcClient["hid"]>;
 
 export interface IosSimulatorDriverOptions {
   id: string;
@@ -109,20 +125,22 @@ export interface IosSimulatorDriverOptions {
   label: string | null;
   simctl?: SimctlRunner;
   /** The idb companion for this simulator. Without one the driver has no
-   * video (the manager wires it in a later slice). */
+   * video or HID input. */
   companion?: IdbCompanionHandle;
   /** Delay before reopening an ended video stream (default 1 s). */
   streamReopenDelayMs?: number;
+  /** Optional logger for dropped live-input warnings (defaults to console). */
+  log?: { warn: (message: string, ...args: unknown[]) => void };
 }
 
 export class IosSimulatorDriver implements DeviceDriver {
   readonly platform: DevicePlatform = "ios";
   readonly id: string;
-  readonly hasLiveControl = false;
 
   private readonly udid: string;
   private readonly label: string | null;
   private readonly simctl: SimctlRunner;
+  private readonly log: { warn: (message: string, ...args: unknown[]) => void };
   private status: DeviceLiveStatus = "starting";
   private error: string | null = null;
   private alive = false;
@@ -152,6 +170,11 @@ export class IosSimulatorDriver implements DeviceDriver {
   private reopening = false;
   private offCompanionExit: (() => void) | null = null;
   private keyframeSent = false;
+  private hidStream: HidStream | null = null;
+  private hidStale = false;
+  private hidRestartPromise: Promise<void> | null = null;
+  private screenDimensions: IdbScreenDimensions | null = null;
+  private describePromise: Promise<IdbScreenDimensions> | null = null;
 
   constructor(options: IosSimulatorDriverOptions) {
     // Validated before the UDID can reach any argv.
@@ -164,10 +187,15 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.simctl = options.simctl ?? execSimctl;
     this.companion = options.companion ?? null;
     this.streamReopenDelayMs = options.streamReopenDelayMs ?? STREAM_REOPEN_DELAY_MS;
+    this.log = options.log ?? console;
   }
 
   get isAlive(): boolean {
     return this.alive;
+  }
+
+  get hasLiveControl(): boolean {
+    return this.alive && Boolean(this.companion?.client);
   }
 
   toInfo(): DeviceInfo {
@@ -268,7 +296,109 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.openStream(client);
   }
 
-  async input(_message: DeviceInput): Promise<void> {}
+  async input(message: DeviceInput): Promise<void> {
+    if (!this.alive || !this.companion?.client) return;
+    switch (message.type) {
+      case "tap": {
+        if (message.videoWidth <= 0 || message.videoHeight <= 0) return;
+        const dims = await this.getScreenDimensionsSafe();
+        if (!dims) return;
+        const point = scaleToPoints(
+          message.x,
+          message.y,
+          message.videoWidth,
+          message.videoHeight,
+          dims.width_points,
+          dims.height_points,
+        );
+        if (!point) return;
+        await this.sendHid(
+          [
+            { press: { action: { touch: { point } }, direction: "DOWN" } },
+            { press: { action: { touch: { point } }, direction: "UP" } },
+          ],
+          false,
+        );
+        break;
+      }
+      case "touchDown":
+      case "touchMove":
+      case "touchUp": {
+        if (message.videoWidth <= 0 || message.videoHeight <= 0) return;
+        const dims = await this.getScreenDimensionsSafe();
+        if (!dims) return;
+        const point = scaleToPoints(
+          message.x,
+          message.y,
+          message.videoWidth,
+          message.videoHeight,
+          dims.width_points,
+          dims.height_points,
+        );
+        if (!point) return;
+        const direction = message.type === "touchUp" ? "UP" : "DOWN";
+        await this.sendHid([{ press: { action: { touch: { point } }, direction } }], false);
+        break;
+      }
+      case "scroll": {
+        if (message.videoWidth <= 0 || message.videoHeight <= 0) return;
+        if (!Number.isFinite(message.scrollX) || !Number.isFinite(message.scrollY)) return;
+        if (message.scrollX === 0 && message.scrollY === 0) return;
+        const dims = await this.getScreenDimensionsSafe();
+        if (!dims) return;
+        const start = scaleToPoints(
+          message.x,
+          message.y,
+          message.videoWidth,
+          message.videoHeight,
+          dims.width_points,
+          dims.height_points,
+        );
+        if (!start) return;
+        const end = {
+          x: start.x + message.scrollX * SCROLL_POINTS_PER_UNIT,
+          y: start.y + message.scrollY * SCROLL_POINTS_PER_UNIT,
+        };
+        await this.sendHid([{ swipe: { start, end, duration: SCROLL_SWIPE_DURATION_SEC } }], false);
+        break;
+      }
+      case "button":
+        await this.sendHid(buttonToHidEvents(message.button), false);
+        break;
+      case "hidKey":
+        await this.sendHid(
+          [
+            {
+              press: {
+                action: { key: { keycode: message.usage } },
+                direction: message.action === "down" ? "DOWN" : "UP",
+              },
+            },
+          ],
+          false,
+        );
+        break;
+      case "text": {
+        const events = textToHidEvents(message.text);
+        await this.sendHid(events, false);
+        break;
+      }
+      case "clipboard": {
+        if (Buffer.byteLength(message.text, "utf8") > CLIPBOARD_MAX_BYTES) {
+          this.log.warn("iOS clipboard live input exceeds byte limit; dropping");
+          return;
+        }
+        await this.simctl(["pbcopy", this.udid], { input: message.text });
+        await this.sendHid(cmdVToHidEvents(), false);
+        break;
+      }
+      case "keyEvent":
+      case "back":
+      case "rotate":
+        // Android-only inputs; iOS uses hidKey and button.
+        break;
+    }
+  }
 
   async screenshot(): Promise<Uint8Array> {
     const out = await this.simctl(["io", this.udid, "screenshot", "--type=png", "-"], {
@@ -289,9 +419,74 @@ export class IosSimulatorDriver implements DeviceDriver {
     return png;
   }
 
-  async tap(_x: number, _y: number): Promise<void> {}
-  async swipe(): Promise<void> {}
-  async text(_text: string): Promise<void> {}
+  async tap(x: number, y: number): Promise<void> {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new DeviceActionError(400, "tap coordinates must be finite numbers");
+    }
+    const dims = await this.requireScreenDimensions();
+    const point = scaleToPoints(
+      x,
+      y,
+      dims.width,
+      dims.height,
+      dims.width_points,
+      dims.height_points,
+    );
+    if (!point) {
+      throw new DeviceActionError(502, "idb describe returned invalid screen dimensions");
+    }
+    await this.sendHid(
+      [
+        { press: { action: { touch: { point } }, direction: "DOWN" } },
+        { press: { action: { touch: { point } }, direction: "UP" } },
+      ],
+      true,
+    );
+  }
+
+  async swipe(x1: number, y1: number, x2: number, y2: number, durationMs?: number): Promise<void> {
+    if (
+      !Number.isFinite(x1) ||
+      !Number.isFinite(y1) ||
+      !Number.isFinite(x2) ||
+      !Number.isFinite(y2)
+    ) {
+      throw new DeviceActionError(400, "swipe coordinates must be finite numbers");
+    }
+    if (durationMs !== undefined && (!Number.isFinite(durationMs) || durationMs < 0)) {
+      throw new DeviceActionError(400, "swipe durationMs must be a non-negative finite number");
+    }
+    const dims = await this.requireScreenDimensions();
+    const start = scaleToPoints(
+      x1,
+      y1,
+      dims.width,
+      dims.height,
+      dims.width_points,
+      dims.height_points,
+    );
+    const end = scaleToPoints(
+      x2,
+      y2,
+      dims.width,
+      dims.height,
+      dims.width_points,
+      dims.height_points,
+    );
+    if (!start || !end) {
+      throw new DeviceActionError(502, "idb describe returned invalid screen dimensions");
+    }
+    const swipe =
+      durationMs !== undefined ? { start, end, duration: durationMs / 1000 } : { start, end };
+    await this.sendHid([{ swipe }], true);
+  }
+
+  async text(text: string): Promise<void> {
+    const events = textToHidEvents(text);
+    this.requireCompanionClient();
+    await this.sendHid(events, true);
+  }
+
   async key(_androidKeyCode: number): Promise<void> {}
 
   async logs(options: { lines?: number; filter?: string }): Promise<string> {
@@ -316,8 +511,7 @@ export class IosSimulatorDriver implements DeviceDriver {
       const out = await this.simctl(["pbpaste", this.udid]);
       return out.toString("utf8");
     },
-    // `paste` is ignored until the input slice can send a paste key.
-    set: async (text: string, _paste: boolean): Promise<void> => {
+    set: async (text: string, paste: boolean): Promise<void> => {
       if (Buffer.byteLength(text, "utf8") > CLIPBOARD_MAX_BYTES) {
         throw new DeviceActionError(
           400,
@@ -325,16 +519,27 @@ export class IosSimulatorDriver implements DeviceDriver {
         );
       }
       await this.simctl(["pbcopy", this.udid], { input: text });
+      if (paste && this.alive && this.companion?.client) {
+        await this.sendHid(cmdVToHidEvents(), true);
+      }
     },
   };
 
   supports(action: DeviceActionName): boolean {
-    return action === "screenshot" || action === "logcat" || action === "clipboard";
+    return (
+      action === "screenshot" ||
+      action === "logcat" ||
+      action === "clipboard" ||
+      action === "tap" ||
+      action === "swipe" ||
+      action === "text"
+    );
   }
 
   private async startVideo(companion: IdbCompanionHandle): Promise<void> {
     this.offCompanionExit?.();
     this.offCompanionExit = null;
+    this.resetCompanionSession();
     try {
       // A companion is restarted after every boot: its HID connection is stale
       // once the simulator has rebooted. Subscribed after, so the restart's own
@@ -429,6 +634,10 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.offCompanionExit?.();
     this.offCompanionExit = null;
     this.closeStream();
+    this.closeHidStream();
+    this.screenDimensions = null;
+    this.describePromise = null;
+    this.hidStale = false;
     this.gop.clear();
     this.keyframeSent = false;
   }
@@ -454,7 +663,10 @@ export class IosSimulatorDriver implements DeviceDriver {
     if (!this.alive) return;
     this.reopening = true;
     try {
-      if (!companion.isRunning || !companion.client) await companion.start();
+      if (!companion.isRunning || !companion.client) {
+        this.resetCompanionSession();
+        await companion.start();
+      }
       if (!this.alive) {
         this.reopening = false;
         return;
@@ -479,6 +691,206 @@ export class IosSimulatorDriver implements DeviceDriver {
       return;
     }
     this.reopening = false;
+  }
+
+  private resetCompanionSession(): void {
+    this.closeHidStream();
+    this.screenDimensions = null;
+    this.describePromise = null;
+    this.hidStale = false;
+  }
+
+  private requireCompanionClient(): IdbGrpcClient {
+    const client = this.companion?.client;
+    if (!this.alive || !client) {
+      throw new DeviceActionError(
+        400,
+        `device ${this.id} has no live idb companion (status: ${this.status})`,
+      );
+    }
+    return client;
+  }
+
+  private async getScreenDimensionsSafe(): Promise<IdbScreenDimensions | null> {
+    try {
+      return await this.requireScreenDimensions();
+    } catch (err) {
+      this.log.warn("iOS describe failed; dropping coordinate input", err);
+      return null;
+    }
+  }
+
+  private async requireScreenDimensions(): Promise<IdbScreenDimensions> {
+    if (this.screenDimensions) return this.screenDimensions;
+    if (this.describePromise) return this.describePromise;
+    const client = this.requireCompanionClient();
+    const promise = (async () => {
+      const res = await client.describe({ timeoutMs: DESCRIBE_TIMEOUT_MS });
+      const dims = res.target_description?.screen_dimensions;
+      if (
+        !dims ||
+        !Number.isFinite(dims.width) ||
+        !Number.isFinite(dims.height) ||
+        !Number.isFinite(dims.width_points) ||
+        !Number.isFinite(dims.height_points) ||
+        dims.width <= 0 ||
+        dims.height <= 0 ||
+        dims.width_points <= 0 ||
+        dims.height_points <= 0
+      ) {
+        throw new DeviceActionError(502, "idb describe did not return valid screen dimensions");
+      }
+      this.screenDimensions = dims;
+      return dims;
+    })();
+    this.describePromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.describePromise === promise) this.describePromise = null;
+    }
+  }
+
+  private ensureHidStream(client: IdbGrpcClient): HidStream {
+    if (this.hidStream) return this.hidStream;
+    const stream = client.hid();
+    stream.on("error", (err: Error) => {
+      if (this.hidStream === stream) {
+        this.hidStream = null;
+        if (isInvalidatedHidError(err)) this.hidStale = true;
+      }
+    });
+    const clear = () => {
+      if (this.hidStream === stream) this.hidStream = null;
+    };
+    stream.on("close", clear);
+    stream.on("finish", clear);
+    this.hidStream = stream;
+    return stream;
+  }
+
+  private closeHidStream(): void {
+    const stream = this.hidStream;
+    this.hidStream = null;
+    if (!stream) return;
+    stream.on("error", () => undefined);
+    try {
+      stream.end();
+    } catch {
+      // The stream may already be closed.
+    }
+    try {
+      stream.cancel?.();
+    } catch {
+      // Same.
+    }
+  }
+
+  private async writeBatchToStream(stream: HidStream, events: IdbHidEvent[]): Promise<void> {
+    for (const event of events) {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (err?: Error | null) => {
+          if (settled) return;
+          settled = true;
+          stream.off("error", onError);
+          if (err) reject(err);
+          else resolve();
+        };
+        const onError = (err: Error) => finish(err);
+        stream.once("error", onError);
+        try {
+          if (stream.write.length >= 2) {
+            stream.write(event, (err?: Error | null) => finish(err));
+          } else {
+            stream.write(event);
+            finish();
+          }
+        } catch (err) {
+          finish(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    }
+  }
+
+  private async restartForStaleHid(): Promise<void> {
+    if (this.hidRestartPromise) return this.hidRestartPromise;
+    const companion = this.companion;
+    if (!companion) return;
+    const promise = (async () => {
+      this.resetCompanionSession();
+      this.offCompanionExit?.();
+      this.offCompanionExit = null;
+      await companion.restart();
+      if (this.alive) {
+        this.offCompanionExit = companion.onExit(() => this.scheduleReopen());
+      }
+    })();
+    this.hidRestartPromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (this.hidRestartPromise === promise) this.hidRestartPromise = null;
+    }
+  }
+
+  private async sendHid(events: IdbHidEvent[], forAction: boolean): Promise<void> {
+    if (events.length === 0) return;
+    if (!this.alive || !this.companion) {
+      if (forAction) {
+        throw new DeviceActionError(
+          400,
+          `device ${this.id} has no live idb companion (status: ${this.status})`,
+        );
+      }
+      return;
+    }
+    if (this.hidStale) {
+      this.hidStale = false;
+      await this.restartForStaleHid();
+    }
+    const client = this.companion.client;
+    if (!client) {
+      if (forAction) {
+        throw new DeviceActionError(
+          400,
+          `device ${this.id} has no live idb companion (status: ${this.status})`,
+        );
+      }
+      return;
+    }
+    try {
+      await this.writeBatchToStream(this.ensureHidStream(client), events);
+      return;
+    } catch (err) {
+      this.closeHidStream();
+      if (!isInvalidatedHidError(err)) {
+        if (forAction) {
+          throw new DeviceActionError(502, `idb HID write failed: ${errorText(err)}`);
+        }
+        this.log.warn("iOS HID input failed; dropping event", err);
+        return;
+      }
+    }
+
+    // Stale HID connection: restart the companion once, reopen the stream and retry.
+    try {
+      await this.restartForStaleHid();
+      const retryClient = this.companion.client;
+      if (!retryClient) {
+        throw new Error("idb companion unavailable after restart");
+      }
+      await this.writeBatchToStream(this.ensureHidStream(retryClient), events);
+    } catch (retryErr) {
+      this.closeHidStream();
+      if (forAction) {
+        throw new DeviceActionError(
+          502,
+          `idb HID write failed after companion restart: ${errorText(retryErr)}`,
+        );
+      }
+      this.log.warn("iOS HID input failed after companion restart; dropping event", retryErr);
+    }
   }
 
   private async isBooted(): Promise<boolean> {
