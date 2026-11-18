@@ -360,7 +360,7 @@ export class RemoteHostClient {
     return this.transport.request<T>(path, init, timeoutMs);
   }
 
-  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts).
+  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts, remote-host-browser.ts).
   private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
 
