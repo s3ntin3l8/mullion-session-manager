@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { CLIPBOARD_MAX_BYTES } from "../device-defaults.js";
 import { pngDimensions } from "../screenshot-image.js";
+import { AnnexBPacketizer, GopBuffer } from "./annexb.js";
+import type { IdbGrpcClient, IdbVideoStreamResponse } from "./idb-grpc.js";
 import {
   DeviceActionError,
   type DeviceActionName,
@@ -14,7 +16,7 @@ import {
 } from "./types.js";
 
 // The simctl half of the iOS Simulator driver (#1943): lifecycle, screenshot,
-// logs and clipboard. Video and input come later from idb_companion.
+// logs and clipboard, plus video from idb_companion (input comes later).
 //
 // CoreSimulator supervises simulators itself, so there is no scope backend: a
 // simulator survives a Mullion restart on its own. A device row names an
@@ -73,11 +75,43 @@ export const execSimctl: SimctlRunner = (args, options = {}) =>
     }
   });
 
+/** The slice of `IdbCompanion` the driver needs, so a test can substitute it. */
+export interface IdbCompanionHandle {
+  readonly client: IdbGrpcClient | null;
+  readonly isRunning: boolean;
+  start(): Promise<void>;
+  restart(): Promise<void>;
+  onExit(listener: () => void): () => void;
+}
+
+/** No on-demand IDR exists in idb, so a keyframe request restarts the stream;
+ * at most once per this window. */
+const KEYFRAME_RESTART_MIN_INTERVAL_MS = 5000;
+const STREAM_REOPEN_DELAY_MS = 1000;
+const MAX_STREAM_REOPEN_FAILURES = 5;
+
+/** idb `video_stream` start request: H.264, an IDR about every second. */
+const VIDEO_STREAM_START = {
+  fps: 30,
+  format: "H264",
+  compression_quality: 1,
+  scale_factor: 1,
+  avg_bitrate: 0,
+  key_frame_rate: 0,
+} as const;
+
+type VideoStream = ReturnType<IdbGrpcClient["videoStream"]>;
+
 export interface IosSimulatorDriverOptions {
   id: string;
   udid: string;
   label: string | null;
   simctl?: SimctlRunner;
+  /** The idb companion for this simulator. Without one the driver has no
+   * video (the manager wires it in a later slice). */
+  companion?: IdbCompanionHandle;
+  /** Delay before reopening an ended video stream (default 1 s). */
+  streamReopenDelayMs?: number;
 }
 
 export class IosSimulatorDriver implements DeviceDriver {
@@ -100,6 +134,18 @@ export class IosSimulatorDriver implements DeviceDriver {
   private readonly exitListeners = new Set<() => void>();
   private readonly videoListeners = new Set<(packet: DeviceVideoPacket) => void>();
   private readonly clipboardListeners = new Set<(text: string) => void>();
+  private readonly companion: IdbCompanionHandle | null;
+  private readonly streamReopenDelayMs: number;
+  private readonly gop = new GopBuffer();
+  private stream: VideoStream | null = null;
+  /** Identifies the live stream; events of a replaced stream are ignored. */
+  private streamGeneration = 0;
+  private lastStreamOpenAt = 0;
+  private reopenTimer: NodeJS.Timeout | null = null;
+  private reopenFailures = 0;
+  private reopening = false;
+  private offCompanionExit: (() => void) | null = null;
+  private keyframeSent = false;
 
   constructor(options: IosSimulatorDriverOptions) {
     // Validated before the UDID can reach any argv.
@@ -110,6 +156,8 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.udid = options.udid;
     this.label = options.label;
     this.simctl = options.simctl ?? execSimctl;
+    this.companion = options.companion ?? null;
+    this.streamReopenDelayMs = options.streamReopenDelayMs ?? STREAM_REOPEN_DELAY_MS;
   }
 
   get isAlive(): boolean {
@@ -157,14 +205,18 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
     this.alive = true;
     this.exited = false;
-    this.status = "streaming";
+    // With a companion the status is `streaming` only once the first keyframe
+    // has gone out; without one there is nothing further to wait for.
+    this.status = this.companion ? "booting" : "streaming";
     this.startPolling();
+    if (this.companion) await this.startVideo(this.companion);
   }
 
   /** Shuts the simulator down ONLY when this process booted it; never
    * deletes or erases. */
   async stop(): Promise<void> {
     this.stopPolling();
+    this.stopVideo();
     try {
       if (this.bootedByUs) {
         try {
@@ -182,7 +234,15 @@ export class IosSimulatorDriver implements DeviceDriver {
   }
 
   onVideoPacket(listener: (packet: DeviceVideoPacket) => void): Unsubscribe {
-    // Registers, never emits: video arrives with the idb companion.
+    // Replay the GOP before registering, so a late joiner starts with the
+    // configuration and an IDR and never sees a delta before a keyframe.
+    for (const packet of this.gop.snapshot()) {
+      try {
+        listener(packet);
+      } catch {
+        // A throwing listener must not break the subscription.
+      }
+    }
     this.videoListeners.add(listener);
     return () => void this.videoListeners.delete(listener);
   }
@@ -197,7 +257,15 @@ export class IosSimulatorDriver implements DeviceDriver {
     return () => void this.clipboardListeners.delete(listener);
   }
 
-  async requestKeyframe(): Promise<void> {}
+  /** idb has no force-keyframe control: restart the stream (it opens with
+   * SPS/PPS/IDR), at most once per 5 s. Inside the window it resolves without
+   * restarting. */
+  async requestKeyframe(): Promise<void> {
+    const client = this.companion?.client;
+    if (!this.alive || !client || !this.stream) return;
+    if (Date.now() - this.lastStreamOpenAt < KEYFRAME_RESTART_MIN_INTERVAL_MS) return;
+    this.openStream(client);
+  }
 
   async input(_message: DeviceInput): Promise<void> {}
 
@@ -263,6 +331,134 @@ export class IosSimulatorDriver implements DeviceDriver {
     return action === "screenshot" || action === "logcat" || action === "clipboard";
   }
 
+  private async startVideo(companion: IdbCompanionHandle): Promise<void> {
+    this.offCompanionExit?.();
+    this.offCompanionExit = null;
+    try {
+      // A companion is restarted after every boot: its HID connection is stale
+      // once the simulator has rebooted. Subscribed after, so the restart's own
+      // stop is not mistaken for a crash.
+      await companion.restart();
+      this.offCompanionExit = companion.onExit(() => this.scheduleReopen());
+      const client = companion.client;
+      if (!client) throw new Error("idb companion has no client");
+      this.openStream(client);
+    } catch (err) {
+      this.status = "error";
+      this.error = errorText(err);
+      this.scheduleReopen();
+    }
+  }
+
+  private openStream(client: IdbGrpcClient): void {
+    this.closeStream();
+    const generation = ++this.streamGeneration;
+    const packetizer = new AnnexBPacketizer();
+    const stream = client.videoStream({ ...VIDEO_STREAM_START });
+    this.stream = stream;
+    this.lastStreamOpenAt = Date.now();
+    stream.on("data", (response: IdbVideoStreamResponse) => {
+      if (generation !== this.streamGeneration) return;
+      const data = response.payload?.data;
+      if (!data || data.length === 0) return;
+      for (const packet of packetizer.push(data)) this.emitVideo(packet);
+    });
+    const ended = (err?: Error) => {
+      if (generation !== this.streamGeneration) return;
+      this.stream = null;
+      if (err && this.alive) this.error = errorText(err);
+      this.scheduleReopen();
+    };
+    stream.on("error", ended);
+    stream.on("end", () => ended());
+  }
+
+  private emitVideo(packet: DeviceVideoPacket): void {
+    this.gop.push(packet);
+    for (const listener of [...this.videoListeners]) {
+      try {
+        listener(packet);
+      } catch {
+        // One throwing listener must not starve the rest.
+      }
+    }
+    if (packet.type === "data" && packet.keyframe && !this.keyframeSent) {
+      this.keyframeSent = true;
+      this.reopenFailures = 0;
+      if (this.status !== "exited") {
+        this.status = "streaming";
+        this.error = null;
+      }
+    }
+  }
+
+  /** Detaches and cancels the current stream; its events no longer count. */
+  private closeStream(): void {
+    const stream = this.stream;
+    this.stream = null;
+    this.streamGeneration++;
+    if (!stream) return;
+    // A cancelled call still emits `error`; keep a listener so it is not thrown.
+    stream.on("error", () => undefined);
+    try {
+      stream.write({ stop: {} });
+      stream.end();
+    } catch {
+      // The stream may already be closed.
+    }
+    try {
+      stream.cancel();
+    } catch {
+      // Same.
+    }
+  }
+
+  private stopVideo(): void {
+    if (this.reopenTimer) clearTimeout(this.reopenTimer);
+    this.reopenTimer = null;
+    this.offCompanionExit?.();
+    this.offCompanionExit = null;
+    this.closeStream();
+    this.gop.clear();
+    this.keyframeSent = false;
+  }
+
+  /** Reopens the stream (restarting the companion if it died) while the
+   * simulator is still ours and Booted; gives up after repeated failures. */
+  private scheduleReopen(): void {
+    const companion = this.companion;
+    if (!companion || !this.alive || this.reopenTimer || this.reopening) return;
+    if (this.reopenFailures >= MAX_STREAM_REOPEN_FAILURES) return;
+    this.reopenTimer = setTimeout(() => {
+      this.reopenTimer = null;
+      void this.reopen(companion);
+    }, this.streamReopenDelayMs);
+    this.reopenTimer.unref();
+  }
+
+  private async reopen(companion: IdbCompanionHandle): Promise<void> {
+    if (!this.alive) return;
+    this.reopening = true;
+    try {
+      if (!companion.isRunning || !companion.client) await companion.start();
+      const client = companion.client;
+      if (!client) throw new Error("idb companion has no client");
+      // A restarted stream opens with fresh SPS/PPS/IDR: forget the old GOP
+      // and the first-keyframe latch so status tracks the new stream.
+      this.gop.clear();
+      this.keyframeSent = false;
+      this.openStream(client);
+    } catch (err) {
+      this.reopenFailures++;
+      this.status = "error";
+      this.error = errorText(err);
+      this.reopening = false;
+      this.scheduleReopen();
+      return;
+    }
+    this.reopening = false;
+  }
+
   private async isBooted(): Promise<boolean> {
     const out = await this.simctl(["list", "devices", "-j"]);
     const parsed = JSON.parse(out.toString("utf8")) as {
@@ -307,6 +503,7 @@ export class IosSimulatorDriver implements DeviceDriver {
   }
 
   private markExited(): void {
+    this.stopVideo();
     this.alive = false;
     if (this.status !== "error") this.status = "exited";
     if (this.exited) return;

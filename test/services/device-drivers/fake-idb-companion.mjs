@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers";
@@ -84,6 +85,17 @@ server.addService(CompanionService.service, {
   video_stream(call) {
     call.on("data", (req) => {
       if (req.start) {
+        // FAKE_IDB_VIDEO_FILE: stream that Annex-B file in FAKE_IDB_CHUNK_BYTES
+        // chunks (default 1000), as idb's gRPC chunks are not NAL-aligned.
+        const file = process.env.FAKE_IDB_VIDEO_FILE;
+        if (file) {
+          const bytes = readFileSync(file);
+          const size = Number(process.env.FAKE_IDB_CHUNK_BYTES ?? "1000");
+          for (let i = 0; i < bytes.length; i += size) {
+            call.write({ payload: { data: bytes.subarray(i, i + size) } });
+          }
+          return;
+        }
         call.write({
           payload: {
             data: Buffer.from([0x00, 0x00, 0x00, 0x01, 0x67]),
