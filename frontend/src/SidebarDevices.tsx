@@ -181,7 +181,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                   data-testid={`device-start-${device.id}`}
                   aria-label={`Start ${label}`}
                   title="Start"
-                  disabled={pendingId !== null}
+                  disabled={pendingId !== null || device.hostUnreachable === true}
                   onClick={(e) => {
                     e.stopPropagation();
                     void runLifecycle(device, "start");

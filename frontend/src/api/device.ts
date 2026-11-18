@@ -2,14 +2,17 @@
 // execution. Split out the same way bridges.ts is: one file per backend
 // route module (routes/devices.ts).
 import { request } from "./client.js";
-import type { Device, DiscoveredDevice, PairAndConnectBody } from "./types.js";
+import type { Device, DeviceHostEntry, DiscoveredDevice, PairAndConnectBody } from "./types.js";
 
 export const devicesApi = {
   listDevices: () => request<Device[]>("/api/devices"),
 
   getDevice: (id: number) => request<Device>(`/api/devices/${id}`),
 
-  createDevice: (body: { avdName: string; projectId?: number; name?: string }) =>
+  // One entry per host that could hold a device, with the kinds it can run.
+  listDeviceHosts: () => request<DeviceHostEntry[]>("/api/devices/hosts"),
+
+  createDevice: (body: { avdName: string; projectId?: number; name?: string; hostId?: string }) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(body) }),
 
   // Issue #1378's mDNS snapshot of nearby phones in Wireless debugging mode.

@@ -249,6 +249,7 @@ export type {
   BundleSyncResyncResult,
   BundleSyncRemoveResult,
   Device,
+  DeviceHostEntry,
   DeviceInfo,
   DeviceLiveStatus,
   DiscoveredDevice,

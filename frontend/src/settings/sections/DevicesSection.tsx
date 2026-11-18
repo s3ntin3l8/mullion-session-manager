@@ -4,10 +4,12 @@ import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
 import type {
   Device,
+  DeviceHostEntry,
   DiscoveredDevice,
   SystemImage,
   AvailableSystemImage,
 } from "../../api/index.js";
+import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
 import { deviceDotClass } from "../../deviceStatus.js";
 import { matchesQuery } from "../../matchQuery.js";
 import { usePolling } from "../../hooks/usePolling.js";
@@ -134,6 +136,9 @@ function describeSystemImage(image: SystemImage): string {
 // the sidebar renders, not a copy of it (a local-state version would leave
 // the sidebar showing a stale list until its own next poll tick).
 function describeDevice(device: Device): string {
+  // Checked first: an unreachable host's `live` is null for lack of an
+  // answer, which must not read as "stopped" / "not running".
+  if (device.hostUnreachable) return "unavailable — host unreachable";
   if (device.status === "killed") return "stopped";
   switch (device.live?.status) {
     case "streaming":
@@ -214,7 +219,13 @@ export function DevicesSection() {
   const [toggling, setToggling] = useState<Record<number, "start" | "stop">>({});
   const [toggleError, setToggleError] = useState<string | null>(null);
 
+  const hosts = useDashboardStore(useShallow((s) => s.hosts));
   const [createOpen, setCreateOpen] = useState(false);
+  // Hosts that could hold the new device (GET /api/devices/hosts), fetched
+  // with the AVD list once the create form opens. `null` until answered; a
+  // failed fetch leaves it empty, which means no picker (primary only).
+  const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[]>([]);
+  const [createHostId, setCreateHostId] = useState(LOCAL_HOST_ID);
   // Physical phones are paired from their own dialog (issue #1379) — see
   // PairDeviceDialog.tsx. This section only owns whether it's open.
   const [pairOpen, setPairOpen] = useState(false);
@@ -290,6 +301,14 @@ export function DevicesSection() {
       setAvdsError(err instanceof ApiError ? err.message : "Could not load AVDs");
       setAvdsLoaded(true);
     },
+    [createOpen],
+    { enabled: createOpen },
+  );
+
+  useAsyncData(
+    () => api.listDeviceHosts(),
+    (list) => setDeviceHosts(list),
+    () => setDeviceHosts([]),
     [createOpen],
     { enabled: createOpen },
   );
@@ -548,17 +567,55 @@ export function DevicesSection() {
       );
   };
 
+  // The picker lists every host the endpoint reports, but only when there is
+  // a real choice (more than the primary). A host that cannot be used is shown
+  // disabled with the reason; a usable one must run the emulator kind this
+  // form creates.
+  const hostOptions = useMemo(() => {
+    if (deviceHosts.length < 2) return [];
+    return deviceHosts.flatMap((h) => {
+      if (h.status === "unsupported") {
+        return [
+          {
+            value: h.hostId,
+            label: `${h.name} — unsupported (agent needs an update)`,
+            disabled: true,
+          },
+        ];
+      }
+      if (h.status === "unreachable") {
+        return [{ value: h.hostId, label: `${h.name} — unreachable`, disabled: true }];
+      }
+      if (!h.deviceKinds.includes("emulator")) return [];
+      return [{ value: h.hostId, label: h.name, disabled: false }];
+    });
+  }, [deviceHosts]);
+  const showHostPicker = hostOptions.length > 1;
+  // A selection that vanished or became unusable falls back to the primary.
+  const effectiveHostId = hostOptions.some((o) => o.value === createHostId && !o.disabled)
+    ? createHostId
+    : LOCAL_HOST_ID;
+  const hostName = (hostId: string) =>
+    hosts.find((h) => h.id === hostId)?.name ??
+    deviceHosts.find((h) => h.hostId === hostId)?.name ??
+    hostId;
+
   const submitCreate = () => {
     if (creating) return;
     const trimmedAvdName = avdName.trim();
     if (!trimmedAvdName) return;
     setCreateError(null);
     setCreating(true);
-    createDevice(trimmedAvdName, name.trim() || undefined)
+    createDevice(
+      trimmedAvdName,
+      name.trim() || undefined,
+      effectiveHostId === LOCAL_HOST_ID ? undefined : effectiveHostId,
+    )
       .then(() => {
         setCreateOpen(false);
         setAvdName("");
         setName("");
+        setCreateHostId(LOCAL_HOST_ID);
       })
       .catch((err: unknown) => {
         // DEVICE_ENABLED off surfaces here verbatim (routes/devices.ts:
@@ -717,8 +774,12 @@ export function DevicesSection() {
                 testId={`device-row-${device.id}`}
                 dot={deviceDotClass(device)}
                 title={device.name || device.avdName || device.serial}
-                subtitle={device.avdName ?? device.serial}
-                unavailable={device.status === "killed"}
+                subtitle={
+                  device.hostId !== LOCAL_HOST_ID
+                    ? `${device.avdName ?? device.serial ?? ""} · ${hostName(device.hostId)}`
+                    : (device.avdName ?? device.serial)
+                }
+                unavailable={device.status === "killed" || device.hostUnreachable === true}
                 trailing={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>
@@ -740,14 +801,14 @@ export function DevicesSection() {
                     {device.status === "active" ? (
                       <SecondaryButton
                         onClick={() => toggleRunning(device, "stop")}
-                        disabled={toggling[device.id] != null}
+                        disabled={toggling[device.id] != null || device.hostUnreachable === true}
                       >
                         {toggling[device.id] === "stop" ? "Stopping…" : "Stop"}
                       </SecondaryButton>
                     ) : (
                       <SecondaryButton
                         onClick={() => toggleRunning(device, "start")}
-                        disabled={toggling[device.id] != null}
+                        disabled={toggling[device.id] != null || device.hostUnreachable === true}
                       >
                         {toggling[device.id] === "start" ? "Starting…" : "Start"}
                       </SecondaryButton>
@@ -866,6 +927,16 @@ export function DevicesSection() {
             <div className="settings-readonly-value" style={{ marginTop: 4 }}>
               Loading AVDs…
             </div>
+          )}
+          {showHostPicker && (
+            <Row label="Host" desc="The machine that runs this emulator.">
+              <Dropdown
+                ariaLabel="Host"
+                options={hostOptions}
+                value={effectiveHostId}
+                onChange={setCreateHostId}
+              />
+            </Row>
           )}
           {avdsLoaded && avds.length > 0 && (
             <Row label="Virtual device" desc="An Android virtual device (AVD) on this machine.">
