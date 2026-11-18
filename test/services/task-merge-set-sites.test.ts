@@ -62,7 +62,7 @@ const NOT_A_TASKS_WRITE = [
   "services/github-request.ts#getPullRequestByNumber",
   "services/github-write.ts#getMergedClosingPullRequest",
   "services/github-write.ts#listClosedPullRequests",
-  "services/task-reconciler.ts#fetchCurrentCiStatus",
+  "services/task-review-gate.ts#fetchCurrentCiStatus",
   "services/task-reconciler.ts#finishTaskForMergedPr",
   "services/task-reconciler.ts#fetchPrLifecycle",
   "services/task-reconciler.ts#endReviewingFromPr",

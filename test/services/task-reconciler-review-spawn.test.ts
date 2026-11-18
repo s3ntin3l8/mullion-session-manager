@@ -171,41 +171,8 @@ describe("reconcileTasks — CI-gated review spawn", () => {
       await app.close();
     });
 
-    it("waits for CI wait deadline when PR reports dirty mergeableState, then spawns with conflict note once past deadline", async () => {
-      const app = await buildApp();
-      const { taskId } = await claimWithPR(app);
-      mockGetPullRequestByNumber.mockResolvedValue({
-        number: 9,
-        htmlUrl: "https://x/pull/9",
-        nodeId: "n",
-        draft: true,
-        headSha: "sha1",
-        mergeable: false,
-        mergeableState: "dirty",
-      });
-      mockFetchRunsForHead.mockResolvedValue([]);
-
-      // Before deadline: should wait, not spawn on first tick
-      await reconcileTasks(app);
-      let row = await getTask(app, taskId);
-      expect(row.status).toBe("reviewing");
-      expect(row.reviewSessionId).toBeNull();
-
-      // Past deadline: should spawn with conflict note
-      const { tasks } = await import("../../src/db/schema.js");
-      app.db
-        .update(tasks)
-        .set({ reviewingAt: new Date(Date.now() - 16 * 60_000) })
-        .where(eq(tasks.id, taskId))
-        .run();
-
-      await reconcileTasks(app);
-      row = await getTask(app, taskId);
-      expect(row.status).toBe("reviewing");
-      expect(row.reviewSessionId).not.toBeNull();
-
-      await app.close();
-    });
+    // A dirty PR is no longer spawned for after the wait deadline: it goes to
+    // the rebase flow instead (task-reconciler-review-conflict.test.ts, #3339).
 
     // Task Master trial 220921 / PR #743 — `unlinkFindingsFileIfPresent` used
     // to run only at INGEST time, so a leftover from a prior same-round

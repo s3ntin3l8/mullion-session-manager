@@ -1843,3 +1843,28 @@ export function buildPrReviewCommentsPrompt(
     "resolve the thread yourself — Mullion picks up your commits and re-checks automatically.";
   return `${preamble}${SECTION_BREAK}${feedback}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
+
+/**
+ * The merge-conflict auto-return's prompt (`returnConflictingPrToWorker`,
+ * task-reconciler.ts) — the PR conflicts with its base and auto-rebase could
+ * not (or may not) resolve it, so the worker does it, as a human did by hand
+ * for #3277. It asks for a MERGE of the base, not a rebase: Mullion pushes at
+ * the end of the turn like any other auto-return round, and a merge commit
+ * lands as a plain fast-forward where a rebase would need a force push.
+ */
+export function buildMergeConflictPrompt(
+  opts: WorkerPreambleOptions & { baseRef: string; reason: string },
+): string {
+  const preamble = buildTaskMasterPreamble(opts);
+  const instructions =
+    `Your pull request for ${opts.branchName} conflicts with ${opts.baseRef}, so GitHub cannot ` +
+    `merge it and runs no checks on it. ${opts.reason}\n\n` +
+    `Run \`git fetch origin\`, then merge \`origin/${opts.baseRef}\` into ${opts.branchName} ` +
+    "(`git merge`, or rebase if you prefer) and resolve every conflict. A generated file (a lockfile, " +
+    "a baseline, a snapshot) is not merged by hand: take the base's copy and regenerate it with the " +
+    "command the repo's AGENTS.md or CONTRIBUTING.md names. Confirm no conflict markers remain " +
+    "(`git grep -nE '^(<<<<<<<|>>>>>>>)'`), re-run the repo's own verification gate, and commit " +
+    "everything. Then finish your turn as usual: Mullion pushes your commits and the review runs " +
+    "on the result. Do not switch to or create another branch.";
+  return `${preamble}${SECTION_BREAK}${instructions}${SECTION_BREAK}${taskSpec(opts.task)}`;
+}

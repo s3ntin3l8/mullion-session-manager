@@ -2101,8 +2101,8 @@ export interface Task {
   // see TaskDetail.tsx's review card. Renamed from `reviewRounds`.
   autoReturnRounds: number;
   // Which trigger most recently spent a round — "review" | "ci" |
-  // "pr-comment". Null until the first auto-return.
-  lastAutoReturnReason: "review" | "ci" | "pr-comment" | null;
+  // "pr-comment" | "suggestions" | "conflict". Null until the first auto-return.
+  lastAutoReturnReason: "review" | "ci" | "pr-comment" | "suggestions" | "conflict" | null;
   // Task 258971's investigation: whether `autoReturnRounds` has reached the
   // resolved per-project cap — derived server-side (routes/tasks.ts's
   // withAutoReturnCapped) from the same resolveMaxAutoReturnRounds the

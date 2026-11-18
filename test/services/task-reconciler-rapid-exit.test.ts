@@ -1121,6 +1121,9 @@ describe("a worker that exits within seconds", () => {
     mockHermesUsable.mockReturnValue(true);
     mockDispatchTaskReview.mockRejectedValue(new Error("stop after dispatch"));
     const { app, task } = await rebaseTask("p-rapid-no-hermes", { ranMs: 3_000 });
+    // Mergeable: a conflicting PR is never dispatched at all (#3339), which
+    // would hide the backoff this test is about.
+    mockPr("sha-head", { mergeable: true, mergeableState: "clean" });
     app.db
       .update(projects)
       .set({ defaultReviewAgent: "hermes" })
