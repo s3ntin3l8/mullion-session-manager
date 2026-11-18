@@ -36,7 +36,6 @@ vi.mock("../../src/services/github-write.js", (io) => mockGithubWriteFactory(io)
 vi.mock("../../src/services/github.js", (io) => mockGithubFactory(io));
 
 const { buildApp } = await import("../../src/app.js");
-const { getDb } = await import("../../src/db/client.js");
 const { reconcileTasks, notifyApprovalsAwaitingHuman, retryPermanentPushFailuresNow } =
   await import("../../src/services/task-reconciler.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
@@ -661,13 +660,6 @@ describe("reconcileTasks", () => {
         payload: { notifications: { channels: { push: true } } },
       });
       await setup.close();
-      // Shared DB: other tests leave reviewing rows with approving verdicts.
-      // Wrapped like the outer beforeEach: with -t filtering, nothing may have migrated the DB yet.
-      try {
-        getDb().delete(tasks).where(eq(tasks.status, "reviewing")).run();
-      } catch {
-        // no tasks table yet
-      }
     });
 
     const T0 = new Date(1_700_000_000_000);

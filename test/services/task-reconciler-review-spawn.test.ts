@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
 import {
@@ -16,7 +16,6 @@ import {
   mockGithubWriteFactory,
   mockGithubFactory,
   setupReconcilerTestLifecycle,
-  restorePassThroughMocks,
   fakeInfo,
   getTask,
   createSessionAndTaskWithReviewAgent,
@@ -52,22 +51,6 @@ const {
 describe("reconcileTasks — CI-gated review spawn", () => {
   setupReconcilerTestLifecycle("task-reconciler-review-spawn");
   describe("CI-gated review spawn (processPendingReviewSpawns)", () => {
-    // claimWithPR below configures mockResolveRepoRef/mockResolveGitHubToken/
-    // mockGetPullRequestByNumber with a fake, persistent `.mockResolvedValue`
-    // (not `Once`) so every task-under-test's own CI lookup resolves
-    // deterministically. That's fine within a given test, but this file
-    // shares ONE DB across its whole run with no per-test reset (module-level
-    // comment above) — a task these tests leave behind (even a successfully
-    // spawned one) can still get re-examined by an UNRELATED later test's own
-    // broad `vi.spyOn(app.pty, "get")` mock, which would then hit these fake
-    // "tok"/"o/r" values instead of the real (harmless, no-op) test-env
-    // defaults, attempting a real GitHub call with fabricated credentials.
-    // Restoring the pass-through default after every test in this block
-    // keeps that fakery from outliving the test that needed it.
-    afterEach(() => {
-      restorePassThroughMocks();
-    });
-
     // Local copy of the review-findings-loop describe block's own helper
     // above (not shared scope) — same "only the given ids are finished"
     // reasoning.
@@ -487,8 +470,8 @@ describe("reconcileTasks — CI-gated review spawn", () => {
     // retry while Task Master is disabled" test above.
     it("does not spawn a review agent while Task Master is disabled, even for a task already in 'reviewing'", async () => {
       const app = await buildApp();
-      const { taskId } = await claimWithPR(app);
       try {
+        const { taskId } = await claimWithPR(app);
         mockFetchRunsForHead.mockResolvedValueOnce([
           {
             name: "CI",

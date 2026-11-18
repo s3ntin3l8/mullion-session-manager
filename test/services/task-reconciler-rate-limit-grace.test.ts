@@ -254,16 +254,6 @@ describe("reconcileTasks — rate-limit grace (#1015)", () => {
       expect(row.status).toBe("in_progress");
       expect(mockCommitHostWipChanges).not.toHaveBeenCalled();
 
-      // Clean up: see the matching comment in the "keeps an in_progress
-      // task alive" test above. The durable lastRateLimitAt on this
-      // task would otherwise haunt a later test's worker loop the same
-      // way.
-      app.db
-        .update(tasks)
-        .set({ status: "failed", failureReason: "test cleanup" })
-        .where(eq(tasks.id, taskId))
-        .run();
-
       await app.close();
     });
 
