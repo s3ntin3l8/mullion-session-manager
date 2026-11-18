@@ -145,6 +145,15 @@
    `.danger.armed` companion here — the sidebar's only device control is
    Start/Stop, both reversible, so nothing arms (Settings -> Devices is
    where the trash confirm lives, and it carries that rule itself). */
+.device-row-host {
+  font-size: 0.65625rem;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+  min-width: 0;
+}
 .device-row-actions {
   display: flex;
   align-items: center;

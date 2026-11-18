@@ -139,6 +139,10 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
         // This row's own failure, or nothing — never another row's.
         const rowError = lifecycleError?.id === device.id ? lifecycleError.message : null;
         const unreachable = device.hostUnreachable === true;
+        // The host is spoken as well as shown: two same-named AVDs on
+        // different hosts must not read as identical rows to a screen reader.
+        const hostSuffix =
+          device.hostId !== LOCAL_HOST_ID ? ` on ${hostDisplayName(device.hostId, hosts)}` : "";
         const title =
           rowError ??
           (unreachable
@@ -158,7 +162,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
             // an error line to make room for — a row without one keeps the
             // exact layout it always had (see styles/sidebar.css).
             className={`sidebar-tasks-entry${stopped ? " stopped" : ""}${
-              rowError ? " sidebar-device-row-wrap" : ""
+              rowError || unreachable ? " sidebar-device-row-wrap" : ""
             }`}
             data-testid={`device-row-${device.id}`}
             role="button"
@@ -169,7 +173,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
             // connection" as one string). Same convention as Sidebar.tsx's
             // SessionRow (`Open session …`) and NotificationBell's
             // EventRow — the row names itself, its content does not.
-            aria-label={`Open device ${deviceSpokenName(device)}`}
+            aria-label={`Open device ${deviceSpokenName(device)}${hostSuffix}`}
             title={title}
             onClick={() => onOpenDevice(device)}
             onKeyDown={(e) => {
@@ -183,10 +187,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
             <DeviceIcon size={14} />
             <span className="sidebar-tasks-entry-label">{label}</span>
             {device.hostId !== LOCAL_HOST_ID && (
-              <span
-                data-testid={`device-host-${device.id}`}
-                style={{ fontSize: "0.65625rem", color: "var(--dim)" }}
-              >
+              <span className="device-row-host" data-testid={`device-host-${device.id}`}>
                 {hostDisplayName(device.hostId, hosts)}
               </span>
             )}
@@ -196,7 +197,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                 <button
                   type="button"
                   data-testid={`device-start-${device.id}`}
-                  aria-label={`Start ${label}`}
+                  aria-label={`Start ${label}${hostSuffix}`}
                   title="Start"
                   disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
@@ -210,7 +211,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                 <button
                   type="button"
                   data-testid={`device-stop-${device.id}`}
-                  aria-label={`Stop ${label}`}
+                  aria-label={`Stop ${label}${hostSuffix}`}
                   title="Stop"
                   disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
@@ -226,6 +227,11 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                 Settings -> Devices gives its own errors under its table
                 (ErrorText: role="alert", so assistive tech announces it
                 and it does not rely on colour alone). */}
+            {unreachable && !rowError && (
+              <span className="sidebar-device-note" data-testid={`device-unreachable-${device.id}`}>
+                unavailable — host unreachable
+              </span>
+            )}
             {rowError && <ErrorText className="sidebar-device-error">{rowError}</ErrorText>}
           </div>
         );

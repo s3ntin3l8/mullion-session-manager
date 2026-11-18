@@ -2591,6 +2591,12 @@ button.discover-header:hover {
 /* The error line itself: the full width of the row's content box, so it sits
    UNDER the row rather than squeezing the label. ErrorText's own inline
    styles carry the size and the red; this only shapes the box. */
+.sidebar-device-note {
+  flex: 0 0 100%;
+  min-width: 0;
+  font-size: 0.65625rem;
+  color: var(--dim);
+}
 .sidebar-device-error {
   flex: 0 0 100%;
   min-width: 0;
