@@ -918,9 +918,12 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   or a mint failure all quietly downgrade that round's review to `COMMENT`
   from the primary identity — logged at `debug`, never a `githubSyncError`,
   the expected steady state for a repo the reviewer App doesn't cover. A 422
-  on a gating attempt (the anchors rejected, or an unexpected rejection of
-  the gating event itself) retries once, dropped back to a plain `COMMENT`
-  from the primary identity, so the round's findings still land either way.
+  on an anchored gating attempt (typically a stale anchor: a finding on a
+  file that left the PR diff) first retries as the reviewer App with the same
+  verdict and no anchors, findings folded into the body, so the verdict keeps
+  its identity. Only if that also 422s (or an anchor-less gating attempt 422s
+  on its own) does it drop back to a plain `COMMENT` from the primary
+  identity, so the round's findings still land either way.
   Either way, the rendered text is also appended to `tasks.reviewFindings` —
   durable across the worktree's own eventual removal, and rendered in the
   task detail's Review card.
