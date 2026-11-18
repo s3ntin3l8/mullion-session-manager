@@ -1,22 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { resolveTaskMaster } from "./taskConfig.js";
 import { DEFAULT_SETTINGS } from "./api/index.js";
+import { makeTaskMasterEnv } from "./test/fixtures.js";
 
 // Mirrors test/services/task-config.test.ts on the backend — same
 // algorithm, same assertions, kept in sync deliberately (see taskConfig.ts's
 // own doc comment on why this is a DOM-free duplicate of the backend
 // resolver rather than a shared package).
-const ENV_DEFAULTS = {
-  enabled: false,
-  maxConcurrent: 2,
-  budgetMinutes: 120,
-  progressCommentMinutes: 15,
-  rateLimitGraceMinutes: 5,
-  rateLimitMaxParkHours: 24,
-  skipPermissions: false,
-  issueLabel: "mullion-task",
-  pollIntervalSeconds: 60,
-};
+const ENV_DEFAULTS = makeTaskMasterEnv();
 
 describe("resolveTaskMaster", () => {
   it("falls through to every env default when every field is at its inherit sentinel", () => {
@@ -63,6 +54,12 @@ describe("resolveTaskMaster", () => {
       resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, rateLimitMaxParkHours: 72 }, ENV_DEFAULTS)
         .rateLimitMaxParkHours,
     ).toBe(72);
+    expect(
+      resolveTaskMaster(DEFAULT_SETTINGS.taskMaster, {
+        ...ENV_DEFAULTS,
+        rateLimitMaxParkHours: undefined as unknown as number,
+      }).rateLimitMaxParkHours,
+    ).toBe(24);
   });
 
   it("resolves a concrete maxConcurrent as a real override", () => {

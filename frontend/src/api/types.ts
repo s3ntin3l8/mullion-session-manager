@@ -1971,8 +1971,7 @@ export interface ServerInfo {
     budgetMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
-    // Optional: an older server's payload lacks it (#3234).
-    rateLimitMaxParkHours?: number;
+    rateLimitMaxParkHours: number;
     skipPermissions: boolean;
     issueLabel: string;
     pollIntervalSeconds: number;
@@ -2668,7 +2667,7 @@ export interface AppSettings {
     workerStartTimeoutMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
-    rateLimitMaxParkHours?: number;
+    rateLimitMaxParkHours: number;
     skipPermissions: "inherit" | "on" | "off";
     // GitHub logins trusted in addition to repo owners/members/collaborators
     // — mirrors settings.ts's AppSettings.taskMaster.trustedLogins.

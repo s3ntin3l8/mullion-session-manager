@@ -19,15 +19,6 @@ export interface ResolvedTaskMasterConfig {
   maxAutoReturnRounds: number;
 }
 
-// #3234 — both fields are optional: an older server's payload lacks them.
-function resolveMaxParkHours(
-  taskMaster: AppSettings["taskMaster"],
-  envDefaults: ServerInfo["taskMasterEnv"],
-): number {
-  const own = taskMaster.rateLimitMaxParkHours ?? -1;
-  return own === -1 ? (envDefaults.rateLimitMaxParkHours ?? 24) : own;
-}
-
 export function resolveTaskMaster(
   taskMaster: AppSettings["taskMaster"],
   envDefaults: ServerInfo["taskMasterEnv"],
@@ -48,7 +39,12 @@ export function resolveTaskMaster(
       taskMaster.rateLimitGraceMinutes === -1
         ? envDefaults.rateLimitGraceMinutes
         : taskMaster.rateLimitGraceMinutes,
-    rateLimitMaxParkHours: resolveMaxParkHours(taskMaster, envDefaults),
+    rateLimitMaxParkHours:
+      // Keep the `?? 24` fallback for pre-#3269 `/api/server-info` payloads in
+      // mixed-build environments where `taskMasterEnv.rateLimitMaxParkHours` may be absent.
+      taskMaster.rateLimitMaxParkHours === -1
+        ? (envDefaults.rateLimitMaxParkHours ?? 24)
+        : taskMaster.rateLimitMaxParkHours,
     skipPermissions:
       taskMaster.skipPermissions === "inherit"
         ? envDefaults.skipPermissions
