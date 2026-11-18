@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { GitHubPanel } from "../GitHubPanel.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
@@ -13,7 +13,11 @@ import type { RightSidebarViewProps } from "./views.js";
 export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps) {
   const [link, setLink] = useState<{ url: string; label: string } | null>(null);
   // What the panel's PR section shows, which leaves the release PR out.
-  const [prCount, setPrCount] = useState(0);
+  // Keyed by project: this view is not remounted on a project switch, and the
+  // new project's panel reports only after its first paint.
+  const [reported, setReported] = useState<{ projectId: number; count: number } | null>(null);
+  const onPrCount = useCallback((count: number) => setReported({ projectId, count }), [projectId]);
+  const prCount = reported?.projectId === projectId ? reported.count : 0;
   return (
     <div className="github-sidebar-view">
       <SidebarHeader
@@ -51,7 +55,7 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
           params={{ projectId }}
           embedded
           onExternalLink={setLink}
-          onPrCount={setPrCount}
+          onPrCount={onPrCount}
         />
       </ExternalLinkOwnedContext.Provider>
     </div>

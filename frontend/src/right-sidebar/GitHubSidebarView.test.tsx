@@ -22,6 +22,7 @@ vi.mock("../api/index.js", async (importOriginal) => {
       getProjectGitHub: vi.fn(),
       getProjectGitHubPRs: vi.fn(),
       getProjectRelease: vi.fn(),
+      getProjectIssues: vi.fn(),
     },
   };
 });
@@ -152,6 +153,37 @@ describe("GitHubSidebarView", () => {
     const title = await screen.findByText("PR title 1");
     expect(document.activeElement).toBe(title.closest("button"));
     expect(document.activeElement).toHaveAttribute("data-row-key", "pr:1");
+  });
+
+  it("returns focus to the row that opened an issue when it closes", async () => {
+    vi.mocked(api.getProjectIssues).mockResolvedValue({
+      issues: [
+        {
+          number: 7,
+          title: "Crash on start",
+          htmlUrl: "https://github.com/o/r/issues/7",
+          author: "x",
+          labels: [],
+          assignees: [],
+          commentCount: 0,
+          milestone: null,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-02T00:00:00Z",
+        },
+      ],
+      page: 1,
+      hasMore: false,
+      labels: [],
+      taskMasterEnabled: false,
+      taskLabel: "mullion-task",
+    } as unknown as Awaited<ReturnType<typeof api.getProjectIssues>>);
+    useDashboardStore.setState({ githubOpenIssueByProject: { 4: 7 } });
+    renderView();
+    await screen.findByRole("button", { name: "Back" });
+    act(() => useDashboardStore.getState().setGithubOpenIssue(4, null));
+    const title = await screen.findByText("Crash on start");
+    expect(document.activeElement).toBe(title.closest("button"));
+    expect(document.activeElement).toHaveAttribute("data-row-key", "issue:7");
   });
 
   it("falls back to the live status' PRs when the PR cache is empty", async () => {
