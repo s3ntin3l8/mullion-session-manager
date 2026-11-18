@@ -39,6 +39,8 @@ export interface BrowserHostParams extends BrowserPanelParams {
   mode?: BrowserMode;
   /** What "Browser · Preview: <target>" names. */
   previewTarget?: string;
+  /** Bumped by each explicit open of the session's browser (openBrowserPanePanel). */
+  openRev?: number;
 }
 
 export type BrowserHostComponent = "browser" | "browserPane";
@@ -81,7 +83,10 @@ export function BrowserPaneHost({
   // The session a switch to Agent's browser would fix: the project's focused
   // session, else its last-focused one (the store remembers focus from before
   // this pane opened and took focus itself), else its newest live one.
-  const followed = useFollowedSession(projectId ?? -1);
+  // useFollowedSession skips killed sessions only; an exited one cannot be
+  // attached either, so it is not a candidate.
+  const followedSession = useFollowedSession(projectId ?? -1);
+  const followed = isLive(followedSession ?? undefined) ? followedSession : null;
   const recentSessionIds = useDashboardStore((s) => s.recentSessionIds);
   const fallback = useMemo(() => {
     if (projectId == null) return null;
@@ -114,14 +119,22 @@ export function BrowserPaneHost({
   // the params (openBrowserPanePanel asks for Agent's browser of its session).
   // Only a change in the params counts, and the pane's own write-back always
   // matches its state, so only a request from outside changes anything here.
-  const [seen, setSeen] = useState({ mode: params.mode, pin: paramPin });
-  if (params.mode !== seen.mode || paramPin !== seen.pin) {
-    setSeen({ mode: params.mode, pin: paramPin });
-    if (paramPin !== seen.pin && paramPin !== pinnedId) setPinnedId(paramPin);
-    if (params.mode != null && params.mode !== seen.mode && params.mode !== mode) {
-      setMode(params.mode);
-      if (params.mode === "agent" && paramPin != null) {
-        setExplicit((prev) => new Set(prev).add(paramPin));
+  // `openRev` is bumped by every explicit open of the session's browser, so
+  // a second open of a pane that already says "agent" still attaches.
+  const [seen, setSeen] = useState({ mode: params.mode, pin: paramPin, rev: params.openRev });
+  if (params.mode !== seen.mode || paramPin !== seen.pin || params.openRev !== seen.rev) {
+    setSeen({ mode: params.mode, pin: paramPin, rev: params.openRev });
+    if (params.openRev != null && params.openRev !== seen.rev && paramPin != null) {
+      setPinnedId(paramPin);
+      setMode("agent");
+      setExplicit((prev) => new Set(prev).add(paramPin));
+    } else {
+      if (paramPin !== seen.pin && paramPin !== pinnedId) setPinnedId(paramPin);
+      if (params.mode != null && params.mode !== seen.mode && params.mode !== mode) {
+        setMode(params.mode);
+        if (params.mode === "agent" && paramPin != null) {
+          setExplicit((prev) => new Set(prev).add(paramPin));
+        }
       }
     }
   }
@@ -208,6 +221,7 @@ export function BrowserPaneHost({
     delete preview.agentSessionId;
     delete preview.previewTarget;
     delete preview.sessionId;
+    delete preview.openRev;
     if (preview.projectId == null && projectId != null) preview.projectId = projectId;
     return preview;
   }, [params, projectId]);

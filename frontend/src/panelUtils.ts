@@ -1046,8 +1046,9 @@ export function openBrowserPanePanel(
       title: browserAgentTitle(sessionPaneTitle(session, titleCtx)),
       params: { sessionId: session.id },
       // The pane can show Preview by now (#3371): focusing it to open the
-      // session's browser switches it back, to this session.
-      retargetParams: { mode: "agent", agentSessionId: undefined },
+      // session's browser switches it back, to this session, and attaches
+      // (a fresh openRev, so a pane already in Agent's browser still does).
+      retargetParams: { mode: "agent", agentSessionId: undefined, openRev: nextRev() },
     },
     layout,
   );

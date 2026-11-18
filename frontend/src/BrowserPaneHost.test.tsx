@@ -244,6 +244,17 @@ describe("BrowserPaneHost (#3371)", () => {
       expect(await screen.findByTestId("agent-5")).toBeInTheDocument();
     });
 
+    it("does not offer a focused session that has exited", async () => {
+      useDashboardStore.setState({
+        sessions: [session(5), session(7, { status: "exited" })],
+        activePanelId: "session-7",
+      });
+      renderHost("browser", { projectId: 1 }, "Browser · Preview: aurora");
+      expect(
+        await screen.findByRole("radio", { name: "Agent's browser · agent 5" }),
+      ).not.toHaveAttribute("aria-disabled");
+    });
+
     it("takes the project's newest live session when none had focus", async () => {
       const user = userEvent.setup();
       useDashboardStore.setState({ activePanelId: null });
@@ -384,6 +395,18 @@ describe("BrowserPaneHost (#3371)", () => {
       // A restored switch still asks before attaching.
       expect(await screen.findByTestId("agent-5")).toBeInTheDocument();
       expect(probes).toEqual([5, 5]);
+    });
+
+    it("attaches on an explicit open even when the pane already shows Agent's browser", async () => {
+      const user = userEvent.setup();
+      const { panel } = renderHost("browserPane", { sessionId: 5, mode: "preview" }, "x");
+      await user.click(await screen.findByRole("radio", { name: /Agent's browser/ }));
+      expect(await screen.findByText("agent 5 has no browser yet.")).toBeInTheDocument();
+      // The pane menu's "Open Agent Browser" again: the mode is already agent.
+      act(() =>
+        panel.api.updateParameters({ mode: "agent", agentSessionId: undefined, openRev: 1 }),
+      );
+      expect(await screen.findByTestId("agent-5")).toBeInTheDocument();
     });
 
     it("follows an opener that asks for a mode on an open pane", async () => {
