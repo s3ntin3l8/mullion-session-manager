@@ -561,9 +561,10 @@ export function formatError(err, client) {
         "from outside a session (session env only ever carries MULLION_HOOK_TOKEN)."
       );
     }
-    return err.message ?? (err.status ? `request failed (status ${err.status})` : "request failed");
+    if (/is not supported on \S+ devices$/.test(err.message)) return err.message;
+    return `${err.message || "request failed"}${err.status ? ` (status ${err.status})` : ""}`;
   }
-  return err.message ?? String(err);
+  return err.message || String(err);
 }
 
 // ---------------------------------------------------------------------------
@@ -1291,13 +1292,10 @@ const dockCommands = createDockCommands({ CliUsageError, requireOne });
 // ambiguity this CLI's own `requireOne`-everywhere convention avoids
 // elsewhere (see sessionCommands' own explicit-id verbs above).
 const DEVICE_BUTTON_VALUES = ["home", "lock", "side", "siri"];
-const formatDeviceRow = (d) => ({
-  ...d,
-  platform: d?.platform ?? "android",
-  udid: d?.udid ?? null,
-});
-const formatDeviceText = (r) =>
-  `${r.id}\t${r.platform}\t${r.kind ?? ""}\t${r.udid ?? "-"}\t${r.status ?? ""}\t${r.name ?? r.avdName ?? r.serial ?? r.udid ?? ""}`;
+const formatDeviceRow = (d) =>
+  d && typeof d === "object"
+    ? { ...d, platform: d.platform ?? "android", udid: d.udid ?? null }
+    : d;
 async function runDeviceLogcat(client, args) {
   const { flags } = extractFlags(args.slice(1), { lines: "number", filter: "string" });
   const body = { deviceId: requireOne(args, "device id"), action: "logcat" };
@@ -1310,38 +1308,61 @@ async function runDeviceLogcat(client, args) {
 const deviceCommands = {
   async list(client) {
     const result = await client.request("device.list", {});
-    const rows = Array.isArray(result) ? result.map(formatDeviceRow) : result;
-    const text = Array.isArray(rows)
-      ? rows.map(formatDeviceText).join("\n")
-      : JSON.stringify(rows, null, 2);
-    return { json: rows, text };
+    return { json: Array.isArray(result) ? result.map(formatDeviceRow) : result };
   },
   async get(client, args) {
-    const result = await client.request("device.get", { deviceId: requireOne(args, "device id") });
-    const row = result && typeof result === "object" ? formatDeviceRow(result) : result;
-    const text =
-      row && typeof row === "object" ? formatDeviceText(row) : JSON.stringify(row, null, 2);
-    return { json: row, text };
+    const res = await client.request("device.get", { deviceId: requireOne(args, "device id") });
+    return { json: formatDeviceRow(res) };
   },
   async create(client, args) {
-    const body = { avdName: requireOne(args, "avd name") };
+    const avdName = requireOne(args, "avd name");
     const { flags } = extractFlags(args.slice(1), { project: "string", name: "string" });
+    const body = { avdName };
     if (flags.project !== undefined) body.projectId = flags.project;
     if (flags.name !== undefined) body.name = flags.name;
     return { json: await client.request("device.create", body) };
   },
+  // A separate verb from `create` rather than an optional flag on it:
+  // `create` does `requireOne(args, "avd name")` unconditionally (this
+  // file's own explicit-verb convention, see this const's header comment),
+  // and pairing/connecting take entirely different arguments (a pairing
+  // address + code, or a connect address) with no AVD name at all — making
+  // that conditional would fight the shape every other verb here follows.
   async pair(client, args) {
     const pairingAddress = requireOne(args, "pairing address (host:port)");
-    if (args[1] === undefined) throw new CliUsageError("pairing code is required");
-    return { json: await client.request("device.pair", { pairingAddress, pairingCode: args[1] }) };
+    const pairingCode = args[1];
+    if (pairingCode === undefined) throw new CliUsageError("pairing code is required");
+    return { json: await client.request("device.pair", { pairingAddress, pairingCode }) };
   },
+  // Lists nearby phones in Wireless-debugging mode (mDNS snapshot from
+  // GET /api/devices/discovered). Empty array when DEVICE_DISCOVERY_ENABLED
+  // is false or nothing is in range — both are returned as `[]`, not as an
+  // error, mirroring the REST endpoint's "empty is a valid answer" posture.
   async discovered(client, args) {
-    if (args.length > 0)
+    if (args.length > 0) {
       throw new CliUsageError(
         "device discovered takes no arguments (use --json for machine-readable output)",
       );
+    }
     return { json: await client.request("device.discovered", {}) };
   },
+  // Atomic pair + connect + insert — the text equivalent of the new "Pair
+  // a phone" modal (issue #1378). Two modes:
+  //
+  //   device pair-and-connect --discovery-id 192.168.1.23 --pairing-code 123456
+  //
+  // drives pair+connect from a cached mDNS entry (use `device discovered`
+  // to find one). `--connect-address` overrides the cached connect port
+  // when mDNS reached the wrong transport.
+  //
+  //   device pair-and-connect --pairing-address 192.168.1.23:41234 \
+  //     --connect-address 192.168.1.23:37251 --pairing-code 123456
+  //
+  // is the manual fallback for networks where mDNS doesn't reach — both
+  // ports must be supplied.
+  //
+  // Quoted-key form because the CLI's verb lookup is verbatim — see how
+  // sessionCommands' "spawn-child" (line 768) does the same.
   "pair-and-connect": async (client, args) => {
     const { flags } = extractFlags(args, {
       "discovery-id": "string",
@@ -1365,27 +1386,31 @@ const deviceCommands = {
     if (typeof flags.name === "string" && flags.name.length > 0) body.name = flags.name;
     return { json: await client.request("device.pair-and-connect", body) };
   },
+  // Registers a physical device row and connects to it — the `kind:
+  // "physical"` counterpart to `create` above. Requires a prior `pair`
+  // against this phone (or any address already in the host adb server's
+  // keystore); this alone does not authorize anything new.
   async connect(client, args) {
-    const body = { kind: "physical", address: requireOne(args, "device address (host:port)") };
+    const address = requireOne(args, "device address (host:port)");
     const { flags } = extractFlags(args.slice(1), { project: "string", name: "string" });
+    const body = { kind: "physical", address };
     if (flags.project !== undefined) body.projectId = flags.project;
     if (flags.name !== undefined) body.name = flags.name;
     return { json: await client.request("device.create", body) };
   },
   async start(client, args) {
-    return {
-      json: await client.request("device.start", { deviceId: requireOne(args, "device id") }),
-    };
+    const deviceId = requireOne(args, "device id");
+    return { json: await client.request("device.start", { deviceId }) };
   },
   async stop(client, args) {
-    return {
-      json: await client.request("device.terminate", { deviceId: requireOne(args, "device id") }),
-    };
+    const deviceId = requireOne(args, "device id");
+    return { json: await client.request("device.terminate", { deviceId }) };
   },
+  // Irreversible — drops the row itself (stop only flips it to "killed").
+  // Full scope only, like the sessions.kill verb's underlying op.
   async delete(client, args) {
-    return {
-      json: await client.request("device.delete", { deviceId: requireOne(args, "device id") }),
-    };
+    const deviceId = requireOne(args, "device id");
+    return { json: await client.request("device.delete", { deviceId }) };
   },
   async screenshot(client, args) {
     const deviceId = requireOne(args, "device id");
@@ -1397,14 +1422,21 @@ const deviceCommands = {
     const deviceId = requireOne(args, "device id");
     const [x, y] = args.slice(1);
     if (x === undefined || y === undefined) throw new CliUsageError("x and y are required");
-    const body = { deviceId, action: "tap", x: Number(x), y: Number(y) };
-    return { json: await client.request("device.action", body) };
+    return {
+      json: await client.request("device.action", {
+        deviceId,
+        action: "tap",
+        x: Number(x),
+        y: Number(y),
+      }),
+    };
   },
   async swipe(client, args) {
     const deviceId = requireOne(args, "device id");
     const [x1, y1, x2, y2, durationMs] = args.slice(1);
-    if ([x1, y1, x2, y2].some((v) => v === undefined))
+    if ([x1, y1, x2, y2].some((v) => v === undefined)) {
       throw new CliUsageError("x1 y1 x2 y2 are required");
+    }
     const body = {
       deviceId,
       action: "swipe",
@@ -1424,9 +1456,15 @@ const deviceCommands = {
   },
   async key(client, args) {
     const deviceId = requireOne(args, "device id");
-    if (args[1] === undefined) throw new CliUsageError("androidKeyCode is required");
-    const body = { deviceId, action: "key", androidKeyCode: Number(args[1]) };
-    return { json: await client.request("device.action", body) };
+    const androidKeyCode = args[1];
+    if (androidKeyCode === undefined) throw new CliUsageError("androidKeyCode is required");
+    return {
+      json: await client.request("device.action", {
+        deviceId,
+        action: "key",
+        androidKeyCode: Number(androidKeyCode),
+      }),
+    };
   },
   async button(client, args) {
     const deviceId = requireOne(args, "device id");
@@ -1439,10 +1477,16 @@ const deviceCommands = {
   },
   logcat: runDeviceLogcat,
   logs: runDeviceLogcat,
+  // Unlike every other verb here, `clipboard` itself takes a sub-verb
+  // (`get`/`set`) as its own first positional arg, with the device id
+  // second — the REST/socket `action: "clipboard"` body's own `op` field
+  // (routes/devices.ts) needs exactly one of the two, so this mirrors that
+  // shape rather than splitting into two top-level CLI verbs.
   async clipboard(client, args) {
     const [op, deviceId, ...rest] = args;
-    if (op !== "get" && op !== "set")
+    if (op !== "get" && op !== "set") {
       throw new CliUsageError("clipboard sub-command must be 'get' or 'set'");
+    }
     if (deviceId === undefined) throw new CliUsageError("device id is required");
     if (op === "get") {
       const result = await client.request("device.action", {
@@ -1450,6 +1494,11 @@ const deviceCommands = {
         action: "clipboard",
         op: "get",
       });
+      // Same "{json, text}" convention as `logcat` above — printing the raw
+      // cached text lets `mullion device clipboard get <id>` pipe cleanly,
+      // rather than forcing every caller through --json + a jq extraction.
+      // No cached value yet (nothing copied/set this session) prints as an
+      // empty line rather than the literal string "null".
       return { json: result, text: result.text ?? "" };
     }
     const { flags, rest: textArgs } = extractFlags(rest, { paste: "boolean" });

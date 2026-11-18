@@ -130,7 +130,6 @@ export type DeviceAction =
   | { action: "key"; androidKeyCode: number }
   | { action: "button"; button: DeviceButton }
   | { action: "logcat"; lines?: number; filter?: string }
-  | { action: "logs"; lines?: number; filter?: string }
   | { action: "clipboard"; op: "get" }
   | { action: "clipboard"; op: "set"; text: string; paste?: boolean };
 

@@ -44,7 +44,6 @@ export function isDeviceAction(value: unknown): value is DeviceAction {
         Object.keys(v).every((k) => BUTTON_ALLOWED_KEYS.has(k))
       );
     case "logcat":
-    case "logs":
       // Unlike screenshot, logcat has two OPTIONAL fields — both must be
       // the right type when present, not just "any object passes" the way
       // this branch used to (Hermes review): a stray non-number `lines` or
@@ -127,7 +126,6 @@ export async function performDeviceAction(
       await driver.button(action.button);
       return { ok: true };
     case "logcat":
-    case "logs":
       return { logcat: await driver.logs({ lines: action.lines, filter: action.filter }) };
     case "clipboard":
       if (action.op === "get") return { text: await driver.clipboard.get() };

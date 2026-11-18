@@ -389,7 +389,6 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     expect(driver.supports("swipe")).toBe(true);
     expect(driver.supports("text")).toBe(true);
     expect(driver.supports("button")).toBe(true);
-    expect(driver.supports("logs")).toBe(true);
     expect(driver.supports("key")).toBe(false);
 
     await driver.start();

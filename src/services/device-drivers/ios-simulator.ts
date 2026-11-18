@@ -593,7 +593,6 @@ export class IosSimulatorDriver implements DeviceDriver {
     return (
       action === "screenshot" ||
       action === "logcat" ||
-      action === "logs" ||
       action === "clipboard" ||
       action === "tap" ||
       action === "swipe" ||

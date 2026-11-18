@@ -313,7 +313,9 @@ export class AndroidDriver implements DeviceDriver {
     await this.shell().spawnWaitText(shellExecArgv(["input", "keyevent", String(androidKeyCode)]));
   }
 
-  async button(_button: DeviceButton): Promise<void> {}
+  async button(_button: DeviceButton): Promise<void> {
+    throw new DeviceActionError(400, 'action "button" is not supported on android devices');
+  }
 
   async logs(options: { lines?: number; filter?: string }): Promise<string> {
     const args = ["logcat", "-d", "-t", String(options.lines ?? 200)];
