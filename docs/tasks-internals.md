@@ -1079,6 +1079,24 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   of the human's own commit is never read as a stall. A human push
   re-arms the task through the same `reannounceCappedTasksAfterHumanPush` sweep
   as before, which clears the reason with the stamp.
+- **A review that stays inconclusive asks a human.** `reannounceInconclusiveReviewsAfterGrace`
+  re-arms an inconclusive review once (`MAX_AUTOMATIC_INCONCLUSIVE_REARMS`).
+  When the re-arm count has reached that bound and the latest round (a session
+  or an external run) has been ingested as `inconclusive` again,
+  `flagExhaustedInconclusiveReviews` (`task-late-findings.ts`, run right after
+  the re-arm sweep each tick) parks the task like the cap: it stamps
+  `autoReturnCapAnnouncedAt`, sets `needsHumanReason: "review-inconclusive"` and
+  posts one PR comment. The stamp is the compare-and-set guard, so it fires once,
+  and it keeps the re-arm sweep (which skips announced rows) off the row. The
+  flag also records the reviewed head in `lastReviewedHeadSha` (from the poller
+  cache), so only a genuine later push re-arms it; with a cold cache the
+  baseline stays null and `reannounceCappedTasksAfterHumanPush` skips this
+  reason rather than treating null as "unknown". It is cleared by Retry review
+  (`POST /api/tasks/:id/re-review`), by a human push
+  (`reannounceCappedTasksAfterHumanPush`, baseline known), and by the next
+  ingested verdict. Retry review spends the re-arm count, so a retried round
+  that comes back inconclusive is flagged again on the next tick: the retry is
+  a single-shot escape. The banner renders without an auto-return round.
 - **Merge-tied reasons.** `tasks.needsHumanReason` also takes
   `rebase-exhausted` (the merge path's `recordMergeError` in
   `task-reconciler.ts` hit `MAX_REBASE_ATTEMPTS` with the PR still dirty) and

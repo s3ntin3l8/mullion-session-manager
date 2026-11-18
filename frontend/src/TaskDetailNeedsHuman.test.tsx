@@ -136,4 +136,19 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText(/approving review could not be posted to GitHub/)).toBeNull();
   });
+
+  it("shows the review-inconclusive banner for a task that spent no auto-return round", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        needsHumanReason: "review-inconclusive",
+        autoReturnRounds: 0,
+        autoReturnCapAnnouncedAt: "2026-01-01T00:00:00.000Z",
+        reviewSessionId: 7,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/the review ended without a verdict twice/)).toBeInTheDocument();
+  });
 });

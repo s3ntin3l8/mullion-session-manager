@@ -169,8 +169,11 @@ describe("re-armed review round heading (#2752)", () => {
     expect(stored).toContain("## Round 1 (retry 2)");
     // The posted PR review body carries the same distinct heading, after the
     // hidden dedupe marker the review post adds (#2749).
-    expect(mockCreatePrReview.mock.calls.at(-1)?.[4].body).toMatch(
-      /^<!-- mullion-review-post:\d+-\d+ -->\n## Round 1 \(retry 2\)\n\n/,
+    // The exhausted re-arm also posts a "review-inconclusive" notice after the
+    // review post in the same tick, so look the review post up by its heading.
+    const postedBodies = mockCreatePrReview.mock.calls.map((c) => c[4].body as string);
+    expect(postedBodies).toContainEqual(
+      expect.stringMatching(/^<!-- mullion-review-post:\d+-\d+ -->\n## Round 1 \(retry 2\)\n\n/),
     );
     await app.close();
   });

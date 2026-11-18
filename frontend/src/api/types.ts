@@ -2150,6 +2150,8 @@ export interface Task {
   // "blocked-threads", "pr-closed", "ci-status-stalled") are set with mergeError and stand on their own; "review-post-failed" is set without the announce stamp.
   // "ci-unfixable" and "ci-still-red" are review-loop reasons about a red CI
   // check: set with the announce stamp, and shown even when an approval is held.
+  // "review-inconclusive" is also set with the announce stamp: the review ended
+  // without a verdict even after its automatic re-arm.
   // See needsHuman.ts.
   needsHumanReason: NeedsHumanReason | null;
   // The failing check names (and, for "ci-unfixable", the worker's sanitised

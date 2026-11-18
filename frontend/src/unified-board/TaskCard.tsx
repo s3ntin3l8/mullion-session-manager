@@ -626,9 +626,19 @@ export function TaskCard({
           {needsHumanText(task.needsHumanReason, task.ciHoldNote)}, needs a human
         </div>
       )}
+      {task.status === "reviewing" && task.needsHumanReason === "review-inconclusive" && (
+        <div
+          className="task-card-review-round task-card-review-round-capped"
+          role="status"
+          data-testid="review-inconclusive-needs-human"
+        >
+          {needsHumanText(task.needsHumanReason)}, needs a human
+        </div>
+      )}
       {task.status === "reviewing" &&
         task.autoReturnRounds > 0 &&
         !task.approvalState &&
+        task.needsHumanReason !== "review-inconclusive" &&
         !isCiHoldReason(task.needsHumanReason) && (
           <div
             className={

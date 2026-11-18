@@ -10,6 +10,9 @@ describe("needsHumanText", () => {
   it("names each reason the automatic loop stopped", () => {
     expect(needsHumanText("cap")).toBe("round cap reached");
     expect(needsHumanText("no-progress")).toBe("worker returned without a change");
+    expect(needsHumanText("review-inconclusive")).toBe(
+      "the review ended without a verdict twice — retry the review or review by hand",
+    );
     expect(needsHumanText("finding-persisted")).toBe("same finding still open after two rounds");
     expect(needsHumanText("review-post-failed")).toBe(
       "approving review could not be posted to GitHub",

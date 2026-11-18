@@ -93,6 +93,7 @@ import { pruneLateFindingsCaches } from "./task-late-findings-cache.js";
 import {
   ingestLateFindings,
   reannounceInconclusiveReviewsAfterGrace,
+  staleReviewFlagPatch,
 } from "./task-late-findings.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
@@ -4223,9 +4224,7 @@ async function ingestReviewOutcome(
       lastReviewVerdictAt: new Date(now),
       ...(announcingCap
         ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason }
-        : task.needsHumanReason === "review-post-failed"
-          ? { needsHumanReason: null }
-          : {}),
+        : staleReviewFlagPatch(task)),
       ...(reviewedHeadSha !== undefined ? { lastReviewedHeadSha: reviewedHeadSha } : {}),
     })
     .where(
@@ -4434,6 +4433,9 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
     // advisory review that re-parks if there was nothing to find; that's
     // the safer direction to be wrong in.
     if (task.lastReviewedHeadSha !== null && pr.headSha === task.lastReviewedHeadSha) continue;
+    // Exception: an inconclusive-review flag with no baseline has no push to
+    // detect; re-arming would restart a review Mullion stopped.
+    if (!task.lastReviewedHeadSha && task.needsHumanReason === "review-inconclusive") continue;
 
     // Narrowed by the query's own `isNotNull(tasks.autoReturnCapAnnouncedAt)`
     // filter above — TypeScript can't see that across the two queries.

@@ -843,8 +843,17 @@ export function TaskDetail({
                 {task.githubSyncError ? ` — ${task.githubSyncError}` : ""}
               </div>
             )}
+          {task.needsHumanReason === "review-inconclusive" && (
+            <div
+              className="task-detail-review-round task-detail-review-round-capped"
+              data-testid="review-inconclusive-needs-human"
+            >
+              {needsHumanText(task.needsHumanReason)}, needs a human to take it from here
+            </div>
+          )}
           {task.autoReturnRounds > 0 &&
             !task.approvalState &&
+            task.needsHumanReason !== "review-inconclusive" &&
             !isCiHoldReason(task.needsHumanReason) && (
               <div
                 className={
