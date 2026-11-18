@@ -63,7 +63,7 @@ preview endpoint, `docs/browser-automation.md`), not to one session. Sessions
 on the same target share one browser. "This session's browser" is therefore
 also the browser of every session on that target.
 
-What each band shows (bands from `lib/layoutTierTypes.ts`):
+What each band shows (the media queries in `lib/layoutTier.ts`, `RAILS_FULL_BAND_QUERY` and its siblings):
 
 | Band                                                              | Preview                                                      | Agent Browser                                                                    |
 | ----------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
@@ -136,9 +136,10 @@ differently.
   token never travels. Which address the agent's browser loads instead is left
   to the implementation issue, with these constraints: a project's dev server
   address can be a bare port; the session can run on another host, where
-  `localhost` is that host; and the agent's browser context is already keyed
-  by the session's preview endpoint (`src/services/browser-target.ts`), so the
-  answer should come from that target, not from the iframe address.
+  `localhost` is that host; and the agent's browser context is keyed by the
+  session's target (project, checkout and preview endpoint, the endpoint fixed
+  at the first bind, `src/services/browser-target.ts`), so the answer should
+  come from that target, not from the iframe address.
 - A saved or external address is sent as is. The agent's browser refuses
   anything that is not http or https, so ⇄ is disabled for such an address.
 
@@ -208,6 +209,12 @@ page, which the server allows: frame capture is per connection
 (`src/routes/browser.ts`), so two viewers cost two capture loops, not a
 conflict. Closing the pane is up to the user.
 
+Crossing up is different today: with the rail's Browser view open, widening
+past 1100px closes the view and resets the stored view to the default
+(`right-sidebar/RightSidebarPanel.tsx`, its `inBand` effect). So "the mode it
+was last in" (the rail table above) is not true yet; follow-up 3 has to keep
+the view's mode and address across that crossing.
+
 ### Saved layouts
 
 Workspaces store dockview layouts as opaque blobs, so an old layout can hold
@@ -234,7 +241,8 @@ written back to the layout, so a reload keeps it, belongs to follow-up 2.
    Browser pane (decisions 1, 4, 5).
 3. `feat(browser): the right rail's Browser view gets the Preview / Agent's browser switch`.
    Below 1100px; every preview entry point opens the view in Preview instead of
-   a pane (decision 2). Blocked by 2.
+   a pane (decision 2). Keeps the view's mode and address when the width
+   crosses 1100px and back. Blocked by 2.
 4. `feat(browser): open the current address in the other browser`. The ⇄
    button and its rules, including which address the agent's browser loads for
    a project preview. Blocked by 2.
