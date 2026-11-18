@@ -66,7 +66,12 @@ export type PreviewForAddressResult =
  * addresses (`0.0.0.0`, `[::]`), which a browser dials as its own loopback:
  * each names one machine's own, whichever machine dials it. */
 export function isLoopbackHostname(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // A trailing dot is the root-qualified form (`localhost.`), which a browser
+  // resolves the same way; URL keeps it on a name.
+  const h = hostname
+    .toLowerCase()
+    .replace(/\.$/, "")
+    .replace(/^\[|\]$/g, "");
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h === "::1" || h === "::" || h === "0.0.0.0") return true;
   // IPv4-mapped loopback, as URL normalizes it ([::ffff:7f00:1]).

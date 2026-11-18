@@ -33,7 +33,8 @@ export function isHttpAddress(url: string): boolean {
 
 /** `localhost`, `*.localhost`, 127.0.0.0/8, `[::1]` and the unspecified
  * addresses (`0.0.0.0`, `[::]`), which a browser dials as its own loopback.
- * Mirrors src/services/browser-handoff.ts's isLoopbackHostname. */
+ * Mirrors src/services/browser-handoff.ts's isLoopbackHostname; both are
+ * tested against test/fixtures/loopback-hosts.json. */
 export function isLoopbackAddress(url: string): boolean {
   let hostname: string;
   try {
@@ -41,7 +42,8 @@ export function isLoopbackAddress(url: string): boolean {
   } catch {
     return false;
   }
-  const h = hostname.replace(/^\[|\]$/g, "");
+  // `localhost.` (root-qualified) resolves the same; URL keeps the dot.
+  const h = hostname.replace(/\.$/, "").replace(/^\[|\]$/g, "");
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h === "::1" || h === "::" || h === "0.0.0.0") return true;
   if (/^::ffff:(?:127\.|7f[0-9a-f]{2}:)/.test(h)) return true;
@@ -55,6 +57,7 @@ export const HANDOFF_PROXY_ADDRESS =
   "This is a preview proxy address; open the preview itself and use ⇄ from there";
 export const HANDOFF_NO_PREVIEW_ADDRESS = "The preview has no address to open";
 export const HANDOFF_NO_AGENT_PAGE = "The agent's browser has no page open";
+export const HANDOFF_AGENT_PAGE_NOT_HTTP = "Only http and https pages can open in the preview";
 export const HANDOFF_PENDING = "Working out the address…";
 export const HANDOFF_FAILED = "Could not work out the address";
 

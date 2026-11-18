@@ -13,6 +13,7 @@ import type { BrowserHostComponent, BrowserHostParams } from "./BrowserPaneHost.
 import type { BrowserPanelParams } from "./BrowserPanel.js";
 import type { PreviewSource } from "./lib/browserHandoff.js";
 import {
+  HANDOFF_AGENT_PAGE_NOT_HTTP,
   HANDOFF_FAILED,
   HANDOFF_LOOPBACK,
   HANDOFF_NOT_HTTP,
@@ -437,6 +438,14 @@ describe("open in the other browser (#3373)", () => {
     it("never asks about a page that is not http or https", async () => {
       await openAgent("about:blank");
       await waitFor(() => expect(toPreview()).toHaveAttribute("title", HANDOFF_NO_AGENT_PAGE));
+      expect(requests).toEqual([]);
+    });
+
+    it("says a non-http page is not one the preview can open", async () => {
+      await openAgent("chrome://settings/");
+      await waitFor(() =>
+        expect(toPreview()).toHaveAttribute("title", HANDOFF_AGENT_PAGE_NOT_HTTP),
+      );
       expect(requests).toEqual([]);
     });
 

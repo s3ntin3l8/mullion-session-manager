@@ -335,22 +335,21 @@ describe("browser handoff routes", () => {
     });
   });
 
-  it("treats localhost, *.localhost, 127/8 and ::1 as loopback", () => {
-    for (const h of [
-      "localhost",
-      "app.localhost",
-      "127.0.0.1",
-      "127.1.2.3",
-      "[::1]",
-      "::1",
-      "0.0.0.0",
-      "[::]",
-      new URL("http://[::ffff:127.0.0.1]/").hostname,
-    ]) {
-      expect(isLoopbackHostname(h)).toBe(true);
+  it("treats exactly the shared loopback vectors as loopback", () => {
+    const vectors = JSON.parse(
+      fs.readFileSync(new URL("../fixtures/loopback-hosts.json", import.meta.url), "utf8"),
+    ) as { loopback: string[]; notLoopback: string[] };
+    for (const url of vectors.loopback) {
+      expect(isLoopbackHostname(new URL(url).hostname), url).toBe(true);
     }
-    for (const h of ["example.com", "10.0.0.1", "localhost.example.com"]) {
-      expect(isLoopbackHostname(h)).toBe(false);
+    for (const url of vectors.notLoopback) {
+      expect(isLoopbackHostname(new URL(url).hostname), url).toBe(false);
     }
+  });
+
+  it("refuses a root-qualified localhost. page that is no dev server", async () => {
+    const projectId = addProject("local", "5173");
+    const sessionId = addSession(projectId, "local");
+    expect((await previewFor(sessionId, "http://localhost.:6000/")).json().kind).toBe("disabled");
   });
 });

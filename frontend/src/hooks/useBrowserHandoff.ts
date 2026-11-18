@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { browserApi } from "../api/browser.js";
 import type { PreviewForAgentAddress } from "../api/browser.js";
 import {
+  HANDOFF_AGENT_PAGE_NOT_HTTP,
   HANDOFF_FAILED,
   HANDOFF_NO_AGENT_PAGE,
   HANDOFF_NO_PREVIEW_ADDRESS,
@@ -100,7 +101,11 @@ export function usePreviewForAgentAddress(
     };
   }, [usable, sessionId, url, key]);
 
-  if (!usable) return { ok: false, reason: HANDOFF_NO_AGENT_PAGE };
+  if (!usable) {
+    // A page that is not http(s) (about:blank, chrome://…) is not "no page".
+    const shown = url != null && url.trim() !== "" && url !== "about:blank";
+    return { ok: false, reason: shown ? HANDOFF_AGENT_PAGE_NOT_HTTP : HANDOFF_NO_AGENT_PAGE };
+  }
   if (answer?.key !== key) return { ok: false, reason: HANDOFF_PENDING };
   return answer.handoff;
 }
