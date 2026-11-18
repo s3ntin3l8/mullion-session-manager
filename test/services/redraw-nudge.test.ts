@@ -13,8 +13,9 @@ import {
 // plus a resize spy) rather than a real Session/pty. The SESSION-shaped
 // behavior tests — suppression gating scrollback capture and attention,
 // coalescing overlapping requestRedraw() cycles, a same-size resize() not
-// cancelling a pending nudge, etc. — already live in pty-manager.test.ts
-// and are unchanged by this extraction; see this PR's description.
+// cancelling a pending nudge, etc. — already live in
+// test/services/pty-manager-terminal-io.test.ts and are unchanged by this
+// extraction; see this PR's description.
 
 // `resize` is a pure spy — unlike a real pty, it does NOT feed back into
 // `size`. That mirrors Session: Session.cols/rows are only ever changed by

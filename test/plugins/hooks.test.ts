@@ -17,7 +17,7 @@ import { sessionWorkflowConventionsPath } from "../../src/services/workflow-conv
 // client" reasoning as test/routes/terminal.test.ts / test/routes/events.test.ts,
 // just over net.createConnection() instead of a WebSocket. node-pty and the
 // systemd-run/dtach bootstrap child_process are faked the same way
-// test/services/pty-manager.test.ts fakes them, so this exercises the real
+// test/helpers/pty-manager-harness.ts fakes them, so this exercises the real
 // hooksPlugin listener (handshake, token validation, line framing) without
 // depending on a real systemd --user session.
 class FakePty {
@@ -1431,7 +1431,7 @@ describe("hooksPlugin (issue #172)", () => {
       // Session.markHooksProven's doc comment for why session_start can't
       // latch through emitHookEvent (this method's normal caller, per the
       // "PtyManager.emitHookEvent() routes to the right session by id" test
-      // in pty-manager.test.ts) the way every other hook kind does.
+      // in pty-manager-gates.test.ts) the way every other hook kind does.
       expect(markHooksProvenSpy).toHaveBeenCalledWith("1");
       socket.destroy();
     });

@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 
 // detectAgents() shells out to `command -v <bin>` once per known binary —
-// fake child_process the same way test/services/pty-manager.test.ts fakes
+// fake child_process the same way test/helpers/pty-manager-harness.ts fakes
 // the systemd-run/dtach bootstrap, so this doesn't depend on which shells/
 // agent CLIs happen to be installed on whatever machine runs the suite.
 

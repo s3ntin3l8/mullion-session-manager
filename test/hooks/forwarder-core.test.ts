@@ -1436,7 +1436,7 @@ describe("mapClaudeCodePermissionRequest", () => {
   // "review_gate" handler. Plan approval already has its own resolution path
   // (the human working directly at the Claude Code terminal) and was never
   // meant to route through Mullion's remote-approval gate — see
-  // test/services/pty-manager.test.ts's "ExitPlanMode dedup" describe block
+  // test/services/pty-manager-hook-status.test.ts's "ExitPlanMode dedup" describe block
   // for that downstream behavior.
   it("maps ExitPlanMode to permission_request, not review_gate — dedup against plan_ready happens downstream, not here", () => {
     expect(
