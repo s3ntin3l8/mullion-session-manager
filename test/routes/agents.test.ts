@@ -27,6 +27,7 @@ vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
 vi.mock("../../src/services/user-shell-env.js", () => ({
   resolveUserShellEnv: () => Promise.resolve(),
   invalidateUserShellEnv: () => {},
+  getUserShellEnvStatus: () => ({ shell: "/usr/bin/zsh", interactiveResolve: "ok", reason: null }),
   getUserShellPath: () => null,
   getUserShellEnv: () => ({}),
   getUserShellRecoverKeys: () => [],
