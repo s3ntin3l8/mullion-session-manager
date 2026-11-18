@@ -43,7 +43,6 @@
     "test/plugins/preview-proxy.test.ts": 1243,
     "test/routes/browser-automation.test.ts": 1342,
     "test/routes/hosts.test.ts": 1366,
-    "test/routes/internal.test.ts": 5721,
     "test/routes/project-setup.test.ts": 1488,
     "test/routes/projects-docker.test.ts": 1225,
     "test/routes/projects.test.ts": 2838,
