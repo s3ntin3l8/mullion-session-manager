@@ -3,6 +3,7 @@ import net from "node:net";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import type { FastifyInstance } from "fastify";
+import type { ConnectionState } from "../../src/plugins/control-socket.js";
 
 export const TEST_TOKEN = "test-auth-token-0123456789";
 export const TEST_SECRET = "test-session-secret-0123456789";
@@ -327,4 +328,22 @@ export async function ask(
 ): Promise<Record<string, unknown>> {
   socket.write(`${JSON.stringify({ id: 1, op, body })}\n`);
   return waitForReply(socket);
+}
+
+/** Builds a socket-less `ConnectionState` and a frame collector for driving `dispatch()` directly. */
+export function makeConnectionState(
+  scope: "full" | "session",
+  sessionId: string | null = null,
+): { conn: ConnectionState; frames: Record<string, unknown>[] } {
+  const frames: Record<string, unknown>[] = [];
+  const conn: ConnectionState = {
+    send: (message) => void frames.push(message),
+    onClose: () => () => {},
+    socket: null,
+    scope,
+    sessionId,
+    openChannels: new Map(),
+    activeWaits: 0,
+  };
+  return { conn, frames };
 }

@@ -13,6 +13,8 @@ import {
   TEST_OIDC_CLIENT_ID,
   TEST_OIDC_CLIENT_SECRET,
   TEST_OIDC_REDIRECT_URI,
+  cleanupControlSocketEnv,
+  enableControlSocketAuthEnv,
   connect,
   waitForClose,
   waitForReply,
@@ -99,14 +101,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     if (app) await app.close();
     app = null;
     ptyMock.spawnedPtys.length = 0;
-    delete process.env.MULLION_AUTH_TOKEN;
-    delete process.env.MULLION_SESSION_SECRET;
-    delete process.env.MULLION_ROLE;
-    delete process.env.MULLION_OIDC_ISSUER;
-    delete process.env.MULLION_OIDC_CLIENT_ID;
-    delete process.env.MULLION_OIDC_CLIENT_SECRET;
-    delete process.env.MULLION_OIDC_REDIRECT_URI;
-    delete process.env.PREVIEW_BASE_HOST;
+    cleanupControlSocketEnv();
   });
 
   it("listens on app.pty.controlSocketPath once ready, mode 0600", async () => {
@@ -603,8 +598,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     it("never logs any prefix of a mismatched handshake token, only its length", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      enableControlSocketAuthEnv();
       app = await buildApp();
       await app.ready();
       const warn = vi.spyOn(app.log, "warn");
@@ -641,8 +635,7 @@ describe("controlSocketPlugin (issue #185)", () => {
 
   describe("auth enabled (MULLION_AUTH_TOKEN + MULLION_SESSION_SECRET set)", () => {
     it("closes the connection on an empty handshake (auth enabled, no token)", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      enableControlSocketAuthEnv();
       app = await buildApp();
       await app.ready();
       const socket = await connect(app.pty.controlSocketPath);
@@ -652,8 +645,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     it("closes the connection on an invalid token", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      enableControlSocketAuthEnv();
       app = await buildApp();
       await app.ready();
       const socket = await connect(app.pty.controlSocketPath);
@@ -663,8 +655,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     it("grants full scope for MULLION_AUTH_TOKEN and can list sessions", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      enableControlSocketAuthEnv();
       app = await buildApp();
       await app.ready();
       const socket = await connect(app.pty.controlSocketPath);
@@ -700,8 +691,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     it("grants session scope for a live session's hook token, pinned to that session", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      enableControlSocketAuthEnv();
       app = await buildApp();
       await app.ready();
       const session = app.pty.getOrCreate({
@@ -722,8 +712,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     it("rejects a session-scoped connection calling a full-scope-only op", async () => {
-      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
-      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      enableControlSocketAuthEnv();
       app = await buildApp();
       await app.ready();
       const session = app.pty.getOrCreate({

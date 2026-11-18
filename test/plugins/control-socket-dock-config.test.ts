@@ -3,24 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildTestApp } from "../helpers/app.js";
-import { dispatch, type ConnectionState } from "../../src/plugins/control-socket.js";
+import { makeConnectionState } from "../helpers/control-socket.js";
+import { dispatch } from "../../src/plugins/control-socket.js";
 import { projects, sessions } from "../../src/db/schema.js";
 
 // #3050 — a session reads/edits its OWN project's .crs/dock.json through
 // projects.get_dock_config / projects.set_dock_config.
-function sinkConn(scope: "full" | "session", sessionId: string | null) {
-  const frames: Record<string, unknown>[] = [];
-  const conn: ConnectionState = {
-    send: (message) => void frames.push(message),
-    onClose: () => () => {},
-    socket: null,
-    scope,
-    sessionId,
-    openChannels: new Map(),
-    activeWaits: 0,
-  };
-  return { conn, frames };
-}
 
 describe("projects.get_dock_config / set_dock_config (#3050)", () => {
   let cwdA: string;
@@ -57,7 +45,7 @@ describe("projects.get_dock_config / set_dock_config (#3050)", () => {
           .lastInsertRowid,
       ),
     );
-    return { app, projectA, projectB, ...sinkConn("session", agent) };
+    return { app, projectA, projectB, ...makeConnectionState("session", agent) };
   }
 
   it("reads the caller's own project's config", async () => {
@@ -143,7 +131,7 @@ describe("projects.get_dock_config / set_dock_config (#3050)", () => {
 
   it("full scope names the project", async () => {
     const { app, projectB } = await setup();
-    const { conn, frames } = sinkConn("full", null);
+    const { conn, frames } = makeConnectionState("full", null);
     await dispatch(app, conn, { id: 1, op: "projects.get_dock_config", body: {} });
     await dispatch(app, conn, {
       id: 2,
@@ -160,7 +148,7 @@ describe("projects.get_dock_config / set_dock_config (#3050)", () => {
       app.db.insert(sessions).values({ projectId: projectA, command: "bash", cwd: cwdA }).run()
         .lastInsertRowid,
     );
-    const { conn, frames } = sinkConn("full", null);
+    const { conn, frames } = makeConnectionState("full", null);
     const body = (extra: Record<string, unknown>) => ({ projectId: String(projectA), ...extra });
     const run = (id: number, op: string, extra: Record<string, unknown>) =>
       dispatch(app, conn, { id, op, body: body(extra) });
