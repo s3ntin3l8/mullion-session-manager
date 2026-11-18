@@ -26,7 +26,7 @@ describe("StopFailure on a rate-limited turn, as Claude Code really sends it (is
     });
   });
 
-  it("does not loosely classify non-rate-limit errors that happen to mention quota or limit", () => {
+  it("does not forward last_assistant_message or classify non-rate-limit StopFailure payloads", () => {
     expect(
       mapClaudeCodeStopFailure({
         error: "invalid_request",
@@ -35,7 +35,16 @@ describe("StopFailure on a rate-limited turn, as Claude Code really sends it (is
     ).toEqual({
       kind: "stop_failure",
       error: "invalid_request",
-      errorDetails: "Context limit exceeded",
+    });
+
+    expect(
+      mapClaudeCodeStopFailure({
+        error: "max_output_tokens",
+        last_assistant_message: "I'll now check the config file.",
+      }),
+    ).toEqual({
+      kind: "stop_failure",
+      error: "max_output_tokens",
     });
   });
 

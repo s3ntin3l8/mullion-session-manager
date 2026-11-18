@@ -83,6 +83,19 @@ describe("parseClaudeCodeResetTime", () => {
     expect(parsed!.getMinutes()).toBe(30);
   });
 
+  it("prefers error_details over last_assistant_message when both are present", () => {
+    const now = new Date("2026-11-18T16:37:58.000Z");
+    const parsed = parseClaudeCodeResetTime(
+      {
+        error: "rate_limit",
+        error_details: "You've hit your 5-hour limit · resets 6:30pm (Europe/Berlin)",
+        last_assistant_message: "Done — I'll note the reset in the log.",
+      },
+      now,
+    );
+    expect(parsed?.toISOString()).toBe("2026-11-18T17:30:00.000Z");
+  });
+
   it("returns null for missing reset text, invalid timezones, invalid dates, or past dated resets", () => {
     const now = new Date("2026-11-18T16:37:58.000Z");
     expect(parseClaudeCodeResetTime(null, now)).toBeNull();

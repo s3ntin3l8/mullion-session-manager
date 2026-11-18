@@ -640,6 +640,7 @@ export function mapClaudeCodeStopFailure(payload) {
   if (payload && typeof payload.error_details === "string") {
     result.errorDetails = payload.error_details;
   } else if (
+    error === "rate_limit" &&
     payload &&
     typeof payload.last_assistant_message === "string" &&
     payload.last_assistant_message.length > 0

@@ -19,7 +19,12 @@ export interface ClaudeCodeStopFailurePayload {
 /**
  * Extracts the future reset `Date` from a Claude Code `StopFailure` hook
  * payload or its message string, or `null` when no future reset is present.
- * `now` is injectable for deterministic tests.
+ *
+ * `now` anchors relative date resolution (including today vs. tomorrow for
+ * time-only strings like `"resets 6:30pm (Europe/Berlin)"`). Callers parsing
+ * a persisted event must pass the event's own timestamp as `now` rather than
+ * relying on the wall-clock default, otherwise a time-only reset that has
+ * already passed since the event will roll forward a full day.
  */
 export function parseClaudeCodeResetTime(
   input: ClaudeCodeStopFailurePayload | string | null | undefined,
@@ -58,7 +63,7 @@ function extractMessageText(
 ): string | null {
   if (typeof input === "string") return input;
   if (!input || typeof input !== "object") return null;
-  for (const field of [input.last_assistant_message, input.error_details, input.error]) {
+  for (const field of [input.error_details, input.last_assistant_message, input.error]) {
     if (typeof field === "string" && field.length > 0) return field;
   }
   return null;
