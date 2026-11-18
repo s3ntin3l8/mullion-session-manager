@@ -5,9 +5,9 @@
   "recordedAtMeaning": "the commit whose tree these sizes were measured from — the fork point this branch started from. The baseline is the RECORD of the giants and the fallback reference when there is no git reference commit; when there is one, the guard measures against the reference commit instead, and that already absorbs the default branch's own growth.",
   "counts": {
     "production": 11,
-    "test": 38,
+    "test": 37,
     "tooling": 0,
-    "total": 49
+    "total": 48
   },
   "files": {
     "frontend/src/api/types.ts": 1467,
@@ -53,7 +53,6 @@
     "test/services/github-integration.test.ts": 1207,
     "test/services/github-write.test.ts": 1822,
     "test/services/hermes-review.test.ts": 1301,
-    "test/services/pty-manager.test.ts": 7504,
     "test/services/remote-host-client.test.ts": 2049,
     "test/services/scaffold-generate.test.ts": 1819,
     "test/services/task-claim.test.ts": 1899,

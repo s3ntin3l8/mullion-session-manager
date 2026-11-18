@@ -13,7 +13,7 @@ import type * as ChildProcess from "node:child_process";
 // for the full boundary. The end-to-end behavior tests that exercise these
 // through PtyManager's own delegating methods (manager.isMasterAliveState(),
 // manager.terminate() calling stopScope(), etc.) already live in
-// pty-manager.test.ts and are unchanged by this extraction; these tests
+// the pty-manager suite and are unchanged by this extraction; these tests
 // exercise the extracted functions directly.
 
 const SESSIONS_DIR = "/tmp/some-sessions";

@@ -52,7 +52,7 @@ describe("sessions route: the dev-server offer", () => {
   // state directly via app.pty.sweepDevServerDetection(...), the exact
   // entry point that timer calls, rather than waiting on the real interval
   // or re-testing the detection/dedup logic itself (already covered
-  // directly in test/services/pty-manager.test.ts).
+  // directly in test/services/pty-manager-dev-server.test.ts).
   describe("POST /api/sessions/:id/dev-server/accept and /dismiss (issue #404)", () => {
     async function createSessionWithPendingPort(
       app: Awaited<ReturnType<typeof buildApp>>,
