@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -549,6 +549,160 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     ]);
     await driver.stop();
   });
+
+  it("does not delay final touchUp or tap after a 60-event touchMove burst", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+
+    const burstStart = Date.now();
+    for (let i = 1; i <= 60; i++) {
+      await driver.input({
+        type: "touchMove",
+        x: 300 + i * 3,
+        y: 600 + i * 3,
+        videoWidth: 1206,
+        videoHeight: 2622,
+        pointerId: 0,
+      });
+    }
+    const touchUpStart = Date.now();
+    await driver.input({
+      type: "touchUp",
+      x: 480,
+      y: 780,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+    const touchUpElapsed = Date.now() - touchUpStart;
+    const totalElapsed = Date.now() - burstStart;
+
+    expect(touchUpElapsed).toBeLessThan(32);
+    expect(totalElapsed).toBeLessThan(32);
+    expect(c.hidStreams[0]!.written.at(-1)).toEqual({
+      press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "UP" },
+    });
+
+    const tapStart = Date.now();
+    await driver.tap(300, 600);
+    expect(Date.now() - tapStart).toBeLessThan(32);
+
+    await driver.stop();
+  });
+
+  it("coalesces queued touchMove events under backpressure so touchUp lands promptly", async () => {
+    const c = fakeCompanion();
+    const origHid = c.handle.client!.hid.bind(c.handle.client);
+    c.handle.client!.hid = () => {
+      const stream = origHid();
+      const origWrite = stream.write.bind(stream);
+      stream.write = ((event: IdbHidEvent, cb?: (err?: Error | null) => void) => {
+        // Simulate 5 ms gRPC write flush backpressure.
+        setTimeout(() => {
+          origWrite(event, cb);
+        }, 5);
+        return true;
+      }) as typeof stream.write;
+      return stream;
+    };
+
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+
+    const start = Date.now();
+    const moves = Array.from({ length: 60 }, (_, idx) =>
+      driver.input({
+        type: "touchMove",
+        x: 300 + (idx + 1) * 3,
+        y: 600 + (idx + 1) * 3,
+        videoWidth: 1206,
+        videoHeight: 2622,
+        pointerId: 0,
+      }),
+    );
+    const touchUpPromise = driver.input({
+      type: "touchUp",
+      x: 480,
+      y: 780,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+    await Promise.all([...moves, touchUpPromise]);
+    const elapsed = Date.now() - start;
+
+    // 60 uncoalesced 5 ms writes would take >= 300 ms; coalescing keeps it to a couple of writes.
+    expect(elapsed).toBeLessThan(50);
+    expect(c.hidStreams[0]!.written.length).toBeLessThan(10);
+    expect(c.hidStreams[0]!.written.at(-1)).toEqual({
+      press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "UP" },
+    });
+    await driver.stop();
+  });
+
+  it("restarts and resends the last live batch when invalidated error arrives late", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+    expect(c.handle.restart).toHaveBeenCalledTimes(1);
+
+    await driver.input({ type: "button", button: "home" });
+    expect(c.hidStreams).toHaveLength(1);
+
+    // Emit the invalidated error well past the 50 ms burst window.
+    await new Promise((r) => setTimeout(r, 80));
+    c.hidStreams[0]!.emit(
+      "error",
+      new Error("13 INTERNAL: The dtuhidd connection has been invalidated"),
+    );
+
+    await vi.waitFor(() => {
+      expect(c.handle.restart).toHaveBeenCalledTimes(2);
+      expect(c.hidStreams).toHaveLength(2);
+      expect(c.hidStreams[1]!.written).toEqual([
+        { press: { action: { button: { button: "HOME" } }, direction: "DOWN" } },
+        { press: { action: { button: { button: "HOME" } }, direction: "UP" } },
+      ]);
+    });
+    await driver.stop();
+  });
 });
 
 describe("IosSimulatorDriver input (fake idb_companion)", () => {
@@ -672,10 +826,20 @@ describe("IosSimulatorDriver input (fake idb_companion)", () => {
 
     await driver.start();
     await driver.input({ type: "button", button: "home" });
+    await vi.waitFor(() => expect(existsSync(hidLog)).toBe(true), { timeout: 2000 });
+    await new Promise((r) => setTimeout(r, 60));
     writeFileSync(staleMarker, "1");
     await driver.input({ type: "button", button: "lock" });
 
-    await new Promise((r) => setTimeout(r, 100));
+    // Recovery runs off the critical path: wait for the companion restart and
+    // resend to record LOCK DOWN/UP.
+    await vi.waitFor(
+      () => {
+        const lines = readFileSync(hidLog, "utf8").trim().split("\n").filter(Boolean);
+        expect(lines).toHaveLength(4);
+      },
+      { timeout: 5000 },
+    );
     await driver.stop();
 
     const recorded = readFileSync(hidLog, "utf8")

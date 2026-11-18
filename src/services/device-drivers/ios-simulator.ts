@@ -104,7 +104,9 @@ const MAX_STREAM_REOPEN_FAILURES = 5;
 const DESCRIBE_TIMEOUT_MS = 5000;
 const HID_ONCE_TIMEOUT_MS = 5000;
 const HID_STREAM_CLOSE_TIMEOUT_MS = 2000;
-const LIVE_HID_SETTLE_MS = 50;
+const RECENT_LIVE_BATCH_WINDOW_MS = 50;
+const RECENT_LIVE_BATCH_MAX = 64;
+const LAST_LIVE_BATCH_MAX_AGE_MS = 5000;
 const SCROLL_POINTS_PER_UNIT = 40;
 const SCROLL_SWIPE_DURATION_SEC = 0.15;
 
@@ -174,9 +176,25 @@ export class IosSimulatorDriver implements DeviceDriver {
   private offCompanionExit: (() => void) | null = null;
   private keyframeSent = false;
   private hidStream: HidStream | null = null;
+  private writingHidStream: HidStream | null = null;
   private hidStreamError: Error | null = null;
   private hidStale = false;
-  private hidQueue: Promise<void> = Promise.resolve();
+  private recentLiveBatches: Array<{
+    stream: HidStream;
+    events: IdbHidEvent[];
+    at: number;
+    retried: boolean;
+  }> = [];
+  private pendingRecoveryBatches: IdbHidEvent[][] = [];
+  private hidPending: Array<{
+    kind: "touchMove" | "other";
+    events: IdbHidEvent[];
+    forAction: boolean;
+    timeoutMs?: number;
+    resolve: () => void;
+    reject: (err: unknown) => void;
+  }> = [];
+  private hidDraining = false;
   private hidRestartPromise: Promise<void> | null = null;
   private hidRestartEpoch = 0;
   private screenDimensions: IdbScreenDimensions | null = null;
@@ -344,7 +362,9 @@ export class IosSimulatorDriver implements DeviceDriver {
         );
         if (!point) return;
         const direction = message.type === "touchUp" ? "UP" : "DOWN";
-        await this.sendHid([{ press: { action: { touch: { point } }, direction } }], false);
+        await this.sendHid([{ press: { action: { touch: { point } }, direction } }], false, {
+          kind: message.type === "touchMove" ? "touchMove" : "other",
+        });
         break;
       }
       case "scroll": {
@@ -485,7 +505,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
     const swipe =
       durationMs !== undefined ? { start, end, duration: durationMs / 1000 } : { start, end };
-    await this.sendHid([{ swipe }], true, HID_ONCE_TIMEOUT_MS + (durationMs ?? 0));
+    await this.sendHid([{ swipe }], true, { timeoutMs: HID_ONCE_TIMEOUT_MS + (durationMs ?? 0) });
   }
 
   async text(text: string): Promise<void> {
@@ -646,6 +666,8 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.describePromise = null;
     this.hidStale = false;
     this.hidStreamError = null;
+    this.recentLiveBatches = [];
+    this.pendingRecoveryBatches = [];
     this.gop.clear();
     this.keyframeSent = false;
   }
@@ -708,6 +730,8 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.describePromise = null;
     this.hidStale = false;
     this.hidStreamError = null;
+    this.recentLiveBatches = [];
+    this.pendingRecoveryBatches = [];
   }
 
   private requireCompanionClient(): IdbGrpcClient {
@@ -767,14 +791,32 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.hidStreamError = null;
     const stream = client.hid();
     stream.on("error", (err: Error) => {
-      if (this.hidStream === stream) {
-        this.hidStream = null;
-        this.hidStreamError = err;
-        if (isInvalidatedHidError(err)) this.hidStale = true;
+      if (this.hidStream !== stream) return;
+      this.hidStream = null;
+      this.hidStreamError = err;
+      if (!isInvalidatedHidError(err)) {
+        this.recentLiveBatches = this.recentLiveBatches.filter((b) => b.stream !== stream);
+        return;
+      }
+      this.hidStale = true;
+      // When writeBatchToStream is currently awaiting flush on this stream,
+      // sendHidSerialized handles the restart and retry inline. Otherwise the
+      // invalidated status arrived asynchronously after flush: recover any
+      // un-retried recent batches off the critical path.
+      if (this.writingHidStream === stream) return;
+      const { batches, hadDropped } = this.drainRecentLiveBatches(stream);
+      if (batches.length > 0) {
+        this.pendingRecoveryBatches.push(...batches);
+        if (!this.hidDraining) void this.drainHidQueue();
+      } else if (hadDropped) {
+        this.log.warn("iOS HID stream invalidated after retry or expiry; dropping batch", err);
       }
     });
     const clear = () => {
-      if (this.hidStream === stream) this.hidStream = null;
+      if (this.hidStream === stream) {
+        this.hidStream = null;
+        this.recentLiveBatches = this.recentLiveBatches.filter((b) => b.stream !== stream);
+      }
     };
     stream.on("close", clear);
     stream.on("finish", clear);
@@ -782,10 +824,46 @@ export class IosSimulatorDriver implements DeviceDriver {
     return stream;
   }
 
+  private recordLiveBatch(stream: HidStream, events: IdbHidEvent[], retried: boolean): void {
+    const now = Date.now();
+    this.recentLiveBatches.push({ stream, events, at: now, retried });
+    while (this.recentLiveBatches.length > 1) {
+      const oldest = this.recentLiveBatches[0]!;
+      if (
+        this.recentLiveBatches.length > RECENT_LIVE_BATCH_MAX ||
+        now - oldest.at > RECENT_LIVE_BATCH_WINDOW_MS
+      ) {
+        this.recentLiveBatches.shift();
+      } else {
+        break;
+      }
+    }
+    if (
+      this.recentLiveBatches.length === 1 &&
+      now - this.recentLiveBatches[0]!.at > LAST_LIVE_BATCH_MAX_AGE_MS
+    ) {
+      this.recentLiveBatches.shift();
+    }
+  }
+
+  private drainRecentLiveBatches(stream: HidStream): {
+    batches: IdbHidEvent[][];
+    hadDropped: boolean;
+  } {
+    const now = Date.now();
+    const matching = this.recentLiveBatches.filter((b) => b.stream === stream);
+    this.recentLiveBatches = this.recentLiveBatches.filter((b) => b.stream !== stream);
+    const batches = matching
+      .filter((b) => !b.retried && now - b.at <= LAST_LIVE_BATCH_MAX_AGE_MS)
+      .map((b) => b.events);
+    return { batches, hadDropped: matching.length > batches.length };
+  }
+
   private closeHidStream(): void {
     const stream = this.hidStream;
     this.hidStream = null;
     if (!stream) return;
+    this.recentLiveBatches = this.recentLiveBatches.filter((b) => b.stream !== stream);
     stream.on("error", () => undefined);
     try {
       stream.end();
@@ -800,29 +878,34 @@ export class IosSimulatorDriver implements DeviceDriver {
   }
 
   private async writeBatchToStream(stream: HidStream, events: IdbHidEvent[]): Promise<void> {
-    for (const event of events) {
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const finish = (err?: Error | null) => {
-          if (settled) return;
-          settled = true;
-          stream.off("error", onError);
-          if (err) reject(err);
-          else resolve();
-        };
-        const onError = (err: Error) => finish(err);
-        stream.once("error", onError);
-        try {
-          if (stream.write.length >= 2) {
-            stream.write(event, (err?: Error | null) => finish(err));
-          } else {
-            stream.write(event);
-            finish();
+    this.writingHidStream = stream;
+    try {
+      for (const event of events) {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finish = (err?: Error | null) => {
+            if (settled) return;
+            settled = true;
+            stream.off("error", onError);
+            if (err) reject(err);
+            else resolve();
+          };
+          const onError = (err: Error) => finish(err);
+          stream.once("error", onError);
+          try {
+            if (stream.write.length >= 2) {
+              stream.write(event, (err?: Error | null) => finish(err));
+            } else {
+              stream.write(event);
+              finish();
+            }
+          } catch (err) {
+            finish(err instanceof Error ? err : new Error(String(err)));
           }
-        } catch (err) {
-          finish(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
+        });
+      }
+    } finally {
+      if (this.writingHidStream === stream) this.writingHidStream = null;
     }
   }
 
@@ -848,24 +931,51 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
   }
 
-  private async waitForStreamSettle(stream: HidStream, ms: number): Promise<void> {
-    if (this.hidStale || this.hidStream !== stream) return;
+  private async closeLiveStreamForAction(prev: HidStream): Promise<Error | null> {
+    let closeError: Error | null = null;
+    const isGrpcStream = typeof (prev as { getPeer?: unknown }).getPeer === "function";
     await new Promise<void>((resolve) => {
       let settled = false;
-      const done = () => {
+      const finish = () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        stream.off("error", done);
-        stream.off("close", done);
-        stream.off("finish", done);
+        prev.off("status", onStatus);
+        prev.off("error", onError);
+        prev.off("close", finish);
         resolve();
       };
-      const timer = setTimeout(done, ms);
-      stream.once("error", done);
-      stream.once("close", done);
-      stream.once("finish", done);
+      const onError = (err: Error) => {
+        closeError ??= err;
+        finish();
+      };
+      const onStatus = (status: { code?: number; details?: string }) => {
+        if (status && typeof status.code === "number" && status.code !== 0) {
+          closeError ??= new Error(`${status.code}: ${status.details ?? "gRPC error"}`);
+        }
+        finish();
+      };
+      const timer = setTimeout(() => {
+        try {
+          prev.cancel?.();
+        } catch {
+          // The stream may already be closed.
+        }
+        finish();
+      }, HID_STREAM_CLOSE_TIMEOUT_MS);
+      prev.once("status", onStatus);
+      prev.once("error", onError);
+      // grpc-js ClientWritableStream emits `close` when the writable side ends
+      // before the server status arrives; only treat `close` as completion for
+      // non-gRPC test doubles.
+      if (!isGrpcStream) prev.once("close", finish);
+      try {
+        prev.end();
+      } catch {
+        finish();
+      }
     });
+    return closeError;
   }
 
   private async sendHidBatch(
@@ -873,37 +983,35 @@ export class IosSimulatorDriver implements DeviceDriver {
     events: IdbHidEvent[],
     forAction: boolean,
     timeoutMs?: number,
+    retried = false,
   ): Promise<{ ok: true } | { ok: false; invalidated: boolean; err: unknown }> {
     if (forAction) {
+      let activeClient = client;
       if (this.hidStream) {
         // idb_companion allows one active HID session at a time, so close the
         // held live stream before opening a one-shot hidOnce call.
         const prev = this.hidStream;
+        const { batches } = this.drainRecentLiveBatches(prev);
         this.hidStream = null;
-        await new Promise<void>((resolve) => {
-          let settled = false;
-          const finish = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            prev.off("status", finish);
-            prev.off("error", finish);
-            prev.off("close", finish);
-            resolve();
-          };
-          const timer = setTimeout(finish, HID_STREAM_CLOSE_TIMEOUT_MS);
-          prev.once("status", finish);
-          prev.once("error", finish);
-          prev.once("close", finish);
-          try {
-            prev.end();
-          } catch {
-            finish();
+        const closeErr = await this.closeLiveStreamForAction(prev);
+        if (closeErr && isInvalidatedHidError(closeErr)) {
+          await this.restartForStaleHid();
+          const retryClient = this.companion?.client;
+          if (!retryClient) {
+            return {
+              ok: false,
+              invalidated: false,
+              err: new Error("idb companion unavailable after restart"),
+            };
           }
-        });
+          activeClient = retryClient;
+          if (batches.length > 0) {
+            await activeClient.hidOnce(batches.flat(), { timeoutMs: HID_ONCE_TIMEOUT_MS });
+          }
+        }
       }
       try {
-        await client.hidOnce(events, { timeoutMs: timeoutMs ?? HID_ONCE_TIMEOUT_MS });
+        await activeClient.hidOnce(events, { timeoutMs: timeoutMs ?? HID_ONCE_TIMEOUT_MS });
         return { ok: true };
       } catch (err) {
         return { ok: false, invalidated: isInvalidatedHidError(err), err };
@@ -912,11 +1020,8 @@ export class IosSimulatorDriver implements DeviceDriver {
     const stream = this.ensureHidStream(client);
     try {
       await this.writeBatchToStream(stream, events);
-      // gRPC client-streaming write callbacks fire on local flush before the
-      // server returns an async INTERNAL invalidated status; wait briefly so a
-      // stale-HID error is observed and retried for this same live event.
-      await this.waitForStreamSettle(stream, LIVE_HID_SETTLE_MS);
       if (!this.hidStale && this.hidStream === stream) {
+        this.recordLiveBatch(stream, events, retried);
         return { ok: true };
       }
       const streamErr = this.hidStreamError;
@@ -948,11 +1053,83 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
   }
 
-  private sendHid(events: IdbHidEvent[], forAction: boolean, timeoutMs?: number): Promise<void> {
+  private sendHid(
+    events: IdbHidEvent[],
+    forAction: boolean,
+    options?: { timeoutMs?: number; kind?: "touchMove" | "other" },
+  ): Promise<void> {
     if (events.length === 0) return Promise.resolve();
-    const run = this.hidQueue.then(() => this.sendHidSerialized(events, forAction, timeoutMs));
-    this.hidQueue = run.catch(() => undefined);
-    return run;
+    const kind = options?.kind ?? "other";
+    return new Promise<void>((resolve, reject) => {
+      if (kind === "touchMove") {
+        const tail = this.hidPending.at(-1);
+        if (tail && tail.kind === "touchMove") {
+          // Coalesce queued touchMove events to the newest point so a fast
+          // pointermove burst never backs up touchUp or one-shot actions.
+          tail.events = events;
+          tail.resolve();
+          tail.resolve = resolve;
+          tail.reject = reject;
+          return;
+        }
+      }
+      this.hidPending.push({
+        kind,
+        events,
+        forAction,
+        timeoutMs: options?.timeoutMs,
+        resolve,
+        reject,
+      });
+      if (!this.hidDraining) {
+        void this.drainHidQueue();
+      }
+    });
+  }
+
+  private async drainHidQueue(): Promise<void> {
+    this.hidDraining = true;
+    try {
+      while (this.hidPending.length > 0 || this.pendingRecoveryBatches.length > 0) {
+        if (this.pendingRecoveryBatches.length > 0) {
+          await this.recoverStaleLiveBatches();
+          continue;
+        }
+        const item = this.hidPending.shift()!;
+        try {
+          await this.sendHidSerialized(item.events, item.forAction, item.timeoutMs);
+          item.resolve();
+        } catch (err) {
+          item.reject(err);
+        }
+      }
+    } finally {
+      this.hidDraining = false;
+      if (this.hidPending.length > 0 || this.pendingRecoveryBatches.length > 0) {
+        void this.drainHidQueue();
+      }
+    }
+  }
+
+  private async recoverStaleLiveBatches(): Promise<void> {
+    const batches = this.pendingRecoveryBatches.splice(0);
+    if (batches.length === 0 || !this.alive || !this.companion) return;
+    this.hidStale = false;
+    try {
+      await this.restartForStaleHid();
+      const retryClient = this.companion.client;
+      if (!retryClient) {
+        throw new Error("idb companion unavailable after restart");
+      }
+      const stream = this.ensureHidStream(retryClient);
+      for (const events of batches) {
+        await this.writeBatchToStream(stream, events);
+        this.recordLiveBatch(stream, events, true);
+      }
+    } catch (retryErr) {
+      this.closeHidStream();
+      this.log.warn("iOS HID input failed after companion restart; dropping event", retryErr);
+    }
   }
 
   private async sendHidSerialized(
@@ -1001,7 +1178,7 @@ export class IosSimulatorDriver implements DeviceDriver {
       if (!retryClient) {
         throw new Error("idb companion unavailable after restart");
       }
-      const retry = await this.sendHidBatch(retryClient, events, forAction, timeoutMs);
+      const retry = await this.sendHidBatch(retryClient, events, forAction, timeoutMs, true);
       if (!retry.ok) {
         throw retry.err;
       }
