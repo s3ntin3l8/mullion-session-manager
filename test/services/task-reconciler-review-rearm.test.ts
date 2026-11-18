@@ -898,8 +898,36 @@ describe("reconcileTasks — review round cap and re-arm", () => {
           prNumber: 9,
           lastReviewedHeadSha: null,
         });
+        // A resolvable repo (so the capped re-announce sweep reaches this row)
+        // but a cold PR cache when the flag is set: no baseline can be stamped.
+        mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+        invalidatePRsCache("o", "r");
 
         await reconcileTasks(app);
+        const first = await getTask(app, task.id);
+        expect(first.needsHumanReason).toBe("review-inconclusive");
+        expect(first.lastReviewedHeadSha).toBeNull();
+
+        // The cache warms up afterwards: a head with nothing to compare to is
+        // not a human push, so the sweep must leave the flag alone.
+        setRepoPRsStatus("o", "r", {
+          prs: [
+            {
+              number: 9,
+              title: "test pr",
+              htmlUrl: "https://github.com/o/r/pull/9",
+              author: "dev",
+              ...PR_REVIEW_DEFAULTS,
+              headSha: "sha-live",
+              headBranch: "feature",
+              baseBranch: "main",
+              ciStatus: null,
+              actionsRuns: [],
+            },
+          ],
+          prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+        });
+
         await reconcileTasks(app);
 
         const row = await getTask(app, task.id);
