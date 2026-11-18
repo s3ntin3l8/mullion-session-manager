@@ -41,9 +41,12 @@ let devicesLoaded = false;
 // (testSetup.ts stubs `matches: false` for every query) staying that way.
 let layoutMode: "auto" | "phone" | "tablet" | "desktop" = "desktop";
 
+const noTasks: never[] = [];
+
 function storeState() {
   return {
     sessions,
+    tasks: noTasks,
     projects,
     devices,
     devicesLoaded,
