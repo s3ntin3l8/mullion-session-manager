@@ -173,8 +173,10 @@ export class IosSimulatorDriver implements DeviceDriver {
   private hidStream: HidStream | null = null;
   private hidStale = false;
   private hidRestartPromise: Promise<void> | null = null;
+  private hidRestartEpoch = 0;
   private screenDimensions: IdbScreenDimensions | null = null;
   private describePromise: Promise<IdbScreenDimensions> | null = null;
+  private describeEpoch = 0;
 
   constructor(options: IosSimulatorDriverOptions) {
     // Validated before the UDID can reach any argv.
@@ -724,6 +726,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     if (this.screenDimensions) return this.screenDimensions;
     if (this.describePromise) return this.describePromise;
     const client = this.requireCompanionClient();
+    const epoch = ++this.describeEpoch;
     const promise = (async () => {
       const res = await client.describe({ timeoutMs: DESCRIBE_TIMEOUT_MS });
       const dims = res.target_description?.screen_dimensions;
@@ -747,7 +750,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     try {
       return await promise;
     } finally {
-      if (this.describePromise === promise) this.describePromise = null;
+      if (this.describeEpoch === epoch) this.describePromise = null;
     }
   }
 
@@ -817,6 +820,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     if (this.hidRestartPromise) return this.hidRestartPromise;
     const companion = this.companion;
     if (!companion) return;
+    const epoch = ++this.hidRestartEpoch;
     const promise = (async () => {
       this.resetCompanionSession();
       this.offCompanionExit?.();
@@ -830,7 +834,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     try {
       await promise;
     } finally {
-      if (this.hidRestartPromise === promise) this.hidRestartPromise = null;
+      if (this.hidRestartEpoch === epoch) this.hidRestartPromise = null;
     }
   }
 
