@@ -27,6 +27,7 @@ import {
 import { useDashboardStore } from "./store/index.js";
 import { Spinner } from "./ui/Spinner.js";
 import { devicesApi } from "./api/device.js";
+import { keyboardEventToHidUsage } from "./deviceHidKeyMap.js";
 import { STORAGE_KEYS, readString, writeString } from "./lib/persistedState.js";
 
 export interface DevicePaneParams {
@@ -209,6 +210,13 @@ export function DevicePane(props: {
   const deviceStatus = useDashboardStore(
     (s) => s.devices.find((d) => d.id === props.params.deviceId)?.status,
   );
+  const devicePlatform = useDashboardStore(
+    (s) => s.devices.find((d) => d.id === props.params.deviceId)?.platform ?? "android",
+  );
+  const platformRef = useRef(devicePlatform);
+  useEffect(() => {
+    platformRef.current = devicePlatform;
+  }, [devicePlatform]);
   const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
   const [starting, setStarting] = useState(false);
   const [showFrame, setShowFrame] = useState(
@@ -604,6 +612,23 @@ export function DevicePane(props: {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (platformRef.current === "ios") {
+        const chord =
+          (event.ctrlKey || event.metaKey) && !event.altKey && !event.getModifierState("AltGraph");
+        if (chord) {
+          // Do NOT preventDefault on paste: cancelling the keydown would
+          // cancel the browser's native `paste` event that onPaste reads.
+          if (event.key.toLowerCase() === "v") return;
+          event.preventDefault();
+          return;
+        }
+        const usage = keyboardEventToHidUsage(event.code);
+        if (usage !== null) {
+          event.preventDefault();
+          sendControl({ type: "hidKey", usage, action: "down" });
+        }
+        return;
+      }
       // Ctrl/Cmd chords must never fall through to the printable-key branch
       // below (Ctrl+V used to type a literal "v"). AltGr reports as
       // ctrl+alt on Windows, so a chord excludes Alt/AltGraph — otherwise
@@ -657,7 +682,19 @@ export function DevicePane(props: {
         sendControl({ type: "text", text: event.key });
       }
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (platformRef.current !== "ios") return;
+      const chord =
+        (event.ctrlKey || event.metaKey) && !event.altKey && !event.getModifierState("AltGraph");
+      if (chord) return;
+      const usage = keyboardEventToHidUsage(event.code);
+      if (usage !== null) {
+        event.preventDefault();
+        sendControl({ type: "hidKey", usage, action: "up" });
+      }
+    };
     canvas.addEventListener("keydown", onKeyDown);
+    canvas.addEventListener("keyup", onKeyUp);
 
     // Host -> device clipboard. The native paste event is the single read
     // path (no readText: no permission prompt, works over plain HTTP, and
@@ -682,6 +719,7 @@ export function DevicePane(props: {
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onContextMenu);
       canvas.removeEventListener("keydown", onKeyDown);
+      canvas.removeEventListener("keyup", onKeyUp);
       canvas.removeEventListener("paste", onPaste);
       if (activePointer !== null) {
         releaseActivePointer();
@@ -695,78 +733,110 @@ export function DevicePane(props: {
     // as BrowserPane.tsx/TerminalPane.tsx.
   }, [props.params.deviceId]);
 
+  const isIos = devicePlatform === "ios";
   const controlsDisabled = status !== "open" || stopped || removed;
   return (
     <div className="browser-pane">
-      <div className="device-toolbar" role="toolbar" aria-label="Android device controls">
-        <div className="device-toolbar-group" aria-label="Navigation">
-          <button
-            onPointerDown={(event) => event.preventDefault()}
-            title="Back"
-            aria-label="Back"
-            disabled={controlsDisabled}
-            onClick={() => sendControlRef.current({ type: "back" })}
-          >
-            <ChevronLeftIcon {...TOOLBAR_ICON} />
-          </button>
-          <button
-            onPointerDown={(event) => event.preventDefault()}
-            title="Home"
-            aria-label="Home"
-            disabled={controlsDisabled}
-            onClick={() => pressKey(3)}
-          >
-            <HomeIcon {...TOOLBAR_ICON} />
-          </button>
-          <button
-            onPointerDown={(event) => event.preventDefault()}
-            title="Recent apps"
-            aria-label="Recent apps"
-            disabled={controlsDisabled}
-            onClick={() => pressKey(187)}
-          >
-            <RecentsIcon {...TOOLBAR_ICON} />
-          </button>
-        </div>
-        <div className="device-toolbar-group" aria-label="Device buttons">
-          <button
-            onPointerDown={(event) => event.preventDefault()}
-            title="Power"
-            aria-label="Power"
-            disabled={controlsDisabled}
-            onClick={() => pressKey(26)}
-          >
-            <PowerIcon {...TOOLBAR_ICON} />
-          </button>
-          <button
-            onPointerDown={(event) => event.preventDefault()}
-            title="Volume down"
-            aria-label="Volume down"
-            disabled={controlsDisabled}
-            onClick={() => pressKey(25)}
-          >
-            <VolumeDownIcon {...TOOLBAR_ICON} />
-          </button>
-          <button
-            onPointerDown={(event) => event.preventDefault()}
-            title="Volume up"
-            aria-label="Volume up"
-            disabled={controlsDisabled}
-            onClick={() => pressKey(24)}
-          >
-            <VolumeUpIcon {...TOOLBAR_ICON} />
-          </button>
-        </div>
+      <div
+        className="device-toolbar"
+        role="toolbar"
+        aria-label={isIos ? "iOS device controls" : "Android device controls"}
+      >
+        {isIos ? (
+          <div className="device-toolbar-group" aria-label="Device buttons">
+            <button
+              onPointerDown={(event) => event.preventDefault()}
+              title="Home"
+              aria-label="Home"
+              disabled={controlsDisabled}
+              onClick={() => sendControlRef.current({ type: "button", button: "home" })}
+            >
+              <HomeIcon {...TOOLBAR_ICON} />
+            </button>
+            <button
+              onPointerDown={(event) => event.preventDefault()}
+              title="Lock"
+              aria-label="Lock"
+              disabled={controlsDisabled}
+              onClick={() => sendControlRef.current({ type: "button", button: "lock" })}
+            >
+              <PowerIcon {...TOOLBAR_ICON} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="device-toolbar-group" aria-label="Navigation">
+              <button
+                onPointerDown={(event) => event.preventDefault()}
+                title="Back"
+                aria-label="Back"
+                disabled={controlsDisabled}
+                onClick={() => sendControlRef.current({ type: "back" })}
+              >
+                <ChevronLeftIcon {...TOOLBAR_ICON} />
+              </button>
+              <button
+                onPointerDown={(event) => event.preventDefault()}
+                title="Home"
+                aria-label="Home"
+                disabled={controlsDisabled}
+                onClick={() => pressKey(3)}
+              >
+                <HomeIcon {...TOOLBAR_ICON} />
+              </button>
+              <button
+                onPointerDown={(event) => event.preventDefault()}
+                title="Recent apps"
+                aria-label="Recent apps"
+                disabled={controlsDisabled}
+                onClick={() => pressKey(187)}
+              >
+                <RecentsIcon {...TOOLBAR_ICON} />
+              </button>
+            </div>
+            <div className="device-toolbar-group" aria-label="Device buttons">
+              <button
+                onPointerDown={(event) => event.preventDefault()}
+                title="Power"
+                aria-label="Power"
+                disabled={controlsDisabled}
+                onClick={() => pressKey(26)}
+              >
+                <PowerIcon {...TOOLBAR_ICON} />
+              </button>
+              <button
+                onPointerDown={(event) => event.preventDefault()}
+                title="Volume down"
+                aria-label="Volume down"
+                disabled={controlsDisabled}
+                onClick={() => pressKey(25)}
+              >
+                <VolumeDownIcon {...TOOLBAR_ICON} />
+              </button>
+              <button
+                onPointerDown={(event) => event.preventDefault()}
+                title="Volume up"
+                aria-label="Volume up"
+                disabled={controlsDisabled}
+                onClick={() => pressKey(24)}
+              >
+                <VolumeUpIcon {...TOOLBAR_ICON} />
+              </button>
+            </div>
+          </>
+        )}
         <div className="device-toolbar-group" aria-label="Display">
-          <button
-            onPointerDown={(event) => event.preventDefault()}
-            title="Rotate device"
-            aria-label="Rotate device"
-            disabled={controlsDisabled}
-            onClick={() => sendControlRef.current({ type: "rotate" })}
-          >
-            <RotateIcon {...TOOLBAR_ICON} />
-          </button>
+          {!isIos && (
+            <button
+              onPointerDown={(event) => event.preventDefault()}
+              title="Rotate device"
+              aria-label="Rotate device"
+              disabled={controlsDisabled}
+              onClick={() => sendControlRef.current({ type: "rotate" })}
+            >
+              <RotateIcon {...TOOLBAR_ICON} />
+            </button>
+          )}
           <button
             onPointerDown={(event) => event.preventDefault()}
             title="Download screenshot"

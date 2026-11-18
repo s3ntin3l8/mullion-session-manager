@@ -23,10 +23,10 @@ import { DeviceIcon, PlayIcon, StopIcon } from "./ui/icons.js";
 export const DEVICES_POLL_MS = 4000;
 
 // The row's label, in the order every other device surface uses it (name →
-// AVD name → serial). One helper, so the row's visible text, its accessible
-// name and the failure message below all name the SAME device.
+// AVD name → serial → UDID). One helper, so the row's visible text, its
+// accessible name and the failure message below all name the SAME device.
 function deviceLabel(device: Device): string | null {
-  return device.name || device.avdName || device.serial;
+  return device.name || device.avdName || device.serial || device.udid || null;
 }
 
 // What to CALL the device when it is spoken — an aria-label, a failure
@@ -136,11 +136,14 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
       {devices.map((device) => {
         const stopped = device.status === "killed";
         const label = deviceLabel(device);
+        const isIos = device.platform === "ios";
         // This row's own failure, or nothing — never another row's.
         const rowError = lifecycleError?.id === device.id ? lifecycleError.message : null;
         const unreachable = device.hostUnreachable === true;
-        // The host is spoken as well as shown: two same-named AVDs on
-        // different hosts must not read as identical rows to a screen reader.
+        // The platform (for iOS) and host are spoken as well as shown: two
+        // same-named devices on different platforms or hosts must not read as
+        // identical rows to a screen reader.
+        const platformSuffix = isIos ? " (iOS)" : "";
         const hostSuffix =
           device.hostId !== LOCAL_HOST_ID ? ` on ${hostDisplayName(device.hostId, hosts)}` : "";
         // The visible note is inside a role="button" row, so its text is
@@ -177,7 +180,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
             // connection" as one string). Same convention as Sidebar.tsx's
             // SessionRow (`Open session …`) and NotificationBell's
             // EventRow — the row names itself, its content does not.
-            aria-label={`Open device ${deviceSpokenName(device)}${hostSuffix}${spokenState}`}
+            aria-label={`Open device ${deviceSpokenName(device)}${platformSuffix}${hostSuffix}${spokenState}`}
             title={title}
             onClick={() => onOpenDevice(device)}
             onKeyDown={(e) => {
@@ -190,6 +193,11 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
           >
             <DeviceIcon size={14} />
             <span className="sidebar-tasks-entry-label">{label}</span>
+            {isIos && (
+              <span className="device-row-host" data-testid={`device-platform-${device.id}`}>
+                iOS
+              </span>
+            )}
             {device.hostId !== LOCAL_HOST_ID && (
               <span className="device-row-host" data-testid={`device-host-${device.id}`}>
                 {hostDisplayName(device.hostId, hosts)}
@@ -201,7 +209,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                 <button
                   type="button"
                   data-testid={`device-start-${device.id}`}
-                  aria-label={`Start ${label}${hostSuffix}${spokenState}`}
+                  aria-label={`Start ${label}${platformSuffix}${hostSuffix}${spokenState}`}
                   title="Start"
                   disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
@@ -215,7 +223,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                 <button
                   type="button"
                   data-testid={`device-stop-${device.id}`}
-                  aria-label={`Stop ${label}${hostSuffix}${spokenState}`}
+                  aria-label={`Stop ${label}${platformSuffix}${hostSuffix}${spokenState}`}
                   title="Stop"
                   disabled={pendingId !== null || unreachable}
                   onClick={(e) => {

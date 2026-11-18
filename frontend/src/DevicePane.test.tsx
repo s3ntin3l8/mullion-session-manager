@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { AndroidKeyEventMeta } from "@yume-chan/scrcpy";
 import { DevicePane } from "./DevicePane.js";
+import { keyboardEventToHidUsage } from "./deviceHidKeyMap.js";
 import type { Device } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { mockFetch } from "./test/mockFetch.js";
@@ -787,4 +788,183 @@ describe("DevicePane (issue #1326)", () => {
     });
     expect(FakeWebSocket.instances).toHaveLength(3);
   }
+
+  describe("iOS input profile and platform-aware toolbar", () => {
+    it("renders the Android toolbar when platform is missing", () => {
+      const device = makeDevice();
+      delete (device as Partial<Device>).platform;
+      resetStore({ devices: [device], devicesLoaded: true });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+
+      expect(screen.getByRole("toolbar", { name: "Android device controls" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Recent apps" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Rotate device" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Lock" })).not.toBeInTheDocument();
+    });
+
+    it("renders the iOS toolbar and sends button messages for Home and Lock", () => {
+      localStorage.removeItem("crs.deviceFrame");
+      resetStore({
+        devices: [
+          makeDevice({
+            platform: "ios",
+            avdName: null,
+            udid: "00008110-001234563C88801E",
+          }),
+        ],
+        devicesLoaded: true,
+      });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+
+      expect(screen.getByRole("toolbar", { name: "iOS device controls" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Recent apps" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Power" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Volume down" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Volume up" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Rotate device" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Download screenshot" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Hide device frame" })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Home" }));
+      fireEvent.click(screen.getByRole("button", { name: "Lock" }));
+      const sent = socket.sent.map((entry) => JSON.parse(entry));
+      expect(sent).toEqual([
+        { type: "button", button: "home" },
+        { type: "button", button: "lock" },
+      ]);
+    });
+
+    it("sends hidKey down then up on key press and never sends Android keyCode messages for an iOS device", () => {
+      resetStore({
+        devices: [
+          makeDevice({
+            platform: "ios",
+            avdName: null,
+            udid: "00008110-001234563C88801E",
+          }),
+        ],
+        devicesLoaded: true,
+      });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+      const canvas = document.querySelector("canvas")!;
+      const sent = () => socket.sent.map((entry) => JSON.parse(entry));
+
+      const downA = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "a",
+        code: "KeyA",
+      });
+      const upA = new KeyboardEvent("keyup", {
+        bubbles: true,
+        cancelable: true,
+        key: "a",
+        code: "KeyA",
+      });
+      act(() => {
+        canvas.dispatchEvent(downA);
+        canvas.dispatchEvent(upA);
+      });
+      expect(downA.defaultPrevented).toBe(true);
+      expect(upA.defaultPrevented).toBe(true);
+      expect(sent()).toEqual([
+        { type: "hidKey", usage: 0x04, action: "down" },
+        { type: "hidKey", usage: 0x04, action: "up" },
+      ]);
+
+      // Named keys and chords that would send Android keyEvent on Android
+      for (const init of [
+        { key: "Enter", code: "Enter" },
+        { key: "Backspace", code: "Backspace" },
+        { key: "ArrowLeft", code: "ArrowLeft", shiftKey: true },
+        { key: "c", code: "KeyC", ctrlKey: true },
+        { key: "a", code: "KeyA", metaKey: true },
+        { key: "F1", code: "F1" },
+      ]) {
+        act(() => {
+          canvas.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+          );
+          canvas.dispatchEvent(
+            new KeyboardEvent("keyup", { bubbles: true, cancelable: true, ...init }),
+          );
+        });
+      }
+
+      // Paste still works via the native paste event (Ctrl/Cmd+V keydown is not cancelled).
+      const pasteKey = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "v",
+        code: "KeyV",
+        metaKey: true,
+      });
+      act(() => {
+        canvas.dispatchEvent(pasteKey);
+      });
+      expect(pasteKey.defaultPrevented).toBe(false);
+
+      const paste = new Event("paste", { bubbles: true, cancelable: true });
+      Object.assign(paste, { clipboardData: { getData: () => "ios paste" } });
+      act(() => {
+        canvas.dispatchEvent(paste);
+      });
+
+      const allMessages = sent();
+      expect(allMessages).toContainEqual({ type: "hidKey", usage: 0x28, action: "down" });
+      expect(allMessages).toContainEqual({ type: "hidKey", usage: 0x28, action: "up" });
+      expect(allMessages).toContainEqual({ type: "clipboard", text: "ios paste" });
+      for (const msg of allMessages) {
+        expect(msg).not.toHaveProperty("androidKeyCode");
+        expect(msg.type).not.toBe("keyEvent");
+        expect(msg.type).not.toBe("back");
+        expect(msg.type).not.toBe("rotate");
+      }
+    });
+  });
+
+  describe("keyboardEventToHidUsage", () => {
+    it("maps letters, digits, editing keys, arrows and common punctuation to USB HID usage codes", () => {
+      expect(keyboardEventToHidUsage("KeyA")).toBe(0x04);
+      expect(keyboardEventToHidUsage("KeyZ")).toBe(0x1d);
+      expect(keyboardEventToHidUsage("Digit1")).toBe(0x1e);
+      expect(keyboardEventToHidUsage("Digit9")).toBe(0x26);
+      expect(keyboardEventToHidUsage("Digit0")).toBe(0x27);
+      expect(keyboardEventToHidUsage("Enter")).toBe(0x28);
+      expect(keyboardEventToHidUsage("Escape")).toBe(0x29);
+      expect(keyboardEventToHidUsage("Backspace")).toBe(0x2a);
+      expect(keyboardEventToHidUsage("Tab")).toBe(0x2b);
+      expect(keyboardEventToHidUsage("Space")).toBe(0x2c);
+      expect(keyboardEventToHidUsage("Minus")).toBe(0x2d);
+      expect(keyboardEventToHidUsage("Equal")).toBe(0x2e);
+      expect(keyboardEventToHidUsage("BracketLeft")).toBe(0x2f);
+      expect(keyboardEventToHidUsage("BracketRight")).toBe(0x30);
+      expect(keyboardEventToHidUsage("Backslash")).toBe(0x31);
+      expect(keyboardEventToHidUsage("Semicolon")).toBe(0x33);
+      expect(keyboardEventToHidUsage("Quote")).toBe(0x34);
+      expect(keyboardEventToHidUsage("Backquote")).toBe(0x35);
+      expect(keyboardEventToHidUsage("Comma")).toBe(0x36);
+      expect(keyboardEventToHidUsage("Period")).toBe(0x37);
+      expect(keyboardEventToHidUsage("Slash")).toBe(0x38);
+      expect(keyboardEventToHidUsage("ArrowRight")).toBe(0x4f);
+      expect(keyboardEventToHidUsage("ArrowLeft")).toBe(0x50);
+      expect(keyboardEventToHidUsage("ArrowDown")).toBe(0x51);
+      expect(keyboardEventToHidUsage("ArrowUp")).toBe(0x52);
+    });
+
+    it("returns null for unmapped key codes", () => {
+      expect(keyboardEventToHidUsage("")).toBeNull();
+      expect(keyboardEventToHidUsage("F1")).toBeNull();
+      expect(keyboardEventToHidUsage("ShiftLeft")).toBeNull();
+      expect(keyboardEventToHidUsage("MetaLeft")).toBeNull();
+      expect(keyboardEventToHidUsage("Key1")).toBeNull();
+      expect(keyboardEventToHidUsage("UnknownCode")).toBeNull();
+    });
+  });
 });
