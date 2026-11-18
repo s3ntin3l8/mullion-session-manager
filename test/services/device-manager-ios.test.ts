@@ -225,6 +225,37 @@ describe("DeviceManager iOS Simulator devices", () => {
     expect(companion.stop).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["boot", "bootstatus"] as const)(
+    "a terminate that lands during %s never starts the companion or leaves the simulator booted",
+    async (gateVerb) => {
+      const sim = scriptedSimctl("Shutdown");
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const gated: typeof sim = {
+        ...sim,
+        simctl: async (args, options) => {
+          const out = await sim.simctl(args, options);
+          if (args[0] === gateVerb) await gate;
+          return out;
+        },
+      };
+      const { factory, companion } = realDriverEngine(gated);
+      const { manager } = makeManager({ iosEngineFactory: factory });
+
+      const device = (await manager.getOrCreate(spawnOpts())) as IosDevice;
+      await vi.waitFor(() => expect(sim.verbs()).toContain(gateVerb));
+      await manager.terminate("7", "emulator", "ios");
+      release();
+      await vi.waitFor(() => expect(sim.res.state).toBe("Shutdown"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(companion.restart).not.toHaveBeenCalled();
+      expect(companion.start).not.toHaveBeenCalled();
+      expect(device.isAlive).toBe(false);
+      expect(manager.get("7")).toBeUndefined();
+    },
+  );
+
   it("never reaches the scope backend: not on start, stop, terminate or killAll", async () => {
     const sim = scriptedSimctl("Booted");
     const { factory } = realDriverEngine(sim);
