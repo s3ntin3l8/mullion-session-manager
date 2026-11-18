@@ -2,23 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { buildTestApp } from "../helpers/app.js";
-import { dispatch, OPS, type ConnectionState } from "../../src/plugins/control-socket.js";
+import { makeConnectionState } from "../helpers/control-socket.js";
+import { dispatch, OPS } from "../../src/plugins/control-socket.js";
 import { projects, sessions } from "../../src/db/schema.js";
 import { insertTask } from "../../src/services/task-store.js";
-
-function makeConn(scope: "full" | "session", sessionId: string | null = null) {
-  const frames: Array<Record<string, unknown>> = [];
-  const conn: ConnectionState = {
-    send: (m) => frames.push(m),
-    onClose: () => () => {},
-    socket: null,
-    scope,
-    sessionId,
-    openChannels: new Map(),
-    activeWaits: 0,
-  };
-  return { conn, frames };
-}
 
 describe("session-scope reads of sessions and tasks", () => {
   let app: FastifyInstance | null = null;
@@ -56,7 +43,7 @@ describe("session-scope reads of sessions and tasks", () => {
   }
 
   async function call(caller: number | null, op: string, body?: Record<string, unknown>) {
-    const { conn, frames } = makeConn(
+    const { conn, frames } = makeConnectionState(
       caller === null ? "full" : "session",
       caller === null ? null : String(caller),
     );
