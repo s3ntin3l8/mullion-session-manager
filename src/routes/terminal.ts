@@ -72,9 +72,9 @@ export function proxyToRemoteAttach(
     if (browserSocket.readyState === browserSocket.OPEN) browserSocket.close();
   };
 
-  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["openAttach"]>;
+  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["streams"]["attach"]>;
   try {
-    upstream = getRemoteHostClient(app, hostId).openAttach(opts);
+    upstream = getRemoteHostClient(app, hostId).streams.attach(opts);
   } catch (err) {
     app.log.error({ err, hostId, sessionId: opts.id }, "failed to open remote terminal attach");
     closeBrowser();

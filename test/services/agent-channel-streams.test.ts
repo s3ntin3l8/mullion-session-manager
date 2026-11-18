@@ -323,10 +323,10 @@ describe("transport selection for streams (#2571)", () => {
         return mode === "up" ? { kind: "channel", channel: r.entry } : { kind: "channel-down" };
       },
     });
-    const ev = client.openEventsStream({ cursors: true }) as never as ChannelSocket;
+    const ev = client.streams.events({ cursors: true }) as never as ChannelSocket;
     await opened(ev);
     expect(r.calls[0]).toEqual({ kind: "events", query: { cursors: "1" } });
-    const att = client.openAttach({
+    const att = client.streams.attach({
       id: "s9",
       cwd: "/w",
       command: "bash",
@@ -348,14 +348,14 @@ describe("transport selection for streams (#2571)", () => {
         env: '{"A":"b"}',
       },
     });
-    const relay = client.openControlRelayStream() as never as ChannelSocket;
-    const ssh = client.openSshAgentStream() as never as ChannelSocket;
+    const relay = client.streams.controlRelay() as never as ChannelSocket;
+    const ssh = client.streams.sshAgent() as never as ChannelSocket;
     await Promise.all([opened(relay), opened(ssh)]);
     expect(r.calls.slice(2).map((c) => c.kind)).toEqual(["control-relay", "ssh-agent"]);
     expect(new Set(ops)).toEqual(new Set(["channel-streams"]));
 
     mode = "down";
-    const down = client.openAttach({
+    const down = client.streams.attach({
       id: "s9",
       cwd: "/w",
       command: "bash",

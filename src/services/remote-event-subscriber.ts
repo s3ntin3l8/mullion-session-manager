@@ -163,7 +163,7 @@ export function startRemoteEventSubscriber(
       // `hosts` row (remote-host-client.ts), which is what picks up a
       // rotated session credential after a stale-token failure; holding a
       // client/socket across reconnects would defeat that (hazard 4).
-      socket = getRemoteHostClient(app, sub.hostId).openEventsStream();
+      socket = getRemoteHostClient(app, sub.hostId).streams.events();
     } catch (err) {
       // Throws synchronously for a deleted/baseUrl-less host row
       // (host-heartbeat.ts's sweep() and relayRemoteEventsHost both already

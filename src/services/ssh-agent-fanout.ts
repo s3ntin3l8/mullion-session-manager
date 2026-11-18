@@ -281,7 +281,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
       // same hazard-4 reasoning as remote-event-subscriber.ts's own
       // connect(): a rotated agent token only takes effect on a fresh
       // getRemoteHostClient() call.
-      socket = getRemoteHostClient(app, f.hostId).openSshAgentStream();
+      socket = getRemoteHostClient(app, f.hostId).streams.sshAgent();
     } catch (err) {
       app.log.warn(
         { err, hostId: f.hostId },
