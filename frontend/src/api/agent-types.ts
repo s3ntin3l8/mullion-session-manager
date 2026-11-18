@@ -9,8 +9,9 @@ export interface Agent {
   kind: "shell" | "agent";
   available: boolean;
   path: string | null;
-  /** Set when detection itself failed (timed out / errored): `available: false`
-   * then means "could not be checked", not "not installed". */
+  /** Set when "not found" cannot be trusted (the probe timed out or failed, or
+   * ran on an unverified PATH): `available: false` then means "could not be
+   * checked", not "not installed". Mirrors DetectedAgent.probeError. */
   probeError?: "timeout" | "error";
   /** Codex's `/hooks` trust status for Mullion's merged hooks (issue #259).
    * Only present on the "codex" agent. */

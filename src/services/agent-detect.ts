@@ -34,9 +34,12 @@ export interface DetectedAgent {
   available: boolean;
   /** Resolved absolute path, or null if not found on PATH. */
   path: string | null;
-  /** Set when the probe itself failed (timed out / errored) and no earlier
-   * good result could stand in: `available: false` then means "could not be
-   * checked", NOT "not installed". Omitted for a probe that ran cleanly. */
+  /** Set when "not found" cannot be trusted, and no earlier good result could
+   * stand in: `available: false` then means "could not be checked", NOT "not
+   * installed". Three causes: the probe timed out (`"timeout"`), it failed to
+   * run (`"error"`), or it ran cleanly but on an unverified PATH because the
+   * interactive-PATH resolve failed transiently (also `"error"`). Omitted for
+   * a probe that ran cleanly on a verified PATH. */
   probeError?: LoginShellFailure;
   /** Codex's `/hooks` trust status for Mullion's merged forwarder hooks
    * (issue #259) — "trusted" | "pending" | "not-installed". Only set for the
@@ -123,7 +126,10 @@ function interactivePathUnverified(): boolean {
   const { interactiveResolve, reason } = getUserShellEnvStatus();
   return (
     interactiveResolve === "fallback" &&
-    (reason === "timeout" || reason === "spawn-failed" || reason === "unparseable")
+    (reason === "timeout" ||
+      reason === "spawn-failed" ||
+      reason === "unparseable" ||
+      reason === "pending")
   );
 }
 

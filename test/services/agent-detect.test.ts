@@ -344,9 +344,10 @@ describe("probe failure vs. not installed", () => {
     try {
       const results = await detectAgents(prior);
       // Carried over unchanged (still the timeout), not replaced by the new 'error'.
-      expect(results.find((r) => r.id === "agent:codex")).toBe(
-        prior.find((r) => r.id === "agent:codex"),
-      );
+      expect(results.find((r) => r.id === "agent:codex")).toMatchObject({
+        available: false,
+        probeError: "timeout",
+      });
     } finally {
       errorBins = new Set();
       vi.restoreAllMocks();
