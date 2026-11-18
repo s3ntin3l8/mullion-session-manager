@@ -5,7 +5,12 @@ import {
   DEVICE_SPAWN_SCHEMA,
   DEVICE_TERMINATE_SCHEMA,
 } from "./internal-schemas.js";
-import { localDeviceKinds, localDevicePlatforms } from "../services/device-kinds.js";
+import {
+  iosSimulatorAvailable,
+  localDeviceKinds,
+  localDevicePlatforms,
+} from "../services/device-kinds.js";
+import { listIosSimulators, SimctlError } from "../services/ios-simulators.js";
 import { isDeviceAction, performDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceKind } from "../services/device-drivers/types.js";
@@ -14,6 +19,7 @@ import type {
   DeviceSpawnSpec,
   DeviceWsQuery,
   LiveDevicesResponse,
+  SimulatorsResponse,
   SpawnDeviceResponse,
 } from "../services/device-wire.js";
 
@@ -35,6 +41,23 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
     deviceKinds: localDeviceKinds(app),
     platforms: await localDevicePlatforms(app),
   }));
+
+  app.get<{ Reply: SimulatorsResponse }>(
+    "/internal/simulators",
+    rateLimit,
+    async (_request, reply) => {
+      if (!app.devicePanelEnabled) return reply.badRequest(app.devicePanelUnavailableMessage);
+      if (!(await iosSimulatorAvailable(app))) {
+        return reply.badRequest("iOS Simulator is not available on this host");
+      }
+      try {
+        return { simulators: await listIosSimulators() };
+      } catch (err) {
+        if (err instanceof SimctlError) return reply.badGateway(err.message);
+        throw err;
+      }
+    },
+  );
 
   // Idempotent get-or-create: a device already live under this id is returned as
   // is, a scope that survived an agent restart is reattached (DeviceManager's

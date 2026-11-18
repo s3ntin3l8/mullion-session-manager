@@ -56,6 +56,25 @@ describe("remote-host-devices", () => {
     expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1]);
   });
 
+  it("lists simulators on /internal/simulators with DEVICE_REQUEST_TIMEOUT_MS", async () => {
+    const sims = [
+      {
+        udid: "0F4A9B7E-1111-2222-3333-444455556666",
+        name: "iPhone 16 Pro",
+        runtime: "iOS 18.2",
+        state: "Booted",
+      },
+    ];
+    const request = vi.fn().mockResolvedValueOnce({ simulators: sims });
+    const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
+    await expect(devices.simulators()).resolves.toEqual(sims);
+    expect(request).toHaveBeenCalledWith(
+      "/internal/simulators",
+      undefined,
+      DEVICE_REQUEST_TIMEOUT_MS,
+    );
+  });
+
   it("reads an agent answer with no platforms as Android-only", async () => {
     const some = vi.fn().mockResolvedValue({ deviceKinds: ["physical", "emulator"] });
     await expect(

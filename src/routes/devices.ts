@@ -14,6 +14,7 @@ import { isDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceAction, DevicePlatform } from "../services/device-drivers/types.js";
 import { getDeviceHost, liveInfoForRows, type DeviceHost } from "../services/device-host.js";
+import { SimctlError } from "../services/ios-simulators.js";
 import { getHostRow, LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveProjectHostId } from "../services/session-host.js";
 import { HostRequestError } from "../services/remote-host-client.js";
@@ -557,6 +558,33 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.get("/api/devices/discovered", async () => {
     if (!app.bootDeviceDiscoveryEnabled) return [];
     return app.deviceDiscovery.getDiscovered();
+  });
+
+  app.get<{ Querystring: { hostId?: string } }>("/api/simulators", async (request, reply) => {
+    const requestedHostId = request.query?.hostId;
+    const hostId = requestedHostId && requestedHostId.length > 0 ? requestedHostId : LOCAL_HOST_ID;
+    if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
+      return reply.badRequest(`Unknown host ${hostId}`);
+    }
+    const host = getDeviceHost(app, hostId);
+    try {
+      const support = await host.kinds();
+      if (support === null) {
+        return reply.badRequest(
+          `Host ${host.hostId} does not report device support — update its agent.`,
+        );
+      }
+      if (!support.platforms.includes("ios")) {
+        return reply.badRequest(
+          `Host ${host.hostId} does not support iOS simulators (supported platforms: ${support.platforms.join(", ") || "none"}).`,
+        );
+      }
+      return await host.simulators();
+    } catch (err) {
+      if (err instanceof SimctlError) return reply.badGateway(err.message);
+      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+      return replyHostUnreachable(reply, host.hostId, err, "listing iOS simulators");
+    }
   });
 
   app.get<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
