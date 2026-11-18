@@ -43,8 +43,8 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
       if (requestId === latestRefreshId) set({ devices, devicesLoaded: true });
     },
 
-    createDevice: async (avdName, name) => {
-      const device = await api.createDevice({ avdName, name });
+    createDevice: async (avdName, name, hostId) => {
+      const device = await api.createDevice({ avdName, name, ...(hostId ? { hostId } : {}) });
       refreshAfterMutation();
       return device;
     },

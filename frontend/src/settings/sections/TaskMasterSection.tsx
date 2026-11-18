@@ -37,6 +37,7 @@ export function TaskMasterSection() {
   // fires from `onCommit` (blur/Enter) instead, so a momentarily-cleared
   // field never reaches the debounced patch as a persisted "0".
   const [maxConcurrentDraft, setMaxConcurrentDraft] = useState<number | null>(null);
+  const [startDraft, setStartDraft] = useState<number | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
   const [graceDraft, setGraceDraft] = useState<number | null>(null);
@@ -121,6 +122,25 @@ export function TaskMasterSection() {
             setBudgetDraft(null);
             updateSettings({
               taskMaster: { budgetMinutes: clampNumberFieldOnCommit(v, 0, 10080) },
+            });
+          }}
+        />
+      </Row>
+      <Row
+        label="Worker startup timeout"
+        desc="Ask for human attention if a worker has not started a turn. 0 disables this check."
+      >
+        <NumberField
+          value={startDraft ?? resolved.workerStartTimeoutMinutes}
+          min={0}
+          max={10080}
+          width={54}
+          suffix="minutes"
+          onChange={setStartDraft}
+          onCommit={(v) => {
+            setStartDraft(null);
+            updateSettings({
+              taskMaster: { workerStartTimeoutMinutes: clampNumberFieldOnCommit(v, 0, 10080) },
             });
           }}
         />

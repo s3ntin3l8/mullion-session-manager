@@ -1277,6 +1277,7 @@ export const tasks = sqliteTable(
         // the worker was not parked; set with the task `failed`, the reset in
         // `rateLimitUntil` and the provider text in `rateLimitMessage`.
         "rate-limited",
+        "worker-not-started",
       ],
     }),
     // `ci-unfixable` — the worker was returned for a red check and declared, in

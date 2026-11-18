@@ -38,6 +38,9 @@ export function taskBucket(t: Task): TaskBucket | null {
 /** Why a task needs a human, or null when it does not. */
 export function needsYouReason(t: Task): string | null {
   if (t.archivedAt) return null;
+  if (t.status === "in_progress" && t.needsHumanReason === "worker-not-started") {
+    return needsHumanText(t.needsHumanReason);
+  }
   if (t.status === "failed") return t.failureReason ?? "failed";
   // A parked red CI check names itself even while an approval is held (that is when
   // it happens), so it comes before the approval line.

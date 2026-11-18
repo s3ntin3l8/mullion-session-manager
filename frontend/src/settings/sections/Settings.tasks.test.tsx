@@ -349,6 +349,7 @@ describe("Settings -> Task Master", () => {
           enabled: "on",
           maxConcurrent: 5,
           budgetMinutes: 30,
+          workerStartTimeoutMinutes: 10,
           progressCommentMinutes: 5,
           rateLimitGraceMinutes: 5,
           rateLimitMaxParkHours: 24,

@@ -40,9 +40,6 @@ class MockWebSocket {
   triggerMessage(data: string) {
     this.onmessage?.({ data });
   }
-  triggerError() {
-    this.onerror?.();
-  }
   triggerClose() {
     this.readyState = 3;
     this.onclose?.();
@@ -186,6 +183,7 @@ describe("Settings -> Devices (issue #1326)", () => {
         devicesDb = [...devicesDb, device];
         return jsonResponse(201, device);
       },
+      "GET /api/devices/hosts": () => jsonResponse(200, []),
       "GET /api/devices/discovered": () => jsonResponse(200, discoveredDb),
       // Mirrors routes/devices.ts's own pair-and-connect handler (issue
       // #1378): inserts a physical row at the resolved connect address.

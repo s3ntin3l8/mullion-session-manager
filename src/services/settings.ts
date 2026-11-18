@@ -315,6 +315,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     enabled: "inherit",
     maxConcurrent: -1,
     budgetMinutes: -1,
+    workerStartTimeoutMinutes: 10,
     progressCommentMinutes: -1,
     rateLimitGraceMinutes: -1,
     rateLimitMaxParkHours: -1,
@@ -730,8 +731,12 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         max: 20,
         dangerousBelow: 1,
       }),
-      // -1 = inherit; 0 is a legitimate "unlimited" value here (no dangerous
-      // floor to guard, unlike maxConcurrent) and must survive untouched.
+      workerStartTimeoutMinutes: safeNumber(settings.taskMaster.workerStartTimeoutMinutes, {
+        min: 0,
+        max: 10080,
+        fallback: DEFAULT_SETTINGS.taskMaster.workerStartTimeoutMinutes,
+      }),
+      // -1 inherits the budget; 0 is a real unlimited override.
       budgetMinutes: safeSentinelNumber(settings.taskMaster.budgetMinutes, {
         sentinel: -1,
         min: 0,

@@ -40,7 +40,8 @@ import type { HookMessageKind, HookMessage } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import { getAdapterEmits, getAdapterTranscriptFormat } from "./hook-adapters/index.js";
 import { resolveClaudeConfigDir } from "./hook-adapters/claude-config-dir.js";
-import { claudeProjectDirNames, type TranscriptSource } from "./session-transcript.js";
+import { claudeProjectDirNames, sessionTranscriptSource } from "./session-transcript.js";
+import type { TranscriptSource } from "./session-transcript.js";
 import { detectDevServerPortForPlainSession, portInUseReason } from "./dev-server-detect.js";
 import { lastMeaningfulLine, collapseAndTruncate } from "./terminal-text.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
@@ -2580,13 +2581,6 @@ export class Session {
   }
 
   /**
-   * Issue #2268 — where this session's agent keeps its conversation, or null
-   * when no hook has reported a path yet. The roots are the directories the file
-   * must resolve inside (the hook-reported path is untrusted): for Claude Code
-   * `<config dir>/projects`, for the session's own `CLAUDE_CONFIG_DIR` and the
-   * backend's default; for Codex its sessions directory.
-   */
-  /**
    * Issue #2268 — why a session that reported a transcript has no readable source: a
    * Claude project directory name past 200 characters is hashed by Claude in a way this
    * cannot reproduce, so such a cwd's conversation is deliberately not served. Null when
@@ -2600,36 +2594,31 @@ export class Session {
     );
   }
 
-  getTranscriptSource(): TranscriptSource | null {
+  emitTaskStartupNote(note: string): void {
+    this.emitEvent("status_change", { reason: "worker-not-started", note });
+  }
+
+  /** Roots derived from launch state, never from hooks. */
+  startupTranscriptSearch() {
     const format = getAdapterTranscriptFormat(this.command);
-    if (format === "codex" && this.codexTranscriptPath !== null) {
-      return {
-        format,
-        path: this.codexTranscriptPath,
-        roots: [path.join(this.codexHome(), "sessions")],
-      };
-    }
-    // Only a Claude Code session may name a Claude transcript, and only inside ITS
-    // OWN project directory (Claude keys it by the launch cwd). The projects/ tree
-    // holds every session's conversation on the host, so a broader root would let a
-    // forged hook message point this session's reader at someone else's.
-    if (format === "claude-code" && this._agentTranscriptPath !== null) {
-      const configDirs = [resolveClaudeConfigDir()];
-      const own = this.env.CLAUDE_CONFIG_DIR;
-      if (typeof own === "string" && own.length > 0) configDirs.unshift(own);
-      const cwds = [this.cwd, this._liveCwd].filter((cwd): cwd is string => !!cwd);
-      const roots = new Set<string>();
-      for (const configDir of configDirs) {
-        const projects = path.join(configDir, "projects");
-        for (const cwd of cwds) {
-          for (const name of claudeProjectDirNames(cwd)) roots.add(path.join(projects, name));
-        }
-      }
-      // No root (a cwd whose directory name Claude hashes): not served, never widened.
-      if (roots.size === 0) return null;
-      return { format, path: this._agentTranscriptPath, roots: [...roots] };
-    }
-    return null;
+    const roots =
+      format === "codex"
+        ? [path.join(this.codexHome(), "sessions")]
+        : claudeProjectDirNames(this.cwd).map((name) =>
+            path.join(this.env.CLAUDE_CONFIG_DIR || resolveClaudeConfigDir(), "projects", name),
+          );
+    return format ? { format, roots, cwd: this.cwd, since: this.createdAt } : null;
+  }
+
+  getTranscriptSource(): TranscriptSource | null {
+    return sessionTranscriptSource(
+      this.command,
+      this.codexTranscriptPath,
+      this.codexHome(),
+      this._agentTranscriptPath,
+      this.env.CLAUDE_CONFIG_DIR,
+      [this.cwd, this._liveCwd].filter((cwd): cwd is string => !!cwd),
+    );
   }
 
   /**

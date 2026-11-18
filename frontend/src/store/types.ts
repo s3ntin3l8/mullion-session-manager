@@ -665,7 +665,7 @@ export interface DevicesSlice {
   // mass-closing every device panel while the list is still loading.
   devicesLoaded: boolean;
   refreshDevices: () => Promise<void>;
-  createDevice: (avdName: string, name?: string) => Promise<Device>;
+  createDevice: (avdName: string, name?: string, hostId?: string) => Promise<Device>;
   // GET /api/devices/discovered (issue #1378) — not stored in the slice,
   // PairDeviceDialog keeps the scan results in its own local state.
   listDiscovered: () => Promise<DiscoveredDevice[]>;

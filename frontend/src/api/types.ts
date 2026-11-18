@@ -2641,6 +2641,7 @@ export interface AppSettings {
     enabled: "inherit" | "on" | "off";
     maxConcurrent: number;
     budgetMinutes: number;
+    workerStartTimeoutMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
     rateLimitMaxParkHours?: number;

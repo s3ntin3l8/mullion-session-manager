@@ -15,7 +15,8 @@ export type NeedsHumanReason =
   | "ci-unfixable"
   | "ci-still-red"
   | "review-inconclusive"
-  | "rate-limited";
+  | "rate-limited"
+  | "worker-not-started";
 
 /** The two review-loop reasons that name a red CI check (`ciHoldNote` carries
  * the check names and, for `ci-unfixable`, the worker's reason). Unlike the
@@ -49,6 +50,8 @@ export function needsHumanText(
   note?: string | null,
 ): string {
   switch (reason) {
+    case "worker-not-started":
+      return "worker has not started a turn — check its terminal for a startup prompt";
     case "ci-unfixable":
       return note
         ? `a CI check can't be fixed from this PR: ${note}`

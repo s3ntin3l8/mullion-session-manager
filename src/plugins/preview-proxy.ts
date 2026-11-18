@@ -423,7 +423,7 @@ async function handlePreviewRequest(
     );
     stripPreviewAuthCookie(headers);
     try {
-      const response = await getRemoteHostClient(app, target.hostId).openConfiguredPreviewHttp(
+      const response = await getRemoteHostClient(app, target.hostId).previews.configuredHttp(
         upstreamUrl.href,
         { method: request.method, headers, ...body },
       );
@@ -448,10 +448,10 @@ async function handlePreviewRequest(
   if (isRemoteProjectTarget(target)) {
     const headers = buildUpstreamRequestHeaders(request, `127.0.0.1:${portFromUrl(upstreamUrl)}`);
     // AS4's "authorization" leak is already closed for this hop by a
-    // different, pre-existing mechanism: remote-host-client.ts's own
-    // openPreviewHttp deletes whatever "authorization" this browser-derived
-    // header set carries and replaces it with the primary's own
-    // agent-session bearer token before it ever reaches the wire (issue
+    // different, pre-existing mechanism: the client's own previews facet
+    // (remote-host-previews.ts) deletes whatever "authorization" this
+    // browser-derived header set carries and replaces it with the primary's
+    // own agent-session bearer token before it ever reaches the wire (issue
     // #249 — see that file's own comment on why a delete-then-set, not a
     // conditional one, is required). The `mullion_preview` auth cookie has
     // no equivalent scrubbing anywhere on this hop, though — the agent's own
@@ -461,7 +461,7 @@ async function handlePreviewRequest(
     stripPreviewAuthCookie(headers);
     let upstreamResponse: Response;
     try {
-      upstreamResponse = await getRemoteHostClient(app, target.hostId).openPreviewHttp(
+      upstreamResponse = await getRemoteHostClient(app, target.hostId).previews.http(
         portFromUrl(upstreamUrl),
         upstreamUrl.pathname + upstreamUrl.search,
         { method: request.method, headers, ...body },
@@ -640,16 +640,14 @@ async function handlePreviewWsUpgrade(
     let upstream: NodeWebSocket;
     if (target.kind === "target" && target.hostId !== LOCAL_HOST_ID) {
       try {
-        upstream = getRemoteHostClient(app, target.hostId).openConfiguredPreviewWs(
-          upstreamUrl.href,
-        );
+        upstream = getRemoteHostClient(app, target.hostId).previews.configuredWs(upstreamUrl.href);
       } catch {
         browserSocket.close(1011, "Preview target host is unavailable");
         return;
       }
     } else if (isRemoteProjectTarget(target)) {
       try {
-        upstream = getRemoteHostClient(app, target.hostId).openPreviewWs(
+        upstream = getRemoteHostClient(app, target.hostId).previews.ws(
           portFromUrl(upstreamUrl),
           upstreamUrl.pathname + upstreamUrl.search,
         );

@@ -27,6 +27,7 @@ export interface ResolvedTaskMasterConfig {
   autoClaimPaused: boolean;
   maxConcurrent: number;
   budgetMinutes: number;
+  workerStartTimeoutMinutes: number;
   progressCommentMinutes: number;
   rateLimitGraceMinutes: number;
   rateLimitMaxParkHours: number;
@@ -47,6 +48,7 @@ export function resolveTaskMaster(
   return {
     enabled: taskMaster.enabled === "inherit" ? envDefaults.enabled : taskMaster.enabled === "on",
     autoClaimPaused: taskMaster.autoClaimPaused,
+    workerStartTimeoutMinutes: taskMaster.workerStartTimeoutMinutes ?? 10,
     maxConcurrent:
       taskMaster.maxConcurrent === -1 ? envDefaults.maxConcurrent : taskMaster.maxConcurrent,
     budgetMinutes:

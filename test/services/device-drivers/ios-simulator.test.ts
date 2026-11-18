@@ -342,18 +342,27 @@ describe("IosSimulatorDriver", () => {
       ).toEqual({ ok: true });
     });
 
+    it("refuses key as unsupported", async () => {
+      const { driver, calls } = make();
+      await expect(
+        performDeviceAction(driver, { action: "key", androidKeyCode: 4 }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: 'action "key" is not supported on ios devices',
+      });
+      expect(calls).toEqual([]);
+    });
+
     it.each([
       { action: "tap", x: 1, y: 2 },
       { action: "swipe", x1: 1, y1: 2, x2: 3, y2: 4 },
       { action: "text", text: "a" },
-      { action: "key", androidKeyCode: 4 },
-    ] as const)("refuses $action", async (action) => {
-      const { driver, calls } = make();
+    ] as const)("supports $action and fails with 400 without a companion", async (action) => {
+      const { driver } = make();
       await expect(performDeviceAction(driver, action)).rejects.toMatchObject({
         statusCode: 400,
-        message: `action "${action.action}" is not supported on ios devices`,
+        message: expect.stringContaining("no live idb companion"),
       });
-      expect(calls).toEqual([]);
     });
   });
 

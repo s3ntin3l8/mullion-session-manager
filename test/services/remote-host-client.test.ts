@@ -11,7 +11,7 @@ import {
 } from "../../src/services/request-signature.js";
 
 // Issue #249 / roadmap 7.5 — the 5 non-request() sites (streams.attach,
-// browser.openSocket, streams.events, openPreviewWs, streams.sshAgent)
+// browser.openSocket, streams.events, previews.ws, streams.sshAgent)
 // construct a real `ws` package WebSocket; mocked here the same way
 // `fetch` is stubbed above, so
 // the exact constructor args (in particular the headers option, which is
@@ -2281,8 +2281,8 @@ describe("RemoteHostClient", () => {
         expect(options.maxPayload).toBe(1024 * 1024);
       });
 
-      it("openPreviewWs signs the WS upgrade for a session-credentialed host", () => {
-        sessionClient("the-secret").openPreviewWs(5173, "/hmr");
+      it("previews.ws signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").previews.ws(5173, "/hmr");
         const [url, options] = wsConstructorCalls[0] as [
           string,
           { headers: Record<string, string> },
@@ -2299,9 +2299,9 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
-      it("openPreviewHttp signs the request and does not hash the (streamed) body", async () => {
+      it("previews.http signs the request and does not hash the (streamed) body", async () => {
         fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
-        await sessionClient("the-secret").openPreviewHttp(5173, "/index.html", {
+        await sessionClient("the-secret").previews.http(5173, "/index.html", {
           method: "GET",
           headers: new Headers(),
         });
@@ -2323,7 +2323,7 @@ describe("RemoteHostClient", () => {
       // BROWSER-controlled request forwarded through the preview proxy — a
       // browser must not be able to inject its own signature/auth headers
       // and have them survive to the outbound request.
-      it("openPreviewHttp strips caller-supplied authorization/signature headers before setting its own", async () => {
+      it("previews.http strips caller-supplied authorization/signature headers before setting its own", async () => {
         fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
         const maliciousHeaders = new Headers({
           authorization: "Bearer attacker-controlled",
@@ -2331,7 +2331,7 @@ describe("RemoteHostClient", () => {
           [TIMESTAMP_HEADER]: "attacker-controlled-timestamp",
           [NONCE_HEADER]: "attacker-controlled-nonce",
         });
-        await sessionClient("the-secret").openPreviewHttp(5173, "/index.html", {
+        await sessionClient("the-secret").previews.http(5173, "/index.html", {
           method: "GET",
           headers: maliciousHeaders,
         });
@@ -2343,14 +2343,14 @@ describe("RemoteHostClient", () => {
         expect(init.headers.get(NONCE_HEADER)).not.toBe("attacker-controlled-nonce");
       });
 
-      it("openPreviewHttp for a static-token host strips a browser-injected signature header entirely, rather than passing it through unsigned", async () => {
+      it("previews.http for a static-token host strips a browser-injected signature header entirely, rather than passing it through unsigned", async () => {
         fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
         const maliciousHeaders = new Headers({
           [SIGNATURE_HEADER]: "attacker-controlled-signature",
           [TIMESTAMP_HEADER]: "attacker-controlled-timestamp",
           [NONCE_HEADER]: "attacker-controlled-nonce",
         });
-        await client().openPreviewHttp(5173, "/index.html", {
+        await client().previews.http(5173, "/index.html", {
           method: "GET",
           headers: maliciousHeaders,
         });

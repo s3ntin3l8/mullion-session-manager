@@ -543,7 +543,7 @@ reason given above (Iceboxed throughout the phase, shipped separately afterward)
 - **7.5 was the highest-risk issue in the phase** — it changes the auth path for every
   primary→agent request from a registered session. Auth is attached in 6+ distinct places in
   `remote-host-client.ts`, not one central spot; 4 are WS upgrades (`streams.attach`,
-  `browser.openSocket`, `streams.events`, `openPreviewWs` — not 3; the roadmap previously missed
+  `browser.openSocket`, `streams.events`, `previews.ws` — not 3; the roadmap previously missed
   `browser.openSocket`, the browser-control WS route added after this section was first written)
   where only the `ws` package's client (not the browser `WebSocket`) can carry a custom
   header, and the signature can only cover the upgrade request itself. Went through 4 rounds
