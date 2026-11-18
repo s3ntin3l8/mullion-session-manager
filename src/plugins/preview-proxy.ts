@@ -51,12 +51,12 @@ import {
 // and proxy identically from that point on — subdomain-based previews
 // don't rewrite paths, so "a project's dev server" and "an external site"
 // are just two ways to obtain that base.
-type PreviewTarget =
+export type PreviewTarget =
   | { kind: "project"; devServerUrl: string; projectId: number; hostId: string }
   | { kind: "external"; url: string }
   | { kind: "target"; url: string; hostId: string };
 
-function resolveUpstreamBase(target: PreviewTarget): URL {
+export function resolveUpstreamBase(target: PreviewTarget): URL {
   if (target.kind === "external" || target.kind === "target") return new URL(target.url);
   // A bare port ("5173") means "this same machine" — see projects.ts's
   // isValidDevServerUrl. A full URL's host (and path — see
@@ -234,9 +234,10 @@ function buildUpstreamUrl(
 // only, via the app.log.warn calls below — so this now returns nothing more
 // than a status code to the caller; the client-facing body is always the
 // same fixed PREVIEW_UNAVAILABLE_MESSAGE (see handlePreviewRequest).
-type PreviewResolution = { ok: true; target: PreviewTarget } | { ok: false; status: 404 | 503 };
+export type PreviewResolution =
+  { ok: true; target: PreviewTarget } | { ok: false; status: 404 | 503 };
 
-async function resolvePreviewTarget(
+export async function resolvePreviewTarget(
   app: FastifyInstance,
   slug: string,
 ): Promise<PreviewResolution> {

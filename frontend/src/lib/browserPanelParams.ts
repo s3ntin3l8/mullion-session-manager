@@ -13,4 +13,7 @@ export interface BrowserPanelParams {
   targetRev?: number;
   activeSavedUrlId?: number | null;
   activeSavedUrlLabel?: string | null;
+  /** #3373 — the page below a project preview's root to open first (path,
+   * query, hash), when ⇄ brought a page over from the agent's browser. */
+  previewPath?: string;
 }

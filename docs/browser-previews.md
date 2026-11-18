@@ -42,6 +42,42 @@ project. Without `BROWSER_ENABLED` there is no switch and the pane is
 Preview only. The mode is saved with the workspace layout, so a reload
 keeps it.
 
+**Open in the other one (⇄).** The ⇄ button at the end of the toolbar opens
+the current address in the other mode and switches to it (#3373). It is not a
+copy of the address field, because the two engines see addresses differently:
+
+- **Preview → Agent's browser** uses the address the preview loaded, not where
+  you clicked inside it (a cross-origin iframe does not report that); the
+  tooltip names the address. A typed, saved or followed address goes as is.
+  For a project preview the server works out the address
+  (`GET /api/sessions/:id/browser/address-for-preview?slug=`,
+  `src/services/browser-handoff.ts`): the preview's upstream, resolved as the
+  proxy resolves it, read from the host the session's browser target names. A
+  dev server on a bare port or on `localhost` is that host's own `localhost`,
+  so it only travels when the session's browser runs on the same host as the
+  dev server. The client names the preview by its slug, never by the iframe's
+  address, so the `__mullion_preview` token never reaches the agent's browser.
+  ⇄ counts as an explicit open: it attaches, and so launches, the session's
+  browser.
+- **Agent's browser → Preview** uses the page's own address as the server
+  reports it. `GET /api/sessions/:id/browser/preview-for-address?url=` says
+  whether its origin is one of the project's dev servers, branch previews or
+  preview targets (from the session browser's host); if it is, the preview
+  opens that target through the proxy, on the same page. Any other http(s)
+  page opens as an external address, and the pane keeps its project.
+- ⇄ is disabled, with the reason as its tooltip, for anything that is not http
+  or https, for a `localhost` address that is not one of the project's dev
+  servers (it means a different machine to each engine), and for a dev server
+  on another host than the session's browser.
+- An external preview that cannot load says "This site cannot be shown as a
+  preview. The agent's browser can show it." and offers **Open in the agent's
+  browser**. A page that forbids framing without going through the proxy
+  cannot be detected (the iframe just shows the browser's own error), so that
+  case has only ⇄.
+- Opening a project's preview again (the Dock, a branch row, a preview
+  target) puts back the pane's own target if ⇄ had opened something else in
+  it.
+
 There are two kinds of preview, in either mode:
 
 - **Project preview** — one per project (opening it again reuses the same
