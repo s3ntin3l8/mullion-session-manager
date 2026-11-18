@@ -35,10 +35,10 @@ import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
 // indefinitely.
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
-// streams.events() has no connect timeout of its own (documented gap,
-// remote-host-client.ts's openPreviewWs comment notes the same gap for a
-// sibling method) — bounded here so a half-open handshake can't stall this
-// host's history capture indefinitely.
+// streams.events() has no connect timeout of its own (documented gap, the
+// previews facet's ws() comment in remote-host-previews.ts notes the same gap
+// for a sibling method) — bounded here so a half-open handshake can't stall
+// this host's history capture indefinitely.
 const CONNECT_TIMEOUT_MESSAGE =
   "[remote-event-subscriber] connect timed out, terminating and retrying";
 const CONNECT_TIMEOUT_MS = 10_000;

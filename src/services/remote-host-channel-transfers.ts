@@ -114,13 +114,14 @@ export async function downloadOverChannel(
 }
 
 /**
- * openPreviewHttpRequest over the outbound channel (#2620). The channel is the
- * credential, so no bearer or signature is set; `headers` arrives with the
- * browser's own `authorization` and signature headers already deleted, and
- * every `x-mullion-*` the browser sent is dropped here too (the agent would
- * otherwise replay one as if it were the primary's: the channel-auth header
- * included). Returns a Response like the inbound path does: a non-2xx upstream
- * status passes through, only a failure to reach the agent throws.
+ * The previews facet's HTTP forward over the outbound channel (#2620). The
+ * channel is the credential, so no bearer or signature is set; `headers`
+ * arrives with the browser's own `authorization` and signature headers already
+ * deleted, and every `x-mullion-*` the browser sent is dropped here too (the
+ * agent would otherwise replay one as if it were the primary's: the
+ * channel-auth header included). Returns a Response like the inbound path
+ * does: a non-2xx upstream status passes through, only a failure to reach the
+ * agent throws.
  */
 export async function previewHttpOverChannel(
   hostId: string,
