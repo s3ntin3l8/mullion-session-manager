@@ -12,8 +12,10 @@ import type {
   DeviceSpawnSpec,
   DeviceWsQuery,
   LiveDevicesResponse,
+  SimulatorsResponse,
   SpawnDeviceResponse,
 } from "./device-wire.js";
+import type { IosSimulator } from "./ios-simulators.js";
 
 // RemoteHostClient facet convention (issue #3289 / #3301):
 // - Each domain lives in `src/services/remote-host-<domain>.ts` and exports a
@@ -90,6 +92,23 @@ export function createDevicesClient({ request, openInbound }: DevicesClientDeps)
 
     async live(): Promise<DeviceInfo[]> {
       return (await request<LiveDevicesResponse>("/internal/devices/live")).devices;
+    },
+
+    /** Available iOS simulators on this host, or null when the agent predates
+     * `GET /internal/simulators` (a 404). */
+    async simulators(): Promise<IosSimulator[] | null> {
+      try {
+        return (
+          await request<SimulatorsResponse>(
+            "/internal/simulators",
+            undefined,
+            DEVICE_REQUEST_TIMEOUT_MS,
+          )
+        ).simulators;
+      } catch (err) {
+        if (err instanceof HostRequestError && err.statusCode === 404) return null;
+        throw err;
+      }
     },
 
     async terminate(id: string, kind: DeviceKind): Promise<void> {

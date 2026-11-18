@@ -14,6 +14,7 @@ import { performDeviceAction } from "./device-drivers/actions.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import type { DeviceSpawnSpec } from "./device-wire.js";
+import { listIosSimulators, type IosSimulator } from "./ios-simulators.js";
 
 // The primary's view of "the machine a device runs on" (issue #3200). A device's
 // `devices` row names its host (`hostId`); every operation on the live device
@@ -49,6 +50,8 @@ export interface DeviceHost {
   /** One device's live info, undefined when nothing is running under that id. */
   info(id: number): Promise<DeviceInfo | undefined>;
   action(id: number, action: DeviceAction): Promise<DeviceActionResult>;
+  /** Available iOS simulators on this host, or null when a remote agent predates `/internal/simulators`. */
+  simulators(): Promise<IosSimulator[] | null>;
 }
 
 class LocalDeviceHost implements DeviceHost {
@@ -98,6 +101,10 @@ class LocalDeviceHost implements DeviceHost {
       );
     }
     return performDeviceAction(driver, action);
+  }
+
+  simulators(): Promise<IosSimulator[]> {
+    return listIosSimulators();
   }
 }
 
@@ -149,6 +156,10 @@ class RemoteDeviceHost implements DeviceHost {
 
   action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
     return this.client.devices.action(String(id), action);
+  }
+
+  simulators(): Promise<IosSimulator[] | null> {
+    return this.client.devices.simulators();
   }
 }
 

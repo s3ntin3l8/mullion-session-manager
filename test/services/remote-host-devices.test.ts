@@ -56,6 +56,25 @@ describe("remote-host-devices", () => {
     expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1]);
   });
 
+  it("lists simulators on /internal/simulators with DEVICE_REQUEST_TIMEOUT_MS", async () => {
+    const sims = [
+      {
+        udid: "0F4A9B7E-1111-2222-3333-444455556666",
+        name: "iPhone 16 Pro",
+        runtime: "iOS 18.2",
+        state: "Booted",
+      },
+    ];
+    const request = vi.fn().mockResolvedValueOnce({ simulators: sims });
+    const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
+    await expect(devices.simulators()).resolves.toEqual(sims);
+    expect(request).toHaveBeenCalledWith(
+      "/internal/simulators",
+      undefined,
+      DEVICE_REQUEST_TIMEOUT_MS,
+    );
+  });
+
   it("reads an agent answer with no platforms as Android-only", async () => {
     const some = vi.fn().mockResolvedValue({ deviceKinds: ["physical", "emulator"] });
     await expect(
@@ -73,14 +92,20 @@ describe("remote-host-devices", () => {
     ).resolves.toEqual({ deviceKinds: ["physical"], platforms: ["android", "ios"] });
   });
 
-  it("answers null for an agent that predates the kinds route, and rethrows anything else", async () => {
+  it("answers null for an agent that predates the kinds or simulators route, and rethrows anything else", async () => {
     const old = vi.fn().mockRejectedValue(new HostRequestError("h", 404, "nope"));
     await expect(
       createDevicesClient({ request: old, openInbound: unusedOpenInbound }).kinds(),
     ).resolves.toBeNull();
+    await expect(
+      createDevicesClient({ request: old, openInbound: unusedOpenInbound }).simulators(),
+    ).resolves.toBeNull();
     const broken = vi.fn().mockRejectedValue(new HostRequestError("h", 500, "boom"));
     await expect(
       createDevicesClient({ request: broken, openInbound: unusedOpenInbound }).kinds(),
+    ).rejects.toThrow();
+    await expect(
+      createDevicesClient({ request: broken, openInbound: unusedOpenInbound }).simulators(),
     ).rejects.toThrow();
   });
 
