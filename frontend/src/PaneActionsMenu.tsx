@@ -125,13 +125,14 @@ export function PaneActionsMenu({
   // `api.id` as the reference panel rather than the group's active one).
   const requestSplit = useDashboardStore((s) => s.requestSplit);
   // #3214 — the two halves and the phone have no grid: no split, no moving
-  // between panes, no reset of pane sizes, and the Agent Browser is the right
-  // rail's Browser view there rather than a pane of its own.
+  // between panes, no reset of pane sizes. (The Agent Browser entry also follows the
+  // band, below.)
   const hasGrid = useLayoutPresentationMode() === "grid";
   // #3370 — the agent's browser entry follows the band, as the palette does:
   // below 1100px it is a rail view (rails-full too, whose presentation is the
   // grid), so the menu offers no entry there.
-  const showAgentBrowser = !agentBrowserIsRailView(useCurrentLayoutBand());
+  const layoutBand = useCurrentLayoutBand();
+  const showAgentBrowser = hasGrid && !agentBrowserIsRailView(layoutBand);
 
   const [overflowOpen, setOverflowOpen] = useState(false);
   // #3054 — under a coarse pointer the menu is a bottom sheet (rows of 44px

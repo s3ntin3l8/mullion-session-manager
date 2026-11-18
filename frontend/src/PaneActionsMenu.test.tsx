@@ -12,30 +12,8 @@ import {
   installFakeVisualViewport,
   uninstallFakeVisualViewport,
 } from "./test/fakeVisualViewport.js";
+import { stubPxWidth } from "./test/appHarness.js";
 import { clearHeaderSplitHidden, setHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
-
-// A matchMedia that answers width queries for a given viewport width, so
-// `layoutMode: "auto"` resolves the tier and band the real breakpoints give.
-function stubViewportWidth(width: number) {
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn((query: string) => {
-      const min = /min-width:\s*([\d.]+)px/.exec(query);
-      const max = /max-width:\s*([\d.]+)px/.exec(query);
-      const matches =
-        !query.includes("pointer") &&
-        (min !== null || max !== null) &&
-        (min === null || width >= Number(min[1])) &&
-        (max === null || width <= Number(max[1]));
-      return {
-        matches,
-        media: query,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      };
-    }),
-  );
-}
 
 // Code review finding on PR #613 — PaneActionsMenu is now a standalone
 // component (api/params/containerApi/onRename/triggerClassName, not
@@ -389,7 +367,7 @@ describe("PaneActionsMenu", () => {
     // 750px: the tablet tier, still presented as a grid (#3214).
     const useGridTablet = () => {
       layoutModeSetting = "auto";
-      stubViewportWidth(750);
+      stubPxWidth(750);
     };
     afterEach(() => vi.unstubAllGlobals());
 
@@ -804,7 +782,7 @@ describe("PaneActionsMenu — items per layout (#3214)", () => {
     [500, "phone", false],
   ])("at %ipx (%s) Open Agent Browser shown: %s", async (width, _band, shown) => {
     layoutModeSetting = "auto";
-    stubViewportWidth(width);
+    stubPxWidth(width);
     try {
       setHeaderSplitHidden(GROUP.id, false);
       const labels = await itemLabels();

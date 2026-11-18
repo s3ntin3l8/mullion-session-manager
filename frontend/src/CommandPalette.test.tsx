@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS, api } from "./api/index.js";
 import type { Launcher, Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeSession, makeWorkspace } from "./test/fixtures.js";
+import { stubPxWidth } from "./test/appHarness.js";
 import { ACTIVE_TERMINAL_FOCUS_SELECTOR, WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 
 // Issue #27: the palette's "Integrations" section — a GitHub-panel shortcut
@@ -2869,34 +2870,13 @@ describe("CommandPalette -> Project drill-in and command search", () => {
   describe("Open Agent Browser by band (#3370)", () => {
     const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
 
-    function stubWidth(width: number) {
-      vi.stubGlobal(
-        "matchMedia",
-        vi.fn((query: string) => {
-          const min = /min-width:\s*([\d.]+)px/.exec(query);
-          const max = /max-width:\s*([\d.]+)px/.exec(query);
-          const matches =
-            !query.includes("pointer") &&
-            (min !== null || max !== null) &&
-            (min === null || width >= Number(min[1])) &&
-            (max === null || width <= Number(max[1]));
-          return {
-            matches,
-            media: query,
-            addEventListener: vi.fn(),
-            removeEventListener: vi.fn(),
-          };
-        }),
-      );
-    }
-
     afterEach(() => vi.unstubAllGlobals());
 
     it.each([
       [750, "rails-full", true],
       [1200, "desktop-narrow", false],
     ])("at %ipx (%s) opens the rail view: %s", async (width, _band, railView) => {
-      stubWidth(width);
+      stubPxWidth(width);
       useDashboardStore.setState({
         sessions: [session],
         activePanelId: "session-7",
