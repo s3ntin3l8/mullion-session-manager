@@ -93,11 +93,11 @@ export interface BrowserShellProps {
   /** Rendered last in the toolbar of either mode, after the ⇄ button. */
   toolbarEnd?: ReactNode;
   /**
-   * #3373 — ⇄ opened another target in the preview: `params` are its new
-   * preview params, every target key named; `label` is what the pane's title
-   * names ("" for the project's own dev server).
+   * #3373 — ⇄ opened another target in the preview (already written through
+   * `previewApi`); `label` is what the pane's title names ("" for the
+   * project's own dev server).
    */
-  onPreviewRetarget?: (params: BrowserPanelParams, label: string) => void;
+  onPreviewRetarget?: (label: string) => void;
   /** #3373 — bumped by an opener that resets the preview to `previewParams`,
    * dropping what ⇄ opened in it. */
   previewRev?: number;
@@ -273,7 +273,10 @@ export function BrowserShell({
     }
     setPreviewOverride(next);
     setPreviewEpoch((e) => e + 1);
-    onPreviewRetarget?.(next, label);
+    // Written where the preview keeps its params (a grid pane's layout, the
+    // rail's stored preview), so a reload or a remount opens what ⇄ opened.
+    previewApi?.updateParameters(next);
+    onPreviewRetarget?.(label);
     onModeChange("preview");
   };
 

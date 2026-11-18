@@ -5,20 +5,7 @@
 // preview (src/services/browser-handoff.ts); what the client can decide on its
 // own lives here.
 
-/** The preview params a retarget names: BrowserPanelParams' target keys,
- * spelled out here so this module does not import the lazy BrowserPanel. */
-export interface PreviewTargetParams {
-  projectId?: number;
-  kind?: "external";
-  url?: string;
-  slug?: string;
-  previewSlug?: string;
-  targetName?: string;
-  targetRev?: number;
-  previewPath?: string;
-  activeSavedUrlId?: number | null;
-  activeSavedUrlLabel?: string | null;
-}
+import type { BrowserPanelParams as PreviewTargetParams } from "./browserPanelParams.js";
 
 /**
  * What the preview loaded, as BrowserPanel reports it. Never the iframe's own

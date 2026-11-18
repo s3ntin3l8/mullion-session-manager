@@ -282,11 +282,7 @@ export function BrowserPaneHost({
       agentSessionTitle={agentSessionTitle}
       agentDisabledReason={agentDisabledReason}
       attachSessionIds={explicit}
-      onPreviewRetarget={(next, label) => {
-        // Into the layout too, so a reload opens what ⇄ opened.
-        api?.updateParameters(next);
-        setRetargetLabel(label);
-      }}
+      onPreviewRetarget={setRetargetLabel}
       previewRev={params.previewRev}
     />
   );

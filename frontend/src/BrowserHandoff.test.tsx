@@ -6,6 +6,9 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewPanelApi } from "dockview-react";
 import { BrowserPaneHost } from "./BrowserPaneHost.js";
+import { BrowserSidebarView } from "./right-sidebar/BrowserSidebarView.js";
+import type { RightSidebarActions } from "./right-sidebar/views.js";
+import { useDashboardStore } from "./store/index.js";
 import type { BrowserHostComponent, BrowserHostParams } from "./BrowserPaneHost.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
 import type { PreviewSource } from "./lib/browserHandoff.js";
@@ -544,6 +547,53 @@ describe("open in the other browser (#3373)", () => {
     expect(previewResetPatch({ projectId: 1, previewPath: "/a" }, { projectId: 1 })).toMatchObject({
       previewPath: undefined,
       kind: undefined,
+    });
+  });
+
+  // #3372 hosts the same BrowserShell in the right rail's Browser view below
+  // 1100px, with its mode and preview in the store instead of a layout.
+  describe("in the rail's Browser view", () => {
+    const renderRail = () =>
+      render(<BrowserSidebarView projectId={1} actions={{} as RightSidebarActions} />);
+
+    it("opens the project preview's address in the followed session's browser", async () => {
+      useDashboardStore.setState({ railBrowser: { mode: "preview", preview: null, rev: 0 } });
+      renderRail();
+      await waitFor(() =>
+        expect(toAgent()).toHaveAttribute(
+          "title",
+          "Open http://localhost:5173/ in the agent's browser",
+        ),
+      );
+      await userEvent.click(toAgent());
+      await waitFor(() => expect(useDashboardStore.getState().railBrowser.mode).toBe("agent"));
+      await waitFor(() =>
+        expect(screen.getByTestId("agent-5")).toHaveAttribute(
+          "data-navigate",
+          "http://localhost:5173/",
+        ),
+      );
+    });
+
+    it("opens the agent's page in the rail's preview, and keeps it in the store", async () => {
+      previewAnswer = (url) => jsonResponse(200, { kind: "external", url });
+      useDashboardStore.setState({ railBrowser: { mode: "agent", preview: null, rev: 0 } });
+      renderRail();
+      await waitFor(() => expect(screen.getByTestId("agent-5")).toBeInTheDocument());
+      act(() => agentProps?.onUrlChange?.("https://example.com/x"));
+      await waitFor(() => expect(toPreview()).not.toHaveAttribute("aria-disabled"));
+      await userEvent.click(toPreview());
+      await waitFor(() => expect(useDashboardStore.getState().railBrowser.mode).toBe("preview"));
+      expect(useDashboardStore.getState().railBrowser.preview).toMatchObject({
+        projectId: 1,
+        kind: "external",
+        url: "https://example.com/x",
+      });
+      await waitFor(() =>
+        expect(
+          JSON.parse(screen.getByTestId("preview").getAttribute("data-params") ?? "{}"),
+        ).toMatchObject({ kind: "external", url: "https://example.com/x" }),
+      );
     });
   });
 });

@@ -25,11 +25,8 @@ import { subscribeFilePathGone } from "../lib/filePathEvents.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
 import type { ProjectHubTab } from "../ProjectHubPanel.js";
 import { BROWSER_PREVIEW_TITLE, browserPreviewTitle } from "../lib/browserTitles.js";
-<<<<<<< HEAD
 import { previewOpensInRail } from "../right-sidebar/viewBands.js";
-=======
 import { previewResetPatch } from "../lib/browserHandoff.js";
->>>>>>> 264a08ff (feat(browser): open the current address in the other browser)
 
 // The near-identical project-scoped panel kinds (GitHub, Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own

@@ -1082,7 +1082,6 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
   });
 });
 
-<<<<<<< HEAD
 // #3372, decision 2: below 1100px every preview entry point opens the rail's
 // Browser view in Preview on its target, and no pane.
 const BAND_QUERY: Record<"phone" | "rails-full" | "rails-halves" | "desktop-narrow", string> = {
@@ -1165,7 +1164,9 @@ describe("usePanelOpener — previews below 1100px open the rail's Browser view 
     result.current.onOpenBlankBrowser();
     expect(api.addPanel).toHaveBeenCalledTimes(2);
     expect(openRailBrowserPreview).not.toHaveBeenCalled();
-=======
+  });
+});
+
 // #3373 — ⇄ can open another address in a preview pane. An opener that
 // focuses that pane asked for the pane's own target, so it resets it.
 describe("usePanelOpener — a preview pane ⇄ retargeted (#3373)", () => {
@@ -1214,6 +1215,5 @@ describe("usePanelOpener — a preview pane ⇄ retargeted (#3373)", () => {
         previewRev: expect.any(Number),
       }),
     );
->>>>>>> 264a08ff (feat(browser): open the current address in the other browser)
   });
 });
