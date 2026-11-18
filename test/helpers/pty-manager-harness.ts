@@ -265,11 +265,14 @@ export async function waitForSpawn(session: { isAlive: boolean }): Promise<void>
  * test (issue #3277's "no test relies on another's leftovers").
  *
  * WHY THIS IS NOT COSMETIC: the faked `systemd-run` child reports its
- * "exit" on a setImmediate, and the scope backend's onSettled hook
- * (src/services/scope/spawn.ts) calls invalidateOwnedScopesCache() when it
- * fires — session-process.ts's MODULE-LEVEL owned-scopes listing cache. A
- * test that calls getOrCreate() and never awaits spawnOutcome() therefore
- * leaves that settle pending, and it lands in whatever test runs next.
+ * "exit" on a setImmediate, and the scope backend's onSettled hook calls
+ * invalidateOwnedScopesCache() when it fires — session-process.ts's
+ * MODULE-LEVEL owned-scopes listing cache. The hook is INVOKED by
+ * src/services/scope/spawn.ts (`opts.onSettled?.()`) and SUPPLIED by
+ * src/services/scope/systemd.ts (`onSettled: invalidateOwnedScopesCache`) —
+ * the latter is where to look for who wires it up. A test that calls
+ * getOrCreate() and never awaits spawnOutcome() therefore leaves that
+ * settle pending, and it lands in whatever test runs next.
  *
  * An invalidation landing inside ANOTHER test's `systemctl --user
  * list-units` window is not a no-op: listOwnedScopes() stamps each listing
@@ -330,6 +333,13 @@ export function createPtyManagerFixture(
  * and an invalidation that lands in the NEXT test is that test reading
  * state its neighbour produced. Draining BEFORE the temp dir is removed
  * keeps the settle's own cwd alive while it runs, too.
+ *
+ * AWAIT IT — the drain is async, and the footgun is a block-body teardown
+ * (`afterEach(() => { destroyPtyManagerFixture(fixture); })`): it compiles,
+ * returns nothing, and silently skips the drain while still removing the
+ * temp dir, reintroducing exactly the leftover-settle leak this drain
+ * exists to prevent. Write `afterEach(async () => { await
+ * destroyPtyManagerFixture(fixture); })`, or return the promise.
  */
 export async function destroyPtyManagerFixture(fixture: PtyManagerFixture): Promise<void> {
   fixture.manager.killAll();
