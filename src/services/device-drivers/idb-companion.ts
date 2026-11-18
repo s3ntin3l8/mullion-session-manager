@@ -17,6 +17,8 @@ const DEFAULT_STOP_GRACE_MS = 2_000;
 const DEFAULT_STDERR_MAX_BYTES = 64 * 1024;
 const STALE_POLL_INTERVAL_MS = 50;
 
+class UdidMismatchError extends Error {}
+
 export type IdbCompanionSpawn = (
   command: string,
   args: readonly string[],
@@ -422,6 +424,7 @@ export class IdbCompanion {
       this.currentClient = client;
 
       const deadline = Date.now() + this.startTimeoutMs;
+      let lastDescribeError: Error | null = null;
       while (Date.now() < deadline) {
         if (earlyExitError) {
           throw earlyExitError;
@@ -443,8 +446,8 @@ export class IdbCompanion {
             throw new Error(`idb_companion for ${this.udid} stopped during startup`);
           }
           if (desc.target_description?.udid?.toLowerCase() !== this.udid.toLowerCase()) {
-            throw new Error(
-              `describe returned unexpected udid ${JSON.stringify(desc.target_description?.udid ?? null)}`,
+            throw new UdidMismatchError(
+              `idb_companion for ${this.udid} describe returned unexpected udid ${JSON.stringify(desc.target_description?.udid ?? null)}${this.formatStderrSuffix()}`,
             );
           }
           return;
@@ -452,9 +455,10 @@ export class IdbCompanion {
           if (earlyExitError) {
             throw earlyExitError;
           }
-          if (this.stopping) {
+          if (this.stopping || err instanceof UdidMismatchError) {
             throw err;
           }
+          lastDescribeError = err instanceof Error ? err : new Error(String(err));
           const waitMs = Math.min(this.readyPollIntervalMs, Math.max(0, deadline - Date.now()));
           if (waitMs > 0) {
             await sleep(waitMs);
@@ -463,8 +467,9 @@ export class IdbCompanion {
       }
 
       await this.killChildAndWait(child);
+      const causeSuffix = lastDescribeError ? ` (${lastDescribeError.message})` : "";
       throw new Error(
-        `idb_companion for ${this.udid} failed to become ready within ${this.startTimeoutMs}ms${this.formatStderrSuffix()}`,
+        `idb_companion for ${this.udid} failed to become ready within ${this.startTimeoutMs}ms${causeSuffix}${this.formatStderrSuffix()}`,
       );
     } catch (err) {
       if (this.child) {

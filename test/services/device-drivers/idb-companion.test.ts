@@ -200,23 +200,37 @@ describe("IdbCompanion", () => {
     expect(companion.isRunning).toBe(false);
   });
 
-  it("does not treat a describe response for another UDID as ready", async () => {
-    const companion = new IdbCompanion({
+  it("rejects on unexpected describe UDID while accepting a matching UDID under the same timeout", async () => {
+    const sharedOptions = {
       udid: UDID_A,
       executablePath: FAKE_EXEC_PATH,
-      spawn: makeFakeSpawn({ FAKE_IDB_DESCRIBE_UDID: UDID_B }),
       killStaleCompanions: async () => undefined,
-      startTimeoutMs: 400,
+      startTimeoutMs: 3000,
       readyPollIntervalMs: 50,
       stopGraceMs: 200,
+    };
+
+    const mismatched = new IdbCompanion({
+      ...sharedOptions,
+      spawn: makeFakeSpawn({ FAKE_IDB_DESCRIBE_UDID: UDID_B }),
     });
-    trackedCompanions.push(companion);
+    trackedCompanions.push(mismatched);
 
-    await expect(companion.start()).rejects.toThrow(/failed to become ready within 400ms/);
+    await expect(mismatched.start()).rejects.toThrow(/unexpected udid/);
 
-    const pid = trackedChildren[0].pid!;
-    expect(await waitForPidDead(pid)).toBe(true);
-    expect(companion.isRunning).toBe(false);
+    const mismatchedPid = trackedChildren[0].pid!;
+    expect(await waitForPidDead(mismatchedPid)).toBe(true);
+    expect(mismatched.isRunning).toBe(false);
+
+    const matching = new IdbCompanion({
+      ...sharedOptions,
+      spawn: makeFakeSpawn({ FAKE_IDB_DESCRIBE_UDID: UDID_A }),
+    });
+    trackedCompanions.push(matching);
+
+    await expect(matching.start()).resolves.toBeUndefined();
+    expect(matching.isRunning).toBe(true);
+    await matching.stop();
   });
 
   it("restarts by killing the old process and starting a fresh one", async () => {
