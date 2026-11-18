@@ -49,7 +49,7 @@ class MockSocket extends EventEmitter {
 const openAttachMock = vi.fn();
 
 vi.mock("../../src/services/remote-host-client.js", () => ({
-  getRemoteHostClient: vi.fn(() => ({ openAttach: openAttachMock })),
+  getRemoteHostClient: vi.fn(() => ({ streams: { attach: openAttachMock } })),
 }));
 
 const { proxyToRemoteAttach } = await import("../../src/routes/terminal.js");

@@ -92,7 +92,7 @@ export function relayRemoteEventsHost(
 ): NodeWebSocket | null {
   let upstream: NodeWebSocket;
   try {
-    upstream = getRemoteHostClient(app, hostId).openEventsStream({ cursors: true });
+    upstream = getRemoteHostClient(app, hostId).streams.events({ cursors: true });
   } catch (err) {
     app.log.error({ err, hostId }, "failed to open remote events stream");
     return null;

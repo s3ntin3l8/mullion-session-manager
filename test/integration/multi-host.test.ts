@@ -1197,7 +1197,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
   // upgrades, where only the `ws` package's client (not the browser
   // WebSocket) can carry a signature header, and the signature can only
   // ever cover the upgrade request itself. This proves the real thing end
-  // to end: RemoteHostClient.openAttach()'s signature is actually accepted
+  // to end: RemoteHostClient.streams.attach()'s signature is actually accepted
   // by internal.ts's real onRequest/preValidation verification, through an
   // actual WS handshake over the primary's own /ws/terminal proxy — not
   // just that each side's logic is independently correct in isolation.
@@ -1252,7 +1252,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
       // A forged/unsigned/wrong signature would have this upgrade rejected
       // (internal.ts's onRequest fires before the upgrade completes) —
       // "open" here specifically proves the agent accepted the signature
-      // RemoteHostClient.openAttach() actually sent.
+      // RemoteHostClient.streams.attach() actually sent.
       expect(outcome).toBe("open");
       ws.close();
     } finally {
