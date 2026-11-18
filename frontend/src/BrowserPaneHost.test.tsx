@@ -70,7 +70,9 @@ function makePanelApi(initialTitle: string) {
       const next: Record<string, unknown> = { ...params, ...patch };
       for (const [k, v] of Object.entries(patch)) if (v === undefined) delete next[k];
       params = next as BrowserHostParams;
-      rerender?.();
+      // Dockview re-renders the panel after the call returns, not inside it
+      // (a write from an effect would otherwise re-enter React's commit).
+      queueMicrotask(() => act(() => rerender?.()));
     }),
   };
   return {
@@ -158,10 +160,9 @@ describe("BrowserPaneHost (#3371)", () => {
 
     it("names the session it would show and marks the current mode", async () => {
       renderHost("browser", { projectId: 1 }, "Browser · Preview: aurora");
-      expect(await screen.findByRole("radio", { name: "Agent's browser · agent 5" })).toHaveAttribute(
-        "aria-checked",
-        "false",
-      );
+      expect(
+        await screen.findByRole("radio", { name: "Agent's browser · agent 5" }),
+      ).toHaveAttribute("aria-checked", "false");
       expect(previewRadio()).toHaveAttribute("aria-checked", "true");
     });
 
@@ -228,6 +229,21 @@ describe("BrowserPaneHost (#3371)", () => {
       expect(agentRadio()).toHaveAccessibleName("Agent's browser · agent 5");
     });
 
+    it("takes the last-focused session when focus already moved to the pane", async () => {
+      const user = userEvent.setup();
+      // Focus 6, then 5, then the pane itself: the store remembers 5.
+      act(() => {
+        useDashboardStore.getState().setActivePanelId("session-6");
+        useDashboardStore.getState().setActivePanelId("session-5");
+        useDashboardStore.getState().setActivePanelId("browser-1");
+      });
+      expect(useDashboardStore.getState().recentSessionIds).toEqual([5, 6]);
+      bindings[5] = [{ sessionId: 5 }];
+      renderHost("browser", { projectId: 1 }, "Browser · Preview: aurora");
+      await user.click(await screen.findByRole("radio", { name: /Agent's browser · agent 5/ }));
+      expect(await screen.findByTestId("agent-5")).toBeInTheDocument();
+    });
+
     it("takes the project's newest live session when none had focus", async () => {
       const user = userEvent.setup();
       useDashboardStore.setState({ activePanelId: null });
@@ -246,6 +262,18 @@ describe("BrowserPaneHost (#3371)", () => {
       await act(async () => {});
       expect(screen.getByTestId("preview")).toBeInTheDocument();
       expect(screen.queryByRole("radiogroup")).toBeNull();
+    });
+
+    it("comes back as Preview when a switched pane is restored with the feature off", async () => {
+      browserEnabled = false;
+      const { panel } = renderHost(
+        "browser",
+        { projectId: 1, mode: "agent", agentSessionId: 5 },
+        "Browser · Agent's browser: agent 5",
+      );
+      expect(await screen.findByTestId("preview")).toBeInTheDocument();
+      expect(panel.params.mode).toBe("preview");
+      expect(probes).toEqual([]);
     });
 
     it("disables Agent's browser when the project has no session", async () => {
@@ -305,7 +333,10 @@ describe("BrowserPaneHost (#3371)", () => {
       const user = userEvent.setup();
       renderHost("browserPane", { sessionId: 5 }, "Agent Browser: agent 5");
       const pane = await screen.findByTestId("agent-5");
-      expect(within(pane).getByRole("radiogroup", { name: "Browser mode" })).toBeInTheDocument();
+      // The switch shows once the server says the browser feature is on.
+      expect(
+        await within(pane).findByRole("radiogroup", { name: "Browser mode" }),
+      ).toBeInTheDocument();
       await user.click(previewRadio());
       expect(screen.getByTestId("preview")).toBeInTheDocument();
     });
@@ -324,8 +355,12 @@ describe("BrowserPaneHost (#3371)", () => {
     });
 
     it("drops the Agent Browser title of an old layout", async () => {
-      const { panel } = renderHost("browserPane", { sessionId: 5 }, "Agent Browser: Example Domain");
-      await screen.findByTestId("agent-5");
+      const { panel } = renderHost(
+        "browserPane",
+        { sessionId: 5 },
+        "Agent Browser: Example Domain",
+      );
+      await screen.findByRole("radiogroup", { name: "Browser mode" });
       expect(panel.api.title).toBe("Browser · Agent's browser: agent 5");
       expect(panel.api.title).not.toMatch(/Agent Browser/);
     });

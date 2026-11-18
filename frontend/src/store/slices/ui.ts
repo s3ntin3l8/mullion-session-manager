@@ -51,6 +51,9 @@ import {
   sameSidebarTarget,
 } from "../sidebarHistory.js";
 
+// How many recently focused sessions the store remembers (recentSessionIds).
+const RECENT_SESSION_LIMIT = 20;
+
 // Right sidebar views that are not reopened on load, though left open (#3053):
 // the ones right-sidebar/views-registry.ts restricts to the two halves (their
 // `bands`), where an open view covers the right half. A new halves-only view
@@ -294,6 +297,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     highlightedPanelId: null,
     newPanelIds: [],
     activePanelId: null,
+    recentSessionIds: [],
     activeWorkspaceId: readStoredActiveWorkspaceId(),
     dockConfigRefreshTrigger: 0,
     currentVersion: null,
@@ -332,7 +336,22 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
           : state,
       ),
 
-    setActivePanelId: (id) => set({ activePanelId: id }),
+    setActivePanelId: (id) =>
+      set((s) => {
+        // Same id format as panelUtils' sessionIdFromPanelId, limited to the
+        // panes that are the session itself (not its browser or a file).
+        const match = id?.match(/^(?:session|timeline)-(\d+)$/);
+        if (!match) return { activePanelId: id };
+        const sessionId = Number(match[1]);
+        if (s.recentSessionIds[0] === sessionId) return { activePanelId: id };
+        return {
+          activePanelId: id,
+          recentSessionIds: [sessionId, ...s.recentSessionIds.filter((x) => x !== sessionId)].slice(
+            0,
+            RECENT_SESSION_LIMIT,
+          ),
+        };
+      }),
 
     setActiveWorkspaceId: (id) => {
       set({ activeWorkspaceId: id });

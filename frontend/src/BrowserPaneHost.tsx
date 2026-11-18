@@ -69,24 +69,35 @@ export function BrowserPaneHost({
   const projectId = params.projectId ?? ownSession?.projectId ?? null;
   const project = projectId != null ? projects.find((p) => p.id === projectId) : undefined;
 
-  const pinnedId = params.agentSessionId ?? params.sessionId ?? null;
+  // Mode and session are the pane's own state, written back to the params
+  // (the effect below) rather than read from them: dockview hands the new
+  // params over a render later, and a pane that read them back would act on
+  // the old ones in between.
+  const paramPin = params.agentSessionId ?? params.sessionId ?? null;
+  const [pinnedId, setPinnedId] = useState<number | null>(paramPin);
   const pinnedSession = pinnedId != null ? sessions.find((s) => s.id === pinnedId) : undefined;
   const pinnedLive = isLive(pinnedSession) ? pinnedSession : null;
 
   // The session a switch to Agent's browser would fix: the project's focused
-  // or last-focused one while this pane is open, else its newest live one (a
-  // pane opened after focus already left the session has no memory of it).
+  // session, else its last-focused one (the store remembers focus from before
+  // this pane opened and took focus itself), else its newest live one.
   const followed = useFollowedSession(projectId ?? -1);
-  const newest = useMemo(() => {
+  const recentSessionIds = useDashboardStore((s) => s.recentSessionIds);
+  const fallback = useMemo(() => {
     if (projectId == null) return null;
-    let best: Session | null = null;
-    for (const s of sessions) {
-      if (s.projectId !== projectId || s.kind === "dock" || !isLive(s)) continue;
-      if (best == null || s.id > best.id) best = s;
+    const eligible = (s: Session | undefined): s is Session =>
+      s != null && s.projectId === projectId && s.kind !== "dock" && isLive(s);
+    for (const id of recentSessionIds) {
+      const s = sessions.find((x) => x.id === id);
+      if (eligible(s)) return s;
     }
-    return best;
-  }, [sessions, projectId]);
-  const candidate = followed ?? newest;
+    let newest: Session | null = null;
+    for (const s of sessions) {
+      if (eligible(s) && (newest == null || s.id > newest.id)) newest = s;
+    }
+    return newest;
+  }, [sessions, projectId, recentSessionIds]);
+  const candidate = followed ?? fallback;
 
   const [mode, setMode] = useState<BrowserMode>(
     () => params.mode ?? (component === "browserPane" ? "agent" : "preview"),
@@ -99,17 +110,18 @@ export function BrowserPaneHost({
       : new Set(),
   );
 
-  // An opener that focuses this pane can ask for a mode through the params
-  // (openBrowserPanePanel asks for Agent's browser). The pane's own switch
-  // writes the params too, and records what it wrote here first, so only a
-  // change from outside reaches the second branch.
-  const [seenParamMode, setSeenParamMode] = useState(params.mode);
-  if (params.mode !== seenParamMode) {
-    setSeenParamMode(params.mode);
-    if (params.mode != null && params.mode !== mode) {
+  // An opener that focuses this pane can ask for a mode and session through
+  // the params (openBrowserPanePanel asks for Agent's browser of its session).
+  // Only a change in the params counts, and the pane's own write-back always
+  // matches its state, so only a request from outside changes anything here.
+  const [seen, setSeen] = useState({ mode: params.mode, pin: paramPin });
+  if (params.mode !== seen.mode || paramPin !== seen.pin) {
+    setSeen({ mode: params.mode, pin: paramPin });
+    if (paramPin !== seen.pin && paramPin !== pinnedId) setPinnedId(paramPin);
+    if (params.mode != null && params.mode !== seen.mode && params.mode !== mode) {
       setMode(params.mode);
-      if (params.mode === "agent" && pinnedId != null) {
-        setExplicit((prev) => new Set(prev).add(pinnedId));
+      if (params.mode === "agent" && paramPin != null) {
+        setExplicit((prev) => new Set(prev).add(paramPin));
       }
     }
   }
@@ -117,29 +129,30 @@ export function BrowserPaneHost({
   // The pinned session is gone: a pane with a project shows its preview, and
   // one without is closed (the effect below).
   const sessionGone = mode === "agent" && sessionsLoaded && pinnedLive == null;
-  if (sessionGone && projectId != null) {
-    setMode("preview");
-    setSeenParamMode("preview");
-  }
+  if (sessionGone && projectId != null) setMode("preview");
   useEffect(() => {
     if (sessionGone && projectId == null) api?.close();
   }, [sessionGone, projectId, api]);
+
+  // Without BROWSER_ENABLED there is no switch, so a pane saved in Agent's
+  // browser by a switch comes back as Preview. A pane opened for a session's
+  // browser (the pane menu, the palette) still attaches and shows the
+  // server's own answer, as it did before #3371.
+  const featureOff =
+    browserFeature === false &&
+    mode === "agent" &&
+    projectId != null &&
+    (pinnedId == null || !explicit.has(pinnedId));
+  if (featureOff) setMode("preview");
 
   const changeMode = (next: BrowserMode) => {
     if (next === mode) return;
     if (next === "agent") {
       const target = pinnedLive ?? candidate;
       if (target == null) return;
-      setMode("agent");
-      setSeenParamMode("agent");
-      api?.updateParameters(
-        target.id === pinnedId ? { mode: "agent" } : { mode: "agent", agentSessionId: target.id },
-      );
-      return;
+      setPinnedId(target.id);
     }
-    setMode("preview");
-    setSeenParamMode("preview");
-    api?.updateParameters({ mode: "preview" });
+    setMode(next);
   };
 
   // What the preview names. A pane opened as a preview reads it once from the
@@ -171,10 +184,21 @@ export function BrowserPaneHost({
     if (!api) return;
     const patch: Partial<BrowserHostParams> = {};
     if (params.mode !== mode) patch.mode = mode;
+    if (pinnedId != null && paramPin !== pinnedId) patch.agentSessionId = pinnedId;
     if (params.projectId == null && projectId != null) patch.projectId = projectId;
     if (params.previewTarget == null && previewTarget) patch.previewTarget = previewTarget;
     if (Object.keys(patch).length > 0) api.updateParameters(patch);
-  }, [api, mode, params.mode, params.projectId, projectId, params.previewTarget, previewTarget]);
+  }, [
+    api,
+    mode,
+    params.mode,
+    pinnedId,
+    paramPin,
+    params.projectId,
+    projectId,
+    params.previewTarget,
+    previewTarget,
+  ]);
 
   const previewParams = useMemo<BrowserPanelParams>(() => {
     // BrowserPanel spreads the params it is given into its own write-back;

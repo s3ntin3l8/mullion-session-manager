@@ -788,6 +788,11 @@ export interface UiSlice {
   clearPanelNew: (id: string) => void;
   activePanelId: string | null;
   setActivePanelId: (id: string | null) => void;
+  // Session ids whose own pane (terminal or timeline) had focus, newest
+  // first, deduplicated and capped. The Browser pane (#3371) fixes "the
+  // project's last-focused session" from this when it switches to Agent's
+  // browser after focus already moved to the pane itself. Client state only.
+  recentSessionIds: number[];
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
   // falling back to first-available/create-default when that happens. Kept
