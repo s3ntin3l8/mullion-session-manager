@@ -803,6 +803,84 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
 
     await driver.stop();
   });
+
+  it("maps a failing stale-HID companion restart during an action to DeviceActionError 502", async () => {
+    let firstWrite = true;
+    const c = fakeCompanion({
+      onHidWrite: () => {
+        if (firstWrite) {
+          firstWrite = false;
+          return new Error("13 INTERNAL: The dtuhidd connection has been invalidated");
+        }
+        return null;
+      },
+    });
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    // First input fails and retries on stream 1 (recorded as retried=true).
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+
+    // Invalidate stream 1 asynchronously: since its batch is already retried,
+    // hidStale=true is set with no pending recovery batches.
+    c.hidStreams[1]!.emit(
+      "error",
+      new Error("13 INTERNAL: The dtuhidd connection has been invalidated"),
+    );
+    c.handle.restart = vi.fn(async () => {
+      throw new Error("spawn idb_companion ENOENT");
+    });
+
+    await expect(driver.tap(300, 600)).rejects.toMatchObject({
+      name: "DeviceActionError",
+      statusCode: 502,
+    });
+    expect(c.handle.restart).toHaveBeenCalledTimes(1);
+
+    // Live input on the same failing restart drops cleanly without throwing.
+    firstWrite = true;
+    c.handle.restart = vi.fn(async () => {});
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+    c.hidStreams[3]!.emit(
+      "error",
+      new Error("13 INTERNAL: The dtuhidd connection has been invalidated"),
+    );
+    c.handle.restart = vi.fn(async () => {
+      throw new Error("spawn idb_companion ENOENT");
+    });
+    await expect(
+      driver.input({
+        type: "tap",
+        x: 300,
+        y: 600,
+        videoWidth: 1206,
+        videoHeight: 2622,
+      }),
+    ).resolves.toBeUndefined();
+    expect(c.handle.restart).toHaveBeenCalledTimes(1);
+
+    await driver.stop();
+  });
 });
 
 describe("IosSimulatorDriver input (fake idb_companion)", () => {

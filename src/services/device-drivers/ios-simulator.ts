@@ -1150,7 +1150,19 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
     if (this.hidStale) {
       this.hidStale = false;
-      await this.restartForStaleHid();
+      try {
+        await this.restartForStaleHid();
+      } catch (err) {
+        this.closeHidStream();
+        if (forAction) {
+          throw new DeviceActionError(
+            502,
+            `idb HID write failed after companion restart: ${errorText(err)}`,
+          );
+        }
+        this.log.warn("iOS HID input failed after companion restart; dropping event", err);
+        return;
+      }
     }
     const client = this.companion.client;
     if (!client) {
