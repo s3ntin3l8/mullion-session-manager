@@ -368,10 +368,13 @@ describe("SidebarDevices (issue #1326)", () => {
     expect(within(stopped).getByTestId("device-unreachable-1")).toHaveTextContent(
       "unavailable — host unreachable",
     );
-    expect(stopped).toHaveAttribute("aria-label", expect.stringMatching(/ on mac-mini$/));
+    expect(stopped).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/ on mac-mini — host unreachable$/),
+    );
     expect(within(stopped).getByTestId("device-start-1")).toHaveAttribute(
       "aria-label",
-      expect.stringMatching(/ on mac-mini$/),
+      expect.stringMatching(/ on mac-mini — host unreachable$/),
     );
     const active = await screen.findByTestId("device-row-2");
     expect(within(active).getByTestId("device-stop-2")).toBeDisabled();

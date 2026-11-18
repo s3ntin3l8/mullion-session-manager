@@ -143,6 +143,9 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
         // different hosts must not read as identical rows to a screen reader.
         const hostSuffix =
           device.hostId !== LOCAL_HOST_ID ? ` on ${hostDisplayName(device.hostId, hosts)}` : "";
+        // The visible note is inside a role="button" row, so its text is
+        // presentational to AT: the reason has to be part of the spoken name.
+        const spokenState = unreachable ? " — host unreachable" : "";
         const title =
           rowError ??
           (unreachable
@@ -158,9 +161,10 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
           // and open the panel when the user meant to start/stop it.
           <div
             key={device.id}
-            // `sidebar-device-row-wrap` only rides along when this row has
-            // an error line to make room for — a row without one keeps the
-            // exact layout it always had (see styles/sidebar.css).
+            // `sidebar-device-row-wrap` rides along whenever this row has a
+            // second line to show (a lifecycle error or the unreachable
+            // note) — any other row keeps the exact layout it always had
+            // (see styles/sidebar.css).
             className={`sidebar-tasks-entry${stopped ? " stopped" : ""}${
               rowError || unreachable ? " sidebar-device-row-wrap" : ""
             }`}
@@ -173,7 +177,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
             // connection" as one string). Same convention as Sidebar.tsx's
             // SessionRow (`Open session …`) and NotificationBell's
             // EventRow — the row names itself, its content does not.
-            aria-label={`Open device ${deviceSpokenName(device)}${hostSuffix}`}
+            aria-label={`Open device ${deviceSpokenName(device)}${hostSuffix}${spokenState}`}
             title={title}
             onClick={() => onOpenDevice(device)}
             onKeyDown={(e) => {
@@ -197,7 +201,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                 <button
                   type="button"
                   data-testid={`device-start-${device.id}`}
-                  aria-label={`Start ${label}${hostSuffix}`}
+                  aria-label={`Start ${label}${hostSuffix}${spokenState}`}
                   title="Start"
                   disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
@@ -211,7 +215,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                 <button
                   type="button"
                   data-testid={`device-stop-${device.id}`}
-                  aria-label={`Stop ${label}${hostSuffix}`}
+                  aria-label={`Stop ${label}${hostSuffix}${spokenState}`}
                   title="Stop"
                   disabled={pendingId !== null || unreachable}
                   onClick={(e) => {

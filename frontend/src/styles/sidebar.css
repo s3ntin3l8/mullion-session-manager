@@ -2582,21 +2582,23 @@ button.discover-header:hover {
    exactly as it was. Both declarations are scoped to the compound selector
    so they win over `.sidebar-tasks-entry`'s own `gap: 8px` (empty-states.css,
    which is imported LATER than this file) without that file having to
-   change. The class is only added to a row that HAS an error, so every
-   other row keeps the layout it always had. */
+   change. The class is only added to a row that HAS a second line (a
+   lifecycle error or the unreachable note), so every other row keeps the
+   layout it always had. */
 .sidebar-tasks-entry.sidebar-device-row-wrap {
   flex-wrap: wrap;
   row-gap: 2px;
 }
-/* The error line itself: the full width of the row's content box, so it sits
-   UNDER the row rather than squeezing the label. ErrorText's own inline
-   styles carry the size and the red; this only shapes the box. */
+/* The unreachable note: a dim, non-error second line under the row. */
 .sidebar-device-note {
   flex: 0 0 100%;
   min-width: 0;
   font-size: 0.65625rem;
   color: var(--dim);
 }
+/* The error line itself: the full width of the row's content box, so it sits
+   UNDER the row rather than squeezing the label. ErrorText's own inline
+   styles carry the size and the red; this only shapes the box. */
 .sidebar-device-error {
   flex: 0 0 100%;
   min-width: 0;

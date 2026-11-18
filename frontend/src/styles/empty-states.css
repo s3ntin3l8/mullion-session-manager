@@ -136,15 +136,6 @@
   flex: 1;
 }
 
-/* Device lifecycle controls (Start/Stop on the sidebar's own device rows).
-   `.device-row-actions` is `.workspace-item-actions` (styles/sidebar.css)
-   transplanted next to the row class it actually decorates: same 22x22
-   centered box rationale (without an explicit box the button only sizes to
-   its icon and aligns to its taller siblings' top edge), same `border:
-   none` reset, same `--dim` resting color lifted by `:hover`. No
-   `.danger.armed` companion here — the sidebar's only device control is
-   Start/Stop, both reversible, so nothing arms (Settings -> Devices is
-   where the trash confirm lives, and it carries that rule itself). */
 .device-row-host {
   font-size: 0.65625rem;
   color: var(--dim);
@@ -154,6 +145,16 @@
   max-width: 45%;
   min-width: 0;
 }
+
+/* Device lifecycle controls (Start/Stop on the sidebar's own device rows).
+   `.device-row-actions` is `.workspace-item-actions` (styles/sidebar.css)
+   transplanted next to the row class it actually decorates: same 22x22
+   centered box rationale (without an explicit box the button only sizes to
+   its icon and aligns to its taller siblings' top edge), same `border:
+   none` reset, same `--dim` resting color lifted by `:hover`. No
+   `.danger.armed` companion here — the sidebar's only device control is
+   Start/Stop, both reversible, so nothing arms (Settings -> Devices is
+   where the trash confirm lives, and it carries that rule itself). */
 .device-row-actions {
   display: flex;
   align-items: center;
