@@ -37,6 +37,7 @@ export async function iosSimulatorAvailable(app: FastifyInstance): Promise<boole
 /** The device platforms this host can run right now: Android when any Android
  * kind is available, iOS when the simulator is. Empty when the panel is off. */
 export async function localDevicePlatforms(app: FastifyInstance): Promise<DevicePlatform[]> {
+  if (!app.devicePanelEnabled) return [];
   const platforms: DevicePlatform[] = [];
   if (localDeviceKinds(app).length > 0) platforms.push("android");
   if (await iosSimulatorAvailable(app)) platforms.push("ios");

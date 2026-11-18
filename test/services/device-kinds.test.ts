@@ -96,9 +96,9 @@ describe("localDevicePlatforms", () => {
     await expect(localDevicePlatforms(fakeApp())).resolves.toEqual(["android", "ios"]);
   });
 
-  it("has no android when no kind is available", async () => {
+  it("is empty when the panel is off, even with iOS available", async () => {
     await expect(
       localDevicePlatforms(fakeApp({ devicePanelEnabled: false, deviceKinds: [] })),
-    ).resolves.toEqual(["ios"]);
+    ).resolves.toEqual([]);
   });
 });
