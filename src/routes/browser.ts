@@ -587,9 +587,9 @@ export function proxyToRemoteBrowser(
     if (browserSocket.readyState === browserSocket.OPEN) browserSocket.close();
   };
 
-  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["openBrowserWs"]>;
+  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["browser"]["openSocket"]>;
   try {
-    upstream = getRemoteHostClient(app, hostId).openBrowserWs(sessionId, target);
+    upstream = getRemoteHostClient(app, hostId).browser.openSocket(sessionId, target);
   } catch (err) {
     app.log.error({ err, hostId, sessionId }, "failed to open remote browser WS upgrade");
     closeBrowser();

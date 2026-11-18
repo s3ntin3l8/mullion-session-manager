@@ -118,7 +118,7 @@ async function pushRemoteEndpoint(
 ): Promise<BrowserTarget | null> {
   try {
     const next = { ...target, endpoint };
-    const answer = (await getRemoteHostClient(app, target.hostId).postBrowser(
+    const answer = (await getRemoteHostClient(app, target.hostId).browser.post(
       `/internal/sessions/${sessionId}/browser-target`,
       next,
       next,

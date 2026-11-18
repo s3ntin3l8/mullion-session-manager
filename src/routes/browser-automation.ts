@@ -235,11 +235,7 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
       if (!page) {
         try {
           return await callRemote(sessionId, target, () =>
-            getRemoteHostClient(app, target.hostId).browserAutomationAction(
-              sessionId,
-              target,
-              request.body,
-            ),
+            getRemoteHostClient(app, target.hostId).browser.action(sessionId, target, request.body),
           );
         } catch (err) {
           app.log.error(
@@ -276,11 +272,7 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
       if (!page) {
         try {
           return await callRemote(sessionId, target, () =>
-            getRemoteHostClient(app, target.hostId).browserAutomationFind(
-              sessionId,
-              target,
-              request.body,
-            ),
+            getRemoteHostClient(app, target.hostId).browser.find(sessionId, target, request.body),
           );
         } catch (err) {
           app.log.error(
