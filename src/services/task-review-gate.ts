@@ -250,6 +250,9 @@ export async function holdConflictingReview(
   // Parked for a human by an earlier tick (a worker that could not be stopped,
   // a return that failed): retrying would repeat the same failure every tick.
   if (isParkedForHuman(task)) return;
+  // A park lifted by a reject or re-arm leaves its "will not retry" note behind;
+  // this tick is a retry, so drop the note (a fresh park rewrites it).
+  if (task.mergeError?.endsWith(PARKED_SUFFIX)) clearConflictHold(app, task);
   // Judge a finished attempt first: a rapid exit is refunded, which can take
   // the task back under the cap.
   await settleRapidRebaseExit(app, task, project);

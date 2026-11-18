@@ -317,6 +317,48 @@ describe.each([
     await app.close();
   });
 
+  it("re-parks a lifted park at the attempt cap without rebasing again", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, {
+      task: {
+        rebaseAttempts: MAX_REBASE_ATTEMPTS,
+        needsHumanReason: null,
+        lastAutoReturnReason: "conflict",
+        mergeError:
+          "Conflicts with main — no worker to send it back to, needs manual resolution (Mullion will not retry automatically)",
+      },
+    });
+
+    await reconcileTasks(app);
+
+    expect(mockAttemptAutoRebase).not.toHaveBeenCalled();
+    const row = await getTask(app, taskId);
+    expect(row.needsHumanReason).toBe("rebase-exhausted");
+    expect(row.mergeError).toMatch(/\(Mullion will not retry automatically\)$/);
+    await app.close();
+  });
+
+  it("drops the stale park note when a lifted park is retried", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("spawned");
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, {
+      task: {
+        rebaseAttempts: 0,
+        needsHumanReason: null,
+        mergeError:
+          "Conflicts with main — no worker to send it back to, needs manual resolution (Mullion will not retry automatically)",
+      },
+    });
+
+    await reconcileTasks(app);
+
+    expect(mockAttemptAutoRebase).toHaveBeenCalledTimes(1);
+    expect((await getTask(app, taskId)).mergeError).toBeNull();
+    await app.close();
+  });
+
   it("stops rebasing a task already parked after a conflict return", async () => {
     mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
     mockAttemptAutoRebase.mockResolvedValue("declined");
