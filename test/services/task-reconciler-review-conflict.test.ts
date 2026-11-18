@@ -297,6 +297,26 @@ describe.each([
     await app.close();
   });
 
+  it("rebases again once a human reject cleared the reason of a parked task", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("spawned");
+    const app = await buildApp();
+    await createReviewingTask(app, agent, {
+      task: {
+        rebaseAttempts: 0,
+        needsHumanReason: null,
+        mergeError:
+          "Conflicts with main — no worker to send it back to, needs manual resolution (Mullion will not retry automatically)",
+      },
+    });
+
+    await reconcileTasks(app);
+    await reconcileTasks(app);
+
+    expect(mockAttemptAutoRebase).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
   it("stops rebasing a task already parked after a conflict return", async () => {
     mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
     mockAttemptAutoRebase.mockResolvedValue("declined");

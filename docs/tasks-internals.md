@@ -746,11 +746,17 @@ reviewing` transition itself — `task-reconciler.ts`'s
   no `autoReturnRounds` round, carries no approval and does not touch
   `inconclusiveReviewRearmCount`. It has no cap of its own, so it happens at most
   once in a row: if `lastAutoReturnReason` is already `conflict` and the PR still
-  conflicts, the task is parked with `needsHumanReason: "rebase-exhausted"`.
+  conflicts, the task is parked for a human (`needsHumanReason: "rebase-exhausted"`,
+  or the review-loop reason it already carried, which is preserved).
   The same park happens, once and without a retry on later ticks, when
   `attemptAutoRebase` returns `blocked` (a session that had to stop first could
-  not be stopped), when the worker's agent cannot take a seed prompt, or when
-  the return itself fails (the reseed could not spawn).
+  not be stopped), when the task has no worktree or agent command to send back
+  to, when the worker's agent cannot take a seed prompt, or when the return
+  itself fails (the reseed could not spawn). A park is recognised by the
+  ` (Mullion will not retry automatically)` suffix on `mergeError` together
+  with a non-null `needsHumanReason`, not by the reason alone: a human reject or
+  a re-arm clears the reason, which lifts the park even though `mergeError` is
+  left alone.
   A `null`/`unknown` mergeability (GitHub still computing) waits a tick like an
   unfinished CI run, bounded by the same `reviewCiWaitMinutes` deadline, then
   dispatches as before. Once the PR reads mergeable again, the `Conflicts with`

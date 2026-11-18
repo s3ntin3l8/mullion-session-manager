@@ -279,9 +279,13 @@ function parkConflict(app: FastifyInstance, task: typeof tasks.$inferSelect, mes
 }
 
 function isParkedForHuman(task: typeof tasks.$inferSelect): boolean {
-  // Keyed on the suffix alone: `recordMergeError` keeps an existing review-loop
-  // `needsHumanReason` (cap, no-progress, ...), so the reason is not reliable.
-  return !!task.mergeError?.endsWith(PARKED_SUFFIX);
+  // The suffix is the once-only marker: `recordMergeError` keeps an existing
+  // review-loop `needsHumanReason` (cap, no-progress, ...), so the reason
+  // cannot say *that this gate* parked the task. But a park always leaves a
+  // non-null reason, and a human reject or a re-arm clears it without touching
+  // `mergeError`: a null reason means the park was lifted, so the stale marker
+  // must not keep the gate silent.
+  return !!task.mergeError?.endsWith(PARKED_SUFFIX) && task.needsHumanReason !== null;
 }
 
 /**
