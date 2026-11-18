@@ -1,4 +1,6 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
+import type { BrowserPanelParams } from "../lib/browserPanelParams.js";
+import type { BrowserMode } from "../lib/browserTitles.js";
 import type { TaskStatus } from "../api/index.js";
 import type {
   ExistingInstructionsMode,
@@ -725,6 +727,9 @@ export interface UiSlice {
   // showing. The panel is always docked (#3006).
   rightSidebarView: string;
   rightSidebarProjectRequest: { projectId: number; nonce: number } | null;
+  /** The rail's Browser view (#3372): its mode and preview, kept here so a
+   *  close, another view or crossing 1100px does not lose them. */
+  railBrowser: RailBrowserState;
   /** A one-shot "show History scoped to this" request (Source Control's View
    *  in History); the History view applies it, then clears it. */
   rightSidebarHistoryRequest: { projectId: number; scope: string; nonce: number } | null;
@@ -849,6 +854,18 @@ export interface UiSlice {
   // Asks the drawer to show `projectId` (pins its project picker); the nonce
   // makes a repeat request for the same project still fire.
   openRightSidebarView: (view: string, projectId?: number) => void;
+  /** The rail Browser view's switch. */
+  setRailBrowserMode: (mode: BrowserMode) => void;
+  /** BrowserPanel's address write-back, in the rail's Browser view. */
+  setRailBrowserPreview: (preview: BrowserPanelParams) => void;
+  /**
+   * Opens the rail's Browser view in Preview on `preview` (null: the rail
+   * project's own preview), moving the rail to `projectId` when given. What
+   * every preview entry point does below 1100px (#3372).
+   */
+  openRailBrowserPreview: (preview: BrowserPanelParams | null, projectId?: number) => void;
+  /** Opens the rail's Browser view in Agent's browser on `projectId`. */
+  openRailBrowserAgent: (projectId: number) => void;
   setGithubOpenPr: (projectId: number, number: number | null) => void;
   /** Shows a PR's drill-in in the right sidebar's GitHub view. */
   openRightSidebarPr: (projectId: number, number: number, back?: SidebarBack | null) => void;
@@ -1165,3 +1182,17 @@ export type DashboardState = ProjectsSlice &
   ToastsSlice &
   PreviewsSlice &
   ScaffoldSlice;
+
+/**
+ * The rail's Browser view (#3372). `mode` is the mode it was last in, Agent's
+ * browser before any. `preview` is what Preview shows: null for the rail
+ * project's own preview, else a target an entry point opened, kept up to date
+ * by BrowserPanel's address write-back. `rev` is bumped by every entry point
+ * that opens a target, so the view loads it even when it is already open.
+ * Client state only, not persisted.
+ */
+export interface RailBrowserState {
+  mode: BrowserMode;
+  preview: BrowserPanelParams | null;
+  rev: number;
+}

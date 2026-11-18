@@ -64,15 +64,38 @@ URL).
 Where the window is between 700 and 1099px wide (the rails layouts, among
 them a foldable unfolded), the right rail has a **Browser** view. On a phone
 the "⋯" sheet lists it with the rail's other views, and it opens full screen
-for the current session's project. The view shows the agent
-browser of the session the right sidebar follows, the same CDP-streamed page
-as a session's "Open browser" pane. The page fills the view under the
-pane's own address bar (back, forward, the address, reload). From 1100px the
-view is not registered and the agent browser stays a grid pane.
+for the current session's project. It is the Browser pane in the rail
+(#3372): the same **Preview** / **Agent's browser** switch, always on its own
+row above the address. From 1100px the view is not registered, and both
+modes are the grid's Browser pane.
+
+Below 1100px every preview opens in this view, in Preview on its target,
+never as a pane: the palette's preview entries (the target picker, the blank
+preview, a saved URL), a project's Preview menu, Git branch rows, GitHub PR
+rows and the Inbox's accepted dev server. A blank preview keeps whatever
+project the rail follows; the others move the rail to their project. Preview
+otherwise works on the rail's project: a project target opened for another
+project gives way to the rail project's own preview when the rail moves.
+The rail's Browser icon and the phone's "⋯" → Browser open the view in the
+mode it was last in (Agent's browser the first time), and the palette's
+"Open browser: agent's browser · <session>" opens it in Agent's browser.
+
+The view keeps its mode and its preview address while it is closed, while
+another view shows, and across the window crossing 1100px and back: widening
+past 1100px still closes the view, and the next open below 1100px finds it as
+it was. A Browser pane already in the grid stays a pane when the window
+narrows. Neither is saved across a reload.
+
+In Agent's browser the view shows the browser of the session the right
+sidebar follows, the same CDP-streamed page as the grid pane, under the
+pane's own address bar (back, forward, the address, reload). Unlike a grid
+pane, which fixes its session at the switch, the view follows focus.
 
 The session it shows is the one whose pane has focus, or the last one that
 had focus while a pane that is not a session's (Settings, a Git panel) has
-it. Only a session of the project the sidebar follows counts.
+it. Only a session of the project the sidebar follows counts. With none,
+Agent's browser says "No session in focus" (the switch gives the same reason
+from Preview), and Preview still works.
 
 Opening the agent browser launches it, so the view does not open one by
 itself: it asks for the session's browser bindings first

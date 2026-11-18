@@ -10,7 +10,7 @@
 // to close a view the current band has no place for);
 // `useEnabledInCompanionBands` is the hook form of the same rule, which the
 // rail and the phone's "more" sheet call through the entry's `useEnabled`.
-import { useLayoutBand } from "../lib/layoutTier.js";
+import { resolveLayoutBand, useLayoutBand } from "../lib/layoutTier.js";
 import type { LayoutBand } from "../lib/layoutTierTypes.js";
 import { useDashboardStore } from "../store/index.js";
 
@@ -30,6 +30,16 @@ export function viewInBand(view: { bands?: readonly LayoutBand[] }, band: Layout
  * the palette opens the rail's Browser view, the pane menu offers no entry.
  */
 export function agentBrowserIsRailView(band: LayoutBand): boolean {
+  return viewInBand({ bands: COMPANION_BANDS }, band);
+}
+
+/**
+ * Whether a preview opens in the rail's Browser view rather than as a pane
+ * (#3372, decision 2): below 1100px, where the Browser view exists. Read at
+ * the moment of opening, so the openers need no subscription of their own.
+ */
+export function previewOpensInRail(): boolean {
+  const band = resolveLayoutBand(useDashboardStore.getState().settings.layoutMode);
   return viewInBand({ bands: COMPANION_BANDS }, band);
 }
 

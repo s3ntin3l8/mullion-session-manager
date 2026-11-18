@@ -1,88 +1,81 @@
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import { useDashboardStore } from "../store/index.js";
-import { BrowserPane } from "../BrowserPane.js";
-import { browserApi } from "../api/browser.js";
+import { BrowserShell } from "../BrowserShell.js";
+import type { BrowserShellProps } from "../BrowserShell.js";
+import type { BrowserPanelParams } from "../BrowserPanel.js";
 import { useFollowedSession } from "../hooks/useFollowedSession.js";
 import { selectSessionTitle } from "../lib/sessionDisplay.js";
-import { EmptyStateNote } from "../ui/EmptyState.js";
+import { useServerInfo } from "../settings/useServerInfo.js";
 import type { RightSidebarViewProps } from "./views.js";
 
-// The right sidebar's Browser view (#3012), registered only on the rails
-// layouts (700 to 1099.98px; see viewBands.ts): the browser of the session the
-// sidebar follows, the page filling the view under BrowserPane's own address
-// bar. It is BrowserPane itself, the same client the grid pane uses, keyed by
-// session so switching sessions reconnects cleanly.
+// The right sidebar's Browser view (#3012), registered only below 1100px (the
+// rails bands and the phone; see viewBands.ts). It is the Browser pane's
+// BrowserShell (#3372, decision 2 of docs/design/one-browser-pane/note.md):
+// the same Preview / Agent's browser switch, with the rail's own rules.
 //
-// Attaching a BrowserPane is what launches and binds a session's browser
-// (routes/browser.ts), so the view does not mount one just because a session
-// has focus: it asks for the session's bindings first, and a session that has
-// none gets an empty state with "Open browser", the same action as the pane
-// menu's "Open Agent Browser".
-type Probe = { sessionId: number; bound: boolean } | null;
+// - Agent's browser follows the session the rail follows (decision 4), where
+//   the grid pane fixes one at the switch. BrowserShell probes the session's
+//   bindings before attaching, since attaching launches its browser.
+// - Preview works on the rail's project, or on the target a preview entry
+//   point opened (every one of them opens this view below 1100px).
+// - Mode and preview live in the store (`railBrowser`), not in this view: the
+//   view unmounts when the rail closes, shows another view, or the window
+//   crosses 1100px, and comes back as it was left. The first time it is in
+//   Agent's browser.
+
+const NO_SESSION_NOTE = "No session in focus. Focus a session of this project to see its browser.";
 
 export function BrowserSidebarView({ projectId }: RightSidebarViewProps) {
   const session = useFollowedSession(projectId);
-  const sessionId = session?.id ?? null;
   // The title the sidebar gives this session (#3285).
   const title = useDashboardStore((s) => (session ? selectSessionTitle(s, session) : ""));
-  const [probe, setProbe] = useState<Probe>(null);
-  // Sessions the user asked to open a browser for while this view is mounted.
-  const [opened, setOpened] = useState<ReadonlySet<number>>(() => new Set());
+  const rail = useDashboardStore((s) => s.railBrowser);
+  const setMode = useDashboardStore((s) => s.setRailBrowserMode);
+  // BROWSER_ENABLED: null until the server answers. Without it there is no
+  // switch and no agent's browser, so the view is Preview only.
+  const serverInfo = useServerInfo();
+  const featureOff = serverInfo != null && !serverInfo.features?.browser;
+  const mode = featureOff ? "preview" : rail.mode;
 
-  useEffect(() => {
-    if (sessionId == null) return;
-    let cancelled = false;
-    browserApi
-      .getSessionBrowserBindings(sessionId)
-      .then((bindings) => {
-        if (!cancelled) setProbe({ sessionId, bound: bindings.length > 0 });
-      })
-      .catch(() => {
-        // Unknown is treated as "no browser yet": the empty state's button
-        // still opens one, and attaching never needs this probe to succeed.
-        if (!cancelled) setProbe({ sessionId, bound: false });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId]);
+  // A project target follows the rail's project: one opened for another
+  // project gives way to this project's own preview. An external address
+  // (a saved URL, a blank preview) stays whatever project the rail shows.
+  const stored = rail.preview;
+  const previewParams = useMemo<BrowserPanelParams>(
+    () =>
+      stored != null && (stored.kind === "external" || stored.projectId === projectId)
+        ? stored
+        : { projectId },
+    [stored, projectId],
+  );
+  // BrowserPanel writes its address back here, as it does to a grid pane's
+  // params, so the address outlives the view.
+  const previewApi = useMemo<NonNullable<BrowserShellProps["previewApi"]>>(
+    () => ({
+      updateParameters: (params) =>
+        useDashboardStore.getState().setRailBrowserPreview(params as BrowserPanelParams),
+    }),
+    [],
+  );
+  // BrowserPanel reads its target once, on mount: an entry point opening a
+  // target (`rev`), or the preview moving to another project, mounts afresh.
+  const previewKey = `${rail.rev}:${previewParams.kind === "external" ? "url" : previewParams.projectId}`;
 
-  if (session == null) {
-    return (
-      <div className="browser-sidebar-view rs-fill">
-        <EmptyStateNote>
-          No session in focus. Focus a session of this project to see its browser.
-        </EmptyStateNote>
-      </div>
-    );
-  }
-
-  const show = opened.has(session.id) || (probe?.sessionId === session.id && probe.bound);
-  if (show) {
-    return (
-      <div className="browser-sidebar-view rs-fill">
-        <BrowserPane key={session.id} params={{ sessionId: session.id }} />
-      </div>
-    );
-  }
-
-  const probing = probe?.sessionId !== session.id;
   return (
     <div className="browser-sidebar-view rs-fill">
-      {probing ? (
-        <EmptyStateNote>Loading…</EmptyStateNote>
-      ) : (
-        <div className="browser-sidebar-empty">
-          <EmptyStateNote>{title} has no browser yet.</EmptyStateNote>
-          <button
-            type="button"
-            className="rs-touch-btn"
-            onClick={() => setOpened((prev) => new Set(prev).add(session.id))}
-          >
-            Open browser
-          </button>
-        </div>
-      )}
+      <BrowserShell
+        key={previewKey}
+        mode={mode}
+        onModeChange={setMode}
+        browserEnabled={!featureOff}
+        previewParams={previewParams}
+        previewApi={previewApi}
+        agentSession={session}
+        agentSessionTitle={title}
+        // With no session in focus, Agent's browser shows this note; the
+        // switch's tooltip gives the same reason from Preview.
+        agentDisabledReason={session == null ? NO_SESSION_NOTE : null}
+      />
     </div>
   );
 }

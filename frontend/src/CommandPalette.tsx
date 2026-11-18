@@ -547,7 +547,7 @@ export function CommandPalette({
       agentBrowser: onOpenAgentBrowser
         ? (session) => {
             if (agentBrowserIsRailView(layoutBand)) {
-              useDashboardStore.getState().openRightSidebarView("browser", session.projectId);
+              useDashboardStore.getState().openRailBrowserAgent(session.projectId);
             } else {
               onOpenAgentBrowser(session);
             }

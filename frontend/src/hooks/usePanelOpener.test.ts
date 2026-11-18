@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { usePanelOpener } from "./usePanelOpener.js";
 import type { DockviewApi } from "dockview-react";
@@ -17,6 +17,10 @@ const setViewMode = vi.fn();
 const openRightSidebarView = vi.fn();
 const startDevice = vi.fn();
 const requestPreviewPicker = vi.fn();
+const openRailBrowserPreview = vi.fn();
+// The band the preview openers read at the moment of opening (#3372). An
+// explicit "desktop" needs no matchMedia; atBand() below stubs it for "auto".
+let layoutMode: "auto" | "desktop" = "desktop";
 
 // What selectSessionTitleContexts reads (#3285): the Agent Browser pane is
 // named the way the sidebar names its session.
@@ -33,6 +37,8 @@ function storeState() {
     openRightSidebarView,
     startDevice,
     requestPreviewPicker,
+    openRailBrowserPreview,
+    settings: { layoutMode },
   };
 }
 
@@ -99,6 +105,8 @@ const DEVICE: Device = {
 };
 
 beforeEach(() => {
+  layoutMode = "desktop";
+  openRailBrowserPreview.mockClear();
   triggerPanelHighlight.mockClear();
   setActiveWorkspaceId.mockClear();
   setViewMode.mockClear();
@@ -1071,5 +1079,90 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
     const phone = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
     phone.result.current.onOpenPreview(1, "s1", "x");
     expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #3372, decision 2: below 1100px every preview entry point opens the rail's
+// Browser view in Preview on its target, and no pane.
+const BAND_QUERY: Record<"phone" | "rails-full" | "rails-halves" | "desktop-narrow", string> = {
+  phone: "(max-width: 699.98px)",
+  "rails-full": "(min-width: 700px) and (max-width: 799.98px)",
+  "rails-halves": "(min-width: 800px) and (max-width: 1099.98px)",
+  "desktop-narrow": "(min-width: 1100px) and (max-width: 1279.98px)",
+};
+
+function atBand(band: keyof typeof BAND_QUERY) {
+  layoutMode = "auto";
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({ matches: query === BAND_QUERY[band], media: query })),
+  );
+}
+
+describe("usePanelOpener — previews below 1100px open the rail's Browser view (#3372)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  describe.each(["rails-halves", "rails-full", "phone"] as const)("in %s", (band) => {
+    beforeEach(() => atBand(band));
+
+    it("the project's preview (Dock, Inbox, picker's default)", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenBrowser(2);
+      expect(openRailBrowserPreview).toHaveBeenCalledWith(null, 2);
+      expect(api.addPanel).not.toHaveBeenCalled();
+      expect(setViewMode).toHaveBeenCalledWith("list");
+    });
+
+    it("a saved URL from the palette", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenBrowserUrl(1, "https://example.com/", "Example");
+      expect(openRailBrowserPreview).toHaveBeenCalledWith(
+        { kind: "external", url: "https://example.com/", projectId: 1 },
+        1,
+      );
+      expect(api.addPanel).not.toHaveBeenCalled();
+    });
+
+    it("a blank preview, on whatever project the rail follows", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenBlankBrowser();
+      expect(openRailBrowserPreview).toHaveBeenCalledWith({ kind: "external" });
+      expect(api.addPanel).not.toHaveBeenCalled();
+    });
+
+    it("a branch or PR preview, and a named target from the picker", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenPreview(1, "s1", "feat/x");
+      expect(openRailBrowserPreview).toHaveBeenLastCalledWith(
+        { projectId: 1, previewSlug: "s1", targetName: undefined },
+        1,
+      );
+      result.current.onOpenPreview(1, "t1", null, "Docker web");
+      expect(openRailBrowserPreview).toHaveBeenLastCalledWith(
+        { projectId: 1, previewSlug: "t1", targetName: "Docker web" },
+        1,
+      );
+      expect(api.addPanel).not.toHaveBeenCalled();
+    });
+
+    it("works before the grid exists", () => {
+      const { result } = setup({ dockviewApi: null });
+      result.current.onOpenBrowser(1);
+      expect(openRailBrowserPreview).toHaveBeenCalledWith(null, 1);
+    });
+  });
+
+  it("from 1100px a preview stays a grid pane", () => {
+    atBand("desktop-narrow");
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    result.current.onOpenBlankBrowser();
+    expect(api.addPanel).toHaveBeenCalledTimes(2);
+    expect(openRailBrowserPreview).not.toHaveBeenCalled();
   });
 });
