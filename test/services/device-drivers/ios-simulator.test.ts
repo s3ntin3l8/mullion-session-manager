@@ -201,9 +201,11 @@ describe("IosSimulatorDriver", () => {
     await vi.advanceTimersByTimeAsync(5000);
     res.state = "Booted"; // the user reboots in Simulator.app
     await vi.advanceTimersByTimeAsync(5000);
+    // start() already rejected, so the poll must not report an exit for a never-alive driver
+    expect(onExit).not.toHaveBeenCalled();
     await driver.stop();
     expect(verbs(calls)).not.toContain("shutdown");
-    expect(onExit).toHaveBeenCalledTimes(1); // only stop() latches it
+    expect(onExit).toHaveBeenCalledTimes(1); // stop()'s own markExited
   });
 
   it("one throwing exit listener does not starve the rest", async () => {
