@@ -2864,6 +2864,57 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     });
   });
 
+  // #3370 — the palette and the pane menu share one band rule; rails-full
+  // (a grid presentation, but the rail's Browser view) opens the view too.
+  describe("Open Agent Browser by band (#3370)", () => {
+    const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
+
+    function stubWidth(width: number) {
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => {
+          const min = /min-width:\s*([\d.]+)px/.exec(query);
+          const max = /max-width:\s*([\d.]+)px/.exec(query);
+          const matches =
+            !query.includes("pointer") &&
+            (min !== null || max !== null) &&
+            (min === null || width >= Number(min[1])) &&
+            (max === null || width <= Number(max[1]));
+          return {
+            matches,
+            media: query,
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+          };
+        }),
+      );
+    }
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([
+      [750, "rails-full", true],
+      [1200, "desktop-narrow", false],
+    ])("at %ipx (%s) opens the rail view: %s", async (width, _band, railView) => {
+      stubWidth(width);
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: "session-7",
+        workspaces: [],
+        rightSidebarView: "git",
+        rightSidebarOpen: false,
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "auto" },
+      });
+      const onOpenAgentBrowser = vi.fn();
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      await user.click(await screen.findByText("Open Agent Browser: hotfix"));
+      expect(onOpenAgentBrowser).toHaveBeenCalledTimes(railView ? 0 : 1);
+      expect(useDashboardStore.getState().rightSidebarView).toBe(railView ? "browser" : "git");
+    });
+  });
+
   it("asks for a workspace name, then creates and switches, and backs out without closing", async () => {
     const workspace = makeWorkspace({ id: 4, name: "side" });
     const createWorkspace = vi.fn().mockResolvedValue(workspace);

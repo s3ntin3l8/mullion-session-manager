@@ -794,6 +794,26 @@ describe("PaneActionsMenu — items per layout (#3214)", () => {
     ]);
   });
 
+  // #3370 — the entry follows the band, not the presentation: rails-full
+  // presents a grid but has the rail's Browser view, so no entry there.
+  it.each([
+    [1400, "desktop", true],
+    [1200, "desktop-narrow", true],
+    [900, "rails-halves", false],
+    [750, "rails-full", false],
+    [500, "phone", false],
+  ])("at %ipx (%s) Open Agent Browser shown: %s", async (width, _band, shown) => {
+    layoutModeSetting = "auto";
+    stubViewportWidth(width);
+    try {
+      setHeaderSplitHidden(GROUP.id, false);
+      const labels = await itemLabels();
+      expect(labels.includes("Open Agent Browser")).toBe(shown);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("never lists Move (drag tab)", async () => {
     expect(await itemLabels()).not.toContain("Move (drag tab)");
   });

@@ -34,7 +34,7 @@ import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useDismissExit } from "./hooks/usePresence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
-import { COMPANION_BANDS, useCurrentLayoutBand, viewInBand } from "./right-sidebar/viewBands.js";
+import { agentBrowserIsRailView, useCurrentLayoutBand } from "./right-sidebar/viewBands.js";
 import {
   ACTIVE_TERMINAL_FOCUS_SELECTOR,
   WORKSPACE_FOCUS_FALLBACK_SELECTOR,
@@ -546,7 +546,7 @@ export function CommandPalette({
       timeline: onOpenTimeline,
       agentBrowser: onOpenAgentBrowser
         ? (session) => {
-            if (viewInBand({ bands: COMPANION_BANDS }, layoutBand)) {
+            if (agentBrowserIsRailView(layoutBand)) {
               useDashboardStore.getState().openRightSidebarView("browser", session.projectId);
             } else {
               onOpenAgentBrowser(session);
