@@ -9,6 +9,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import { resolveHeadSha } from "./task-workflow-gate.js";
 import {
   healUntrackedLocalSession,
   TASK_REVIEW_STATUS,
@@ -568,6 +569,34 @@ async function ingestHermesInconclusive(
 }
 
 /**
+ * True while the task's worktree head is not what its PR shows, i.e. there are
+ * commits the PR (and so a remote review) cannot see. Each call that finds this
+ * also retries the push, on the draft-PR retry backoff, so an approval or a
+ * fixed credential is picked up without waiting for the task to leave
+ * `reviewing`. An unreadable local head never holds: that is the old behavior.
+ */
+async function holdForUnpushedHead(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  prHeadSha: string,
+  now: number,
+): Promise<boolean> {
+  if (!task.worktreePath) return false;
+  const localSha = await resolveHeadSha(app, task.worktreePath, resolveTaskWorkerHost(app, task));
+  if (!localSha || localSha === prHeadSha) return false;
+  app.log.info(
+    { taskId: task.id, localSha, prHeadSha },
+    "task reconcile: holding the review — the worktree has commits the pull request does not",
+  );
+  if (draftPrRetryBackoff.shouldAttempt(task.id, now)) {
+    draftPrRetryBackoff.record(task.id, now);
+    await maybeOpenDraftPR(app, task, project);
+  }
+  return true;
+}
+
+/**
  * Starts the review run for every `reviewing` task whose reviewer resolves to
  * Hermes and which has none yet. Awaited AFTER `processPendingReviewSpawns`
  * (same CI wait, same rebase hold-back, same claim slot), so a task that
@@ -668,6 +697,14 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
               await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber!)
             ).headSha;
           })());
+        // The run reviews a clone of the PR's head, so commits that never
+        // reached it (a workflow-approval hold, a failed push) would be
+        // reviewed as the old head and the round reported as "no progress".
+        // Hold, retrying the push, until the PR carries the worktree's head.
+        if (await holdForUnpushedHead(app, task, project, headSha, now)) {
+          releaseClaim();
+          return;
+        }
         const priorRound = priorRoundFor(task, headSha);
         const roundsRemaining = Math.max(
           0,
@@ -2186,6 +2223,13 @@ const autoApproveRetryBackoff = createRetryBackoff<number>({
 
 export function resetAutoApproveBackoff(taskId: number): void {
   autoApproveRetryBackoff.reset(taskId);
+}
+
+/** Lets the next sweep retry a task's push at once (an operator just approved
+ * the workflow change that was holding it). */
+export function retryTaskPushNow(taskId: number): void {
+  draftPrRetryBackoff.clear(taskId);
+  autoApproveRetryBackoff.clear(taskId);
 }
 
 /**

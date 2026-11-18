@@ -101,7 +101,7 @@ async function listWorkflowFiles(
 }
 
 /** The worktree's current head commit on whichever host owns it. */
-async function resolveHeadSha(
+export async function resolveHeadSha(
   app: FastifyInstance,
   cwd: string,
   hostId: string,

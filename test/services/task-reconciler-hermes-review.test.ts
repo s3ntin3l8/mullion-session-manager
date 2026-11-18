@@ -32,6 +32,18 @@ vi.mock("../../src/services/git-worktree.js", (io) => mockGitWorktreeFactory(io)
 vi.mock("../../src/services/github-integration.js", (io) => mockGithubIntegrationFactory(io));
 vi.mock("../../src/services/github-write.js", (io) => mockGithubWriteFactory(io));
 vi.mock("../../src/services/github.js", (io) => mockGithubFactory(io));
+// Passes through to the real resolver unless a test pins the worktree's head.
+const mockResolveCommitSha = vi.hoisted(() => vi.fn());
+const realResolveCommitSha = vi.hoisted(() => ({
+  fn: undefined as undefined | ((cwd: string, ref: string) => Promise<string | null>),
+}));
+vi.mock("../../src/services/git-refs.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const real = actual.resolveCommitSha as (cwd: string, ref: string) => Promise<string | null>;
+  realResolveCommitSha.fn = real;
+  mockResolveCommitSha.mockImplementation(real);
+  return { ...actual, resolveCommitSha: mockResolveCommitSha };
+});
 
 const { buildApp } = await import("../../src/app.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
@@ -48,6 +60,7 @@ const {
   mockGetPullRequestByNumber,
   mockFetchRunsForHead,
   mockCreatePullRequestReview,
+  mockOpenDraftPRForTask,
 } = reconcilerMocks;
 
 describe("reconcileTasks — Hermes review agent (#2369)", () => {
@@ -471,6 +484,83 @@ describe("reconcileTasks — Hermes review agent (#2369)", () => {
         await reconcileTasks(app);
         expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
         await app.close();
+      });
+
+      describe("a worktree head the pull request does not carry yet", () => {
+        afterEach(() => {
+          mockResolveCommitSha.mockReset().mockImplementation(realResolveCommitSha.fn!);
+          mockOpenDraftPRForTask.mockReset();
+        });
+
+        it("holds the review and retries the push instead of reviewing the old head", async () => {
+          const app = await buildApp();
+          const taskId = await createHermesTask(app);
+          mockResolveCommitSha.mockResolvedValue("local-ahead");
+          mockOpenDraftPRForTask.mockResolvedValue({
+            ok: false,
+            reason: "workflow-approval-required",
+            detail: "approve the workflow change to push it",
+          });
+
+          await reconcileTasks(app);
+
+          expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+          expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+          const row = await getTask(app, taskId);
+          expect(row.reviewRunId).toBeNull();
+          expect(row.reviewSpawnClaimedAt).toBeNull();
+          await app.close();
+        });
+
+        it("dispatches on the next tick once the pull request carries the worktree's head", async () => {
+          const app = await buildApp();
+          const taskId = await createHermesTask(app);
+          mockResolveCommitSha.mockResolvedValue("sha2");
+          mockOpenDraftPRForTask.mockResolvedValue({
+            ok: true,
+            prUrl: "https://x/pull/9",
+            prNumber: 9,
+          });
+
+          await reconcileTasks(app);
+          expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+
+          // The push landed: the PR now shows the worktree's head.
+          mockGetPullRequestByNumber.mockResolvedValue({
+            number: 9,
+            htmlUrl: "https://x/pull/9",
+            nodeId: "n",
+            draft: true,
+            headSha: "sha2",
+          });
+          mockFetchRunsForHead.mockResolvedValue([
+            {
+              name: "CI",
+              status: "completed",
+              conclusion: "success",
+              htmlUrl: "https://x/1",
+              headSha: "sha2",
+            },
+          ]);
+          await reconcileTasks(app);
+
+          expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+          expect(mockDispatchTaskReview.mock.calls[0][1].target.headSha).toBe("sha2");
+          expect((await getTask(app, taskId)).reviewRunHeadSha).toBe("sha2");
+          await app.close();
+        });
+
+        it("does not hold when the worktree head cannot be read", async () => {
+          const app = await buildApp();
+          await createHermesTask(app);
+          mockResolveCommitSha.mockResolvedValue(null);
+
+          await reconcileTasks(app);
+
+          expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+          expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+          await app.close();
+        });
       });
 
       it("keys a re-entry into reviewing at the same head differently, but a retry within one entry the same", async () => {
