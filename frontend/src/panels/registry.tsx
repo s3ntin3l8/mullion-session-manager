@@ -169,6 +169,28 @@ export function makePanelWrapper<
 // stays intact, it just doesn't repaint on every single OSC frame.
 const OSC_TITLE_THROTTLE_MS = 1000;
 
+type DashboardState = ReturnType<typeof useDashboardStore.getState>;
+
+// A terminal tab's title from the store (#3292). `osc` is the latest live OSC
+// title, if any; `seeded` the agent title the tab was seeded with (undefined:
+// the session was not listed yet, so the live value stands in).
+function tabTitleFor(
+  state: DashboardState,
+  sessionId: number,
+  osc: string | null,
+  seeded: string | null | undefined,
+): string | null {
+  const session = state.sessions.find((s) => s.id === sessionId);
+  if (!session) return null;
+  const projectName = state.projects.find((p) => p.id === session.projectId)?.name;
+  const lastTitle = osc ?? (seeded === undefined ? session.lastTitle : seeded);
+  return paneTabTitle(
+    { ...session, lastTitle },
+    projectName,
+    selectSessionTitleContexts(state).get(sessionId),
+  );
+}
+
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too.
 function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
@@ -187,27 +209,24 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // session's title order (#3292), so a locked name or a task title is never
   // overwritten by it.
   const oscTitleRef = useRef<string | null>(null);
-  // The title the tab shows. The tab was seeded with the store's title at
-  // addPanel time, so the first value is the baseline, not a change.
-  const lastStoreTitleRef = useRef<string | null | undefined>(undefined);
   // Until the first live OSC title, the agent title stays at the value the
   // tab was seeded with: the ~4s session poll refreshes `lastTitle` with the
   // agent's elapsed-second counter, and following it would repaint (and
   // autosave) the tab on every poll — the storm the throttle below prevents.
-  const seededLastTitleRef = useRef<string | null | undefined>(undefined);
+  // Seeded once, lazily, from the store (undefined: the session was not
+  // listed yet, so the live value stands in), so the selector below stays pure.
+  const seededLastTitleRef = useRef<string | null | undefined>(
+    useDashboardStore.getState().sessions.find((s) => s.id === sessionId)?.lastTitle,
+  );
   const resolveTabTitle = useCallback(
-    (state: ReturnType<typeof useDashboardStore.getState>): string | null => {
-      const session = state.sessions.find((s) => s.id === sessionId);
-      if (!session) return null;
-      const projectName = state.projects.find((p) => p.id === session.projectId)?.name;
-      if (seededLastTitleRef.current === undefined) seededLastTitleRef.current = session.lastTitle;
-      const withOsc = {
-        ...session,
-        lastTitle: oscTitleRef.current ?? seededLastTitleRef.current,
-      };
-      return paneTabTitle(withOsc, projectName, selectSessionTitleContexts(state).get(sessionId));
-    },
+    (state: DashboardState): string | null =>
+      tabTitleFor(state, sessionId, oscTitleRef.current, seededLastTitleRef.current),
     [sessionId],
+  );
+  // The title the tab shows. The tab was seeded with the store's title at
+  // addPanel time, so the first value is the baseline, not a change.
+  const lastStoreTitleRef = useRef<string | null>(
+    tabTitleFor(useDashboardStore.getState(), sessionId, null, undefined),
   );
   const applyTitle = useCallback(
     (oscTitle: string) => {
@@ -226,7 +245,6 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // `claude` ends and `claude 2` becomes the only one). The selector yields a
   // string, so a store change that leaves the title alone does not re-render.
   const storeTitle = useDashboardStore(resolveTabTitle);
-  if (lastStoreTitleRef.current === undefined) lastStoreTitleRef.current = storeTitle;
   useEffect(() => {
     if (storeTitle === lastStoreTitleRef.current) return;
     lastStoreTitleRef.current = storeTitle;
