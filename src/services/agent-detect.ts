@@ -1,5 +1,9 @@
 import { runLoginShell, runLoginShellDetailed, type LoginShellFailure } from "./login-shell.js";
-import { invalidateUserShellEnv, resolveUserShellEnv } from "./user-shell-env.js";
+import {
+  getUserShellEnvStatus,
+  invalidateUserShellEnv,
+  resolveUserShellEnv,
+} from "./user-shell-env.js";
 import { getCodexHookTrust, type CodexHookTrust } from "./hook-adapters/codex-trust.js";
 import type { HookMessageKind } from "./hook-protocol.js";
 import { claudeCodeAdapter } from "./hook-adapters/claude-code.js";
@@ -112,6 +116,17 @@ function probe(bin: string): Promise<{ path: string | null; failure: LoginShellF
   }));
 }
 
+/** True when the interactive-PATH resolve failed for a transient reason (not a
+ * deliberate opt-out or an unsupported shell), so a probe's "not found" may
+ * only mean the user's rc-file PATH entries are missing. */
+function interactivePathUnverified(): boolean {
+  const { interactiveResolve, reason } = getUserShellEnvStatus();
+  return (
+    interactiveResolve === "fallback" &&
+    (reason === "timeout" || reason === "spawn-failed" || reason === "unparseable")
+  );
+}
+
 /** Probe every known shell + agent CLI in parallel. `previous` is the last
  * result: a binary whose probe failed (e.g. timed out on a loaded host) keeps
  * its earlier answer rather than flipping to "not found". */
@@ -125,7 +140,13 @@ export async function detectAgents(
 
   return Promise.all(
     candidates.map(async ({ bin, kind }) => {
-      const { path: resolvedPath, failure } = await probe(bin);
+      const probed = await probe(bin);
+      const resolvedPath = probed.path;
+      // "Nothing found" cannot be trusted when the interactive-PATH resolve
+      // itself failed transiently: the probe then ran on the bare service PATH,
+      // which lacks nvm/bun/... entries. Refresh re-runs the resolve.
+      const failure =
+        probed.failure ?? (resolvedPath === null && interactivePathUnverified() ? "error" : null);
       if (failure) {
         const prior = previous.find((p) => p.id === `${kind}:${bin}`);
         // Keep a prior positive (or prior probe-failed) answer — a transient
@@ -166,8 +187,6 @@ export async function detectAgents(
 // /api/actions, GET /api/projects/:id/actions) share this one cache rather
 // than each probing independently.
 const CACHE_TTL_MS = 60_000;
-// A batch with a failed probe is retried soon rather than cached a full minute.
-const FAILED_PROBE_TTL_MS = 5_000;
 
 let cache: { data: DetectedAgent[]; expiresAt: number } | null = null;
 // One shared in-flight probe batch: concurrent misses and background
@@ -182,8 +201,7 @@ function refreshAgents(): Promise<DetectedAgent[]> {
   refreshPromise = resolveUserShellEnv()
     .then(() => detectAgents(cache?.data))
     .then((data) => {
-      const ttl = data.some((a) => a.probeError) ? FAILED_PROBE_TTL_MS : CACHE_TTL_MS;
-      cache = { data, expiresAt: Date.now() + ttl };
+      cache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
       return data;
     })
     .finally(() => {

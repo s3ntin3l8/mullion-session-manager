@@ -40,6 +40,8 @@ let available: Record<string, string>;
 // the fake child spawned for each so the timeout test below can assert on
 // it directly (kill escalation, listener detachment).
 let hangBins: Set<string> = new Set();
+// Bins whose shell fails to spawn at all ('error' event, no pid).
+let errorBins: Set<string> = new Set();
 const hungChildren = new Map<string, FakeChild>();
 let lastSpawnOpts: { stdio?: unknown } | undefined;
 // What `opencode --version` prints (issue #1593); null = the probe prints nothing.
@@ -49,10 +51,16 @@ let opencodeVersionOutput: string | null = null;
 // faked child_process — covered by user-shell-env.test.ts, kept out of here.
 // `resolveUserShellEnvImpl` lets a test hold the resolve open to pin the
 // resolve-before-probe ordering in refreshAgents().
+let userShellEnvStatus: {
+  shell: string | null;
+  interactiveResolve: "ok" | "fallback";
+  reason: string | null;
+} = { shell: "/usr/bin/zsh", interactiveResolve: "ok", reason: null };
 let resolveUserShellEnvImpl: () => Promise<void> = () => Promise.resolve();
 vi.mock("../../src/services/user-shell-env.js", () => ({
   resolveUserShellEnv: () => resolveUserShellEnvImpl(),
   invalidateUserShellEnv: () => {},
+  getUserShellEnvStatus: () => userShellEnvStatus,
   getUserShellPath: () => null,
   getUserShellEnv: () => ({}),
   getUserShellRecoverKeys: () => [],
@@ -91,6 +99,11 @@ vi.mock("node:child_process", async (importOriginal) => {
         // B7 — deliberately never emits exit/data/close, modeling a login
         // shell blocked on a write() syscall to an unread stderr pipe.
         hungChildren.set(bin, child);
+        return child;
+      }
+
+      if (bin && errorBins.has(bin)) {
+        setImmediate(() => child.emit("error", new Error("spawn EAGAIN")));
         return child;
       }
 
@@ -307,24 +320,69 @@ describe("probe failure vs. not installed", () => {
     expect(codex?.probeError).toBeUndefined();
   });
 
-  it("does not cache a batch with a failed probe for the full TTL", async () => {
-    available = {};
-    clearAgentsCacheForTests();
-    const spawnMock = vi.mocked((await import("node:child_process")).spawn);
-    hangBins = new Set(["codex"]);
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  it("flags a probe whose shell failed to spawn as probeError 'error', with path null and available false", async () => {
+    available = { claude: "/usr/local/bin/claude" };
+    errorBins = new Set(["codex"]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const p = getCachedAgents();
-      await vi.advanceTimersByTimeAsync(5_000);
-      await p;
-      hangBins = new Set();
-      vi.setSystemTime(Date.now() + 6_000); // past the short TTL, well under 60 s
-      spawnMock.mockClear();
-      await getCachedAgents(); // stale data now, re-probe in the background
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+      const results = await detectAgents();
+      const codex = results.find((r) => r.id === "agent:codex");
+      expect(codex).toMatchObject({ available: false, path: null, probeError: "error" });
+      expect(results.find((r) => r.id === "agent:claude")?.available).toBe(true);
     } finally {
-      vi.useRealTimers();
-      hangBins = new Set();
+      errorBins = new Set();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps a previous probeError entry when the probe fails again", async () => {
+    available = {};
+    const prior = await detectWithHungBin("codex");
+    expect(prior.find((r) => r.id === "agent:codex")?.probeError).toBe("timeout");
+    errorBins = new Set(["codex"]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const results = await detectAgents(prior);
+      // Carried over unchanged (still the timeout), not replaced by the new 'error'.
+      expect(results.find((r) => r.id === "agent:codex")).toBe(
+        prior.find((r) => r.id === "agent:codex"),
+      );
+    } finally {
+      errorBins = new Set();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("does not trust 'not found' while the interactive-PATH resolve failed transiently", async () => {
+    available = {};
+    userShellEnvStatus = {
+      shell: "/usr/bin/zsh",
+      interactiveResolve: "fallback",
+      reason: "timeout",
+    };
+    try {
+      const results = await detectAgents();
+      expect(results.find((r) => r.id === "agent:pi")).toMatchObject({
+        available: false,
+        probeError: "error",
+      });
+    } finally {
+      userShellEnvStatus = { shell: "/usr/bin/zsh", interactiveResolve: "ok", reason: null };
+    }
+  });
+
+  it("still reports plain not-found when the interactive resolve was skipped on purpose", async () => {
+    available = {};
+    userShellEnvStatus = {
+      shell: "/usr/bin/fish",
+      interactiveResolve: "fallback",
+      reason: "unsupported-shell",
+    };
+    try {
+      const results = await detectAgents();
+      expect("probeError" in results.find((r) => r.id === "agent:pi")!).toBe(false);
+    } finally {
+      userShellEnvStatus = { shell: "/usr/bin/zsh", interactiveResolve: "ok", reason: null };
     }
   });
 });
