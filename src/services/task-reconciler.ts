@@ -79,6 +79,7 @@ import {
   syncTaskTransition,
   computeTaskDiffStat,
   postReviewFindingsComment,
+  recordGithubSyncError,
   type PendingReviewPost,
 } from "./task-github-sync.js";
 import { resolveMullionOwnThreadsIfClean } from "./task-own-threads.js";
@@ -535,13 +536,18 @@ const HERMES_STATE_MAX_ENTRIES = 500;
 const hermesGonePolls = new Map<string, number>();
 const hermesDispatchFailures = new Map<number, number>();
 
-function bumpBounded<K>(map: Map<K, number>, key: K): number {
-  const next = (map.get(key) ?? 0) + 1;
+/** FIFO-bounded insert: past the cap, the oldest key makes room for a new one. */
+function setBounded<K, V>(map: Map<K, V>, key: K, value: V): void {
   if (!map.has(key) && map.size >= HERMES_STATE_MAX_ENTRIES) {
     const oldest = map.keys().next();
     if (!oldest.done) map.delete(oldest.value);
   }
-  map.set(key, next);
+  map.set(key, value);
+}
+
+function bumpBounded<K>(map: Map<K, number>, key: K): number {
+  const next = (map.get(key) ?? 0) + 1;
+  setBounded(map, key, next);
   return next;
 }
 
@@ -601,11 +607,7 @@ async function holdForUnpushedHead(
   let state = unpushedHeadState.get(task.id);
   if (state?.tip !== tip) {
     state = { tip, pushes: 0, gated: false };
-    if (!unpushedHeadState.has(task.id) && unpushedHeadState.size >= HERMES_STATE_MAX_ENTRIES) {
-      const oldest = unpushedHeadState.keys().next();
-      if (!oldest.done) unpushedHeadState.delete(oldest.value);
-    }
-    unpushedHeadState.set(task.id, state);
+    setBounded(unpushedHeadState, task.id, state);
     app.log.info(
       { taskId: task.id, tip, prHeadSha },
       "task reconcile: holding the review — the worktree is ahead of the pull request",
@@ -615,6 +617,13 @@ async function holdForUnpushedHead(
     app.log.warn(
       { taskId: task.id, tip, prHeadSha, pushes: state.pushes },
       "task reconcile: the worktree's commits could not be pushed — reviewing the pull request's head as it is",
+    );
+    // A dirty-tree refusal records no sync error of its own, so say it here: the
+    // card would otherwise read "reviewing" with nothing showing the PR is stale.
+    recordGithubSyncError(
+      app,
+      task.id,
+      `The branch's latest commits could not be pushed after ${state.pushes} attempts, so the review ran on the pull request's earlier head. Clean the worktree or fix the push, then re-review.`,
     );
     return false;
   }

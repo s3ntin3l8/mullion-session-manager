@@ -32,7 +32,8 @@ export interface WorktreeAhead {
  * Local worktrees are compared by `refs/heads/<branch>`, the ref the push
  * sends, not HEAD (a rebase stopped on a conflict leaves HEAD detached at the
  * new base). A remote host reports only HEAD, so there the PR head must appear
- * in HEAD's recent history.
+ * in HEAD's last REMOTE_LOG_WINDOW commits; a tip further ahead than that reads
+ * as not ahead (the old behavior).
  */
 export async function worktreeAheadOfPr(
   app: FastifyInstance,

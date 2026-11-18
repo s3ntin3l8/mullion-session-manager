@@ -626,6 +626,7 @@ describe("reconcileTasks — Hermes review agent (#2369)", () => {
           await reconcileTasks(app);
 
           expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(3);
+          expect((await getTask(app, taskId)).githubSyncError).toContain("could not be pushed");
           expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
           expect(mockDispatchTaskReview.mock.calls[0][1].target.headSha).toBe("sha1");
           await app.close();
