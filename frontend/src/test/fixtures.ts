@@ -15,7 +15,17 @@
 // so an api.ts shape change that adds/renames a required field is a
 // same-file compile error here, not a silent gap a consuming test's
 // `Partial<T>` override would otherwise mask.
-import type { Host, Project, Session, Task, Workspace } from "../api/index.js";
+import { DEFAULT_SETTINGS } from "../api/index.js";
+import type {
+  AppSettings,
+  Host,
+  Project,
+  ServerInfo,
+  Session,
+  Task,
+  Workspace,
+} from "../api/index.js";
+import { FALLBACK_RUNTIME_ENV, FALLBACK_TASK_MASTER_ENV } from "../store/constants.js";
 
 export function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -239,6 +249,57 @@ export function makeHost(overrides: Partial<Host> = {}): Host {
     // Issue #1725 — the drain flag: every host carries it.
     drained: false,
     role: "worker",
+    ...overrides,
+  };
+}
+
+export function makeTaskMaster(
+  overrides: Partial<AppSettings["taskMaster"]> = {},
+): AppSettings["taskMaster"] {
+  return {
+    ...DEFAULT_SETTINGS.taskMaster,
+    trustedLogins: [...DEFAULT_SETTINGS.taskMaster.trustedLogins],
+    ...overrides,
+  };
+}
+
+export function makeTaskMasterEnv(
+  overrides: Partial<ServerInfo["taskMasterEnv"]> = {},
+): ServerInfo["taskMasterEnv"] {
+  return {
+    ...FALLBACK_TASK_MASTER_ENV,
+    ...overrides,
+  };
+}
+
+export function makeServerInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
+  return {
+    version: "0.1.0",
+    role: "primary",
+    nodeEnv: "test",
+    port: 3000,
+    encryptionEnabled: false,
+    sessionsDir: "/tmp/sessions",
+    dbPath: "/tmp/app.db",
+    uptimeSeconds: 1,
+    rateLimit: { max: 100, window: "1 minute" },
+    projectsRoots: "",
+    crsConfigDir: "~/.config/crs",
+    previewsEnabled: false,
+    previewBaseHost: "",
+    previewAuthRequired: false,
+    taskMasterEnabled: false,
+    taskMasterEnv: makeTaskMasterEnv(),
+    runtimeEnv: { ...FALLBACK_RUNTIME_ENV },
+    running: { browserEnabled: false, browserMaxInstances: 4, deviceDiscoveryEnabled: true },
+    features: { browser: true, devices: true, deviceDiscovery: true },
+    ...overrides,
+  };
+}
+
+export function makeAppSettings(overrides: Partial<AppSettings> = {}): AppSettings {
+  return {
+    ...DEFAULT_SETTINGS,
     ...overrides,
   };
 }

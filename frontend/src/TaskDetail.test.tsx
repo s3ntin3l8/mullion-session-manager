@@ -3,7 +3,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
-import { makeHost, makeProject, TASK_DERIVED_DEFAULTS } from "./test/fixtures.js";
+import {
+  makeHost,
+  makeProject,
+  makeTaskMasterEnv,
+  TASK_DERIVED_DEFAULTS,
+} from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
 import { ApiError } from "./api/index.js";
 import type {
@@ -1896,16 +1901,7 @@ describe("TaskDetail delete action", () => {
   // re-prompt must name whatever label is actually configured, not always
   // literally "mullion-task".
   it("names the project's actual configured label, not a hardcoded one", async () => {
-    taskMasterEnv = {
-      enabled: true,
-      maxConcurrent: 1,
-      budgetMinutes: 30,
-      progressCommentMinutes: 10,
-      rateLimitGraceMinutes: 5,
-      skipPermissions: false,
-      issueLabel: "custom-work-label",
-      pollIntervalSeconds: 60,
-    };
+    taskMasterEnv = makeTaskMasterEnv({ enabled: true, issueLabel: "custom-work-label" });
     deleteTask.mockRejectedValueOnce(
       new ApiError("Cannot delete: this task has a preserved branch — use Retry to resume it", 409),
     );

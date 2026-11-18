@@ -6,9 +6,10 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import type { DockviewPanelApi } from "dockview-react";
 import { BrowserPanel } from "./BrowserPanel.js";
-import { useDashboardStore, FALLBACK_RUNTIME_ENV } from "./store/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { api } from "./api/index.js";
 import type { Project, ServerInfo } from "./api/index.js";
+import { makeServerInfo } from "./test/fixtures.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
 const PROJECT: Project = {
@@ -40,34 +41,9 @@ const PROJECT: Project = {
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
-const SERVER_INFO_BASE = {
-  version: "0.1.0",
-  role: "primary" as const,
-  nodeEnv: "test",
-  port: 3000,
-  encryptionEnabled: false,
-  sessionsDir: "/tmp/sessions",
-  dbPath: "/tmp/app.db",
-  uptimeSeconds: 1,
-  rateLimit: { max: 100, window: "1 minute" },
-  projectsRoots: "",
-  crsConfigDir: "~/.config/crs",
-  taskMasterEnabled: false,
-  taskMasterEnv: {
-    enabled: false,
-    maxConcurrent: 2,
-    budgetMinutes: 120,
-    progressCommentMinutes: 15,
-    rateLimitGraceMinutes: 5,
-    skipPermissions: false,
-    issueLabel: "mullion-task",
-    pollIntervalSeconds: 60,
-  },
-  runtimeEnv: FALLBACK_RUNTIME_ENV,
-  running: { browserEnabled: false, browserMaxInstances: 4, deviceDiscoveryEnabled: true },
+const SERVER_INFO_BASE = makeServerInfo({
   features: { browser: true, devices: false, deviceDiscovery: true },
-  previewAuthRequired: false,
-};
+});
 
 // jsdom provides no window.matchMedia at all (unlike a real browser) — every
 // test needs one now that BrowserPanel.tsx's own empty-address-bar autoFocus

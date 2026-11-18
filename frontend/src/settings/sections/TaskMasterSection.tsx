@@ -185,7 +185,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Longest rate-limit park"
-        desc={`When a rate-limited agent's quota resets within this many hours, the task waits and resumes by itself. A later reset fails the task with the quota and reset time on the card; Retry it once the quota is back. 0 never waits. Server default: ${env.rateLimitMaxParkHours ?? 24} h.`}
+        desc={`When a rate-limited agent's quota resets within this many hours, the task waits and resumes by itself. A later reset fails the task with the quota and reset time on the card; Retry it once the quota is back. 0 never waits. Server default: ${env.rateLimitMaxParkHours} h.`}
       >
         <NumberField
           value={maxParkDraft ?? resolved.rateLimitMaxParkHours}
