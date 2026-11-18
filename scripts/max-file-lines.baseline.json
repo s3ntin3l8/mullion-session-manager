@@ -45,7 +45,6 @@
     "test/routes/projects-docker.test.ts": 1225,
     "test/routes/projects.test.ts": 2838,
     "test/routes/review-relay.test.ts": 2076,
-    "test/routes/tasks.test.ts": 3822,
     "test/routes/webhooks.test.ts": 1740,
     "test/scripts/install.test.ts": 1381,
     "test/services/device-manager.test.ts": 1500,
