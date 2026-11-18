@@ -336,7 +336,7 @@ describe("transfers above the channel limit (#2674)", () => {
 
   it("cuts a response of undeclared length off at the limit instead of buffering it", async () => {
     const r = await rig();
-    const res = await r.client.openPreviewHttp(1, "/big", {
+    const res = await r.client.previews.http(1, "/big", {
       method: "GET",
       headers: new Headers(),
     });
@@ -347,7 +347,7 @@ describe("transfers above the channel limit (#2674)", () => {
 describe("HTTP preview forward over the outbound channel (#2620)", () => {
   it("keeps the browser's headers, drops its credentials, and never sets its own", async () => {
     const r = await rig();
-    const res = await r.client.openPreviewHttp(5173, "/app.js?v=1", {
+    const res = await r.client.previews.http(5173, "/app.js?v=1", {
       method: "GET",
       headers: new Headers({
         authorization: "Bearer browser-token",
@@ -380,19 +380,19 @@ describe("HTTP preview forward over the outbound channel (#2620)", () => {
 
   it("passes an upstream error status through, and a body-less status as an empty Response", async () => {
     const r = await rig();
-    const gone = await r.client.openPreviewHttp(1, "/gone", {
+    const gone = await r.client.previews.http(1, "/gone", {
       method: "GET",
       headers: new Headers(),
     });
     expect(gone.status).toBe(404);
     expect(await gone.text()).toBe("nope");
-    const unchanged = await r.client.openPreviewHttp(1, "/unchanged", {
+    const unchanged = await r.client.previews.http(1, "/unchanged", {
       method: "GET",
       headers: new Headers(),
     });
     expect(unchanged.status).toBe(304);
     expect(unchanged.body).toBeNull();
-    const head = await r.client.openPreviewHttp(1, "/x", {
+    const head = await r.client.previews.http(1, "/x", {
       method: "HEAD",
       headers: new Headers(),
     });
@@ -402,7 +402,7 @@ describe("HTTP preview forward over the outbound channel (#2620)", () => {
 
   it("delivers an SSE-style response chunk by chunk, before it ends", async () => {
     const r = await rig();
-    const res = await r.client.openPreviewHttp(1, "/sse", {
+    const res = await r.client.previews.http(1, "/sse", {
       method: "GET",
       headers: new Headers(),
     });
@@ -424,14 +424,12 @@ describe("HTTP preview forward over the outbound channel (#2620)", () => {
     const r = await rig();
     const open: Response[] = [];
     for (let i = 0; i < AGENT_CHANNEL_MAX_PREVIEW_CHANNELS; i++) {
-      open.push(
-        await r.client.openPreviewHttp(1, "/sse", { method: "GET", headers: new Headers() }),
-      );
+      open.push(await r.client.previews.http(1, "/sse", { method: "GET", headers: new Headers() }));
     }
     // The preview budget is spent: one more preview is refused as busy ...
 
-    const over = await r.client
-      .openPreviewHttp(1, "/sse", { method: "GET", headers: new Headers() })
+    const over = await r.client.previews
+      .http(1, "/sse", { method: "GET", headers: new Headers() })
       .catch((e) => e);
     expect(over).toBeInstanceOf(HostBusyError);
     // ... while an ordinary request still gets a slot: ping() is a request
@@ -443,7 +441,7 @@ describe("HTTP preview forward over the outbound channel (#2620)", () => {
 
   it("streams a POST body to the dev server and uses the configured-preview path", async () => {
     const r = await rig();
-    const res = await r.client.openPreviewHttp(1, "/submit", {
+    const res = await r.client.previews.http(1, "/submit", {
       method: "POST",
       headers: new Headers({ "content-type": "text/plain" }),
       body: webBody(Buffer.from("payload")),
@@ -486,9 +484,9 @@ describe("a bound host whose channel is down (#2620)", () => {
       expect(p).rejects.toBeInstanceOf(HostUnreachableError);
     await unreachable(r.client.uploadProjectFile("/p", "f", Readable.from([Buffer.from("x")])));
     await unreachable(r.client.downloadProjectFile("/p", "f"));
-    await unreachable(r.client.openPreviewHttp(1, "/", { method: "GET", headers: new Headers() }));
+    await unreachable(r.client.previews.http(1, "/", { method: "GET", headers: new Headers() }));
     await unreachable(
-      r.client.openConfiguredPreviewHttp("http://x/", { method: "GET", headers: new Headers() }),
+      r.client.previews.configuredHttp("http://x/", { method: "GET", headers: new Headers() }),
     );
     expect(await r.client.ping()).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -502,7 +500,7 @@ describe("a host that never bound the channel (#2620)", () => {
     fetchSpy.mockImplementation(async () => new Response("ok", { status: 200 }));
     expect(await r.client.ping()).toBe(true);
     expect(String(fetchSpy.mock.calls[0]![0])).toBe("http://127.0.0.1:1/health");
-    await r.client.openPreviewHttp(1, "/", { method: "GET", headers: new Headers() });
+    await r.client.previews.http(1, "/", { method: "GET", headers: new Headers() });
     expect(String(fetchSpy.mock.calls[1]![0])).toBe("http://127.0.0.1:1/internal/preview/1/");
     await r.client.downloadProjectFile("/p", "f").catch(() => undefined);
     expect(String(fetchSpy.mock.calls[2]![0])).toBe(
@@ -518,7 +516,7 @@ describe("a host that never bound the channel (#2620)", () => {
 describe("outbound transfer edge cases (#2690)", () => {
   it("passes a HEAD of an asset over the limit: no body follows, so its Content-Length is not a size", async () => {
     const r = await rig();
-    const res = await r.client.openPreviewHttp(1, "/head-big", {
+    const res = await r.client.previews.http(1, "/head-big", {
       method: "HEAD",
       headers: new Headers(),
     });
@@ -527,8 +525,8 @@ describe("outbound transfer edge cases (#2690)", () => {
     expect(await res.text()).toBe("");
     // The same response to a GET is refused: a body that size really follows
     // (as an upstream-response error, not a request one).
-    const get = await r.client
-      .openPreviewHttp(1, "/head-big", { method: "GET", headers: new Headers() })
+    const get = await r.client.previews
+      .http(1, "/head-big", { method: "GET", headers: new Headers() })
       .then(async (res) => {
         await res.arrayBuffer();
         return res;
@@ -569,7 +567,7 @@ describe("outbound transfer edge cases (#2690)", () => {
     // proxy uses, to a real HTTP client.
     const proxy = Fastify();
     proxy.get("/*", async (request, reply) => {
-      const upstream = await r.client.openPreviewHttp(1, "/three", {
+      const upstream = await r.client.previews.http(1, "/three", {
         method: "GET",
         headers: new Headers(),
       });

@@ -23,11 +23,7 @@ import type { GitDiffStats } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import type { UpdateStatus, ApplyUpdateBody } from "./update-apply.js";
 import type { HostTransport } from "./agent-channel-tunnel.js";
-import {
-  downloadOverChannel,
-  previewHttpOverChannel,
-  uploadOverChannel,
-} from "./remote-host-channel-transfers.js";
+import { downloadOverChannel, uploadOverChannel } from "./remote-host-channel-transfers.js";
 import { openStreamOnTransport } from "./agent-channel-streams.js";
 import {
   AGENT_CHANNEL_STREAMS_OPERATION,
@@ -39,6 +35,7 @@ import * as git from "./remote-host-git.js";
 import { createBrowserClient, type BrowserClient } from "./remote-host-browser.js";
 import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
 import { createStreamsClient, type StreamsClient } from "./remote-host-streams.js";
+import { createPreviewsClient, type PreviewsClient } from "./remote-host-previews.js";
 import { probeHealth } from "./host-health-probe.js";
 
 export {
@@ -52,7 +49,6 @@ import type {
   SpawnResult,
   SpawnSessionOptions,
 } from "./remote-host-client-types.js";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, NONCE_HEADER } from "./request-signature.js";
 import { uploadInbound, downloadInbound } from "./remote-host-file-streams.js";
 import { RemoteHostTransport, type HostCredentials } from "./remote-host-transport.js";
 import type { PromoteDecision } from "../shared/promote-decision.js";
@@ -171,13 +167,11 @@ const GIT_READ_CACHE_TTL_MS = 3_000;
 // host as unreachable for at most one more cooldown.
 const LIVE_STATUS_DOWN_COOLDOWN_MS = 10_000;
 
-// A preview asset request (issue #28 phase 6) can legitimately take longer
-// than REQUEST_TIMEOUT_MS's 5s — a dev server compiling a route on first
-// request (Vite/webpack's on-demand compilation) is a real, non-error delay
-// this proxy must not preempt.
-const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
+// The preview forward's own budget (PREVIEW_REQUEST_TIMEOUT_MS) lives with
+// the previews facet, in remote-host-previews.ts.
 
-// Same reasoning as PREVIEW_REQUEST_TIMEOUT_MS above, for the same reason:
+// Same reasoning as the previews facet's PREVIEW_REQUEST_TIMEOUT_MS (see
+// remote-host-previews.ts), for the same reason:
 // a file upload (issue #68) can be up to MAX_UPLOAD_BYTES (25 MiB,
 // session-upload.ts) — a real, non-error transfer time over a WAN/VPN link
 // to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
@@ -211,7 +205,8 @@ export function overrideTransferIdleTimeoutForTests(ms: number): () => void {
 // running — e.g. reporting push-failed on a branch that actually landed.
 // Each constant below is the agent-side budget plus headroom, following the
 // same "real, non-error delay this proxy must not preempt" reasoning as
-// PREVIEW_REQUEST_TIMEOUT_MS/UPLOAD_REQUEST_TIMEOUT_MS above.
+// the previews facet's PREVIEW_REQUEST_TIMEOUT_MS (remote-host-previews.ts)
+// and UPLOAD_REQUEST_TIMEOUT_MS above.
 /** git-push.ts's GIT_TIMEOUT_MS is 120s (one `git push`, raised from 30s so
  * `--no-verify` doesn't have to also budget for a target repo's own
  * pre-push hook — see that file's header comment). Kept in lockstep with
@@ -242,9 +237,9 @@ const WORKTREE_PATH_COMPARE_TIMEOUT_MS = 30_000;
 // orphaning a real worktree the primary never tracked: an unrecoverable
 // leak, same class as the accepted restart-leak limitation). 45s gives 15s
 // of margin for network RTT on top of the 30s agent-side worst case.
-// Distinct from PREVIEW_REQUEST_TIMEOUT_MS (that one covers the browser
-// dev-server proxy, an unrelated "preview" — dock-preview worktrees are a
-// different feature despite the name collision).
+// Distinct from the previews facet's PREVIEW_REQUEST_TIMEOUT_MS (that one
+// covers the browser dev-server proxy, an unrelated "preview" — dock-preview
+// worktrees are a different feature despite the name collision).
 const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
 
 // Issue #1951 follow-up — the agent validates every root with a few stat/realpath
@@ -342,6 +337,11 @@ export class RemoteHostClient {
     this.hostId = opts.hostId;
     this.transport = new RemoteHostTransport(opts);
     this.channelApp = opts.channelApp;
+    this.previews = createPreviewsClient({
+      transport: this.transport,
+      openInbound: (target) => this.inboundStream(target, false),
+      openChannel: (kind, identity, query) => this.channelStream(kind, identity, query),
+    });
   }
 
   /**
@@ -378,6 +378,15 @@ export class RemoteHostClient {
     openInbound: (target, capPayload) => this.inboundStream(target, capPayload),
     openChannel: (kind, identity, query) => this.channelStream(kind, identity, query),
   });
+
+  /**
+   * The previews facet (issue #3289 / #3304): the preview HTTP forward and
+   * the two preview WebSocket kinds. Built in the constructor rather than in
+   * a field initializer because it takes the transport itself — its bearer
+   * token, its signature headers and its SSRF pinning — and the transport is
+   * built there; a field initializer would run before it exists.
+   */
+  readonly previews: PreviewsClient;
 
   discover(): Promise<DiscoveredCandidate[]> {
     return this.request("/internal/discover");
@@ -1750,139 +1759,6 @@ export class RemoteHostClient {
   ): NodeWebSocket | null {
     const transport = this.transport.resolveTransport?.(AGENT_CHANNEL_STREAMS_OPERATION);
     return openStreamOnTransport(this.channelApp, transport, kind, identity, query);
-  }
-
-  /**
-   * Forwards an HTTP preview request to this agent's own
-   * `/internal/preview/:port/*` (issue #28 phase 6) — the agent, not this
-   * process, dials the actual dev server, always on its own loopback (see
-   * internal.ts's own loopback assertion; `port` is never a caller-supplied
-   * host, only a number this method interpolates into the path). Returns
-   * the raw Response regardless of status (a 404/500 from the dev server is
-   * not this method's failure to report — only a network-level failure to
-   * reach the agent itself is, same distinction request()'s callers rely
-   * on but this method can't reuse it for: unlike request(), a non-2xx
-   * upstream status must pass through to the caller unchanged, not throw).
-   *
-   * `body`/`duplex`, when present, stream a non-GET/HEAD request body
-   * through to the agent unbuffered — see http-proxy.ts's
-   * buildUpstreamRequestBody. Note PREVIEW_REQUEST_TIMEOUT_MS now also
-   * bounds upload time for those requests, not just the response: a large
-   * POST to a remote-hosted preview can abort mid-upload once it elapses.
-   */
-  async openPreviewHttp(
-    port: number,
-    pathAndQuery: string,
-    init: {
-      method: string;
-      headers: Headers;
-      body?: ReadableStream<Uint8Array>;
-      duplex?: "half";
-    },
-  ): Promise<Response> {
-    return this.openPreviewHttpRequest(`/internal/preview/${port}${pathAndQuery}`, init);
-  }
-
-  openConfiguredPreviewHttp(
-    url: string,
-    init: { method: string; headers: Headers; body?: ReadableStream<Uint8Array>; duplex?: "half" },
-  ): Promise<Response> {
-    return this.openPreviewHttpRequest(
-      `/internal/configured-preview?${new URLSearchParams({ url })}`,
-      init,
-    );
-  }
-
-  openConfiguredPreviewWs(url: string): NodeWebSocket {
-    const viaChannel = this.channelStream("configured-preview", url, { url });
-    if (viaChannel) return viaChannel;
-    const requestTarget = `/internal/ws/configured-preview?${new URLSearchParams({ url })}`;
-    return this.inboundStream(requestTarget, false);
-  }
-
-  private async openPreviewHttpRequest(
-    requestTarget: string,
-    init: { method: string; headers: Headers; body?: ReadableStream<Uint8Array>; duplex?: "half" },
-  ): Promise<Response> {
-    const headers = new Headers(init.headers);
-    // Issue #249 / roadmap 7.5 — `init.headers` here is seeded from a
-    // BROWSER-controlled request forwarded through the preview proxy
-    // (preview-proxy.ts), unlike every other call site in this file, which
-    // only ever builds its own headers from scratch. Delete-then-set, never
-    // just set-without-delete: this route's own request body is exempt from
-    // hashing (isUnsignedBodyPath), so if the auth/signature headers below
-    // were only conditionally set (empty for a static-Bearer host) a
-    // browser could otherwise inject its own x-request-signature/
-    // -timestamp/-nonce and have them pass straight through unexamined.
-    headers.delete("authorization");
-    headers.delete(SIGNATURE_HEADER);
-    headers.delete(TIMESTAMP_HEADER);
-    headers.delete(NONCE_HEADER);
-    const t = this.requestTransport();
-    if (t.kind !== "inbound") {
-      return previewHttpOverChannel(
-        this.hostId,
-        t,
-        requestTarget,
-        init,
-        headers,
-        PREVIEW_REQUEST_TIMEOUT_MS,
-      );
-    }
-    headers.set("authorization", `Bearer ${this.transport.token}`);
-    for (const [key, value] of Object.entries(
-      this.transport.signatureHeaders(init.method, requestTarget, undefined),
-    )) {
-      headers.set(key, value);
-    }
-    try {
-      return await fetch(`${this.transport.baseUrl}${requestTarget}`, {
-        method: init.method,
-        headers,
-        ...(init.body !== undefined ? { body: init.body, duplex: init.duplex } : {}),
-        // "manual" here for the same reason request()'s own comment gives:
-        // a followed redirect would resend this bearer token whichever way
-        // the redirect's target points, cross-origin-redirect stripping
-        // rules notwithstanding — never rely on that instead of just not
-        // following. The dev server's own 3xx (relayed by the agent's
-        // /internal/preview handler as an ordinary response status, not an
-        // HTTP-level redirect of *this* fetch) reaches this method as an
-        // ordinary non-ok Response either way, which the caller forwards
-        // to the browser unchanged.
-        redirect: "manual",
-        signal: AbortSignal.timeout(PREVIEW_REQUEST_TIMEOUT_MS),
-        dispatcher: this.transport.pinnedDispatcher(),
-      } as RequestInit & { duplex?: "half" });
-    } catch (err) {
-      throw new HostUnreachableError(this.hostId, err);
-    }
-  }
-
-  /**
-   * Opens (but does not wait for) a WS connection to this agent's
-   * `/internal/ws/preview` (issue #28 phase 6) — the WS analog of
-   * openPreviewHttp above, and constructed the same bearer-header way as
-   * `streams.attach()` (the `ws` package is required for a request header the
-   * browser/global WebSocket API can't set). Callers (preview-proxy.ts) own
-   * the open/error/close lifecycle and the actual frame piping.
-   *
-   * No connect timeout, deliberately matching `streams.attach()`'s own gap rather
-   * than a bespoke one just for this method (Hermes review, PR #48): if the
-   * agent accepts the TCP/WS handshake but its own loopback dev server
-   * never answers, this connection can sit open with nothing flowing. A
-   * hung *preview* pane is a lower-stakes failure mode than the equivalent
-   * for a terminal attach — worth fixing for both together in a follow-up,
-   * not diverging on here in isolation.
-   */
-  openPreviewWs(port: number, pathAndQuery: string): NodeWebSocket {
-    const viaChannel = this.channelStream("preview", `${port}${pathAndQuery}`, {
-      port: String(port),
-      path: pathAndQuery,
-    });
-    if (viaChannel) return viaChannel;
-    const query = new URLSearchParams({ port: String(port), path: pathAndQuery });
-    const requestTarget = `/internal/ws/preview?${query.toString()}`;
-    return this.inboundStream(requestTarget, false);
   }
 
   /** Best-effort reachability probe for the Settings hosts panel's "test

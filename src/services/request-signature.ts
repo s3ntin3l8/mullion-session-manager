@@ -3,10 +3,10 @@ import crypto from "node:crypto";
 // Issue #249 / roadmap 7.5 — HMAC-signed primary->agent requests. Pure
 // functions, no Fastify dependency — same reasoning as signed-payload.ts's
 // own top-of-file comment: the WS-upgrade signing path (remote-host-client.ts's
-// streams.attach/browser.openSocket/streams.events/openPreviewWs) has no
-// FastifyRequest at all, only a raw `ws` package client-options object, and
-// the agent-side verification needs to run from routes/internal.ts's own
-// hooks without this module knowing anything about Fastify's request type.
+// streams.attach/browser.openSocket/streams.events, and the previews facet's
+// ws) has no FastifyRequest at all, only a raw `ws` package client-options
+// object, and the agent-side verification needs to run from routes/internal.ts's
+// own hooks without this module knowing anything about Fastify's request type.
 //
 // Only ever used for a *session*-credentialed (self-registered, #245) host.
 // A manually-registered static-Bearer host never signs and never verifies a

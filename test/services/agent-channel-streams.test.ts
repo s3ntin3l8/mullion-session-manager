@@ -381,9 +381,9 @@ describe("preview WebSockets over the channel (#2620)", () => {
         return { kind: "channel", channel: r.entry };
       },
     });
-    const preview = client.openPreviewWs(5173, "/@vite/client?x=1") as never as ChannelSocket;
+    const preview = client.previews.ws(5173, "/@vite/client?x=1") as never as ChannelSocket;
     await opened(preview);
-    const configured = client.openConfiguredPreviewWs(
+    const configured = client.previews.configuredWs(
       "http://127.0.0.1:3000/",
     ) as never as ChannelSocket;
     await opened(configured);
@@ -418,8 +418,8 @@ describe("preview WebSockets over the channel (#2620)", () => {
       resolveTransport: () => ({ kind: "channel-down" }),
     });
     for (const sock of [
-      down.openPreviewWs(1, "/"),
-      down.openConfiguredPreviewWs("http://127.0.0.1:1/"),
+      down.previews.ws(1, "/"),
+      down.previews.configuredWs("http://127.0.0.1:1/"),
     ]) {
       const err = new Promise<Error>((res) => sock.once("error", res));
       expect((await err).message).toContain("not falling back");
