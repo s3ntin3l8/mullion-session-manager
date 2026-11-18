@@ -575,8 +575,30 @@ export function DevicePane(props: {
       if (activePointer !== event.pointerId) return;
       releaseActivePointer(canvasPoint(event));
     };
+    // Tracks hardware keys dispatched as `hidKey` down on iOS (keyed by
+    // `KeyboardEvent.code` so aliased usages like top-row/numpad digits never
+    // collide) along with whether LEFT_SHIFT (0xE1) was wrapped around a
+    // shifted non-printable key.
+    const activeIosHidKeys = new Map<string, { usage: number; shift: boolean }>();
+    function releaseActiveIosHidKeys() {
+      if (activeIosHidKeys.size === 0) return;
+      let anyShifted = false;
+      for (const { usage, shift } of activeIosHidKeys.values()) {
+        sendControl({ type: "hidKey", usage, action: "up" });
+        if (shift) anyShifted = true;
+      }
+      activeIosHidKeys.clear();
+      if (anyShifted) {
+        sendControl({ type: "hidKey", usage: 0xe1, action: "up" });
+      }
+    }
+
     const onWindowBlur = () => {
       releaseActivePointer();
+      releaseActiveIosHidKeys();
+    };
+    const onCanvasBlur = () => {
+      releaseActiveIosHidKeys();
     };
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -601,6 +623,7 @@ export function DevicePane(props: {
     canvas.addEventListener("pointercancel", onPointerCancel);
     canvas.addEventListener("lostpointercapture", onPointerCancel);
     window.addEventListener("blur", onWindowBlur);
+    canvas.addEventListener("blur", onCanvasBlur);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onContextMenu);
 
@@ -610,12 +633,6 @@ export function DevicePane(props: {
       sendControl({ type: "keyEvent", androidKeyCode, action: "down", metaState });
       sendControl({ type: "keyEvent", androidKeyCode, action: "up", metaState });
     }
-
-    // Tracks hardware keys dispatched as `hidKey` down on iOS (keyed by
-    // `KeyboardEvent.code` so aliased usages like top-row/numpad digits never
-    // collide) along with whether LEFT_SHIFT (0xE1) was wrapped around a
-    // shifted non-printable key.
-    const activeIosHidKeys = new Map<string, { usage: number; shift: boolean }>();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (platformRef.current === "ios") {
@@ -628,20 +645,21 @@ export function DevicePane(props: {
           event.preventDefault();
           return;
         }
-        // Printable keys that need Shift, CapsLock, AltGr (ctrl+alt / AltGraph)
-        // or have no unshifted HID usage go through `{ type: "text", text: event.key }`
-        // so the iOS driver's `textToHidEvents` expands shifted characters
-        // (uppercase letters, `! ? @ : ( ) # % $ & * +` and friends) with
-        // LEFT_SHIFT and unmapped printable keys still type, while unshifted
-        // hardware keys and non-printable keys (Enter, Escape, Backspace, Tab,
-        // arrows, ...) go through `{ type: "hidKey", usage, action }`.
+        // Printable keys that need Shift, CapsLock, Alt/Option, AltGr
+        // (ctrl+alt / AltGraph) or have no unshifted HID usage go through
+        // `{ type: "text", text: event.key }` so the iOS driver's
+        // `textToHidEvents` expands shifted characters (uppercase letters,
+        // `! ? @ : ( ) # % $ & * +` and friends) with LEFT_SHIFT and unmapped
+        // printable keys still type, while unshifted hardware keys and
+        // non-printable keys (Enter, Escape, Backspace, Tab, arrows, ...) go
+        // through `{ type: "hidKey", usage, action }`.
         const usage = keyboardEventToHidUsage(event.code);
         if (
           event.key.length === 1 &&
           (event.shiftKey ||
+            event.altKey ||
             event.getModifierState("CapsLock") ||
             event.getModifierState("AltGraph") ||
-            (event.ctrlKey && event.altKey) ||
             usage === null)
         ) {
           event.preventDefault();
@@ -714,9 +732,6 @@ export function DevicePane(props: {
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (platformRef.current !== "ios") return;
-      const chord =
-        (event.ctrlKey || event.metaKey) && !event.altKey && !event.getModifierState("AltGraph");
-      if (chord) return;
       const active = activeIosHidKeys.get(event.code);
       if (active) {
         activeIosHidKeys.delete(event.code);
@@ -750,6 +765,7 @@ export function DevicePane(props: {
       canvas.removeEventListener("pointercancel", onPointerCancel);
       canvas.removeEventListener("lostpointercapture", onPointerCancel);
       window.removeEventListener("blur", onWindowBlur);
+      canvas.removeEventListener("blur", onCanvasBlur);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onContextMenu);
       canvas.removeEventListener("keydown", onKeyDown);
@@ -758,6 +774,7 @@ export function DevicePane(props: {
       if (activePointer !== null) {
         releaseActivePointer();
       }
+      releaseActiveIosHidKeys();
       ws?.close();
       disposeDecoder();
       sendControlRef.current = () => {};

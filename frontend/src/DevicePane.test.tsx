@@ -849,7 +849,7 @@ describe("DevicePane (issue #1326)", () => {
         ],
         devicesLoaded: true,
       });
-      render(<DevicePane params={{ deviceId: 7 }} />);
+      const { unmount } = render(<DevicePane params={{ deviceId: 7 }} />);
       const socket = FakeWebSocket.instances[0];
       act(() => socket.open());
       const canvas = document.querySelector("canvas")!;
@@ -878,16 +878,18 @@ describe("DevicePane (issue #1326)", () => {
         { type: "hidKey", usage: 0x04, action: "up" },
       ]);
 
-      // Shifted, CapsLock, AltGr and unmapped printable keys send
+      // Shifted, CapsLock, Alt/Option, AltGr and unmapped printable keys send
       // `{ type: "text", text: event.key }` so the iOS driver's `textToHidEvents`
       // expands LEFT_SHIFT, and their keyup does not emit an orphan `hidKey` up.
       for (const init of [
         { key: "A", code: "KeyA", shiftKey: true },
         { key: "A", code: "KeyA", modifierCapsLock: true },
         { key: "@", code: "KeyQ", ctrlKey: true, altKey: true },
+        { key: "@", code: "KeyQ", modifierAltGraph: true },
+        { key: "œ", code: "KeyQ", altKey: true },
         { key: "!", code: "Digit1", shiftKey: true },
         { key: "_", code: "IntlRo" },
-      ] as Array<KeyboardEventInit & { modifierCapsLock?: boolean }>) {
+      ] as Array<KeyboardEventInit & { modifierCapsLock?: boolean; modifierAltGraph?: boolean }>) {
         act(() => {
           canvas.dispatchEvent(
             new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
@@ -901,6 +903,8 @@ describe("DevicePane (issue #1326)", () => {
         { type: "text", text: "A" },
         { type: "text", text: "A" },
         { type: "text", text: "@" },
+        { type: "text", text: "@" },
+        { type: "text", text: "œ" },
         { type: "text", text: "!" },
         { type: "text", text: "_" },
       ]);
@@ -941,7 +945,7 @@ describe("DevicePane (issue #1326)", () => {
           }),
         );
       });
-      expect(sent().slice(7)).toEqual([
+      expect(sent().slice(9)).toEqual([
         { type: "hidKey", usage: 0x1e, action: "down" },
         { type: "hidKey", usage: 0x1e, action: "down" },
         { type: "hidKey", usage: 0x1e, action: "up" },
@@ -969,7 +973,7 @@ describe("DevicePane (issue #1326)", () => {
           );
         });
       }
-      expect(sent().slice(11)).toEqual([
+      expect(sent().slice(13)).toEqual([
         { type: "hidKey", usage: 0x28, action: "down" },
         { type: "hidKey", usage: 0x28, action: "up" },
         { type: "hidKey", usage: 0x2a, action: "down" },
@@ -981,6 +985,76 @@ describe("DevicePane (issue #1326)", () => {
         { type: "hidKey", usage: 0xe1, action: "down" },
         { type: "hidKey", usage: 0x50, action: "down" },
         { type: "hidKey", usage: 0x50, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "up" },
+      ]);
+
+      // Releasing a shift-wrapped key while Ctrl/Cmd is held still releases
+      // both the key usage and LEFT_SHIFT (0xE1) instead of latching shift.
+      act(() => {
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowLeft",
+            code: "ArrowLeft",
+            shiftKey: true,
+          }),
+        );
+        canvas.dispatchEvent(
+          new KeyboardEvent("keyup", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowLeft",
+            code: "ArrowLeft",
+            shiftKey: true,
+            ctrlKey: true,
+          }),
+        );
+      });
+      expect(sent().slice(25)).toEqual([
+        { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "up" },
+      ]);
+
+      // Focus loss (window blur / canvas blur) and unmount sweep any held
+      // hidKey entries and release LEFT_SHIFT once if any held key was shifted.
+      act(() => {
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowLeft",
+            code: "ArrowLeft",
+            shiftKey: true,
+          }),
+        );
+        window.dispatchEvent(new Event("blur"));
+      });
+      expect(sent().slice(29)).toEqual([
+        { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "up" },
+      ]);
+
+      act(() => {
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Tab",
+            code: "Tab",
+            shiftKey: true,
+          }),
+        );
+        canvas.dispatchEvent(new FocusEvent("blur"));
+      });
+      expect(sent().slice(33)).toEqual([
+        { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x2b, action: "down" },
+        { type: "hidKey", usage: 0x2b, action: "up" },
         { type: "hidKey", usage: 0xe1, action: "up" },
       ]);
 
@@ -1002,6 +1076,26 @@ describe("DevicePane (issue #1326)", () => {
       act(() => {
         canvas.dispatchEvent(paste);
       });
+
+      // Unmounting while a shifted key is held releases it before closing.
+      act(() => {
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowRight",
+            code: "ArrowRight",
+            shiftKey: true,
+          }),
+        );
+      });
+      unmount();
+      expect(sent().slice(38)).toEqual([
+        { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x4f, action: "down" },
+        { type: "hidKey", usage: 0x4f, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "up" },
+      ]);
 
       const allMessages = sent();
       expect(allMessages).toContainEqual({ type: "hidKey", usage: 0x28, action: "down" });
