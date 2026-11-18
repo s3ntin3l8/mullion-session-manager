@@ -376,7 +376,7 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     await driver.stop();
   });
 
-  it("supports one-shot tap, swipe (with durationMs), and text; keeps key false", async () => {
+  it("supports one-shot tap, swipe (with durationMs), text, and button; keeps key false", async () => {
     const c = fakeCompanion();
     const driver = new IosSimulatorDriver({
       id: "1",
@@ -388,6 +388,7 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     expect(driver.supports("tap")).toBe(true);
     expect(driver.supports("swipe")).toBe(true);
     expect(driver.supports("text")).toBe(true);
+    expect(driver.supports("button")).toBe(true);
     expect(driver.supports("key")).toBe(false);
 
     await driver.start();
@@ -400,11 +401,14 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
       y2: 600,
       durationMs: 250,
     });
+    await performDeviceAction(driver, { action: "button", button: "home" });
 
     expect(c.hidStreams.flatMap((s) => s.written)).toEqual([
       { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
       { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "UP" } },
       { swipe: { start: { x: 100, y: 600 }, end: { x: 100, y: 200 }, duration: 0.25 } },
+      { press: { action: { button: { button: "HOME" } }, direction: "DOWN" } },
+      { press: { action: { button: { button: "HOME" } }, direction: "UP" } },
     ]);
     await driver.stop();
   });

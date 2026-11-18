@@ -561,9 +561,10 @@ export function formatError(err, client) {
         "from outside a session (session env only ever carries MULLION_HOOK_TOKEN)."
       );
     }
-    return `${err.message}${err.status ? ` (status ${err.status})` : ""}`;
+    if (/is not supported on \S+ devices$/.test(err.message)) return err.message;
+    return `${err.message || "request failed"}${err.status ? ` (status ${err.status})` : ""}`;
   }
-  return err.message ?? String(err);
+  return err.message || String(err);
 }
 
 // ---------------------------------------------------------------------------
@@ -1290,9 +1291,28 @@ const dockCommands = createDockCommands({ CliUsageError, requireOne });
 // device attached, an implicit default is exactly the kind of silent
 // ambiguity this CLI's own `requireOne`-everywhere convention avoids
 // elsewhere (see sessionCommands' own explicit-id verbs above).
+const DEVICE_BUTTON_VALUES = ["home", "lock", "side", "siri"];
+const formatDeviceRow = (d) =>
+  d && typeof d === "object"
+    ? { ...d, platform: d.platform ?? "android", udid: d.udid ?? null }
+    : d;
+async function runDeviceLogcat(client, args) {
+  const { flags } = extractFlags(args.slice(1), { lines: "number", filter: "string" });
+  const body = { deviceId: requireOne(args, "device id"), action: "logcat" };
+  if (flags.lines !== undefined) body.lines = flags.lines;
+  if (flags.filter !== undefined) body.filter = flags.filter;
+  const result = await client.request("device.action", body);
+  return { json: result, text: result.logcat };
+}
+
 const deviceCommands = {
   async list(client) {
-    return { json: await client.request("device.list", {}) };
+    const result = await client.request("device.list", {});
+    return { json: Array.isArray(result) ? result.map(formatDeviceRow) : result };
+  },
+  async get(client, args) {
+    const res = await client.request("device.get", { deviceId: requireOne(args, "device id") });
+    return { json: formatDeviceRow(res) };
   },
   async create(client, args) {
     const avdName = requireOne(args, "avd name");
@@ -1351,28 +1371,19 @@ const deviceCommands = {
       "pairing-code": "string",
       name: "string",
     });
-    if (flags["pairing-code"] === undefined) {
-      throw new CliUsageError("--pairing-code is required");
-    }
+    if (flags["pairing-code"] === undefined) throw new CliUsageError("--pairing-code is required");
     const hasDiscovery =
       typeof flags["discovery-id"] === "string" && flags["discovery-id"].length > 0;
     const hasManual =
       typeof flags["pairing-address"] === "string" && flags["pairing-address"].length > 0;
-    if (hasDiscovery === hasManual) {
+    if (hasDiscovery === hasManual)
       throw new CliUsageError("exactly one of --discovery-id or --pairing-address is required");
-    }
     const body = { pairingCode: flags["pairing-code"] };
-    if (hasDiscovery) {
-      body.discoveryId = flags["discovery-id"];
-    } else {
-      body.pairingAddress = flags["pairing-address"];
-    }
-    if (typeof flags["connect-address"] === "string" && flags["connect-address"].length > 0) {
+    if (hasDiscovery) body.discoveryId = flags["discovery-id"];
+    else body.pairingAddress = flags["pairing-address"];
+    if (typeof flags["connect-address"] === "string" && flags["connect-address"].length > 0)
       body.connectAddress = flags["connect-address"];
-    }
-    if (typeof flags.name === "string" && flags.name.length > 0) {
-      body.name = flags.name;
-    }
+    if (typeof flags.name === "string" && flags.name.length > 0) body.name = flags.name;
     return { json: await client.request("device.pair-and-connect", body) };
   },
   // Registers a physical device row and connects to it — the `kind:
@@ -1455,15 +1466,17 @@ const deviceCommands = {
       }),
     };
   },
-  async logcat(client, args) {
+  async button(client, args) {
     const deviceId = requireOne(args, "device id");
-    const { flags } = extractFlags(args.slice(1), { lines: "number", filter: "string" });
-    const body = { deviceId, action: "logcat" };
-    if (flags.lines !== undefined) body.lines = flags.lines;
-    if (flags.filter !== undefined) body.filter = flags.filter;
-    const result = await client.request("device.action", body);
-    return { json: result, text: result.logcat };
+    const button = args[1];
+    if (button === undefined)
+      throw new CliUsageError(`button is required (${DEVICE_BUTTON_VALUES.join("|")})`);
+    if (!DEVICE_BUTTON_VALUES.includes(button))
+      throw new CliUsageError(`button must be one of: ${DEVICE_BUTTON_VALUES.join(", ")}`);
+    return { json: await client.request("device.action", { deviceId, action: "button", button }) };
   },
+  logcat: runDeviceLogcat,
+  logs: runDeviceLogcat,
   // Unlike every other verb here, `clipboard` itself takes a sub-verb
   // (`get`/`set`) as its own first positional arg, with the device id
   // second — the REST/socket `action: "clipboard"` body's own `op` field
@@ -1980,7 +1993,7 @@ Commands:
   project list|actions|targets|dock|tooling
   preview create|get|delete|list
   dock start|stop|list
-  device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
+  device list|get|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard
   task list [--status <s>] [--project <id>]
   task get <id>
   task retry <id> [--agent <a>] [--review-agent <r>]

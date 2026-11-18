@@ -1,12 +1,14 @@
 import { DEVICE_SCREENSHOT_DEFAULT_WIDTH, deviceScreenshot } from "./device-screenshot.mjs";
 
+const DEVICE_BUTTON_VALUES = ["home", "lock", "side", "siri"];
+
 export const useDevice = {
   name: "use_device",
   description:
-    "Execute a one-shot Android device action (screenshot, tap, swipe, text, key, logcat, " +
-    "clipboard) against the device's live adb/scrcpy connection — works independently of " +
-    "whether the device's video panel is currently open in the dashboard. Use list_devices " +
-    "to find a deviceId first.",
+    "Execute a one-shot device action (screenshot, tap, swipe, text, key, button, logs, logcat, " +
+    "clipboard) against the device's live adb/scrcpy or iOS Simulator connection — works " +
+    "independently of whether the device's video panel is currently open in the dashboard. " +
+    "Use list_devices to find a deviceId first.",
   inputSchema: {
     type: "object",
     required: ["deviceId", "action"],
@@ -14,7 +16,17 @@ export const useDevice = {
       deviceId: { type: "string", description: "The device's row id, from list_devices." },
       action: {
         type: "string",
-        enum: ["screenshot", "tap", "swipe", "text", "key", "logcat", "clipboard"],
+        enum: [
+          "screenshot",
+          "tap",
+          "swipe",
+          "text",
+          "key",
+          "button",
+          "logs",
+          "logcat",
+          "clipboard",
+        ],
         description: "The device action to execute.",
       },
       x: {
@@ -55,21 +67,30 @@ export const useDevice = {
       },
       androidKeyCode: {
         type: "number",
-        description: "AOSP KEYCODE_* numeric value to send (key).",
+        description: "AOSP KEYCODE_* numeric value to send (key, Android only).",
       },
-      lines: { type: "number", description: "Number of trailing log lines to return (logcat)." },
+      button: {
+        type: "string",
+        enum: DEVICE_BUTTON_VALUES,
+        description: "Hardware simulator button to press (button, iOS only).",
+      },
+      lines: {
+        type: "number",
+        description: "Number of trailing log lines to return (logs, logcat).",
+      },
       filter: {
         type: "string",
-        description: "logcat filter expression, e.g. 'MyApp:D *:S' (logcat).",
+        description: "Log filter expression or substring (logs, logcat).",
       },
       op: {
         type: "string",
         enum: ["get", "set"],
         description:
           "clipboard sub-operation (clipboard). 'get' returns the last-known device " +
-          "clipboard text from a cache — never a live round-trip to the device, which scrcpy " +
-          "only supports with clipboard autosync disabled (Mullion runs with it enabled). " +
-          "'set' writes `text` to the device clipboard via the scrcpy control channel.",
+          "clipboard text from a cache on Android — never a live round-trip to the device, which scrcpy " +
+          "only supports with clipboard autosync disabled (Mullion runs with it enabled) — or live " +
+          "from the iOS Simulator pasteboard. " +
+          "'set' writes `text` to the device clipboard.",
       },
       paste: {
         type: "boolean",
@@ -84,6 +105,27 @@ export const useDevice = {
     if (!deviceId) throw new Error("deviceId is required");
     if (actionPayload.action === "screenshot") {
       return deviceScreenshot(client, deviceId, actionPayload);
+    }
+    if (actionPayload.action === "button") {
+      if (actionPayload.button === undefined) {
+        throw new Error(`button is required (${DEVICE_BUTTON_VALUES.join("|")})`);
+      }
+      if (!DEVICE_BUTTON_VALUES.includes(actionPayload.button)) {
+        throw new Error(`button must be one of: ${DEVICE_BUTTON_VALUES.join(", ")}`);
+      }
+    }
+    if (actionPayload.action === "logs" || actionPayload.action === "logcat") {
+      if (
+        actionPayload.lines !== undefined &&
+        (typeof actionPayload.lines !== "number" || !Number.isFinite(actionPayload.lines))
+      ) {
+        throw new Error("lines must be a number");
+      }
+      if (actionPayload.filter !== undefined && typeof actionPayload.filter !== "string") {
+        throw new Error("filter must be a string");
+      }
+      const logPayload = { ...actionPayload, action: "logcat" };
+      return JSON.stringify(await client.deviceAction(deviceId, logPayload));
     }
     return JSON.stringify(await client.deviceAction(deviceId, actionPayload));
   },

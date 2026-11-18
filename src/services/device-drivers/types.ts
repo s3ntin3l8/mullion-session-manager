@@ -128,6 +128,7 @@ export type DeviceAction =
   | { action: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs?: number }
   | { action: "text"; text: string }
   | { action: "key"; androidKeyCode: number }
+  | { action: "button"; button: DeviceButton }
   | { action: "logcat"; lines?: number; filter?: string }
   | { action: "clipboard"; op: "get" }
   | { action: "clipboard"; op: "set"; text: string; paste?: boolean };
@@ -192,6 +193,7 @@ export interface DeviceDriver {
   swipe(x1: number, y1: number, x2: number, y2: number, durationMs?: number): Promise<void>;
   text(text: string): Promise<void>;
   key(androidKeyCode: number): Promise<void>;
+  button(button: DeviceButton): Promise<void>;
   logs(options: { lines?: number; filter?: string }): Promise<string>;
   clipboard: {
     /** Android: last-known device clipboard (a cache, never a live
