@@ -38,7 +38,6 @@ import {
   mapClaudeCodeSessionEnd,
   mapClaudeCodeSessionStart,
   mapClaudeCodeStop,
-  mapClaudeCodeStopFailure,
   mapClaudeCodeSubagentStart,
   mapClaudeCodeSubagentStop,
   mapClaudeCodeUserPromptSubmit,
@@ -378,6 +377,7 @@ describe("mapClaudeCodeEvent", () => {
       kind: "stop_failure",
       error: "rate_limit",
       errorDetails: "429",
+      errorType: "rate_limit",
     });
   });
 
@@ -1490,40 +1490,6 @@ describe("mapClaudeCodePermissionRequest", () => {
       kind: "review_gate",
       state: "waiting",
       prompt: "WebFetch",
-    });
-  });
-});
-
-describe("mapClaudeCodeStopFailure", () => {
-  it("extracts error and errorDetails", () => {
-    expect(
-      mapClaudeCodeStopFailure({ error: "rate_limit", error_details: "429 Too Many Requests" }),
-    ).toEqual({ kind: "stop_failure", error: "rate_limit", errorDetails: "429 Too Many Requests" });
-  });
-
-  it("extracts error without errorDetails", () => {
-    expect(mapClaudeCodeStopFailure({ error: "max_output_tokens" })).toEqual({
-      kind: "stop_failure",
-      error: "max_output_tokens",
-    });
-  });
-
-  it("handles empty payload gracefully", () => {
-    expect(mapClaudeCodeStopFailure({})).toEqual({ kind: "stop_failure", error: "unknown" });
-  });
-
-  it("extracts errorType alongside errorDetails", () => {
-    expect(
-      mapClaudeCodeStopFailure({
-        error: "429",
-        error_details: "429 Too Many Requests",
-        error_type: "rate_limit",
-      }),
-    ).toEqual({
-      kind: "stop_failure",
-      error: "429",
-      errorDetails: "429 Too Many Requests",
-      errorType: "rate_limit",
     });
   });
 });

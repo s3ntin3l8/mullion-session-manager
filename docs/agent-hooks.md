@@ -360,6 +360,36 @@ below for why it replaced the old `PreToolUse`/`Bash` gate, and why that
 means it's safe to register unconditionally rather than behind a flag.
 Every other hook above is fire-and-forget (never blocks the tool call).
 
+**Rate-limit `StopFailure` payload (captured live on Claude Code 2.1.326,
+issue #3265):** on an exhausted 5-hour usage limit, `claude -p ... --output-format json`
+emits `terminal_reason: "api_error"`, `is_error: true`, `api_error_status: 429`,
+`api_error_type: "rate_limit_error"`, `api_error: "usage_limit_reached"`, and
+`result: "You've hit your 5-hour limit · resets 6:30pm (Europe/Berlin)"`, and
+fires `StopFailure` with:
+
+```json
+{
+  "session_id": "a0ce1358-876e-4739-8237-ca52f8b02bdf",
+  "transcript_path": "/tmp/claude-spike/config/projects/-tmp-claude-spike-workdir/a0ce1358-876e-4739-8237-ca52f8b02bdf.jsonl",
+  "cwd": "/tmp/claude-spike/workdir",
+  "prompt_id": "d9776663-1538-4f6f-b058-b8e23eca9c64",
+  "effort": { "level": "medium" },
+  "hook_event_name": "StopFailure",
+  "error": "rate_limit",
+  "last_assistant_message": "You've hit your 5-hour limit · resets 6:30pm (Europe/Berlin)"
+}
+```
+
+Notably, the hook payload carries no `error_type`, `error_details`, or
+`retryable` field: the classification (`"rate_limit"`) arrives in `error`, and
+the human-readable reset message arrives in `last_assistant_message` (the
+transcript's synthetic assistant entry also carries
+`apiErrorParams.rate_limit_info.resetsAt` / `quotaLimits.resetsAt` as Unix
+seconds). `mapClaudeCodeStopFailure` maps `error === "rate_limit"` to
+`errorType: "rate_limit"` and forwards `last_assistant_message` as
+`errorDetails`; `parseClaudeCodeResetTime` (`src/services/claude-reset-time.ts`)
+parses the prose reset time and IANA timezone into a `Date`.
+
 **The `--bare` caveat:** Claude Code's `--bare` flag ("Minimal mode: skip
 hooks, LSP, plugin credentials") disables every integration described above.
 If a user-authored launcher command includes `--bare` — e.g.
