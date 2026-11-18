@@ -545,7 +545,7 @@ describe("PaneActionsMenu", () => {
       ]);
     });
 
-    it("hides View timeline, Open Agent Browser, and Promote to worktree", async () => {
+    it("hides View timeline, Open browser, and Promote to worktree", async () => {
       const user = userEvent.setup();
       render(
         <PaneActionsMenu
@@ -560,7 +560,7 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
 
       expect(screen.queryByText("View timeline")).not.toBeInTheDocument();
-      expect(screen.queryByText("Open Agent Browser")).not.toBeInTheDocument();
+      expect(screen.queryByText("Open browser")).not.toBeInTheDocument();
       expect(screen.queryByText("Promote to worktree…")).not.toBeInTheDocument();
     });
   });
@@ -724,7 +724,7 @@ describe("PaneActionsMenu — items per layout (#3214)", () => {
       "Rename↵",
       "Reset pane sizes",
       "View timeline",
-      "Open Agent Browser",
+      "Open browser",
       "Promote to worktree…",
       "Mute notifications",
       "Kill session",
@@ -739,7 +739,7 @@ describe("PaneActionsMenu — items per layout (#3214)", () => {
       "Split down",
       "Reset pane sizes",
       "View timeline",
-      "Open Agent Browser",
+      "Open browser",
       "Promote to worktree…",
       "Mute notifications",
       "Kill session",
@@ -780,13 +780,13 @@ describe("PaneActionsMenu — items per layout (#3214)", () => {
     [900, "rails-halves", false],
     [750, "rails-full", false],
     [500, "phone", false],
-  ])("at %ipx (%s) Open Agent Browser shown: %s", async (width, _band, shown) => {
+  ])("at %ipx (%s) Open browser shown: %s", async (width, _band, shown) => {
     layoutModeSetting = "auto";
     stubPxWidth(width);
     try {
       setHeaderSplitHidden(GROUP.id, false);
       const labels = await itemLabels();
-      expect(labels.includes("Open Agent Browser")).toBe(shown);
+      expect(labels.includes("Open browser")).toBe(shown);
     } finally {
       vi.unstubAllGlobals();
     }

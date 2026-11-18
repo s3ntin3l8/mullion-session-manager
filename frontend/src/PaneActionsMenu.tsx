@@ -572,7 +572,7 @@ export function PaneActionsMenu({
           <span style={{ flex: 1 }}>View timeline</span>
         </button>
       )}
-      {/* #3214/#3370 — below 1100px the Agent Browser is the right rail's
+      {/* #3214/#3370 — below 1100px the agent's browser is the right rail's
             Browser view, which follows the active session. */}
       {session && showAgentBrowser && (
         <button
@@ -590,7 +590,7 @@ export function PaneActionsMenu({
           }}
         >
           <BotIcon size={14} style={{ color: "var(--muted)" }} />
-          <span style={{ flex: 1 }}>Open Agent Browser</span>
+          <span style={{ flex: 1 }}>Open browser</span>
         </button>
       )}
       {session && project && (

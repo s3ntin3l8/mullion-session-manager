@@ -177,8 +177,8 @@ interface CommandPaletteProps {
   // Pane menu's "View timeline" for the active session. Omitted from the
   // list when there is no active session pane.
   onOpenTimeline?: (session: Session) => void;
-  // Pane menu's "Open Agent Browser" (panelUtils' openBrowserPanePanel) for
-  // the active session, #3215. Where the Agent Browser is a right-sidebar
+  // Pane menu's "Open browser" (panelUtils' openBrowserPanePanel) for
+  // the active session, #3215. Where the agent's browser is a right-sidebar
   // view instead of a pane (the phone and the rails bands, viewBands.ts), the
   // command opens that view and this is not called. Omitted from the list
   // when there is no active session pane.

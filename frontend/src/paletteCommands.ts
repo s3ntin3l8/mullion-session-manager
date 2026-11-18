@@ -97,7 +97,7 @@ export interface PaletteCommandOpeners {
   hosts?: () => void;
   settings?: () => void;
   timeline?: (session: Session) => void;
-  // The pane menu's "Open Agent Browser" for the active session: the
+  // The pane menu's "Open browser" for the active session: the
   // session's server-side browser, the one its agent drives (#3215).
   // CommandPalette decides where it opens (a grid pane, or the right
   // sidebar's Browser view in the companion bands).
@@ -281,12 +281,12 @@ export function buildPaletteCommands({
       {
         id: "preview",
         movesFocus: true,
-        // #3215: every embedded-browser entry says "preview", so none can be
-        // mistaken for the session's Agent Browser below.
-        title: "Open preview browser",
+        // #3215/#3374: the preview rows say "preview" or the saved label; only the
+        // session's row says "agent's browser".
+        title: "Open browser: preview…",
         subtitle: "Choose a preview target for this project",
         icon: GlobeIcon,
-        keywords: ["preview", "dev server", "browser"],
+        keywords: ["preview", "preview browser", "open preview browser", "dev server", "browser"],
         placement: dockUnavailable ? "top" : "search",
         run: () => open.browser(id),
       },
@@ -346,10 +346,10 @@ export function buildPaletteCommands({
       },
       ...favoriteUrls.map((u): PaletteCommand => ({
         id: `url-${u.id}`,
-        title: `Preview: ${u.label}`,
+        title: `Open browser: ${u.label}`,
         subtitle: u.url,
         icon: GlobeIcon,
-        keywords: [u.label, u.url, "preview"],
+        keywords: [u.label, u.url, "preview", `preview: ${u.label}`],
         placement: "top",
         run: () => open.browserUrl(id, u.url, u.label),
       })),
@@ -393,11 +393,11 @@ export function buildPaletteCommands({
     {
       id: "blank-browser",
       movesFocus: true,
-      title: "New blank preview browser",
+      title: "Open browser: blank preview",
       subtitle: "Embed any external site — type an address directly",
       icon: GlobeIcon,
       // The old title, so a search learned from it still finds the row.
-      keywords: ["preview", "browser", "website", "new preview tab"],
+      keywords: ["preview", "browser", "website", "new preview tab", "new blank preview browser"],
       placement: "search",
       run: () => open.blankBrowser(),
     },
@@ -494,10 +494,10 @@ export function buildPaletteCommands({
     const label = sessionPaneTitle(session, activeSessionTitleContext);
     commands.push({
       id: "agent-browser",
-      title: `Open Agent Browser: ${label}`,
+      title: `Open browser: agent's browser · ${label}`,
       subtitle: "The browser this session's agent drives",
       icon: BotIcon,
-      keywords: ["agent browser", "browser", "automation", label],
+      keywords: ["agent browser", "open agent browser", "browser", "automation", label],
       placement: "search",
       run: () => openAgentBrowser(session),
     });
