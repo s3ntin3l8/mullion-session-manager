@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS, api } from "./api/index.js";
 import type { Launcher, Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeSession, makeWorkspace } from "./test/fixtures.js";
+import { stubPxWidth } from "./test/appHarness.js";
 import { ACTIVE_TERMINAL_FOCUS_SELECTOR, WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 
 // Issue #27: the palette's "Integrations" section — a GitHub-panel shortcut
@@ -2861,6 +2862,36 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       expect(state.rightSidebarView).toBe("browser");
       expect(state.rightSidebarOpen).toBe(true);
       expect(state.rightSidebarProjectRequest?.projectId).toBe(PROJECT.id);
+    });
+  });
+
+  // #3370 — the palette and the pane menu share one band rule; rails-full
+  // (a grid presentation, but the rail's Browser view) opens the view too.
+  describe("Open Agent Browser by band (#3370)", () => {
+    const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([
+      [750, "rails-full", true],
+      [1200, "desktop-narrow", false],
+    ])("at %ipx (%s) opens the rail view: %s", async (width, _band, railView) => {
+      stubPxWidth(width);
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: "session-7",
+        workspaces: [],
+        rightSidebarView: "git",
+        rightSidebarOpen: false,
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "auto" },
+      });
+      const onOpenAgentBrowser = vi.fn();
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      await user.click(await screen.findByText("Open Agent Browser: hotfix"));
+      expect(onOpenAgentBrowser).toHaveBeenCalledTimes(railView ? 0 : 1);
+      expect(useDashboardStore.getState().rightSidebarView).toBe(railView ? "browser" : "git");
     });
   });
 

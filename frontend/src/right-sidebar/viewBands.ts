@@ -23,6 +23,16 @@ export function viewInBand(view: { bands?: readonly LayoutBand[] }, band: Layout
   return view.bands === undefined || view.bands.includes(band);
 }
 
+/**
+ * Whether the agent's browser is a right-sidebar view in this band rather
+ * than a grid pane (#3370). The one rule the command palette and the pane
+ * menu both ask, so they cannot open different things in the same band:
+ * the palette opens the rail's Browser view, the pane menu offers no entry.
+ */
+export function agentBrowserIsRailView(band: LayoutBand): boolean {
+  return viewInBand({ bands: COMPANION_BANDS }, band);
+}
+
 /** The live layout band, from the user's layout-mode setting. */
 export function useCurrentLayoutBand(): LayoutBand {
   return useLayoutBand(useDashboardStore((s) => s.settings.layoutMode));
