@@ -220,7 +220,7 @@ export interface SpawnOpts {
 // agent over HTTP — see the plan's "same intent-vs-live-state seam, now
 // host-aware" framing. WS attach is deliberately NOT part of this
 // interface: piping bytes needs the raw upstream socket
-// (remote-host-client.ts's openAttach), not a request/response call, so
+// (remote-host-client.ts's `streams.attach()`), not a request/response call, so
 // routes/terminal.ts branches on local-vs-remote directly instead.
 export interface SessionBackend {
   spawn(opts: SpawnOpts): Promise<SpawnResult>;

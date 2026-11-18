@@ -393,7 +393,7 @@ export async function internalRoutes(app: FastifyInstance) {
   //
   // Issue #1459 — the one opt-in exception: `?cursors=1`, set only by a NEW
   // primary's own relayRemoteEventsHost (routes/events.ts,
-  // RemoteHostClient.openEventsStream's own doc comment explains why this is
+  // RemoteHostClient.streams.events's own doc comment explains why this is
   // opt-in rather than unconditional). When present, this ALSO sends this
   // agent's own `cursors` frame first and joins this agent's own
   // seenSubscribers broadcast set — attachCursorsAndSeenBroadcast is the

@@ -10,8 +10,8 @@ import {
   verify,
 } from "../../src/services/request-signature.js";
 
-// Issue #249 / roadmap 7.5 — the 5 non-request() sites (openAttach,
-// browser.openSocket, openEventsStream, openPreviewWs, openSshAgentStream)
+// Issue #249 / roadmap 7.5 — the 5 non-request() sites (streams.attach,
+// browser.openSocket, streams.events, openPreviewWs, streams.sshAgent)
 // construct a real `ws` package WebSocket; mocked here the same way
 // `fetch` is stubbed above, so
 // the exact constructor args (in particular the headers option, which is

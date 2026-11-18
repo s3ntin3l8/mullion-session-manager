@@ -360,7 +360,7 @@ export class RemoteHostClient {
     return this.transport.request<T>(path, init, timeoutMs);
   }
 
-  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts, remote-host-browser.ts).
+  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts, remote-host-browser.ts, remote-host-streams.ts).
   private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
 
@@ -1862,11 +1862,11 @@ export class RemoteHostClient {
    * Opens (but does not wait for) a WS connection to this agent's
    * `/internal/ws/preview` (issue #28 phase 6) — the WS analog of
    * openPreviewHttp above, and constructed the same bearer-header way as
-   * openAttach (the `ws` package is required for a request header the
+   * `streams.attach()` (the `ws` package is required for a request header the
    * browser/global WebSocket API can't set). Callers (preview-proxy.ts) own
    * the open/error/close lifecycle and the actual frame piping.
    *
-   * No connect timeout, deliberately matching openAttach's own gap rather
+   * No connect timeout, deliberately matching `streams.attach()`'s own gap rather
    * than a bespoke one just for this method (Hermes review, PR #48): if the
    * agent accepts the TCP/WS handshake but its own loopback dev server
    * never answers, this connection can sit open with nothing flowing. A
