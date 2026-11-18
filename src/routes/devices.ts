@@ -104,10 +104,11 @@ function resolvePlacementHostId(
 
 /** Why a host cannot run a device of this kind, or null when it can. */
 async function kindRefusal(host: DeviceHost, kind: DeviceKind): Promise<string | null> {
-  const kinds = await host.kinds();
-  if (kinds === null) {
+  const support = await host.kinds();
+  if (support === null) {
     return `Host ${host.hostId} does not report device support — update its agent.`;
   }
+  const kinds = support.deviceKinds;
   if (kinds.includes(kind)) return null;
   return kinds.length === 0
     ? `Host ${host.hostId} cannot run devices right now: its device panel is off (DEVICE_ENABLED=true) or its platform supports none.`

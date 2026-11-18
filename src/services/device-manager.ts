@@ -71,16 +71,19 @@ import {
  * the adb server over TCP and pushes the scrcpy server jar; `adb` exists on
  * macOS.
  *
- * Keyed per platform × kind so a further driver (an iOS Simulator panel on
- * macOS hosts, #1943) can add its own capability without another special case.
+ * Keyed per platform × kind so a further driver can add its own capability
+ * without another special case: `ios-simulator` (macOS hosts, #1943) is one.
  */
-export type DeviceCapability = "physical" | "emulator";
+export type DeviceCapability = "physical" | "emulator" | "ios-simulator";
 
 export const DEVICE_PLATFORM_CAPABILITIES: Readonly<
   Partial<Record<NodeJS.Platform, readonly DeviceCapability[]>>
 > = {
   linux: ["physical", "emulator"],
-  darwin: ["physical", "emulator"],
+  // "ios-simulator" is the platform half only: whether a given Mac can actually
+  // run one is a runtime fact (the `xcode` placement capability, DEVICE_IOS_ENABLED
+  // and an idb_companion), answered by iosSimulatorAvailable() in device-kinds.ts.
+  darwin: ["physical", "emulator", "ios-simulator"],
 };
 
 /** The capabilities the device panel has on `platform` (empty when none). */
@@ -119,6 +122,9 @@ export function unsupportedKindMessage(
   // "only physical devices are" is only true where physical devices exist — on a
   // platform with no capability at all (win32) it would contradict the panel's own
   // "not supported" answer for a physical create.
+  if (kind === "ios-simulator") {
+    return `iOS Simulator devices are not supported on ${platform}.`;
+  }
   if (kind === "emulator" && capabilities.has("physical")) {
     return `Emulator devices are not supported on ${platform} — only physical devices are.`;
   }
