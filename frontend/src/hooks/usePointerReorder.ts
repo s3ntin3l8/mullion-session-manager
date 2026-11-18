@@ -167,8 +167,13 @@ export function usePointerReorder({
 
       const retarget = () => {
         const root = (listRef ?? scrollRef).current;
+        // A list inside a larger scroller can be scrolled partly out of its
+        // view: the part outside the scroller's box is not a target either.
+        const scroller = listRef ? scrollRef.current : null;
         target =
-          root && overList(lastX, lastY, root.getBoundingClientRect())
+          root &&
+          overList(lastX, lastY, root.getBoundingClientRect()) &&
+          (!scroller || overList(lastX, lastY, scroller.getBoundingClientRect()))
             ? dropTargetAt(lastY, measureZones(root), id)
             : null;
         setDragging({ id, target });

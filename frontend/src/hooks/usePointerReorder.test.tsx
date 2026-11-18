@@ -231,6 +231,20 @@ describe("usePointerReorder", () => {
     expect(onDrop).toHaveBeenCalledWith(4, { groupId: 2, index: 0 });
   });
 
+  it("drops nothing on the part of the list scrolled out of its scroller's view", () => {
+    const onDrop = vi.fn();
+    render(<Harness onDrop={onDrop} split />);
+    // The scroller now starts at 100: the list's 0-100 is scrolled out of view.
+    screen.getByTestId("scroll").dataset.top = "100";
+    down(4, 170);
+    move(4, 130);
+    expect(state().target).toEqual({ groupId: 2, index: 0 });
+    move(4, 40);
+    expect(state()).toEqual({ id: 4, target: null });
+    up(4, 40);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
   it("treats a press without travel as a click, not a drop", () => {
     const onDrop = vi.fn();
     render(<Harness onDrop={onDrop} />);
