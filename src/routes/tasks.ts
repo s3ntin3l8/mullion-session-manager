@@ -40,7 +40,11 @@ import {
 import { stopHermesRunQuietly } from "../services/hermes-task-review.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
-import { retryTaskPushNow, resolveMaxAutoReturnRounds } from "../services/task-reconciler.js";
+import {
+  resetAutoApproveBackoff,
+  resetDraftPrRetryBackoff,
+  resolveMaxAutoReturnRounds,
+} from "../services/task-reconciler.js";
 import { approveWorkflowChange } from "../services/task-workflow-gate.js";
 import { resolveTaskWorkerHost } from "../services/session-live-info.js";
 import { deliverRejectFeedback } from "../services/task-reject.js";
@@ -1306,7 +1310,8 @@ export async function tasksRoute(app: FastifyInstance) {
       }
       // Let the reconciler's retry push right away instead of waiting out its
       // backoff — the operator is watching for this to go through.
-      retryTaskPushNow(taskId);
+      resetAutoApproveBackoff(taskId);
+      resetDraftPrRetryBackoff(taskId);
       return { ok: true, sha: result.sha };
     },
   );

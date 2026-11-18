@@ -9,7 +9,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
-import { resolveHeadSha } from "./task-workflow-gate.js";
+import { worktreeAheadOfPr } from "./task-worktree-ahead.js";
 import {
   healUntrackedLocalSession,
   TASK_REVIEW_STATUS,
@@ -568,12 +568,23 @@ async function ingestHermesInconclusive(
   });
 }
 
+// Pushes tried for one worktree tip before a hold on it is given up. A push that
+// can never succeed (a dirty tree left by the worker's last turn, a host that
+// cannot push) must not park a task in `reviewing`: after this many the review
+// goes ahead on the PR head, as it did before the hold existed. The workflow
+// approval gate is exempt, since a human is the only thing that can clear it.
+const UNPUSHED_HEAD_MAX_PUSHES = 3;
+// Per task, process-local like the other retry ledgers: a restart just restarts the count.
+const unpushedHeadState = new Map<number, { tip: string; pushes: number; gated: boolean }>();
+
 /**
- * True while the task's worktree head is not what its PR shows, i.e. there are
- * commits the PR (and so a remote review) cannot see. Each call that finds this
- * also retries the push, on the draft-PR retry backoff, so an approval or a
- * fixed credential is picked up without waiting for the task to leave
- * `reviewing`. An unreadable local head never holds: that is the old behavior.
+ * True while the task's branch holds commits its pull request does not (the
+ * worktree is strictly ahead of the PR head), so a remote review would read
+ * the old head. Each call that finds this also retries the push, on the
+ * draft-PR retry backoff, so an approval or a fixed credential is picked up
+ * without waiting for the task to leave `reviewing`. A worktree that is
+ * behind or diverged from the PR, or whose tip cannot be read, never holds:
+ * the push is a force-with-lease and must not run in those cases.
  */
 async function holdForUnpushedHead(
   app: FastifyInstance,
@@ -582,16 +593,36 @@ async function holdForUnpushedHead(
   prHeadSha: string,
   now: number,
 ): Promise<boolean> {
-  if (!task.worktreePath) return false;
-  const localSha = await resolveHeadSha(app, task.worktreePath, resolveTaskWorkerHost(app, task));
-  if (!localSha || localSha === prHeadSha) return false;
-  app.log.info(
-    { taskId: task.id, localSha, prHeadSha },
-    "task reconcile: holding the review — the worktree has commits the pull request does not",
-  );
+  const { ahead, tip } = await worktreeAheadOfPr(app, task, prHeadSha);
+  if (!ahead || tip === null) {
+    unpushedHeadState.delete(task.id);
+    return false;
+  }
+  let state = unpushedHeadState.get(task.id);
+  if (state?.tip !== tip) {
+    state = { tip, pushes: 0, gated: false };
+    if (!unpushedHeadState.has(task.id) && unpushedHeadState.size >= HERMES_STATE_MAX_ENTRIES) {
+      const oldest = unpushedHeadState.keys().next();
+      if (!oldest.done) unpushedHeadState.delete(oldest.value);
+    }
+    unpushedHeadState.set(task.id, state);
+    app.log.info(
+      { taskId: task.id, tip, prHeadSha },
+      "task reconcile: holding the review — the worktree is ahead of the pull request",
+    );
+  }
+  if (!state.gated && state.pushes >= UNPUSHED_HEAD_MAX_PUSHES) {
+    app.log.warn(
+      { taskId: task.id, tip, prHeadSha, pushes: state.pushes },
+      "task reconcile: the worktree's commits could not be pushed — reviewing the pull request's head as it is",
+    );
+    return false;
+  }
   if (draftPrRetryBackoff.shouldAttempt(task.id, now)) {
     draftPrRetryBackoff.record(task.id, now);
-    await maybeOpenDraftPR(app, task, project);
+    const failure = await maybeOpenDraftPR(app, task, project);
+    state.gated = failure === "workflow-approval-required";
+    if (!state.gated) state.pushes++;
   }
   return true;
 }
@@ -1062,7 +1093,7 @@ async function maybeOpenDraftPR(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
-): Promise<void> {
+): Promise<string | null> {
   const result = await openDraftPRForTask(app, task, project, resolveTaskWorkerHost(app, task));
   if (!result.ok && result.reason === "push-forbidden") {
     // Permanent until the operator fixes the App installation: say so at warn
@@ -1073,7 +1104,7 @@ async function maybeOpenDraftPR(
     );
     permanentFailureTaskIds.add(task.id);
     setDraftPrRetryState(task.id, PERMANENT_FAILURE_ATTEMPTS, Date.now());
-    return;
+    return result.reason;
   }
   if (!result.ok) {
     // dirty-tree/no-worktree/remote-not-supported are ordinary, expected
@@ -1086,7 +1117,7 @@ async function maybeOpenDraftPR(
       { taskId: task.id, reason: result.reason, detail: result.detail },
       "task reconcile: draft PR not opened",
     );
-    return;
+    return result.reason;
   }
   // CAS'd on `status = "reviewing"` (independent review, PR #725) — the
   // retry sweep below awaits a real network call (openDraftPRForTask) per
@@ -1106,9 +1137,10 @@ async function maybeOpenDraftPR(
       { taskId: task.id, prUrl: result.prUrl },
       "task reconcile: draft PR opened but the task left 'reviewing' before this could record it — leaving the PR as-is for a human to notice",
     );
-    return;
+    return null;
   }
   app.log.info({ taskId: task.id, prUrl: result.prUrl }, "task reconcile: draft PR opened");
+  return null;
 }
 
 // Stranded draft-PR retry sweep (#722's investigation, task 213765) — a
@@ -2227,9 +2259,8 @@ export function resetAutoApproveBackoff(taskId: number): void {
 
 /** Lets the next sweep retry a task's push at once (an operator just approved
  * the workflow change that was holding it). */
-export function retryTaskPushNow(taskId: number): void {
+export function resetDraftPrRetryBackoff(taskId: number): void {
   draftPrRetryBackoff.clear(taskId);
-  autoApproveRetryBackoff.clear(taskId);
 }
 
 /**
