@@ -40,8 +40,10 @@ export function resolveTaskMaster(
         ? envDefaults.rateLimitGraceMinutes
         : taskMaster.rateLimitGraceMinutes,
     rateLimitMaxParkHours:
+      // Keep the `?? 24` fallback for pre-#3269 `/api/server-info` payloads in
+      // mixed-build environments where `taskMasterEnv.rateLimitMaxParkHours` may be absent.
       taskMaster.rateLimitMaxParkHours === -1
-        ? envDefaults.rateLimitMaxParkHours
+        ? (envDefaults.rateLimitMaxParkHours ?? 24)
         : taskMaster.rateLimitMaxParkHours,
     skipPermissions:
       taskMaster.skipPermissions === "inherit"

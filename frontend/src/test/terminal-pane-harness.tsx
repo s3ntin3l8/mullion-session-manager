@@ -265,6 +265,8 @@ export function renderPane(
   } = {},
 ) {
   useDashboardStore.setState({
+    // Non-terminal settings (sessions, notifications, launchers, etc.) are
+    // intentionally inherited from DEFAULT_SETTINGS.
     settings: makeAppSettings({
       terminal: {
         ...DEFAULT_SETTINGS.terminal,

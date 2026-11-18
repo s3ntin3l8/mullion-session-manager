@@ -11,7 +11,7 @@
   },
   "files": {
     "frontend/src/api/types.ts": 1467,
-    "frontend/src/BrowserPanel.test.tsx": 1290,
+    "frontend/src/BrowserPanel.test.tsx": 1266,
     "frontend/src/CommandPalette.test.tsx": 2822,
     "frontend/src/CommandPalette.tsx": 1242,
     "frontend/src/CreateProjectModal.test.tsx": 1363,

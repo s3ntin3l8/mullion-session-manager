@@ -54,6 +54,12 @@ describe("resolveTaskMaster", () => {
       resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, rateLimitMaxParkHours: 72 }, ENV_DEFAULTS)
         .rateLimitMaxParkHours,
     ).toBe(72);
+    expect(
+      resolveTaskMaster(DEFAULT_SETTINGS.taskMaster, {
+        ...ENV_DEFAULTS,
+        rateLimitMaxParkHours: undefined as unknown as number,
+      }).rateLimitMaxParkHours,
+    ).toBe(24);
   });
 
   it("resolves a concrete maxConcurrent as a real override", () => {
