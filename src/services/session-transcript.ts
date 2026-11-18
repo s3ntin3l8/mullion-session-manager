@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { constants, realpathSync, statSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { resolveClaudeConfigDir } from "./hook-adapters/claude-config-dir.js";
 import { getAdapterTranscriptFormat } from "./hook-adapters/index.js";
 
 export type TranscriptFormat = "claude-code" | "codex";
@@ -82,6 +83,47 @@ export function claudeProjectDirNames(cwd: string): string[] {
   return [...names]
     .map((name) => name.replace(/[^a-zA-Z0-9]/g, "-"))
     .filter((encoded) => encoded.length <= 200);
+}
+
+/** Claude transcripts must stay within the launch/live cwd's own project roots. */
+function claudeTranscriptRoots(configDirs: string[], cwds: string[]): string[] {
+  return [
+    ...new Set(
+      configDirs.flatMap((configDir) =>
+        cwds.flatMap((cwd) =>
+          claudeProjectDirNames(cwd).map((name) => path.join(configDir, "projects", name)),
+        ),
+      ),
+    ),
+  ];
+}
+
+function claudeTranscriptSource(
+  file: string,
+  ownConfigDir: string | undefined,
+  cwds: string[],
+): TranscriptSource | null {
+  const configDirs = [resolveClaudeConfigDir()];
+  if (ownConfigDir) configDirs.unshift(ownConfigDir);
+  const roots = claudeTranscriptRoots(configDirs, cwds);
+  return roots.length > 0 ? { format: "claude-code", path: file, roots } : null;
+}
+
+export function sessionTranscriptSource(
+  command: string,
+  codexPath: string | null,
+  codexHome: string,
+  claudePath: string | null,
+  claudeConfigDir: string | undefined,
+  cwds: string[],
+): TranscriptSource | null {
+  const format = getAdapterTranscriptFormat(command);
+  if (format === "codex" && codexPath !== null) {
+    return { format, path: codexPath, roots: [path.join(codexHome, "sessions")] };
+  }
+  return format === "claude-code" && claudePath !== null
+    ? claudeTranscriptSource(claudePath, claudeConfigDir, cwds)
+    : null;
 }
 
 /** The slice of a live session this needs, so tests need no PtyManager. */
@@ -269,7 +311,10 @@ function insideRoots(real: string, roots: string[]): boolean {
  *     same file (device and inode) as the descriptor we hold, so a swapped directory
  *     component cannot have pointed the open elsewhere.
  */
-async function openInsideRoots(candidate: string, roots: string[]): Promise<FileHandle | null> {
+export async function openInsideRoots(
+  candidate: string,
+  roots: string[],
+): Promise<FileHandle | null> {
   if (typeof candidate !== "string" || candidate.length === 0) return null;
   let handle: FileHandle | null = null;
   try {

@@ -31,6 +31,7 @@ describe("resolveTaskMaster", () => {
       rateLimitMaxParkHours: 24,
       skipPermissions: false,
       reviewCiWaitMinutes: 15,
+      workerStartTimeoutMinutes: 10,
       maxAutoReturnRounds: 10,
     });
   });

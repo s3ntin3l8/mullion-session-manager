@@ -395,6 +395,7 @@ export function renderPane(
         enabled: "inherit",
         maxConcurrent: -1,
         budgetMinutes: -1,
+        workerStartTimeoutMinutes: 10,
         progressCommentMinutes: -1,
         rateLimitGraceMinutes: -1,
         skipPermissions: "inherit",

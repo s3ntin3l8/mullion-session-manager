@@ -765,6 +765,12 @@ export function TaskDetail({
         </div>
       )}
 
+      {task.status === "in_progress" && task.needsHumanReason === "worker-not-started" && (
+        <div className="task-detail-review-round task-detail-review-round-capped" role="status">
+          {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
+        </div>
+      )}
+
       {isMergeNeedsHumanReason(task.needsHumanReason) && !task.mergedAt && (
         <div
           className="task-detail-review-round task-detail-review-round-capped"

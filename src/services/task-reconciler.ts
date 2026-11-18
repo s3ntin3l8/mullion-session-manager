@@ -1,3 +1,4 @@
+import { checkWorkerStarted, clearStoppedWorkerWarnings } from "./task-worker-start.js";
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { reviewRoundLabel } from "./task-round-label.js";
 import type { FastifyInstance } from "fastify";
@@ -4596,6 +4597,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   await reannounceInconclusiveReviewsAfterGrace(app);
   await processConventionalTitlesAutoEnable(app);
 
+  clearStoppedWorkerWarnings(app);
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })
     .from(tasks)
@@ -4794,6 +4796,17 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             dbStatus: session.status,
             info: defaultDeriveStatusInfo(info),
           });
+          if (info !== null && info.alive !== false) {
+            await checkWorkerStarted(
+              app,
+              task,
+              session,
+              hostId,
+              backend,
+              resolvedTaskMaster.workerStartTimeoutMinutes,
+              now,
+            );
+          }
 
           // The session already exited — #282's hook in
           // session-reconciler.ts owns flipping this task to failed (it runs

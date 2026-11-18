@@ -1097,6 +1097,16 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   ingested verdict. Retry review spends the re-arm count, so a retried round
   that comes back inconclusive is flagged again on the next tick: the retry is
   a single-shot escape. The banner renders without an auto-return round.
+- **Worker never started.** An alive `in_progress` worker with no hook-independent
+  turn evidence after `taskMaster.workerStartTimeoutMinutes` (default 10 minutes;
+  0 disables) gets `needsHumanReason: "worker-not-started"`. The reconciler
+  notifies once and records a task activity note with the last 12 rendered screen
+  lines. It leaves the session running so a human can answer a startup prompt.
+  Local Codex rollout discovery uses session metadata for the worker's launch cwd
+  and spawn time; Claude transcript discovery looks for a user turn, before any
+  assistant output is required. Remote hosts use their transcript API. Unsupported,
+  unreadable or inconclusive sources fail open. The flag clears when a turn is
+  observed or the task leaves `in_progress`.
 - **Merge-tied reasons.** `tasks.needsHumanReason` also takes
   `rebase-exhausted` (the merge path's `recordMergeError` in
   `task-reconciler.ts` hit `MAX_REBASE_ATTEMPTS` with the PR still dirty) and

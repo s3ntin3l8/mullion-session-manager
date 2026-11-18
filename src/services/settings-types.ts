@@ -659,6 +659,7 @@ export interface AppSettings {
     enabled: "inherit" | "on" | "off";
     maxConcurrent: number;
     budgetMinutes: number;
+    workerStartTimeoutMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
     // #3234 — longest park for a provider reset; -1 inherits the env default.
