@@ -38,7 +38,6 @@
     "test/hooks/forwarder-core.test.ts": 2413,
     "test/hooks/opencode-plugin.test.ts": 1866,
     "test/mcp/client.test.ts": 1282,
-    "test/plugins/control-socket.test.ts": 5875,
     "test/plugins/hooks.test.ts": 1500,
     "test/plugins/preview-proxy.test.ts": 1243,
     "test/routes/browser-automation.test.ts": 1342,
