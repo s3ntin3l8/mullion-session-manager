@@ -1269,6 +1269,10 @@ export const tasks = sqliteTable(
         "ci-status-stalled",
         "ci-unfixable",
         "ci-still-red",
+        // The review ended without a verdict even after its one automatic
+        // re-arm (`flagExhaustedInconclusiveReviews`); set with the announce
+        // stamp, cleared by Retry review, a human push or a later verdict.
+        "review-inconclusive",
         // #3234 — the provider quota resets beyond `rateLimitMaxParkHours`, so
         // the worker was not parked; set with the task `failed`, the reset in
         // `rateLimitUntil` and the provider text in `rateLimitMessage`.

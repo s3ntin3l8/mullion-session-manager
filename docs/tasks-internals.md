@@ -1043,6 +1043,17 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   of the human's own commit is never read as a stall. A human push
   re-arms the task through the same `reannounceCappedTasksAfterHumanPush` sweep
   as before, which clears the reason with the stamp.
+- **A review that stays inconclusive asks a human.** `reannounceInconclusiveReviewsAfterGrace`
+  re-arms an inconclusive review once (`MAX_AUTOMATIC_INCONCLUSIVE_REARMS`).
+  When the re-arm count has reached that bound and the latest round (a session
+  or an external run) has been ingested as `inconclusive` again,
+  `flagExhaustedInconclusiveReviews` (`task-late-findings.ts`, run right after
+  the re-arm sweep each tick) parks the task like the cap: it stamps
+  `autoReturnCapAnnouncedAt`, sets `needsHumanReason: "review-inconclusive"` and
+  posts one PR comment. The stamp is the compare-and-set guard, so it fires once,
+  and it keeps the re-arm sweep (which skips announced rows) off the row. It is
+  cleared by Retry review (`POST /api/tasks/:id/re-review`), by a human push
+  (`reannounceCappedTasksAfterHumanPush`), and by the next ingested verdict.
 - **Merge-tied reasons.** `tasks.needsHumanReason` also takes
   `rebase-exhausted` (the merge path's `recordMergeError` in
   `task-reconciler.ts` hit `MAX_REBASE_ATTEMPTS` with the PR still dirty) and

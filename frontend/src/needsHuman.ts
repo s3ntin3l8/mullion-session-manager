@@ -14,6 +14,7 @@ export type NeedsHumanReason =
   | "ci-status-stalled"
   | "ci-unfixable"
   | "ci-still-red"
+  | "review-inconclusive"
   | "rate-limited";
 
 /** The two review-loop reasons that name a red CI check (`ciHoldNote` carries
@@ -56,6 +57,8 @@ export function needsHumanText(
       return note
         ? `CI still red after the worker and two reruns: ${note}`
         : "CI still red after the worker and two reruns";
+    case "review-inconclusive":
+      return "the review ended without a verdict twice — retry the review or review by hand";
     case "no-progress":
       return "worker returned without a change";
     case "finding-persisted":

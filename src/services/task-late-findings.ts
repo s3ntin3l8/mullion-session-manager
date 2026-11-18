@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, lt, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks, type sessions } from "../db/schema.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
@@ -20,6 +20,7 @@ import {
   lateIngestFailures,
 } from "./task-late-findings-cache.js";
 import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
+import { postReviewFindingsComment } from "./task-github-sync.js";
 
 /**
  * A review session whose findings were ingested as `inconclusive` (it died or
@@ -189,6 +190,7 @@ const MAX_AUTOMATIC_INCONCLUSIVE_REARMS = 1;
 export async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Promise<void> {
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   if (!resolvedTaskMaster.enabled) return;
+  await flagExhaustedInconclusiveReviews(app);
 
   const now = Date.now();
   const rows = app.db
@@ -279,4 +281,84 @@ export async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstan
       });
     }
   }
+}
+
+/**
+ * The other half of the re-arm sweep above: once a task's automatic re-arm is
+ * spent and the latest round ended without a verdict again, nothing else will
+ * ever act on it, so say so. Same predicate as the sweep (reviewing, inconclusive,
+ * the latest round ingested, not already parked) with the count at the bound
+ * instead of below it — the two never both match one row. Parks it exactly like
+ * the round cap (announce stamp + `needsHumanReason`), CAS'd on the stamp still
+ * being null so it fires once, not every tick. A human Retry review
+ * (`/re-review`), a human push (`reannounceCappedTasksAfterHumanPush`) or a
+ * later verdict (`ingestReviewOutcome`) clears it.
+ */
+async function flagExhaustedInconclusiveReviews(app: FastifyInstance): Promise<void> {
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        eq(tasks.lastReviewVerdict, "inconclusive"),
+        or(
+          and(isNotNull(tasks.reviewFindingsIngestedSessionId), isNotNull(tasks.reviewSessionId)),
+          and(isNotNull(tasks.reviewRunIngestedId), isNotNull(tasks.reviewRunId)),
+        ),
+        isNull(tasks.autoReturnCapAnnouncedAt),
+        gte(tasks.inconclusiveReviewRearmCount, MAX_AUTOMATIC_INCONCLUSIVE_REARMS),
+      ),
+    )
+    .all();
+
+  for (const { task, project } of rows) {
+    const flagged = app.db
+      .update(tasks)
+      .set({ autoReturnCapAnnouncedAt: new Date(), needsHumanReason: "review-inconclusive" })
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, "reviewing"),
+          eq(tasks.lastReviewVerdict, "inconclusive"),
+          isNull(tasks.autoReturnCapAnnouncedAt),
+          gte(tasks.inconclusiveReviewRearmCount, MAX_AUTOMATIC_INCONCLUSIVE_REARMS),
+        ),
+      )
+      .run();
+    if (flagged.changes === 0) continue;
+    app.log.warn(
+      { taskId: task.id, rearms: task.inconclusiveReviewRearmCount },
+      "task reconcile: the review ended without a verdict after its automatic re-arm — flagged for a human",
+    );
+    // Set BEFORE the post: a crash in between leaves the banner right with only
+    // the comment missing. A failed post must not fail the tick.
+    try {
+      await postReviewFindingsComment(app, task, project, {
+        body: "The review ended without a verdict twice, and Mullion has stopped re-running it automatically. A human needs to retry the review or review this PR by hand.",
+      });
+    } catch (err) {
+      app.log.warn(
+        { err, taskId: task.id },
+        "task reconcile: failed to post the inconclusive-review notice",
+      );
+    }
+  }
+}
+
+/**
+ * What a freshly ingested verdict clears of the flags a previous round left: a
+ * `review-post-failed` hold (the next ingest releases it) and a
+ * `review-inconclusive` flag with its announce stamp (the review has now
+ * concluded, or was re-run).
+ */
+export function staleReviewFlagPatch(task: {
+  needsHumanReason: string | null;
+}): { needsHumanReason: null; autoReturnCapAnnouncedAt?: null } | Record<string, never> {
+  if (task.needsHumanReason === "review-post-failed") return { needsHumanReason: null };
+  if (task.needsHumanReason === "review-inconclusive") {
+    return { needsHumanReason: null, autoReturnCapAnnouncedAt: null };
+  }
+  return {};
 }

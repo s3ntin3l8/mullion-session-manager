@@ -850,6 +850,144 @@ describe("reconcileTasks — review round cap and re-arm", () => {
       await app.close();
     });
 
+    describe("flagging a review that is still inconclusive after its re-arm", () => {
+      it("flags a spent-budget inconclusive review for a human, once", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+        });
+
+        await reconcileTasks(app);
+        const first = await getTask(app, task.id);
+        expect(first.needsHumanReason).toBe("review-inconclusive");
+        expect(first.autoReturnCapAnnouncedAt).not.toBeNull();
+        // The re-arm sweep did not act on the same row.
+        expect(first.reviewSessionId).not.toBeNull();
+        expect(first.inconclusiveReviewRearmCount).toBe(1);
+
+        await reconcileTasks(app);
+        const second = await getTask(app, task.id);
+        expect(second.autoReturnCapAnnouncedAt?.getTime()).toBe(
+          first.autoReturnCapAnnouncedAt?.getTime(),
+        );
+
+        await app.close();
+      });
+
+      it("flags a spent-budget inconclusive run too, and needs no grace period", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+          lastReviewVerdictAt: new Date(),
+          reviewSessionId: null,
+          reviewFindingsIngestedSessionId: null,
+          reviewRunId: "run_spent",
+          reviewRunIngestedId: "run_spent",
+        });
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, task.id)).needsHumanReason).toBe("review-inconclusive");
+        await app.close();
+      });
+
+      it("does not flag while an automatic re-arm is still left", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          lastReviewVerdictAt: new Date(Date.now() - 60_000),
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.needsHumanReason).toBeNull();
+        expect(row.autoReturnCapAnnouncedAt).toBeNull();
+        await app.close();
+      });
+
+      it("does not flag a review whose latest round is not ingested yet", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+          reviewFindingsIngestedSessionId: null,
+        });
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, task.id)).needsHumanReason).toBeNull();
+        await app.close();
+      });
+
+      it("does not flag a conclusive verdict", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+          lastReviewVerdict: "clean",
+        });
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, task.id)).needsHumanReason).toBeNull();
+        await app.close();
+      });
+
+      it("is cleared by Retry review", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+        });
+        await reconcileTasks(app);
+        expect((await getTask(app, task.id)).needsHumanReason).toBe("review-inconclusive");
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
+
+        expect(res.statusCode).toBe(200);
+        const row = await getTask(app, task.id);
+        expect(row.needsHumanReason).toBeNull();
+        expect(row.autoReturnCapAnnouncedAt).toBeNull();
+        expect(row.reviewSessionId).toBeNull();
+        expect(row.inconclusiveReviewRearmCount).toBe(2);
+        await app.close();
+      });
+
+      it("is cleared when a later round ingests a conclusive verdict", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+        });
+        await reconcileTasks(app);
+        expect((await getTask(app, task.id)).needsHumanReason).toBe("review-inconclusive");
+
+        // A retry spawned a new review session that has now written a verdict.
+        const fresh = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId: task.projectId, command: "bash" },
+        });
+        const freshId = fresh.json().id as number;
+        app.db
+          .update(tasks)
+          .set({ reviewSessionId: freshId, reviewFindingsIngestedSessionId: null })
+          .where(eq(tasks.id, task.id))
+          .run();
+        mockFinishedSessionIds(app, freshId);
+        writeFindings(
+          app,
+          task.id,
+          task.autoReturnRounds,
+          JSON.stringify({ verdict: "clean", summary: "Looks good.", findings: [] }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.lastReviewVerdict).toBe("approved");
+        expect(row.needsHumanReason).toBeNull();
+        expect(row.autoReturnCapAnnouncedAt).toBeNull();
+        await app.close();
+      });
+    });
+
     it("does not re-arm a task that has already spent its auto-return round budget", async () => {
       const app = await buildApp();
       const { task } = await createStalledInconclusiveTask(app, {

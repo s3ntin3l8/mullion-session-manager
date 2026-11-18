@@ -79,6 +79,7 @@ const taskFixtureProps = {
       "ci-status-stalled",
       "ci-unfixable",
       "ci-still-red",
+      "review-inconclusive",
       "rate-limited",
       null,
     ],

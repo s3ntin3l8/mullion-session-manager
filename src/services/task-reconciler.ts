@@ -86,6 +86,7 @@ import { pruneLateFindingsCaches } from "./task-late-findings-cache.js";
 import {
   ingestLateFindings,
   reannounceInconclusiveReviewsAfterGrace,
+  staleReviewFlagPatch,
 } from "./task-late-findings.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
@@ -4376,9 +4377,7 @@ async function ingestReviewOutcome(
       lastReviewVerdictAt: new Date(now),
       ...(announcingCap
         ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason }
-        : task.needsHumanReason === "review-post-failed"
-          ? { needsHumanReason: null }
-          : {}),
+        : staleReviewFlagPatch(task)),
       ...(reviewedHeadSha !== undefined ? { lastReviewedHeadSha: reviewedHeadSha } : {}),
     })
     .where(
