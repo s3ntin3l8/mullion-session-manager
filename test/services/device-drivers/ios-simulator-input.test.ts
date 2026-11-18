@@ -59,9 +59,11 @@ class FakeHidStream extends EventEmitter {
   }
   end() {
     this.ended = true;
+    this.emit("close");
   }
   cancel() {
     this.cancelled = true;
+    this.emit("close");
   }
 }
 
@@ -93,6 +95,17 @@ function fakeCompanion(options?: {
       const stream = new FakeHidStream((ev) => options?.onHidWrite?.(ev, idx) ?? null);
       hidStreams.push(stream);
       return stream;
+    },
+    hidOnce: async (events: IdbHidEvent[]) => {
+      const idx = hidStreams.length;
+      const stream = new FakeHidStream((ev) => options?.onHidWrite?.(ev, idx) ?? null);
+      hidStreams.push(stream);
+      for (const ev of events) {
+        await new Promise<void>((resolve, reject) => {
+          stream.write(ev, (err) => (err ? reject(err) : resolve()));
+        });
+      }
+      stream.end();
     },
     describe,
     close: vi.fn(),
@@ -388,7 +401,7 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
       durationMs: 250,
     });
 
-    expect(c.hidStreams[0]!.written).toEqual([
+    expect(c.hidStreams.flatMap((s) => s.written)).toEqual([
       { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
       { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "UP" } },
       { swipe: { start: { x: 100, y: 600 }, end: { x: 100, y: 200 }, duration: 0.25 } },
@@ -492,6 +505,50 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     ]);
     await driver.stop();
   });
+
+  it("closes the live stream before a one-shot action mid-drag and reopens it for touchUp", async () => {
+    const c = fakeCompanion();
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+
+    await driver.input({
+      type: "touchDown",
+      x: 300,
+      y: 600,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+    await driver.tap(600, 1200);
+    await driver.input({
+      type: "touchUp",
+      x: 300,
+      y: 900,
+      videoWidth: 1206,
+      videoHeight: 2622,
+      pointerId: 0,
+    });
+
+    expect(c.hidStreams).toHaveLength(3);
+    expect(c.hidStreams[0]!.ended).toBe(true);
+    expect(c.hidStreams[0]!.written).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+    ]);
+    expect(c.hidStreams[1]!.written).toEqual([
+      { press: { action: { touch: { point: { x: 200, y: 400 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 200, y: 400 } } }, direction: "UP" } },
+    ]);
+    expect(c.hidStreams[2]!.written).toEqual([
+      { press: { action: { touch: { point: { x: 100, y: 300 } } }, direction: "UP" } },
+    ]);
+    await driver.stop();
+  });
 });
 
 describe("IosSimulatorDriver input (fake idb_companion)", () => {
@@ -538,10 +595,9 @@ describe("IosSimulatorDriver input (fake idb_companion)", () => {
 
     await driver.start();
 
-    // First input hits stale HID marker; allow the loopback gRPC error to arrive
-    // so the next input restarts the companion and writes to the fresh stream.
+    // First input hits stale HID marker; live input waits briefly for the
+    // loopback gRPC error, restarts the companion, and retries the same event.
     await driver.input({ type: "tap", x: 603, y: 1311, videoWidth: 1206, videoHeight: 2622 });
-    await new Promise((r) => setTimeout(r, 50));
     await driver.input({
       type: "touchDown",
       x: 300,
@@ -571,6 +627,8 @@ describe("IosSimulatorDriver input (fake idb_companion)", () => {
       .map((line) => JSON.parse(line) as IdbHidEvent);
 
     expect(recorded).toMatchObject([
+      { press: { action: { touch: { point: { x: 201, y: 437 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 201, y: 437 } } }, direction: "UP" } },
       { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
       { press: { action: { touch: { point: { x: 100, y: 300 } } }, direction: "UP" } },
       { press: { action: { button: { button: "HOME" } }, direction: "DOWN" } },
@@ -579,6 +637,56 @@ describe("IosSimulatorDriver input (fake idb_companion)", () => {
       { press: { action: { key: { keycode: 0x04 } }, direction: "DOWN" } },
       { press: { action: { key: { keycode: 0x04 } }, direction: "UP" } },
       { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "UP" } },
+    ]);
+  }, 15_000);
+
+  it("restarts and retries live input when stale HID occurs between two live events", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-hid-live-stale-"));
+    dirs.push(dir);
+    const hidLog = path.join(dir, "hid.jsonl");
+    const staleMarker = path.join(dir, "stale");
+
+    const companion = new IdbCompanion({
+      udid: UDID,
+      executablePath: FAKE_COMPANION_SCRIPT,
+      killStaleCompanions: async () => {},
+      spawn: (cmd, args, opts) =>
+        spawn(process.execPath, [cmd, ...args], {
+          ...opts,
+          env: {
+            ...process.env,
+            FAKE_IDB_HID_LOG: hidLog,
+            FAKE_IDB_STALE_HID_MARKER: staleMarker,
+          },
+        }) as unknown as ChildProcess,
+    });
+    companions.push(companion);
+
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion,
+    });
+
+    await driver.start();
+    await driver.input({ type: "button", button: "home" });
+    writeFileSync(staleMarker, "1");
+    await driver.input({ type: "button", button: "lock" });
+
+    await new Promise((r) => setTimeout(r, 100));
+    await driver.stop();
+
+    const recorded = readFileSync(hidLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as IdbHidEvent);
+    expect(recorded).toMatchObject([
+      { press: { action: { button: { button: "HOME" } }, direction: "DOWN" } },
+      { press: { action: { button: { button: "HOME" } }, direction: "UP" } },
+      { press: { action: { button: { button: "LOCK" } }, direction: "DOWN" } },
+      { press: { action: { button: { button: "LOCK" } }, direction: "UP" } },
     ]);
   }, 15_000);
 

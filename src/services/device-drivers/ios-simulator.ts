@@ -102,6 +102,9 @@ const KEYFRAME_RESTART_MIN_INTERVAL_MS = 5000;
 const STREAM_REOPEN_DELAY_MS = 1000;
 const MAX_STREAM_REOPEN_FAILURES = 5;
 const DESCRIBE_TIMEOUT_MS = 5000;
+const HID_ONCE_TIMEOUT_MS = 5000;
+const HID_STREAM_CLOSE_TIMEOUT_MS = 2000;
+const LIVE_HID_SETTLE_MS = 50;
 const SCROLL_POINTS_PER_UNIT = 40;
 const SCROLL_SWIPE_DURATION_SEC = 0.15;
 
@@ -171,7 +174,9 @@ export class IosSimulatorDriver implements DeviceDriver {
   private offCompanionExit: (() => void) | null = null;
   private keyframeSent = false;
   private hidStream: HidStream | null = null;
+  private hidStreamError: Error | null = null;
   private hidStale = false;
+  private hidQueue: Promise<void> = Promise.resolve();
   private hidRestartPromise: Promise<void> | null = null;
   private hidRestartEpoch = 0;
   private screenDimensions: IdbScreenDimensions | null = null;
@@ -480,7 +485,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
     const swipe =
       durationMs !== undefined ? { start, end, duration: durationMs / 1000 } : { start, end };
-    await this.sendHid([{ swipe }], true);
+    await this.sendHid([{ swipe }], true, HID_ONCE_TIMEOUT_MS + (durationMs ?? 0));
   }
 
   async text(text: string): Promise<void> {
@@ -640,6 +645,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.screenDimensions = null;
     this.describePromise = null;
     this.hidStale = false;
+    this.hidStreamError = null;
     this.gop.clear();
     this.keyframeSent = false;
   }
@@ -701,6 +707,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.describeEpoch += 1;
     this.describePromise = null;
     this.hidStale = false;
+    this.hidStreamError = null;
   }
 
   private requireCompanionClient(): IdbGrpcClient {
@@ -757,10 +764,12 @@ export class IosSimulatorDriver implements DeviceDriver {
 
   private ensureHidStream(client: IdbGrpcClient): HidStream {
     if (this.hidStream) return this.hidStream;
+    this.hidStreamError = null;
     const stream = client.hid();
     stream.on("error", (err: Error) => {
       if (this.hidStream === stream) {
         this.hidStream = null;
+        this.hidStreamError = err;
         if (isInvalidatedHidError(err)) this.hidStale = true;
       }
     });
@@ -839,27 +848,62 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
   }
 
+  private async waitForStreamSettle(stream: HidStream, ms: number): Promise<void> {
+    if (this.hidStale || this.hidStream !== stream) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stream.off("error", done);
+        stream.off("close", done);
+        stream.off("finish", done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      stream.once("error", done);
+      stream.once("close", done);
+      stream.once("finish", done);
+    });
+  }
+
   private async sendHidBatch(
     client: IdbGrpcClient,
     events: IdbHidEvent[],
     forAction: boolean,
+    timeoutMs?: number,
   ): Promise<{ ok: true } | { ok: false; invalidated: boolean; err: unknown }> {
-    if (forAction && client.hidOnce) {
+    if (forAction) {
       if (this.hidStream) {
+        // idb_companion allows one active HID session at a time, so close the
+        // held live stream before opening a one-shot hidOnce call.
         const prev = this.hidStream;
         this.hidStream = null;
         await new Promise<void>((resolve) => {
-          prev.once("status", () => resolve());
-          prev.once("error", () => resolve());
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            prev.off("status", finish);
+            prev.off("error", finish);
+            prev.off("close", finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, HID_STREAM_CLOSE_TIMEOUT_MS);
+          prev.once("status", finish);
+          prev.once("error", finish);
+          prev.once("close", finish);
           try {
             prev.end();
           } catch {
-            resolve();
+            finish();
           }
         });
       }
       try {
-        await client.hidOnce(events);
+        await client.hidOnce(events, { timeoutMs: timeoutMs ?? HID_ONCE_TIMEOUT_MS });
         return { ok: true };
       } catch (err) {
         return { ok: false, invalidated: isInvalidatedHidError(err), err };
@@ -868,26 +912,54 @@ export class IosSimulatorDriver implements DeviceDriver {
     const stream = this.ensureHidStream(client);
     try {
       await this.writeBatchToStream(stream, events);
+      // gRPC client-streaming write callbacks fire on local flush before the
+      // server returns an async INTERNAL invalidated status; wait briefly so a
+      // stale-HID error is observed and retried for this same live event.
+      await this.waitForStreamSettle(stream, LIVE_HID_SETTLE_MS);
       if (!this.hidStale && this.hidStream === stream) {
         return { ok: true };
       }
+      const streamErr = this.hidStreamError;
+      const wasStale = this.hidStale || (streamErr !== null && isInvalidatedHidError(streamErr));
       this.closeHidStream();
       this.hidStale = false;
+      this.hidStreamError = null;
       return {
         ok: false,
-        invalidated: true,
-        err: new Error("idb HID stream became stale during write"),
+        invalidated: wasStale,
+        err:
+          streamErr ??
+          new Error(
+            wasStale
+              ? "idb HID stream became stale during write"
+              : "idb HID stream closed during write",
+          ),
       };
     } catch (err) {
-      const wasStale = this.hidStale;
+      const streamErr = this.hidStreamError;
+      const wasStale =
+        this.hidStale ||
+        isInvalidatedHidError(err) ||
+        (streamErr !== null && isInvalidatedHidError(streamErr));
       this.closeHidStream();
       this.hidStale = false;
-      return { ok: false, invalidated: isInvalidatedHidError(err) || wasStale, err };
+      this.hidStreamError = null;
+      return { ok: false, invalidated: wasStale, err };
     }
   }
 
-  private async sendHid(events: IdbHidEvent[], forAction: boolean): Promise<void> {
-    if (events.length === 0) return;
+  private sendHid(events: IdbHidEvent[], forAction: boolean, timeoutMs?: number): Promise<void> {
+    if (events.length === 0) return Promise.resolve();
+    const run = this.hidQueue.then(() => this.sendHidSerialized(events, forAction, timeoutMs));
+    this.hidQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async sendHidSerialized(
+    events: IdbHidEvent[],
+    forAction: boolean,
+    timeoutMs?: number,
+  ): Promise<void> {
     if (!this.alive || !this.companion) {
       if (forAction) {
         throw new DeviceActionError(
@@ -912,7 +984,7 @@ export class IosSimulatorDriver implements DeviceDriver {
       return;
     }
 
-    const first = await this.sendHidBatch(client, events, forAction);
+    const first = await this.sendHidBatch(client, events, forAction, timeoutMs);
     if (first.ok) return;
     if (!first.invalidated) {
       if (forAction) {
@@ -929,7 +1001,7 @@ export class IosSimulatorDriver implements DeviceDriver {
       if (!retryClient) {
         throw new Error("idb companion unavailable after restart");
       }
-      const retry = await this.sendHidBatch(retryClient, events, forAction);
+      const retry = await this.sendHidBatch(retryClient, events, forAction, timeoutMs);
       if (!retry.ok) {
         throw retry.err;
       }

@@ -120,6 +120,10 @@ export interface IdbDescribeOptions {
   timeoutMs?: number;
 }
 
+export interface IdbHidOnceOptions {
+  timeoutMs?: number;
+}
+
 export interface IdbGrpcClient {
   videoStream(
     start: IdbVideoStreamStart,
@@ -128,7 +132,7 @@ export interface IdbGrpcClient {
   /** Sends a one-shot HID event batch, half-closes the stream, and awaits
    * the server's completion status so stale-HID errors are observed before
    * returning. */
-  hidOnce?(events: IdbHidEvent[]): Promise<void>;
+  hidOnce(events: IdbHidEvent[], options?: IdbHidOnceOptions): Promise<void>;
   describe(options?: IdbDescribeOptions): Promise<IdbTargetDescriptionResponse>;
   close(): void;
 }
@@ -140,6 +144,10 @@ interface RawCompanionServiceClient extends grpc.Client {
     callback: grpc.requestCallback<IdbTargetDescriptionResponse>,
   ): grpc.ClientUnaryCall;
   hid(callback: grpc.requestCallback<IdbHidResponse>): grpc.ClientWritableStream<IdbHidEvent>;
+  hid(
+    options: grpc.CallOptions,
+    callback: grpc.requestCallback<IdbHidResponse>,
+  ): grpc.ClientWritableStream<IdbHidEvent>;
   video_stream(): grpc.ClientDuplexStream<IdbVideoStreamRequest, IdbVideoStreamResponse>;
 }
 
@@ -199,7 +207,11 @@ export function createIdbGrpcClient(port: number): IdbGrpcClient {
       return stream;
     },
 
-    hidOnce(events: IdbHidEvent[]): Promise<void> {
+    hidOnce(events: IdbHidEvent[], options: IdbHidOnceOptions = {}): Promise<void> {
+      const callOptions: grpc.CallOptions = {};
+      if (options.timeoutMs !== undefined) {
+        callOptions.deadline = Date.now() + options.timeoutMs;
+      }
       return new Promise((resolve, reject) => {
         let settled = false;
         const finish = (err?: Error | null) => {
@@ -208,7 +220,7 @@ export function createIdbGrpcClient(port: number): IdbGrpcClient {
           if (err) reject(err);
           else resolve();
         };
-        const stream = client.hid((err: grpc.ServiceError | null) => {
+        const stream = client.hid(callOptions, (err: grpc.ServiceError | null) => {
           finish(err);
         });
         stream.on("error", (err: Error) => finish(err));
