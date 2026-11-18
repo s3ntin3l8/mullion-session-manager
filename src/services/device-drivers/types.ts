@@ -94,6 +94,20 @@ export interface RotateInput {
   type: "rotate";
 }
 
+export type DeviceButton = "home" | "lock" | "side" | "siri";
+
+export interface ButtonInput {
+  type: "button";
+  button: DeviceButton;
+}
+
+/** `usage` is a USB HID Keyboard/Keypad usage code (0–0xFFFF). */
+export interface HidKeyInput {
+  type: "hidKey";
+  usage: number;
+  action: "down" | "up";
+}
+
 export type DeviceInput =
   | TapInput
   | TouchInput
@@ -102,7 +116,9 @@ export type DeviceInput =
   | KeyEventInput
   | ClipboardInput
   | BackInput
-  | RotateInput;
+  | RotateInput
+  | ButtonInput
+  | HidKeyInput;
 
 // --- one-shot actions (`mullion device <verb>`, POST /api/devices/:id/action)
 

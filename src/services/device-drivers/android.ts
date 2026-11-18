@@ -236,6 +236,10 @@ export class AndroidDriver implements DeviceDriver {
       case "rotate":
         await controller.rotateDevice();
         break;
+      case "button":
+      case "hidKey":
+        // iOS-only inputs; Android uses `back` and `keyEvent`.
+        break;
     }
   }
 

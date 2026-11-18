@@ -120,11 +120,19 @@ export interface IdbDescribeOptions {
   timeoutMs?: number;
 }
 
+export interface IdbHidOnceOptions {
+  timeoutMs?: number;
+}
+
 export interface IdbGrpcClient {
   videoStream(
     start: IdbVideoStreamStart,
   ): grpc.ClientDuplexStream<IdbVideoStreamRequest, IdbVideoStreamResponse>;
   hid(): grpc.ClientWritableStream<IdbHidEvent>;
+  /** Sends a one-shot HID event batch, half-closes the stream, and awaits
+   * the server's completion status so stale-HID errors are observed before
+   * returning. */
+  hidOnce(events: IdbHidEvent[], options?: IdbHidOnceOptions): Promise<void>;
   describe(options?: IdbDescribeOptions): Promise<IdbTargetDescriptionResponse>;
   close(): void;
 }
@@ -136,6 +144,10 @@ interface RawCompanionServiceClient extends grpc.Client {
     callback: grpc.requestCallback<IdbTargetDescriptionResponse>,
   ): grpc.ClientUnaryCall;
   hid(callback: grpc.requestCallback<IdbHidResponse>): grpc.ClientWritableStream<IdbHidEvent>;
+  hid(
+    options: grpc.CallOptions,
+    callback: grpc.requestCallback<IdbHidResponse>,
+  ): grpc.ClientWritableStream<IdbHidEvent>;
   video_stream(): grpc.ClientDuplexStream<IdbVideoStreamRequest, IdbVideoStreamResponse>;
 }
 
@@ -184,9 +196,43 @@ export function createIdbGrpcClient(port: number): IdbGrpcClient {
     },
 
     hid() {
-      // Pass a no-op callback as required by grpc-js for client-streaming
-      // calls; stream errors still surface on the returned ClientWritableStream.
-      return client.hid(() => undefined);
+      // grpc-js delivers non-OK server statuses to the client-streaming
+      // callback rather than emitting `error` on the writable stream; forward
+      // them onto the stream when a listener is attached.
+      const stream = client.hid((err: grpc.ServiceError | null) => {
+        if (!err) return;
+        if (stream.listenerCount("error") > 0) stream.destroy(err);
+        else stream.destroy();
+      });
+      return stream;
+    },
+
+    hidOnce(events: IdbHidEvent[], options: IdbHidOnceOptions = {}): Promise<void> {
+      const callOptions: grpc.CallOptions = {};
+      if (options.timeoutMs !== undefined) {
+        callOptions.deadline = Date.now() + options.timeoutMs;
+      }
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (err?: Error | null) => {
+          if (settled) return;
+          settled = true;
+          if (err) reject(err);
+          else resolve();
+        };
+        const stream = client.hid(callOptions, (err: grpc.ServiceError | null) => {
+          finish(err);
+        });
+        stream.on("error", (err: Error) => finish(err));
+        try {
+          for (const event of events) {
+            stream.write(event);
+          }
+          stream.end();
+        } catch (err) {
+          finish(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
     },
 
     describe(options: IdbDescribeOptions = {}): Promise<IdbTargetDescriptionResponse> {

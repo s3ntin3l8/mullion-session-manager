@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers";
@@ -79,7 +79,22 @@ server.addService(CompanionService.service, {
     }
   },
   hid(call, callback) {
-    call.on("data", () => undefined);
+    const hidLogFile = process.env.FAKE_IDB_HID_LOG;
+    const staleHidMarker = process.env.FAKE_IDB_STALE_HID_MARKER;
+    call.on("data", (event) => {
+      if (staleHidMarker && existsSync(staleHidMarker)) {
+        unlinkSync(staleHidMarker);
+        callback({
+          code: grpc.status.INTERNAL,
+          message:
+            "The dtuhidd connection (com.apple.coredevice.feature.remote.hid.digitizer) has been invalidated",
+        });
+        return;
+      }
+      if (hidLogFile) {
+        appendFileSync(hidLogFile, `${JSON.stringify(event)}\n`);
+      }
+    });
     call.on("end", () => callback(null, {}));
   },
   video_stream(call) {
