@@ -553,7 +553,7 @@ export function SessionRow({
             to mismatch (#3106). */}
         <button
           type="button"
-          className="visually-hidden session-item-open"
+          className="visually-hidden row-open-btn session-item-open"
           aria-current={isActiveSession ? "true" : undefined}
           aria-label={`Open session ${showAgentFallback ? `${agentBinary} ` : ""}${title}, ${metaParts
             .map((p) => p.text)

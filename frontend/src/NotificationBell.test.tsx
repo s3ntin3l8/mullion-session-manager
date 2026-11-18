@@ -689,8 +689,10 @@ describe("NotificationBell", () => {
       expectNameHasVisibleText(open, shown);
     });
 
-    it("puts the open button first among the row's tab stops", async () => {
+    it("puts the open button first among the row's tab stops, and Tab reaches it", async () => {
       const { row, open } = await renderWithTimeline();
+      for (let i = 0; i < 20 && document.activeElement !== open; i += 1) await userEvent.tab();
+      expect(open).toHaveFocus();
       const stops = within(row).getAllByRole("button");
       expect(stops[0]).toBe(open);
       expect(stops.slice(1).map((b) => b.textContent || b.getAttribute("aria-label"))).toEqual([

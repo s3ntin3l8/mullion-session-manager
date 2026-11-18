@@ -162,7 +162,7 @@ export function ProjectHeader({
           // itself, so there is no visible text to mismatch.
           <button
             type="button"
-            className="visually-hidden project-row-toggle"
+            className="visually-hidden row-open-btn project-row-toggle"
             aria-label={project.name}
             aria-expanded={!collapsed}
             aria-controls={bodyId}

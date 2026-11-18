@@ -141,6 +141,7 @@ vi.mock("./store/index.js", () => {
 let activeChangeHandler: ((e: { isActive: boolean }) => void) | null;
 let visibilityChangeHandler: ((e: { isVisible: boolean }) => void) | null;
 let titleChangeHandler: ((e: { title: string }) => void) | null;
+let groupChangeHandler: (() => void) | null;
 
 function makeProps(
   overrides: {
@@ -152,6 +153,7 @@ function makeProps(
   activeChangeHandler = null;
   visibilityChangeHandler = null;
   titleChangeHandler = null;
+  groupChangeHandler = null;
   return {
     api: {
       // Split (PaneActionsMenu.tsx's "Split right"/"Split down" items)
@@ -176,6 +178,11 @@ function makeProps(
         titleChangeHandler = cb;
         return { dispose: vi.fn() };
       }),
+      onDidGroupChange: vi.fn((cb: () => void) => {
+        groupChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+      onDidLocationChange: vi.fn(() => ({ dispose: vi.fn() })),
       group: { panels: overrides.groupPanels ?? [], api: { isVisible: true } },
     },
     // A stable marker object, not a real DockviewApi — the "View timeline"
@@ -1286,6 +1293,34 @@ describe("dock tab name (#3106)", () => {
     expectNameHasVisibleText(tab, leading);
     // The close and actions buttons are not part of it.
     expect(tab).not.toHaveAccessibleName(/close pane|more actions/i);
+  });
+
+  it("names the new tab element dockview builds when the pane moves to another group", () => {
+    vi.useFakeTimers();
+    try {
+      const first = document.createElement("div");
+      first.className = "dv-tab";
+      document.body.appendChild(first);
+      render(<PaneTab {...makeProps()} />, { container: first });
+      const content = first.querySelector(".pane-tab")!;
+      // What dockview does: a new tab element in the new group, this
+      // component's element moved into it, no remount.
+      const second = document.createElement("div");
+      second.className = "dv-tab";
+      document.body.appendChild(second);
+      second.appendChild(content);
+      act(() => {
+        groupChangeHandler?.();
+        vi.runOnlyPendingTimers();
+      });
+      expect(second).toHaveAttribute("aria-labelledby");
+      expect(first).not.toHaveAttribute("aria-labelledby");
+      // Back where React put it, so the test's own unmount finds it.
+      first.appendChild(content);
+      second.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops the reference when the tab unmounts", () => {

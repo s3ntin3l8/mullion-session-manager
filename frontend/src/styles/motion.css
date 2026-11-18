@@ -38,7 +38,8 @@
    0.96 of it pulled the "x" at its far end ~30px out from under the pointer
    before release, so no `click` reached it. A control with a pressed control
    inside it (the last, `:where()`-wrapped entry of both `:not()` lists below)
-   stays still; a workspace row's own `.ws-row-btn` and a banner's
+   stays still; a workspace row's own `.ws-row-btn`, a sidebar or
+   notification row's hidden `.row-open-btn` (#3106) and a banner's
    `.update-banner-open` do not count, since the row or banner presses for it. `:where()` keeps both rules' specificity unchanged. */
 :where(
   button,
@@ -52,7 +53,9 @@
   .rail-ws-row,
   .workspace-item,
   .ws-section-header,
-  .ws-group-header
+  .ws-group-header,
+  .project-row-header,
+  .notif-event-row
 ) {
   transition: scale var(--motion-press) var(--motion-ease-press);
 }
@@ -63,6 +66,7 @@
     .device-toolbar button,
     .terminal-voice-btn,
     .ws-row-btn,
+    .row-open-btn,
     .update-banner-open,
     .rail-ws-grip,
     :has(.ws-drag-handle:active),
@@ -83,10 +87,12 @@
             .workspace-item,
             .ws-section-header,
             .ws-group-header,
+            .project-row-header,
+            .notif-event-row,
             .dock-monitor,
             .sidebar-device-row,
             .update-banner
-          ):active:not(.ws-row-btn, .update-banner-open)
+          ):active:not(.ws-row-btn, .row-open-btn, .update-banner-open)
       )
     )
   ) {
@@ -96,7 +102,8 @@
 /* Wide things (rows, cards, list options) move less than a small button.
    A workspace row and the WORKSPACES and group headers are containers, not
    buttons (#2886): the row presses, and its one inner button (`.ws-row-btn`)
-   does not press again inside it.
+   does not press again inside it. The same goes for a project header and a
+   notification row and their hidden `.row-open-btn` (#3106).
    The same `:not()` list as above keeps this rule exactly as specific, so,
    coming later, it wins for a row that is also a button. */
 :is(
@@ -110,6 +117,8 @@
     .workspace-item,
     .ws-section-header,
     .ws-group-header,
+    .project-row-header,
+    .notif-event-row,
     .dock-monitor,
     .sidebar-device-row,
     .update-banner
@@ -120,6 +129,7 @@
     .device-toolbar button,
     .terminal-voice-btn,
     .ws-row-btn,
+    .row-open-btn,
     .update-banner-open,
     .rail-ws-grip,
     :has(.ws-drag-handle:active),
@@ -140,10 +150,12 @@
             .workspace-item,
             .ws-section-header,
             .ws-group-header,
+            .project-row-header,
+            .notif-event-row,
             .dock-monitor,
             .sidebar-device-row,
             .update-banner
-          ):active:not(.ws-row-btn, .update-banner-open)
+          ):active:not(.ws-row-btn, .row-open-btn, .update-banner-open)
       )
     )
   ) {

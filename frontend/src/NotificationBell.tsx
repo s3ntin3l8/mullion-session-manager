@@ -1072,7 +1072,7 @@ function EventRow({
           no visible text for the name to mismatch. */}
       <button
         type="button"
-        className="visually-hidden notif-event-open"
+        className="visually-hidden row-open-btn notif-event-open"
         aria-label={
           repeatCount > 1
             ? `${label}: ${fullText} — ${age}, repeated ${repeatCount} times`

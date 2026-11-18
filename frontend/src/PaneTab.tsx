@@ -274,13 +274,35 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // (axe's nested-interactive): dockview renders that element itself and
   // gives a tab component no slot outside it, and its group-level header
   // actions are one set per group, not per tab.
+  //
+  // dockview builds a new .dv-tab when the panel moves to another group (or
+  // floats) and moves this component's element into it without remounting
+  // it, so the attribute is applied again whenever the group or location
+  // changes, a frame later, once the new tab holds this content.
   const nameId = useId();
+  const { api } = props;
   useEffect(() => {
-    const tab = tabRef.current?.closest(".dv-tab");
-    if (!tab) return;
-    tab.setAttribute("aria-labelledby", nameId);
-    return () => tab.removeAttribute("aria-labelledby");
-  }, [nameId]);
+    let labelled: Element | null = null;
+    const apply = () => {
+      const tab = tabRef.current?.closest(".dv-tab") ?? null;
+      if (tab === labelled) return;
+      labelled?.removeAttribute("aria-labelledby");
+      tab?.setAttribute("aria-labelledby", nameId);
+      labelled = tab;
+    };
+    apply();
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(apply);
+    };
+    const moved = [api.onDidGroupChange(later), api.onDidLocationChange(later)];
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const d of moved) d.dispose();
+      labelled?.removeAttribute("aria-labelledby");
+    };
+  }, [api, nameId]);
 
   // Clears the unread badge by advancing the read cursor (store.ts's
   // markEventSeen, which updates the local lastSeenSeq and sends the "seen"
