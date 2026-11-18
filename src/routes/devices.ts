@@ -579,7 +579,13 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
           `Host ${host.hostId} does not support iOS simulators (supported platforms: ${support.platforms.join(", ") || "none"}).`,
         );
       }
-      return await host.simulators();
+      const simulators = await host.simulators();
+      if (simulators === null) {
+        return reply.badRequest(
+          `Host ${host.hostId} does not report simulator support — update its agent.`,
+        );
+      }
+      return simulators;
     } catch (err) {
       if (err instanceof SimctlError) return reply.badGateway(err.message);
       if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);

@@ -92,14 +92,20 @@ describe("remote-host-devices", () => {
     ).resolves.toEqual({ deviceKinds: ["physical"], platforms: ["android", "ios"] });
   });
 
-  it("answers null for an agent that predates the kinds route, and rethrows anything else", async () => {
+  it("answers null for an agent that predates the kinds or simulators route, and rethrows anything else", async () => {
     const old = vi.fn().mockRejectedValue(new HostRequestError("h", 404, "nope"));
     await expect(
       createDevicesClient({ request: old, openInbound: unusedOpenInbound }).kinds(),
     ).resolves.toBeNull();
+    await expect(
+      createDevicesClient({ request: old, openInbound: unusedOpenInbound }).simulators(),
+    ).resolves.toBeNull();
     const broken = vi.fn().mockRejectedValue(new HostRequestError("h", 500, "boom"));
     await expect(
       createDevicesClient({ request: broken, openInbound: unusedOpenInbound }).kinds(),
+    ).rejects.toThrow();
+    await expect(
+      createDevicesClient({ request: broken, openInbound: unusedOpenInbound }).simulators(),
     ).rejects.toThrow();
   });
 

@@ -50,8 +50,8 @@ export interface DeviceHost {
   /** One device's live info, undefined when nothing is running under that id. */
   info(id: number): Promise<DeviceInfo | undefined>;
   action(id: number, action: DeviceAction): Promise<DeviceActionResult>;
-  /** Available iOS simulators on this host. */
-  simulators(): Promise<IosSimulator[]>;
+  /** Available iOS simulators on this host, or null when a remote agent predates `/internal/simulators`. */
+  simulators(): Promise<IosSimulator[] | null>;
 }
 
 class LocalDeviceHost implements DeviceHost {
@@ -158,7 +158,7 @@ class RemoteDeviceHost implements DeviceHost {
     return this.client.devices.action(String(id), action);
   }
 
-  simulators(): Promise<IosSimulator[]> {
+  simulators(): Promise<IosSimulator[] | null> {
     return this.client.devices.simulators();
   }
 }

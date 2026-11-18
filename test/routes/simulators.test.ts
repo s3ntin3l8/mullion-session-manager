@@ -214,7 +214,7 @@ describe("GET /api/simulators and GET /internal/simulators", () => {
     await app.close();
   });
 
-  it("forwards a remote agent's 4xx and 502 responses via forwardHostRequestError", async () => {
+  it("forwards a remote agent's 4xx via forwardHostRequestError, maps 5xx transport failures to 503, and prompts agent update on null", async () => {
     const app = await buildTestAppOnPlatform("darwin");
     const mac = createHost(app, { name: "mac-mini", baseUrl: "http://mac.test", token: "t" }).id;
     devices.kinds.mockResolvedValue({ deviceKinds: [], platforms: ["ios"] });
@@ -229,15 +229,23 @@ describe("GET /api/simulators and GET /internal/simulators", () => {
     expect(badReq.statusCode).toBe(400);
     expect(badReq.json().message).toBe("iOS Simulator is not available");
 
-    devices.simulators.mockRejectedValueOnce(
-      new HostRequestError(mac, 502, JSON.stringify({ message: "simctl failed on agent" })),
-    );
+    // RemoteHostClient maps agent 5xx (including simctl 502) to HostUnreachableError,
+    // which replyHostUnreachable turns into 503.
+    devices.simulators.mockRejectedValueOnce(new HostUnreachableError(mac, new Error("HTTP 502")));
     const badGw = await app.inject({
       method: "GET",
       url: `/api/simulators?hostId=${encodeURIComponent(mac)}`,
     });
-    expect(badGw.statusCode).toBe(502);
-    expect(badGw.json().message).toBe("simctl failed on agent");
+    expect(badGw.statusCode).toBe(503);
+    expect(badGw.json().message).toContain(mac);
+
+    devices.simulators.mockResolvedValueOnce(null);
+    const outdated = await app.inject({
+      method: "GET",
+      url: `/api/simulators?hostId=${encodeURIComponent(mac)}`,
+    });
+    expect(outdated.statusCode).toBe(400);
+    expect(outdated.json().message).toContain("update its agent");
     await app.close();
   });
 

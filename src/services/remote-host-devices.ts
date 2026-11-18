@@ -94,14 +94,21 @@ export function createDevicesClient({ request, openInbound }: DevicesClientDeps)
       return (await request<LiveDevicesResponse>("/internal/devices/live")).devices;
     },
 
-    async simulators(): Promise<IosSimulator[]> {
-      return (
-        await request<SimulatorsResponse>(
-          "/internal/simulators",
-          undefined,
-          DEVICE_REQUEST_TIMEOUT_MS,
-        )
-      ).simulators;
+    /** Available iOS simulators on this host, or null when the agent predates
+     * `GET /internal/simulators` (a 404). */
+    async simulators(): Promise<IosSimulator[] | null> {
+      try {
+        return (
+          await request<SimulatorsResponse>(
+            "/internal/simulators",
+            undefined,
+            DEVICE_REQUEST_TIMEOUT_MS,
+          )
+        ).simulators;
+      } catch (err) {
+        if (err instanceof HostRequestError && err.statusCode === 404) return null;
+        throw err;
+      }
     },
 
     async terminate(id: string, kind: DeviceKind): Promise<void> {
