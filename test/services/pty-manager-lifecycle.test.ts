@@ -42,8 +42,8 @@ describe("PtyManager", () => {
     ({ sessionsDir, manager } = createPtyManagerFixture(PtyManager));
   });
 
-  afterEach(() => {
-    destroyPtyManagerFixture({ sessionsDir, manager });
+  afterEach(async () => {
+    await destroyPtyManagerFixture({ sessionsDir, manager });
   });
 
   it("kill() only kills our tracked client, not conceptually the whole session", async () => {

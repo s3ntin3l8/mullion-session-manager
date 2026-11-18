@@ -37,8 +37,8 @@ describe("PtyManager", () => {
     ({ sessionsDir, manager } = createPtyManagerFixture(PtyManager));
   });
 
-  afterEach(() => {
-    destroyPtyManagerFixture({ sessionsDir, manager });
+  afterEach(async () => {
+    await destroyPtyManagerFixture({ sessionsDir, manager });
   });
 
   describe("emitHookEvent (issue #176)", () => {

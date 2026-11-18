@@ -36,8 +36,8 @@ describe("PtyManager", () => {
     ({ sessionsDir, manager } = createPtyManagerFixture(PtyManager));
   });
 
-  afterEach(() => {
-    destroyPtyManagerFixture({ sessionsDir, manager });
+  afterEach(async () => {
+    await destroyPtyManagerFixture({ sessionsDir, manager });
   });
 
   // getScrollback() always prepends a screen-mode preamble (see pty-manager.ts)

@@ -260,6 +260,41 @@ export async function waitForSpawn(session: { isAlive: boolean }): Promise<void>
   throw new Error("session never became alive");
 }
 
+/**
+ * Settle the async work a test left PENDING, so it cannot land in the next
+ * test (issue #3277's "no test relies on another's leftovers").
+ *
+ * WHY THIS IS NOT COSMETIC: the faked `systemd-run` child reports its
+ * "exit" on a setImmediate, and the scope backend's onSettled hook
+ * (src/services/scope/spawn.ts) calls invalidateOwnedScopesCache() when it
+ * fires — session-process.ts's MODULE-LEVEL owned-scopes listing cache. A
+ * test that calls getOrCreate() and never awaits spawnOutcome() therefore
+ * leaves that settle pending, and it lands in whatever test runs next.
+ *
+ * An invalidation landing inside ANOTHER test's `systemctl --user
+ * list-units` window is not a no-op: listOwnedScopes() stamps each listing
+ * with the cache generation it started under, so an invalidation that
+ * arrives before the listing resolves stops that listing from populating
+ * the TTL cache at all (session-process.ts's own "a listing that STARTED
+ * before the invalidation can't repopulate the cache" rule). The next
+ * reader then re-lists instead of seeing the cached verdict — which is
+ * exactly how the #1541 case in pty-manager-core.test.ts came to depend on
+ * its neighbours' timing.
+ *
+ * Draining here keeps every settle inside the test that caused it. A few
+ * turns is plenty: the settle is one setImmediate, and the work it unblocks
+ * (the attach-client spawn, the spawn failure's rollback) is a couple more.
+ *
+ * setImmediate must be REAL for this to work — no suite using this harness
+ * fakes it (they fake Date and/or setTimeout only), and a suite that did
+ * would hang here rather than drain.
+ */
+export async function drainPendingScopeWork(turns = 10): Promise<void> {
+  for (let i = 0; i < turns; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
 /** A per-test PtyManager and the sessions dir it owns. */
 export interface PtyManagerFixture {
   sessionsDir: string;
@@ -289,8 +324,15 @@ export function createPtyManagerFixture(
  * (issue #171/#98) — unref()'d so it can't hang the test runner either
  * way, but leaving it running would keep ticking (and console.debug-
  * logging) an abandoned manager's sessions into later, unrelated tests.
+ *
+ * Then drain what the test left pending (see drainPendingScopeWork): a
+ * bootstrap spawn's settle invalidates the module-level owned-scopes cache,
+ * and an invalidation that lands in the NEXT test is that test reading
+ * state its neighbour produced. Draining BEFORE the temp dir is removed
+ * keeps the settle's own cwd alive while it runs, too.
  */
-export function destroyPtyManagerFixture(fixture: PtyManagerFixture): void {
+export async function destroyPtyManagerFixture(fixture: PtyManagerFixture): Promise<void> {
   fixture.manager.killAll();
+  await drainPendingScopeWork();
   fs.rmSync(fixture.sessionsDir, { recursive: true, force: true });
 }

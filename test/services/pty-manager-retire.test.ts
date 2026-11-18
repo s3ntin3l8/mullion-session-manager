@@ -11,6 +11,7 @@ import {
   bundleSyncMock,
   cgroupInventoryMock,
   childProcessMock,
+  drainPendingScopeWork,
   fakePtyChildren,
   nodePtyMock,
   ownedLine,
@@ -41,10 +42,17 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
     manager = new PtyManager({ sessionsDir });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     manager.killAll();
+    // Settle what this test left pending. A bootstrap spawn's "exit" lands
+    // on a setImmediate, and the scope backend invalidates the module-level
+    // owned-scopes cache when it does — a leftover that lands in the NEXT
+    // test (and can even push a stray fake PTY into the shared
+    // `fakePtyChildren` array this file asserts on). The same reason the
+    // harness fixture drains; see drainPendingScopeWork's own doc comment.
+    await drainPendingScopeWork();
     fs.rmSync(sessionsDir, { recursive: true, force: true });
   });
 

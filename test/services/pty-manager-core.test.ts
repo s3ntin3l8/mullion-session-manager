@@ -33,6 +33,21 @@ vi.mock("../../src/services/cgroup-inventory.js", () => cgroupInventoryMock());
 
 const { PtyManager, getSkipPermissionFlag } = await import("../../src/services/pty-manager.js");
 
+/**
+ * How many `systemctl --user list-units` spawns this file has made so far.
+ *
+ * The mocked child_process is module-level (one mock for the whole file, not
+ * one per test), so this counts ACROSS tests — it is a "did this read hit
+ * the listing cache or spawn a fresh listing?" probe, never a
+ * "did this test spawn it?" one. See the #1541 case below for how it is
+ * used.
+ */
+function listUnitsSpawnCount(): number {
+  return vi
+    .mocked(spawnChildProcess)
+    .mock.calls.filter((call) => call[0] === "systemctl" && call[1][1] === "list-units").length;
+}
+
 describe("getSkipPermissionFlag", () => {
   it("returns the flag for a bare binary name", () => {
     expect(getSkipPermissionFlag("claude")).toBe("--dangerously-skip-permissions");
@@ -86,8 +101,8 @@ describe("PtyManager", () => {
     ({ sessionsDir, manager } = createPtyManagerFixture(PtyManager));
   });
 
-  afterEach(() => {
-    destroyPtyManagerFixture({ sessionsDir, manager });
+  afterEach(async () => {
+    await destroyPtyManagerFixture({ sessionsDir, manager });
   });
 
   // Issue #1734 — the codex home the rollout path is looked for under.
@@ -233,12 +248,33 @@ describe("PtyManager", () => {
   // (the reconciler would mark the live session exited and terminate it).
   describe("bootstrapMaster invalidates the owned-scopes cache (issue #1541)", () => {
     it("a cached dead verdict is dropped once systemd-run creates the scope", async () => {
+      // The first read has nothing to go on but the listing, and that
+      // listing is what gets CACHED (session-process.ts's TTL cache). Count
+      // the `systemctl --user list-units` spawns so the two reads below can
+      // be told apart: one that listed, and one that reused the cached
+      // listing instead of listing again.
+      const listUnitsBeforeFirst = listUnitsSpawnCount();
       scopeMocks.listUnitsReply = [];
       await expect(manager.isMasterAliveState("1")).resolves.toBe("dead");
-      // The scope now exists, but the cached listing still says "dead".
-      scopeMocks.listUnitsReply = [ownedLine("1", sessionsDir)];
-      await expect(manager.isMasterAliveState("1")).resolves.toBe("dead");
+      expect(listUnitsSpawnCount()).toBeGreaterThan(listUnitsBeforeFirst);
 
+      // The scope now exists, but the cached listing still says "dead" —
+      // and that stale verdict is what a reader gets, because the cached
+      // listing is REUSED rather than re-read.
+      //
+      // Assert the reuse ITSELF (no second `systemctl --user list-units`
+      // spawn), not only the value: the value alone cannot tell "served
+      // from the cache" apart from "re-read and found nothing", and the
+      // whole point of #1541 is the first. Counting the spawns states the
+      // dependency on the cache explicitly, instead of leaving it implied
+      // in "the second read happened to answer the same".
+      scopeMocks.listUnitsReply = [ownedLine("1", sessionsDir)];
+      const listUnitsBefore = listUnitsSpawnCount();
+      await expect(manager.isMasterAliveState("1")).resolves.toBe("dead");
+      expect(listUnitsSpawnCount()).toBe(listUnitsBefore);
+
+      // The spawn is what drops the stale verdict: bootstrapMaster
+      // invalidates the owned-scopes cache once systemd-run settles.
       const session = manager.getOrCreate({
         id: "1",
         cwd: sessionsDir,

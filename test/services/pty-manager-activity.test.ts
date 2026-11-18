@@ -36,8 +36,8 @@ describe("PtyManager", () => {
     ({ sessionsDir, manager } = createPtyManagerFixture(PtyManager));
   });
 
-  afterEach(() => {
-    destroyPtyManagerFixture({ sessionsDir, manager });
+  afterEach(async () => {
+    await destroyPtyManagerFixture({ sessionsDir, manager });
   });
 
   describe("activity/attention signals (WS-6)", () => {

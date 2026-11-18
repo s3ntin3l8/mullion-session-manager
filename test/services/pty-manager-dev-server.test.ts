@@ -10,12 +10,13 @@ import {
   bundleSyncMock,
   cgroupInventoryMock,
   childProcessMock,
+  createPtyManagerFixture,
+  destroyPtyManagerFixture,
   fakePtyChildren,
   nodePtyMock,
+  resetPtyManagerMocks,
+  waitForSpawn,
 } from "../helpers/pty-manager-harness.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 vi.mock("node-pty", () => nodePtyMock());
 vi.mock("../../src/services/bundle-sync.js", () => bundleSyncMock());
@@ -38,23 +39,16 @@ describe("PtyManager dev-server detection (issue #404)", () => {
   let manager: InstanceType<typeof PtyManager>;
 
   beforeEach(() => {
-    fakePtyChildren.length = 0;
-    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-manager-devserver-test-"));
-    manager = new PtyManager({ sessionsDir });
+    // The shared harness's reset, so this file starts each test from the
+    // same clean slate as its siblings: no fake PTYs, no `systemctl`
+    // fixtures and no cgroup-inventory call log left over from a sibling.
+    resetPtyManagerMocks();
+    ({ sessionsDir, manager } = createPtyManagerFixture(PtyManager, "pty-manager-devserver-test-"));
   });
 
-  afterEach(() => {
-    manager.killAll();
-    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await destroyPtyManagerFixture({ sessionsDir, manager });
   });
-
-  async function waitForSpawn(session: { isAlive: boolean }) {
-    for (let i = 0; i < 50; i++) {
-      if (session.isAlive) return;
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    throw new Error("session never became alive");
-  }
 
   const VITE_BANNER = "  ➜  Local:   http://localhost:5173/\n";
   const VITE_BANNER_RESTART = "  ➜  Local:   http://localhost:5174/\n";
