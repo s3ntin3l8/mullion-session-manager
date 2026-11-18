@@ -52,7 +52,7 @@ server.addService(CompanionService.service, {
     }
     callback(null, {
       target_description: {
-        udid,
+        udid: process.env.FAKE_IDB_DESCRIBE_UDID ?? udid,
         name: "iPhone 17 (Fake)",
         state: "Booted",
         target_type: "simulator",

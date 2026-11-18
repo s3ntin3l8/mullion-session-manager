@@ -200,6 +200,25 @@ describe("IdbCompanion", () => {
     expect(companion.isRunning).toBe(false);
   });
 
+  it("does not treat a describe response for another UDID as ready", async () => {
+    const companion = new IdbCompanion({
+      udid: UDID_A,
+      executablePath: FAKE_EXEC_PATH,
+      spawn: makeFakeSpawn({ FAKE_IDB_DESCRIBE_UDID: UDID_B }),
+      killStaleCompanions: async () => undefined,
+      startTimeoutMs: 400,
+      readyPollIntervalMs: 50,
+      stopGraceMs: 200,
+    });
+    trackedCompanions.push(companion);
+
+    await expect(companion.start()).rejects.toThrow(/failed to become ready within 400ms/);
+
+    const pid = trackedChildren[0].pid!;
+    expect(await waitForPidDead(pid)).toBe(true);
+    expect(companion.isRunning).toBe(false);
+  });
+
   it("restarts by killing the old process and starting a fresh one", async () => {
     const companion = new IdbCompanion({
       udid: UDID_A,
@@ -231,6 +250,7 @@ describe("IdbCompanion", () => {
       spawn: makeFakeSpawn({ FAKE_IDB_MODE: "ignore-sigterm" }),
       killStaleCompanions: async () => undefined,
       stopGraceMs: 150,
+      stderrMaxBytes: 24,
     });
     trackedCompanions.push(companion);
 
@@ -241,6 +261,7 @@ describe("IdbCompanion", () => {
 
     expect(await waitForPidDead(pid)).toBe(true);
     expect(companion.getStderr()).toContain("ignoring SIGTERM");
+    expect(Buffer.byteLength(companion.getStderr(), "utf8")).toBeLessThanOrEqual(24);
   });
 
   it("emits onExit with the exit code on an unexpected crash", async () => {

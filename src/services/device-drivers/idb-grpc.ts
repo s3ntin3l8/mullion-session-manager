@@ -118,7 +118,6 @@ export interface IdbTargetDescriptionResponse {
 
 export interface IdbDescribeOptions {
   timeoutMs?: number;
-  fetchDiagnostics?: boolean;
 }
 
 export interface IdbGrpcClient {
@@ -197,7 +196,7 @@ export function createIdbGrpcClient(port: number): IdbGrpcClient {
       }
       return new Promise((resolve, reject) => {
         client.describe(
-          { fetch_diagnostics: options.fetchDiagnostics ?? false },
+          { fetch_diagnostics: false },
           callOptions,
           (err: grpc.ServiceError | null, response?: IdbTargetDescriptionResponse) => {
             if (err) {

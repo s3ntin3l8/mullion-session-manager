@@ -39,8 +39,6 @@ export interface IdbCompanionOptions {
   stderrMaxBytes?: number;
   /** Override for stale-companion cleanup (defaults to ps-based matching). */
   killStaleCompanions?: (udid: string) => Promise<void>;
-  /** Override for gRPC client factory (defaults to createIdbGrpcClient). */
-  createClient?: (port: number) => IdbGrpcClient;
   /** Optional listener invoked when the companion exits unexpectedly. */
   onExit?: IdbCompanionExitListener;
 }
@@ -216,8 +214,7 @@ function sendSignal(pid: number, signal: NodeJS.Signals): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
+    setTimeout(resolve, ms);
   });
 }
 
@@ -294,7 +291,6 @@ export class IdbCompanion {
   private readonly readyPollIntervalMs: number;
   private readonly stopGraceMs: number;
   private readonly killStaleFn: (udid: string) => Promise<void>;
-  private readonly createClientFn: (port: number) => IdbGrpcClient;
   private readonly stderrBuffer: StderrRingBuffer;
   private readonly exitListeners = new Set<IdbCompanionExitListener>();
 
@@ -322,7 +318,6 @@ export class IdbCompanion {
     this.killStaleFn =
       options.killStaleCompanions ??
       ((u) => killStaleIdbCompanions(u, this.executablePath, this.stopGraceMs));
-    this.createClientFn = options.createClient ?? createIdbGrpcClient;
     if (options.onExit) {
       this.exitListeners.add(options.onExit);
     }
@@ -423,7 +418,7 @@ export class IdbCompanion {
         });
       });
 
-      const client = this.createClientFn(port);
+      const client = createIdbGrpcClient(port);
       this.currentClient = client;
 
       const deadline = Date.now() + this.startTimeoutMs;
@@ -438,7 +433,7 @@ export class IdbCompanion {
         if (remainingMs <= 0) break;
 
         try {
-          await client.describe({
+          const desc = await client.describe({
             timeoutMs: Math.min(DEFAULT_DESCRIBE_TIMEOUT_MS, remainingMs),
           });
           if (earlyExitError) {
@@ -446,6 +441,11 @@ export class IdbCompanion {
           }
           if (this.stopping) {
             throw new Error(`idb_companion for ${this.udid} stopped during startup`);
+          }
+          if (desc.target_description?.udid?.toLowerCase() !== this.udid.toLowerCase()) {
+            throw new Error(
+              `describe returned unexpected udid ${JSON.stringify(desc.target_description?.udid ?? null)}`,
+            );
           }
           return;
         } catch (err) {
