@@ -4338,7 +4338,7 @@ async function ingestReviewOutcome(
           body: commentBody + cappedNote,
           ...(parsed
             ? {
-                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
+                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cutShortNote(finished, latch)}${cappedNote}`,
                 findings: parsed.findings,
               }
             : {}),

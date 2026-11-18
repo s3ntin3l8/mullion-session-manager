@@ -775,6 +775,10 @@ describe("reconcileTasks — Hermes review agent (#2369)", () => {
           const row = await getTask(app, taskId);
           expect(row.lastReviewVerdict).toBe("changes-requested");
           expect(row.reviewFindings).toContain("ran out of turns");
+          // The note must also reach the review's own text, which is what lands
+          // on the PR when a finding is anchored inline.
+          const review = mockCreatePullRequestReview.mock.calls[0];
+          expect(review?.[4]?.body).toContain("ran out of turns");
           expect(row.status).toBe("reviewing");
           expect(row.autoReturnRounds).toBe(0);
           await app.close();
