@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewPanelApi, IDockviewPanelProps } from "dockview-react";
 import { BrowserPaneHost } from "./BrowserPaneHost.js";
@@ -285,6 +285,19 @@ describe("BrowserPaneHost (#3371)", () => {
       expect(await screen.findByTestId("preview")).toBeInTheDocument();
       expect(panel.params.mode).toBe("preview");
       expect(probes).toEqual([]);
+    });
+
+    it("shows Preview for a restored agent's browser pane with the feature off", async () => {
+      browserEnabled = false;
+      const { panel } = renderHost(
+        "browserPane",
+        { sessionId: 5, mode: "agent" },
+        "Browser · Agent's browser: agent 5",
+      );
+      expect(await screen.findByTestId("preview")).toBeInTheDocument();
+      expect(screen.queryByTestId("agent-5")).toBeNull();
+      expect(screen.queryByRole("radiogroup")).toBeNull();
+      await waitFor(() => expect(panel.params.mode).toBe("preview"));
     });
 
     it("disables Agent's browser when the project has no session", async () => {

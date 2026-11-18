@@ -3,7 +3,7 @@ import type { DockviewPanelApi } from "dockview-react";
 import type { Session } from "./api/index.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
 import { BrowserShell } from "./BrowserShell.js";
-import { useBrowserFeatureEnabled } from "./hooks/useBrowserFeatureEnabled.js";
+import { useServerInfo } from "./settings/useServerInfo.js";
 import { useFollowedSession } from "./hooks/useFollowedSession.js";
 import { selectSessionTitle } from "./lib/sessionDisplay.js";
 import { useDashboardStore } from "./store/index.js";
@@ -61,7 +61,9 @@ export function BrowserPaneHost({
   const sessions = useDashboardStore((s) => s.sessions);
   const sessionsLoaded = useDashboardStore((s) => s.sessionsLoaded);
   const projects = useDashboardStore((s) => s.projects);
-  const browserFeature = useBrowserFeatureEnabled();
+  // BROWSER_ENABLED: null until the server answers; no switch until then.
+  const serverInfo = useServerInfo();
+  const browserFeature = serverInfo ? Boolean(serverInfo.features?.browser) : null;
 
   const ownSession =
     params.sessionId != null ? sessions.find((s) => s.id === params.sessionId) : undefined;
@@ -147,15 +149,10 @@ export function BrowserPaneHost({
     if (sessionGone && projectId == null) api?.close();
   }, [sessionGone, projectId, api]);
 
-  // Without BROWSER_ENABLED there is no switch, so a pane saved in Agent's
-  // browser by a switch comes back as Preview. A pane opened for a session's
-  // browser (the pane menu, the palette) still attaches and shows the
-  // server's own answer, as it did before #3371.
-  const featureOff =
-    browserFeature === false &&
-    mode === "agent" &&
-    projectId != null &&
-    (pinnedId == null || !explicit.has(pinnedId));
+  // Without BROWSER_ENABLED there is no switch and no agent's browser to
+  // show, so a pane saved or opened in Agent's browser shows Preview, and lets
+  // go of any attachment it made before the server answered.
+  const featureOff = browserFeature === false && mode === "agent" && projectId != null;
   if (featureOff) setMode("preview");
 
   const changeMode = (next: BrowserMode) => {
@@ -180,7 +177,8 @@ export function BrowserPaneHost({
   );
   const previewTarget = titleTarget || project?.name || "";
 
-  const agentSession = mode === "agent" ? pinnedLive : (pinnedLive ?? candidate);
+  const agentSession =
+    browserFeature === false ? null : mode === "agent" ? pinnedLive : (pinnedLive ?? candidate);
   const agentSessionTitle = useDashboardStore((s) =>
     agentSession ? selectSessionTitle(s, agentSession) : "",
   );

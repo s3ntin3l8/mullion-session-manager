@@ -16,6 +16,7 @@ import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 import type { ProjectHubTab } from "./ProjectHubPanel.js";
 import { browserAgentTitle } from "./lib/browserTitles.js";
+import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 
 // U9 — App.tsx's global Escape handler's own action list, extracted here
 // (App.tsx itself can only export components — react-refresh/only-export-
@@ -531,8 +532,9 @@ export function openTerminalSessionIds(panels: ReadonlyArray<{ id: string }>): n
  */
 export function sessionIdFromPanelId(panelId: string | null | undefined): number | null {
   if (!panelId) return null;
-  const match =
-    panelId.match(/^(?:session|timeline|browserPane)-(\d+)$/) ?? panelId.match(/^file-\d+-@(\d+)-/);
+  const own = sessionIdFromSessionPaneId(panelId);
+  if (own != null) return own;
+  const match = panelId.match(/^file-\d+-@(\d+)-/);
   return match ? parseInt(match[1]!, 10) : null;
 }
 

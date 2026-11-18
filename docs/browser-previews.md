@@ -81,8 +81,8 @@ session without one shows "… has no browser yet." and an **Open browser**
 button, which does what "Open Agent Browser" does.
 
 The pane menu's "Open Agent Browser" (which adds the browser as a pane of
-its own) is offered only where there is a grid: not in the two halves
-(800-1099px) and not on the phone, where this view is the agent browser.
+its own) is offered only from 1100px: below it, `rails-full` included, this
+view is the agent browser (#3370).
 
 On a touch screen a one-finger drag on the page scrolls it (in the view and
 in the grid pane); a tap clicks.

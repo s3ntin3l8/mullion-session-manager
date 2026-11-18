@@ -44,6 +44,7 @@ import {
   toggleRight,
 } from "../../lib/foldHalves.js";
 import type { FoldHalvesState } from "../../lib/foldHalves.js";
+import { sessionIdFromOwnPaneId } from "../../lib/panelIds.js";
 import {
   currentSidebarLocation,
   pruneSidebarHistory,
@@ -338,11 +339,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     setActivePanelId: (id) =>
       set((s) => {
-        // Same id format as panelUtils' sessionIdFromPanelId, limited to the
-        // panes that are the session itself (not its browser or a file).
-        const match = id?.match(/^(?:session|timeline)-(\d+)$/);
-        if (!match) return { activePanelId: id };
-        const sessionId = Number(match[1]);
+        // Only the panes that are the session itself (not its browser or a file).
+        const sessionId = sessionIdFromOwnPaneId(id);
+        if (sessionId == null) return { activePanelId: id };
         if (s.recentSessionIds[0] === sessionId) return { activePanelId: id };
         return {
           activePanelId: id,
