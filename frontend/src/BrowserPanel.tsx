@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { DockviewPanelApi } from "dockview-react";
 import type { ProjectUrl, ServerInfo } from "./api/index.js";
@@ -166,9 +167,15 @@ async function resolvePreviewUrl(
 export function BrowserPanel({
   params,
   api: panelApi,
+  toolbarStart,
+  toolbarEnd,
 }: {
   params: BrowserPanelParams;
   api?: DockviewPanelApi;
+  /** Rendered first in the toolbar: the Browser pane's mode switch (#3371). */
+  toolbarStart?: ReactNode;
+  /** Rendered last in the toolbar, after reload. */
+  toolbarEnd?: ReactNode;
 }) {
   // Dockview replaces the full params object on write-back. Keep the latest
   // snapshot without making that write effect depend on its own output.
@@ -212,8 +219,6 @@ export function BrowserPanel({
   );
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [urlHistory, setUrlHistory] = useState<string[]>(initialUrl ? [initialUrl] : []);
-  const [historyIndex, setHistoryIndex] = useState(initialUrl ? 0 : -1);
   const [favoriteUrls, setFavoriteUrls] = useState<ProjectUrl[]>([]);
   const [favDropdownOpen, setFavDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -597,13 +602,6 @@ export function BrowserPanel({
           ? { status: "empty" }
           : fetchState;
 
-  const pushToHistory = (url: string) => {
-    const newHistory = urlHistory.slice(0, historyIndex + 1);
-    newHistory.push(url);
-    setUrlHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-  };
-
   const navigate = () => {
     setFollowAgent(false);
     const normalized = normalizeUrl(addressInput);
@@ -611,37 +609,30 @@ export function BrowserPanel({
     setAddressInput(normalized);
     setActiveSavedUrlId(null);
     setActiveSavedUrlLabel(null);
-    pushToHistory(normalized);
     setCurrentUrl(normalized);
   };
 
-  const goBack = () => {
-    setFollowAgent(false);
-    if (historyIndex <= 0) return;
-    const newIndex = historyIndex - 1;
-    setHistoryIndex(newIndex);
-    const url = urlHistory[newIndex];
-    setAddressInput(url);
-    setActiveSavedUrlId(null);
-    setActiveSavedUrlLabel(null);
-    setCurrentUrl(url);
-  };
-
-  const goForward = () => {
-    setFollowAgent(false);
-    if (historyIndex >= urlHistory.length - 1) return;
-    const newIndex = historyIndex + 1;
-    setHistoryIndex(newIndex);
-    const url = urlHistory[newIndex];
-    setAddressInput(url);
-    setActiveSavedUrlId(null);
-    setActiveSavedUrlLabel(null);
-    setCurrentUrl(url);
-  };
+  // A project preview that has nothing to show yet returns a bare message.
+  // Inside the Browser pane it still needs its toolbar, or the mode switch
+  // would go missing exactly when the preview cannot load (#3371).
+  const hasToolbarSlots = toolbarStart != null || toolbarEnd != null;
+  const withToolbar = (body: ReactNode) =>
+    hasToolbarSlots ? (
+      <div className="browser-panel">
+        <div className="browser-panel-toolbar">
+          {toolbarStart}
+          <span className="browser-panel-url" />
+          {toolbarEnd}
+        </div>
+        {body}
+      </div>
+    ) : (
+      body
+    );
 
   if (!isExternal) {
     if (state.status === "loading" || state.status === "empty") {
-      return <div className="browser-panel-empty">Loading…</div>;
+      return withToolbar(<div className="browser-panel-empty">Loading…</div>);
     }
     if (state.status === "unavailable") {
       // Retry only offered once there's actually a dev server/saved URL to
@@ -653,7 +644,7 @@ export function BrowserPanel({
       const canRetry =
         (!!devServerUrl || !!previewSlug || activeSavedUrlId !== null || isExternal) &&
         state.retryable !== false;
-      return (
+      return withToolbar(
         <div className="browser-panel-empty">
           <div>{state.message}</div>
           {canRetry && (
@@ -665,7 +656,7 @@ export function BrowserPanel({
               Retry
             </button>
           )}
-        </div>
+        </div>,
       );
     }
     const currentLabel = params.targetName ?? activeSavedUrlLabel ?? "Dev server";
@@ -673,6 +664,7 @@ export function BrowserPanel({
     return (
       <div className="browser-panel">
         <div className="browser-panel-toolbar">
+          {toolbarStart}
           {params.targetName ? (
             <span className="browser-panel-dropdown-label">{params.targetName}</span>
           ) : (
@@ -780,6 +772,7 @@ export function BrowserPanel({
           >
             <RefreshIcon size={13} />
           </button>
+          {toolbarEnd}
         </div>
         <iframe
           key={`${reloadKey}:${params.targetRev ?? 0}`}
@@ -804,23 +797,11 @@ export function BrowserPanel({
 
   return (
     <div className="browser-panel">
+      {/* No back and forward here: a cross-origin iframe's history cannot be
+          read, so the Browser pane offers them in Agent's browser only
+          (#3371). */}
       <div className="browser-panel-toolbar">
-        <button
-          className="browser-panel-reload"
-          disabled={historyIndex <= 0}
-          onClick={goBack}
-          title="Back"
-        >
-          ‹
-        </button>
-        <button
-          className="browser-panel-reload"
-          disabled={historyIndex >= urlHistory.length - 1}
-          onClick={goForward}
-          title="Forward"
-        >
-          ›
-        </button>
+        {toolbarStart}
         <TextInput
           small
           className="browser-panel-address mono"
@@ -873,7 +854,6 @@ export function BrowserPanel({
                         setAddressInput(favUrl);
                         setActiveSavedUrlId(null);
                         setActiveSavedUrlLabel(null);
-                        pushToHistory(favUrl);
                         setCurrentUrl(favUrl);
                       }}
                     >
@@ -934,6 +914,7 @@ export function BrowserPanel({
         >
           <RefreshIcon size={13} />
         </button>
+        {toolbarEnd}
       </div>
       {state.status === "empty" && (
         <div className="browser-panel-empty">

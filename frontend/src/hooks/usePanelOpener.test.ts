@@ -463,7 +463,7 @@ describe("usePanelOpener — onOpenAgentBrowser (#3215)", () => {
       result.current.onOpenAgentBrowser(SESSION);
 
       expect(api.addPanel).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Agent Browser: Fix the login form" }),
+        expect.objectContaining({ title: "Browser · Agent's browser: Fix the login form" }),
       );
     } finally {
       titleTasks = [];
@@ -484,7 +484,7 @@ describe("usePanelOpener — onOpenAgentBrowser (#3215)", () => {
 describe("usePanelOpener — project-scoped panel kinds", () => {
   it.each([
     ["onOpenGitHub", "github", "GitHub: project-alpha"],
-    ["onOpenBrowser", "browser", "Preview: project-alpha"],
+    ["onOpenBrowser", "browser", "Browser · Preview: project-alpha"],
   ] as const)("%s opens a %s-<projectId> panel titled %s", (fnName, kind, title) => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
@@ -851,7 +851,7 @@ describe("usePanelOpener — onOpenBrowserUrl", () => {
     expect(firstCall[0]).toEqual(
       expect.objectContaining({
         component: "browser",
-        title: "Example",
+        title: "Browser · Preview: Example",
         params: { kind: "external", url: "https://example.com", projectId: 1 },
       }),
     );
@@ -910,7 +910,7 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
     expect(firstCall[0]).toEqual(
       expect.objectContaining({
         component: "browser",
-        title: "Preview",
+        title: "Browser · Preview",
         params: { kind: "external" },
       }),
     );
@@ -1030,7 +1030,7 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
       expect.objectContaining({
         id: "browser-preview-s1",
         component: "browser",
-        title: "Preview · feat/x",
+        title: "Browser · Preview: feat/x",
         params: { projectId: 1, previewSlug: "s1" },
       }),
     );
@@ -1038,9 +1038,13 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
     result.current.onOpenPreview(1, "s1", "feat/x");
     expect(api.addPanel).toHaveBeenCalledTimes(1);
     expect(panel.api.setActive).toHaveBeenCalled();
+    // #3371 — the pane may show Agent's browser by now; the preview was asked for.
+    expect(panel.api.updateParameters).toHaveBeenCalledWith({ mode: "preview" });
 
     result.current.onOpenPreview(1, "s2", null);
-    expect((api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0].title).toBe("Preview");
+    expect((api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0].title).toBe(
+      "Browser · Preview",
+    );
   });
 
   it("preserves target identity when reopening a named preview", () => {

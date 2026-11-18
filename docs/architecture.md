@@ -743,7 +743,11 @@ closes the topmost sheet, then a detail, then the view
 **Where Devices, Browser and the Dock live.** Devices: the right sidebar's
 Devices view on every width (the phone through "⋯"), plus a device's own
 dockview pane. Browser: a dockview browser pane from 1100px, the Browser view
-below. Dock: the bottom Dock under a fine pointer from 700px (under the left half on
+below. The grid's Browser pane (`BrowserPaneHost.tsx` around `BrowserShell.tsx`)
+hosts both browsers behind a Preview / Agent's browser switch; both panel
+components a saved layout can hold, `browser` and `browserPane`, load it, one
+starting in Preview and the other in Agent's browser, and the mode lives in the
+panel's params, so the backend still stores the layout as an opaque blob. Dock: the bottom Dock under a fine pointer from 700px (under the left half on
 the two halves), and the read-only Dock view below 1100px; under a coarse
 pointer from 1100px there is no Dock yet (a decision still open).
 

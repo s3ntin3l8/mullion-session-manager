@@ -15,6 +15,7 @@ import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 import type { ProjectHubTab } from "./ProjectHubPanel.js";
+import { browserAgentTitle } from "./lib/browserTitles.js";
 
 // U9 — App.tsx's global Escape handler's own action list, extracted here
 // (App.tsx itself can only export components — react-refresh/only-export-
@@ -1042,8 +1043,11 @@ export function openBrowserPanePanel(
     `browserPane-${session.id}`,
     {
       component: "browserPane",
-      title: `Agent Browser: ${sessionPaneTitle(session, titleCtx)}`,
+      title: browserAgentTitle(sessionPaneTitle(session, titleCtx)),
       params: { sessionId: session.id },
+      // The pane can show Preview by now (#3371): focusing it to open the
+      // session's browser switches it back, to this session.
+      retargetParams: { mode: "agent", agentSessionId: undefined },
     },
     layout,
   );

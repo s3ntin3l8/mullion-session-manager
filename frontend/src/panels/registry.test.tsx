@@ -535,17 +535,19 @@ describe("useRetriableLazy — 'Reload pane' can recover from a rejected dynamic
 // as registered for real — recovers too, so a future revert back to a bare
 // module-level `lazy()` in registry.tsx would break this test.
 //
-// Mocking "../BrowserPane.js" with a THROWING GETTER (rather than a
+// Mocking "../BrowserPaneHost.js" (the module the Browser wrapper lazy-loads
+// since #3371) with a THROWING GETTER (rather than a
 // rejecting import()) is what makes a controllable reject-once-then-succeed
-// possible here: loadBrowserPane's `.then((m) => ({ default: m.BrowserPane }))`
-// reads `m.BrowserPane` on every call, so a getter that throws on its first
+// possible here: loadBrowserPaneHost's
+// `.then((m) => ({ default: m.BrowserPaneHost }))` reads `m.BrowserPaneHost`
+// on every call, so a getter that throws on its first
 // access turns that `.then()` handler's promise rejection into exactly what
 // lazy() sees from a real "Failed to fetch dynamically imported module"
 // network failure — with no way to actually make jsdom's import() itself
 // reject on demand.
 let browserPaneImportAttempts = 0;
-vi.mock("../BrowserPane.js", () => ({
-  get BrowserPane() {
+vi.mock("../BrowserPaneHost.js", () => ({
+  get BrowserPaneHost() {
     browserPaneImportAttempts += 1;
     if (browserPaneImportAttempts === 1) {
       throw new Error("Failed to fetch dynamically imported module");

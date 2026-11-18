@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { isMacPlatform, macChordPress } from "./browserKeyMap.js";
@@ -92,6 +93,10 @@ function mouseButtonName(button: number): "left" | "right" | "middle" {
 export function BrowserPane(props: {
   params: BrowserPaneParams;
   onTitleChange?: (title: string) => void;
+  /** Rendered first in the toolbar: the Browser pane's mode switch (#3371). */
+  toolbarStart?: ReactNode;
+  /** Rendered last in the toolbar, after reload. */
+  toolbarEnd?: ReactNode;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -465,6 +470,7 @@ export function BrowserPane(props: {
   return (
     <div className="browser-pane">
       <div className="browser-panel-toolbar">
+        {props.toolbarStart}
         <button
           className="browser-panel-reload"
           title="Back"
@@ -499,6 +505,7 @@ export function BrowserPane(props: {
         >
           <RefreshIcon size={13} />
         </button>
+        {props.toolbarEnd}
       </div>
       <div className="browser-pane-canvas-wrap">
         <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
