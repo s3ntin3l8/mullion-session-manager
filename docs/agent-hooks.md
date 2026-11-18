@@ -387,7 +387,8 @@ transcript's synthetic assistant entry also carries
 `apiErrorParams.rate_limit_info.resetsAt` / `quotaLimits.resetsAt` as Unix
 seconds). `mapClaudeCodeStopFailure` maps `error === "rate_limit"` to
 `errorType: "rate_limit"` and forwards `last_assistant_message` as
-`errorDetails`; `parseClaudeCodeResetTime` (`src/services/claude-reset-time.ts`)
+`errorDetails` when `errorType === "rate_limit"` (and `error_details` is
+absent); `parseClaudeCodeResetTime` (`src/services/claude-reset-time.ts`)
 parses the prose reset time and IANA timezone into a `Date`.
 
 **The `--bare` caveat:** Claude Code's `--bare` flag ("Minimal mode: skip

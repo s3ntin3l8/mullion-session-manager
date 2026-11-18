@@ -26,6 +26,21 @@ describe("StopFailure on a rate-limited turn, as Claude Code really sends it (is
     });
   });
 
+  it("forwards last_assistant_message when error_type classifies the failure as rate_limit", () => {
+    expect(
+      mapClaudeCodeStopFailure({
+        error: "429",
+        error_type: "rate_limit",
+        last_assistant_message: "You've hit your 5-hour limit · resets 6:30pm (Europe/Berlin)",
+      }),
+    ).toEqual({
+      kind: "stop_failure",
+      error: "429",
+      errorType: "rate_limit",
+      errorDetails: "You've hit your 5-hour limit · resets 6:30pm (Europe/Berlin)",
+    });
+  });
+
   it("does not forward last_assistant_message or classify non-rate-limit StopFailure payloads", () => {
     expect(
       mapClaudeCodeStopFailure({
