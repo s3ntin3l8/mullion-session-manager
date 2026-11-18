@@ -13,7 +13,7 @@ import {
 import { listIosSimulators, SimctlError } from "../services/ios-simulators.js";
 import { isDeviceAction, performDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
-import type { DeviceKind } from "../services/device-drivers/types.js";
+import type { DeviceKind, DevicePlatform } from "../services/device-drivers/types.js";
 import type {
   DeviceKindsResponse,
   DeviceSpawnSpec,
@@ -69,12 +69,14 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
     { ...rateLimit, schema: { body: DEVICE_SPAWN_SCHEMA } },
     async (request, reply) => {
       const spec = request.body;
-      // There is no iOS engine on an agent yet (#1943); say so rather than
-      // handing an iOS spec to the Android manager.
+      // An iOS device is gated by iOS availability here, never by the Android
+      // emulator gate; without it the spec must not reach the Android manager.
       if (spec.platform === "ios") {
-        return reply.badRequest("iOS devices are not supported on this agent yet");
-      }
-      if (spec.kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+        if (!(await iosSimulatorAvailable(app))) {
+          return reply.badRequest("iOS Simulator is not available on this host");
+        }
+        if (!spec.udid) return reply.badRequest("udid is required for an ios device");
+      } else if (spec.kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
         return reply.badRequest(
           spec.kind === "emulator"
             ? app.deviceEmulatorUnavailableMessage
@@ -90,6 +92,7 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
           serial: spec.serial,
           label: spec.label,
           port: spec.port,
+          ...(spec.platform === "ios" ? { platform: spec.platform, udid: spec.udid } : {}),
         });
         return { info: device.toInfo(), port: device.port };
       } catch (err) {
@@ -105,7 +108,7 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
   // Same teardown the primary's own stop/delete runs locally. Not gated on
   // DEVICE_ENABLED: tearing a device down must keep working while the panel is
   // off. Idempotent: nothing running is ok.
-  app.post<{ Params: { id: string }; Body: { kind: DeviceKind } }>(
+  app.post<{ Params: { id: string }; Body: { kind: DeviceKind; platform?: DevicePlatform } }>(
     "/internal/devices/:id/terminate",
     {
       ...rateLimit,
@@ -114,7 +117,10 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
     async (request, reply) => {
       // Deliberately not caught: a failed teardown must reach the primary, which
       // keeps the row as the only handle to a possibly-surviving scope.
-      await app.device.terminate(request.params.id, request.body.kind);
+      const { kind, platform } = request.body;
+      await (platform === "ios"
+        ? app.device.terminate(request.params.id, kind, platform)
+        : app.device.terminate(request.params.id, kind));
       reply.code(204);
     },
   );
@@ -159,7 +165,16 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
       preValidation: async (request, reply) => {
         const { kind } = request.query;
         if (!isDeviceKind(kind)) return reply.badRequest("kind must be emulator or physical");
-        if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+        const { platform } = request.query;
+        if (platform !== undefined && platform !== "android" && platform !== "ios") {
+          return reply.badRequest("platform must be android or ios");
+        }
+        if (platform === "ios") {
+          if (!(await iosSimulatorAvailable(app))) {
+            return reply.badRequest("iOS Simulator is not available on this host");
+          }
+          if (!request.query.udid) return reply.badRequest("udid is required for an ios device");
+        } else if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
           return reply.badRequest(
             kind === "emulator"
               ? app.deviceEmulatorUnavailableMessage
@@ -174,7 +189,7 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
       },
     },
     (socket, req) => {
-      const { kind, avdName, serial, label, port } = req.query;
+      const { kind, avdName, serial, label, port, platform, udid } = req.query;
       void attachSocketToDevice(app, socket, {
         deviceId: Number(req.params.id),
         kind,
@@ -182,6 +197,8 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
         serial: serial ?? null,
         label: label ?? null,
         port: port === undefined ? null : Number(port),
+        platform,
+        udid: udid ?? null,
       });
     },
   );

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   deleteDeviceRow,
+  findActiveIosOwner,
   findActivePhysicalOwner,
   getDeviceRow,
   insertDevice,
@@ -13,10 +14,15 @@ import type { DeviceInfo, DeviceKind } from "../services/device-manager.js";
 import { isDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceAction, DevicePlatform } from "../services/device-drivers/types.js";
-import { getDeviceHost, liveInfoForRows, type DeviceHost } from "../services/device-host.js";
+import {
+  DevicePlacementError,
+  getDeviceHost,
+  liveInfoForRows,
+  type DeviceHost,
+} from "../services/device-host.js";
 import { SimctlError } from "../services/ios-simulators.js";
 import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.js";
-import { localDeviceKinds } from "../services/device-kinds.js";
+import { iosSimulatorAvailable, localDeviceKinds } from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
@@ -168,7 +174,9 @@ function toListItem(
  * an agent's own refusal is forwarded with its status; a host that did not
  * answer is 503 (or 502 when the request may have landed). */
 function replyDeviceError(reply: FastifyReply, host: DeviceHost, err: unknown, what: string) {
-  if (host.isLocal) return reply.badRequest(err instanceof Error ? err.message : String(err));
+  if (host.isLocal || err instanceof DevicePlacementError) {
+    return reply.badRequest(err instanceof Error ? err.message : String(err));
+  }
   if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
   return replyHostUnreachable(reply, host.hostId, err, what);
 }
@@ -198,6 +206,78 @@ async function kindRefusal(host: DeviceHost, kind: DeviceKind): Promise<string |
   return kinds.length === 0
     ? `Host ${host.hostId} cannot run devices right now: its device panel is off (DEVICE_ENABLED=true) or its platform supports none.`
     : `Host ${host.hostId} cannot run ${kind} devices (it supports: ${kinds.join(", ")}).`;
+}
+
+const IOS_UNAVAILABLE_MESSAGE =
+  "iOS Simulator is not available on this host (needs macOS with Xcode, DEVICE_IOS_ENABLED=true and DEVICE_IDB_COMPANION_PATH).";
+
+/**
+ * Creates an iOS Simulator device (#1943). Placement is checked before a row
+ * exists: the host must report `ios` (an agent that predates the field would
+ * strip it from the spawn and run its Android path), and the UDID must be one
+ * of that host's own simulators. The duplicate check and the insert share one
+ * synchronous stretch, after the awaits, so two requests cannot both pass it.
+ */
+async function createIosDevice(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  host: DeviceHost,
+  input: { udid: string; projectId: number | undefined; name: string | undefined },
+) {
+  const { udid } = input;
+  try {
+    const support = await host.kinds();
+    if (support === null) {
+      return reply.badRequest(
+        `Host ${host.hostId} does not report device support — update its agent.`,
+      );
+    }
+    if (!support.platforms.includes("ios")) {
+      return reply.badRequest(
+        host.isLocal
+          ? IOS_UNAVAILABLE_MESSAGE
+          : `Host ${host.hostId} does not support iOS simulators (supported platforms: ${support.platforms.join(", ") || "none"}).`,
+      );
+    }
+    const simulators = await host.simulators();
+    if (simulators === null) {
+      return reply.badRequest(
+        `Host ${host.hostId} does not report simulator support — update its agent.`,
+      );
+    }
+    if (!simulators.some((simulator) => simulator.udid === udid)) {
+      return reply.badRequest(`Simulator ${udid} was not found on host ${host.hostId}`);
+    }
+  } catch (err) {
+    if (err instanceof SimctlError) return reply.badGateway(err.message);
+    if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+    return replyHostUnreachable(reply, host.hostId, err, "checking the host's simulators");
+  }
+
+  // Synchronous from here to the insert (better-sqlite3): no await between them.
+  const existingActive = findActiveIosOwner(app, udid, host.hostId);
+  if (existingActive) {
+    return reply.conflict(`device ${existingActive.id} is already active for simulator ${udid}`);
+  }
+  const row = insertDevice(app, {
+    kind: "emulator",
+    platform: "ios",
+    udid,
+    avdName: null,
+    serial: null,
+    projectId: input.projectId ?? null,
+    name: input.name ?? null,
+    hostId: host.hostId,
+  });
+
+  let spawned;
+  try {
+    spawned = await host.getOrCreate(row);
+  } catch (err) {
+    return replyDeviceError(reply, host, err, "starting the device");
+  }
+  reply.code(201);
+  return toListItem(getDeviceRow(app, row.id) ?? row, spawned.info);
 }
 
 // A physical device's adb TCP address, as both the one-time pairing address
@@ -280,12 +360,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         return reply.badRequest("avdName must not be set for an ios device");
       if (address !== undefined)
         return reply.badRequest("address must not be set for an ios device");
-      // The shape is right; there is no driver behind it yet (#1943).
-      return reply.badRequest("iOS Simulator devices are not supported yet");
+      if (typeof udid !== "string" || udid.length === 0) {
+        return reply.badRequest("udid is required for an ios device");
+      }
     }
     const hostId = resolvePlacementHostId(app, requestedHostId, projectId);
     if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
     const host = getDeviceHost(app, hostId);
+    if (platform === "ios") {
+      return createIosDevice(app, reply, host, {
+        udid: udid as string,
+        projectId,
+        name,
+      });
+    }
     // Gate on the KIND (issue #1854): physical works wherever the panel does,
     // an emulator additionally needs a platform device scope. A device placed
     // on an agent host is gated on what THAT host reports it can run (#3200),
@@ -806,7 +894,10 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
     if (!row) return reply.notFound(`No device ${id}`);
     const host = getDeviceHost(app, row.hostId);
-    if (host.isLocal && row.kind !== "physical" && !app.deviceEmulatorEnabled) {
+    // An iOS row is gated by iOS availability, never by the Android emulator gate.
+    if (host.isLocal && row.platform === "ios") {
+      if (!(await iosSimulatorAvailable(app))) return reply.badRequest(IOS_UNAVAILABLE_MESSAGE);
+    } else if (host.isLocal && row.kind !== "physical" && !app.deviceEmulatorEnabled) {
       return reply.badRequest(app.deviceEmulatorUnavailableMessage);
     }
 
@@ -824,6 +915,15 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       const owner = findActivePhysicalOwner(app, row.serial, row.hostId);
       if (owner && owner.id !== id) {
         return reply.conflict(`device ${owner.id} is already active for address ${row.serial}`);
+      }
+    }
+
+    // The iOS counterpart of the guard above: one ACTIVE row per simulator on a
+    // host, or two companions would fight over its HID connection.
+    if (row.platform === "ios" && row.udid !== null) {
+      const owner = findActiveIosOwner(app, row.udid, row.hostId);
+      if (owner && owner.id !== id) {
+        return reply.conflict(`device ${owner.id} is already active for simulator ${row.udid}`);
       }
     }
 
@@ -872,7 +972,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // DELETE won: the row identifying the scope we just made is gone, so
       // tear the scope down rather than orphan it, then report what the API
       // now says about this id.
-      await host.terminate(id, row.kind).catch((err) => {
+      await host.terminate(id, row.kind, row.platform).catch((err) => {
         app.log.warn({ err, deviceId: id }, "start: row deleted mid-start; teardown failed");
       });
       return reply.notFound(`No device ${id}`);
@@ -881,7 +981,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // /stop won: roll back what we just brought up so the stopped row the
       // caller asked for stays stopped (a Stop click racing a Start click is
       // a normal thing for the sidebar's two buttons to do).
-      await host.terminate(id, row.kind).catch((err) => {
+      await host.terminate(id, row.kind, row.platform).catch((err) => {
         app.log.warn({ err, deviceId: id }, "start: row stopped mid-start; rollback failed");
       });
       return reply.conflict("device was stopped while starting");
@@ -911,7 +1011,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // scope), and the caller gets the failure instead of a silent success.
     const host = getDeviceHost(app, row.hostId);
     try {
-      await host.terminate(id, row.kind);
+      await host.terminate(id, row.kind, row.platform);
     } catch (err) {
       // A local failure is thrown (a 500) as it always was; an agent's is
       // answered as that host's error (a 503 when it did not answer).
@@ -940,7 +1040,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
 
     const host = getDeviceHost(app, row.hostId);
     try {
-      await host.terminate(id, row.kind);
+      await host.terminate(id, row.kind, row.platform);
     } catch (err) {
       app.log.warn({ err, deviceId: id }, "device delete: teardown failed, keeping the row");
       if (!host.isLocal) return replyDeviceError(reply, host, err, "deleting the device");

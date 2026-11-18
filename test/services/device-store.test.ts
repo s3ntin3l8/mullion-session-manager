@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildTestApp } from "../helpers/app.js";
+import { createHost } from "../../src/services/host-registry.js";
 import {
   deleteDeviceRow,
+  findActiveIosOwner,
   findActivePhysicalOwner,
   getDeviceRow,
   insertDevice,
@@ -50,5 +52,31 @@ describe("device-store", () => {
 
     setDeviceStatus(app, row.id, "active");
     expect(findActivePhysicalOwner(app, "10.0.0.2:5555")).toEqual({ id: row.id });
+  });
+
+  it("findActiveIosOwner only sees an ACTIVE iOS row for that UDID on that host", async () => {
+    const app = await setup();
+    const udid = "0F4A9B7E-1111-2222-3333-444455556666";
+    const ios = (hostId?: string) => ({
+      kind: "emulator" as const,
+      platform: "ios" as const,
+      udid,
+      serial: null,
+      avdName: null,
+      projectId: null,
+      name: null,
+      ...(hostId ? { hostId } : {}),
+    });
+    const mac2 = createHost(app, { name: "mac-2", baseUrl: "http://mac2.test", token: "t" }).id;
+    const row = insertDevice(app, ios());
+    expect(findActiveIosOwner(app, udid)).toEqual({ id: row.id });
+    expect(findActiveIosOwner(app, "1A2B3C4D-1111-2222-3333-444455556666")).toBeUndefined();
+    // Another host's simulator with the same UDID is another simulator.
+    expect(findActiveIosOwner(app, udid, mac2)).toBeUndefined();
+    const other = insertDevice(app, ios(mac2));
+    expect(findActiveIosOwner(app, udid, mac2)).toEqual({ id: other.id });
+
+    setDeviceStatus(app, row.id, "killed");
+    expect(findActiveIosOwner(app, udid)).toBeUndefined();
   });
 });

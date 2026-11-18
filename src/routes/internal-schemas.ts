@@ -86,7 +86,7 @@ export const DEVICE_TERMINATE_SCHEMA = {
   type: "object",
   additionalProperties: false,
   required: ["kind"],
-  properties: { kind: DEVICE_KIND_SCHEMA },
+  properties: { kind: DEVICE_KIND_SCHEMA, platform: { type: "string", enum: ["android", "ios"] } },
 } as const;
 
 export const SESSION_ID_PARAMS_SCHEMA = {

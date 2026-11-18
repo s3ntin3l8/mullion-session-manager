@@ -3,6 +3,7 @@ import type { DeviceRow } from "./device-store.js";
 import { listDeviceRows, setDevicePort } from "./device-store.js";
 import {
   DeviceActionError,
+  type DevicePlatform,
   type DeviceAction,
   type DeviceActionResult,
   type DeviceInfo,
@@ -38,6 +39,15 @@ export interface SpawnedDevice {
   port: number | null;
 }
 
+/** A host the device must not be placed on (answered as a 400, not as an
+ * unreachable host): nothing was sent to it. */
+export class DevicePlacementError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DevicePlacementError";
+  }
+}
+
 export interface DeviceHost {
   readonly hostId: string;
   readonly isLocal: boolean;
@@ -45,8 +55,9 @@ export interface DeviceHost {
   kinds(): Promise<HostDeviceSupport | null>;
   /** Get-or-create the row's device (idempotent; reattaches a surviving scope). */
   getOrCreate(row: DeviceRow): Promise<SpawnedDevice>;
-  /** Tears the live device down; never touches the row. */
-  terminate(id: number, kind: DeviceKind): Promise<void>;
+  /** Tears the live device down; never touches the row. An iOS device is stopped
+   * through its driver, never through the scope backend, so its platform rides. */
+  terminate(id: number, kind: DeviceKind, platform?: DevicePlatform): Promise<void>;
   /** One device's live info, undefined when nothing is running under that id. */
   info(id: number): Promise<DeviceInfo | undefined>;
   action(id: number, action: DeviceAction): Promise<DeviceActionResult>;
@@ -74,6 +85,8 @@ class LocalDeviceHost implements DeviceHost {
       serial: row.serial,
       label: row.name,
       port: row.kind === "emulator" ? row.port : null,
+      // Only for iOS, so an Android spawn keeps exactly the options it always had.
+      ...(row.platform === "ios" ? { platform: row.platform, udid: row.udid } : {}),
     });
     // Read back from the manager, as the routes always did, rather than from
     // getOrCreate's return: the live device is the truth, and a local port is
@@ -82,8 +95,11 @@ class LocalDeviceHost implements DeviceHost {
     return { info: device?.toInfo(), port: device?.port ?? null };
   }
 
-  terminate(id: number, kind: DeviceKind): Promise<void> {
-    return this.app.device.terminate(String(id), kind);
+  terminate(id: number, kind: DeviceKind, platform?: DevicePlatform): Promise<void> {
+    const manager = this.app.device;
+    return platform === "ios"
+      ? manager.terminate(String(id), kind, platform)
+      : manager.terminate(String(id), kind);
   }
 
   async info(id: number): Promise<DeviceInfo | undefined> {
@@ -124,6 +140,17 @@ class RemoteDeviceHost implements DeviceHost {
   }
 
   async getOrCreate(row: DeviceRow): Promise<SpawnedDevice> {
+    // An agent that predates the `platform` field strips it from the spawn and
+    // would run its Android path against an iOS row, so never send one to a
+    // host that does not report `ios` (an absent report reads as Android-only).
+    if (row.platform === "ios") {
+      const support = await this.kinds();
+      if (!support?.platforms.includes("ios")) {
+        throw new DevicePlacementError(
+          `Host ${this.hostId} does not support iOS simulators (supported platforms: ${support?.platforms.join(", ") || "none"}).`,
+        );
+      }
+    }
     const spec: DeviceSpawnSpec = {
       id: String(row.id),
       kind: row.kind,
@@ -145,8 +172,11 @@ class RemoteDeviceHost implements DeviceHost {
     return res;
   }
 
-  terminate(id: number, kind: DeviceKind): Promise<void> {
-    return this.client.devices.terminate(String(id), kind);
+  terminate(id: number, kind: DeviceKind, platform?: DevicePlatform): Promise<void> {
+    const devices = this.client.devices;
+    return platform === "ios"
+      ? devices.terminate(String(id), kind, platform)
+      : devices.terminate(String(id), kind);
   }
 
   async info(id: number): Promise<DeviceInfo | undefined> {

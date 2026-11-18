@@ -3,11 +3,13 @@ import type { WebSocket } from "@fastify/websocket";
 import { getDeviceRow, type DeviceRow } from "../services/device-store.js";
 import { getDeviceHost } from "../services/device-host.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { iosSimulatorAvailable } from "../services/device-kinds.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import type { DeviceKind } from "../services/device-manager.js";
 import { parseDeviceInput } from "../services/device-drivers/input.js";
 import type {
   DeviceDriver,
+  DevicePlatform,
   DeviceVideoPacket,
   TouchInput,
 } from "../services/device-drivers/types.js";
@@ -81,6 +83,10 @@ export interface AttachDeviceParams {
   serial: string | null;
   label: string | null;
   port: number | null;
+  /** Absent means "android". */
+  platform?: DevicePlatform;
+  /** An iOS Simulator's UDID; with `platform: "ios"`. */
+  udid?: string | null;
 }
 
 /** Attaches a device WS socket to the live Device: gets-or-creates it via
@@ -89,7 +95,7 @@ export interface AttachDeviceParams {
 export async function attachSocketToDevice(
   app: FastifyInstance,
   socket: WebSocket,
-  { deviceId, kind, avdName, serial, label, port }: AttachDeviceParams,
+  { deviceId, kind, avdName, serial, label, port, platform, udid }: AttachDeviceParams,
 ): Promise<void> {
   let device;
   try {
@@ -100,6 +106,7 @@ export async function attachSocketToDevice(
       serial,
       label,
       port,
+      ...(platform === "ios" ? { platform, udid } : {}),
     });
   } catch (err) {
     // Same shape as routes/browser.ts's attachSocketToBrowser on a
@@ -291,6 +298,9 @@ export async function proxyToRemoteDevice(
       ...(current.serial !== null ? { serial: current.serial } : {}),
       ...(current.name !== null ? { label: current.name } : {}),
       ...(current.port !== null ? { port: String(current.port) } : {}),
+      ...(current.platform === "ios" && current.udid !== null
+        ? { platform: "ios" as const, udid: current.udid }
+        : {}),
     });
   } catch (err) {
     app.log.error({ err, hostId, deviceId }, "failed to open remote device WS upgrade");
@@ -422,7 +432,16 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
         }
         if (!row) return reply.notFound(`No device ${deviceId}`);
         if (row.status === "killed") return reply.badRequest(`Device ${deviceId} was killed`);
-        if (row.hostId === LOCAL_HOST_ID && row.kind !== "physical" && !app.deviceEmulatorEnabled) {
+        // An iOS row is gated by iOS availability, never by the Android emulator gate.
+        if (row.hostId === LOCAL_HOST_ID && row.platform === "ios") {
+          if (!(await iosSimulatorAvailable(app))) {
+            return reply.badRequest("iOS Simulator is not available on this host.");
+          }
+        } else if (
+          row.hostId === LOCAL_HOST_ID &&
+          row.kind !== "physical" &&
+          !app.deviceEmulatorEnabled
+        ) {
           return reply.badRequest(app.deviceEmulatorUnavailableMessage);
         }
       },
@@ -453,6 +472,7 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
         serial: row.serial,
         label: row.name,
         port: row.port,
+        ...(row.platform === "ios" ? { platform: row.platform, udid: row.udid } : {}),
       });
     },
   );

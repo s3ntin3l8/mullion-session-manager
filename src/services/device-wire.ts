@@ -61,4 +61,7 @@ export interface DeviceWsQuery {
   serial?: string;
   label?: string;
   port?: string;
+  /** Absent means "android". */
+  platform?: DevicePlatform;
+  udid?: string;
 }

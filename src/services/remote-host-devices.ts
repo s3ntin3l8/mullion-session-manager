@@ -60,7 +60,7 @@ const devicePath = (id: string, op: string) => `/internal/devices/${encodeURICom
 /** The request target of an agent's `/internal/ws/device/:id`. */
 function deviceWsTarget(id: string, query: DeviceWsQuery): string {
   const params = new URLSearchParams({ kind: query.kind });
-  for (const key of ["avdName", "serial", "label", "port"] as const) {
+  for (const key of ["avdName", "serial", "label", "port", "platform", "udid"] as const) {
     const value = query[key];
     if (value !== undefined) params.set(key, value);
   }
@@ -111,8 +111,18 @@ export function createDevicesClient({ request, openInbound }: DevicesClientDeps)
       }
     },
 
-    async terminate(id: string, kind: DeviceKind): Promise<void> {
-      await request(devicePath(id, "terminate"), jsonPost({ kind }), DEVICE_REQUEST_TIMEOUT_MS);
+    async terminate(
+      id: string,
+      kind: DeviceKind,
+      platform: DevicePlatform = "android",
+    ): Promise<void> {
+      // `platform` rides only for a non-Android device, so an Android teardown is
+      // byte-for-byte what an agent that predates the field already accepts.
+      await request(
+        devicePath(id, "terminate"),
+        jsonPost(platform === "android" ? { kind } : { kind, platform }),
+        DEVICE_REQUEST_TIMEOUT_MS,
+      );
     },
 
     action(id: string, action: DeviceAction): Promise<DeviceActionResult> {
