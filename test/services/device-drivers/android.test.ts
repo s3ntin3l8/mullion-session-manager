@@ -28,7 +28,7 @@ function fakeDevice(over: Record<string, unknown> = {}): Device {
 }
 
 describe("AndroidDriver", () => {
-  it("reports its platform and supports every action", () => {
+  it("reports its platform and supports every Android action (not iOS button)", () => {
     const driver = new AndroidDriver(fakeDevice());
     expect(driver.platform).toBe("android");
     for (const action of [
@@ -38,10 +38,12 @@ describe("AndroidDriver", () => {
       "text",
       "key",
       "logcat",
+      "logs",
       "clipboard",
     ] as const) {
       expect(driver.supports(action)).toBe(true);
     }
+    expect(driver.supports("button")).toBe(false);
   });
 
   it("reads liveness and the control channel lazily from the Device", () => {

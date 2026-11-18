@@ -18,6 +18,7 @@ import {
 import {
   DeviceActionError,
   type DeviceActionName,
+  type DeviceButton,
   type DeviceDriver,
   type DeviceInfo,
   type DeviceInput,
@@ -546,6 +547,12 @@ export class IosSimulatorDriver implements DeviceDriver {
 
   async key(_androidKeyCode: number): Promise<void> {}
 
+  async button(button: DeviceButton): Promise<void> {
+    const events = buttonToHidEvents(button);
+    this.requireCompanionClient();
+    await this.sendHid(events, true);
+  }
+
   async logs(options: { lines?: number; filter?: string }): Promise<string> {
     const out = await this.simctl(
       ["spawn", this.udid, "log", "show", "--last", "5m", "--style", "compact"],
@@ -586,10 +593,12 @@ export class IosSimulatorDriver implements DeviceDriver {
     return (
       action === "screenshot" ||
       action === "logcat" ||
+      action === "logs" ||
       action === "clipboard" ||
       action === "tap" ||
       action === "swipe" ||
-      action === "text"
+      action === "text" ||
+      action === "button"
     );
   }
 

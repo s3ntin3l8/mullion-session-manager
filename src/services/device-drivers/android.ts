@@ -11,6 +11,7 @@ import { pngDimensions } from "../screenshot-image.js";
 import {
   DeviceActionError,
   type DeviceActionName,
+  type DeviceButton,
   type DeviceDriver,
   type DeviceInfo,
   type DeviceInput,
@@ -128,8 +129,8 @@ export class AndroidDriver implements DeviceDriver {
     await this.device.controller?.resetVideo();
   }
 
-  supports(_action: DeviceActionName): boolean {
-    return true;
+  supports(action: DeviceActionName): boolean {
+    return action !== "button";
   }
 
   // --- live input -------------------------------------------------------
@@ -311,6 +312,8 @@ export class AndroidDriver implements DeviceDriver {
   async key(androidKeyCode: number): Promise<void> {
     await this.shell().spawnWaitText(shellExecArgv(["input", "keyevent", String(androidKeyCode)]));
   }
+
+  async button(_button: DeviceButton): Promise<void> {}
 
   async logs(options: { lines?: number; filter?: string }): Promise<string> {
     const args = ["logcat", "-d", "-t", String(options.lines ?? 200)];

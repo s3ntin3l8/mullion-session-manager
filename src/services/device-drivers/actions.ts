@@ -3,8 +3,12 @@ import {
   DeviceActionError,
   type DeviceAction,
   type DeviceActionResult,
+  type DeviceButton,
   type DeviceDriver,
 } from "./types.js";
+
+const VALID_BUTTONS = new Set<DeviceButton>(["home", "lock", "side", "siri"]);
+const BUTTON_ALLOWED_KEYS = new Set(["action", "button"]);
 
 // Platform-neutral half of the one-shot action endpoint
 // (POST /api/devices/:id/action, i.e. `mullion device <verb>`): body
@@ -33,7 +37,14 @@ export function isDeviceAction(value: unknown): value is DeviceAction {
       return typeof v.text === "string";
     case "key":
       return typeof v.androidKeyCode === "number";
+    case "button":
+      return (
+        typeof v.button === "string" &&
+        VALID_BUTTONS.has(v.button as DeviceButton) &&
+        Object.keys(v).every((k) => BUTTON_ALLOWED_KEYS.has(k))
+      );
     case "logcat":
+    case "logs":
       // Unlike screenshot, logcat has two OPTIONAL fields — both must be
       // the right type when present, not just "any object passes" the way
       // this branch used to (Hermes review): a stray non-number `lines` or
@@ -112,7 +123,11 @@ export async function performDeviceAction(
     case "key":
       await driver.key(action.androidKeyCode);
       return { ok: true };
+    case "button":
+      await driver.button(action.button);
+      return { ok: true };
     case "logcat":
+    case "logs":
       return { logcat: await driver.logs({ lines: action.lines, filter: action.filter }) };
     case "clipboard":
       if (action.op === "get") return { text: await driver.clipboard.get() };

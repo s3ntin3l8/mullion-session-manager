@@ -954,10 +954,73 @@ describe("use_device and device_action handlers (PR #1324)", () => {
     expect(JSON.parse(result)).toEqual({ ok: true });
   });
 
-  it("use_device's inputSchema advertises the clipboard action, op, and paste properties", () => {
+  it("use_device's inputSchema advertises the clipboard, logs, and button actions and properties", () => {
     expect(useDevTool.inputSchema.properties.action.enum).toContain("clipboard");
+    expect(useDevTool.inputSchema.properties.action.enum).toContain("logs");
+    expect(useDevTool.inputSchema.properties.action.enum).toContain("logcat");
+    expect(useDevTool.inputSchema.properties.action.enum).toContain("button");
+    expect(useDevTool.inputSchema.properties.button.enum).toEqual(["home", "lock", "side", "siri"]);
     expect(useDevTool.inputSchema.properties.op.enum).toEqual(["get", "set"]);
     expect(useDevTool.inputSchema.properties.paste.type).toBe("boolean");
+  });
+
+  it("use_device logs aliases logcat with the same request, output, and argument validation", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ logcat: "line 1\nline 2" });
+    const logsResult = await useDevTool.handler(
+      { deviceId: "3", action: "logs", lines: 50, filter: "MyApp" },
+      { deviceAction },
+    );
+    expect(deviceAction).toHaveBeenCalledWith("3", {
+      action: "logcat",
+      lines: 50,
+      filter: "MyApp",
+    });
+    expect(JSON.parse(logsResult)).toEqual({ logcat: "line 1\nline 2" });
+
+    const logcatResult = await useDevTool.handler(
+      { deviceId: "3", action: "logcat", lines: 50, filter: "MyApp" },
+      { deviceAction },
+    );
+    expect(JSON.parse(logcatResult)).toEqual({ logcat: "line 1\nline 2" });
+
+    const badClient = { deviceAction: vi.fn() };
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "logs", lines: "50" }, badClient),
+    ).rejects.toThrow("lines must be a number");
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "logs", filter: 123 }, badClient),
+    ).rejects.toThrow("filter must be a string");
+    expect(badClient.deviceAction).not.toHaveBeenCalled();
+  });
+
+  it("use_device button validates button name and forwards home|lock|side|siri", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ ok: true });
+    for (const button of ["home", "lock", "side", "siri"]) {
+      const res = await useDevTool.handler(
+        { deviceId: "3", action: "button", button },
+        { deviceAction },
+      );
+      expect(deviceAction).toHaveBeenLastCalledWith("3", { action: "button", button });
+      expect(JSON.parse(res)).toEqual({ ok: true });
+    }
+
+    const badClient = { deviceAction: vi.fn() };
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "button" }, badClient),
+    ).rejects.toThrow(/button is required/);
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "button", button: "power" }, badClient),
+    ).rejects.toThrow("button must be one of: home, lock, side, siri");
+    expect(badClient.deviceAction).not.toHaveBeenCalled();
+  });
+
+  it("use_device passes unsupported-action errors through verbatim without retrying", async () => {
+    const errMsg = 'action "button" is not supported on android devices';
+    const deviceAction = vi.fn().mockRejectedValue(new Error(errMsg));
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "button", button: "home" }, { deviceAction }),
+    ).rejects.toThrow(errMsg);
+    expect(deviceAction).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -701,9 +701,9 @@ describe("formatError", () => {
     expect(msg).not.toContain("operator-only");
   });
 
-  it("renders a non-scope MullionSocketError with its status", () => {
+  it("renders a non-scope MullionSocketError message verbatim", () => {
     const err = new MullionSocketError(404, "no such session");
-    expect(formatError(err, {})).toBe("no such session (status 404)");
+    expect(formatError(err, {})).toBe("no such session");
   });
 
   it("falls back to a plain Error's message", () => {
@@ -2790,264 +2790,203 @@ describe("runCommand", () => {
   });
 
   describe("device commands (PR #1324)", () => {
-    it("device list calls device.list", async () => {
-      const client = fakeClient();
+    it("device list calls device.list and prints platform and udid in text and --json", async () => {
+      const rows = [
+        {
+          id: 1,
+          platform: "ios",
+          kind: "emulator",
+          udid: "0F4A9B7E-1111-2222-3333-444455556666",
+          name: "iPhone 16",
+          status: "active",
+        },
+        {
+          id: 2,
+          kind: "emulator",
+          avdName: "dev35",
+          serial: "emulator-5554",
+          name: "Pixel",
+          status: "active",
+        },
+      ];
+      const client = fakeClient({ request: vi.fn(async () => rows) });
       const io = fakeIo();
-      await runCommand(["device", "list"], { client, io });
+      expect(await runCommand(["device", "list"], { client, io })).toBe(0);
       expect(client.request).toHaveBeenCalledWith("device.list", {});
+      const textOut = io.written.join("");
+      expect(textOut).toContain("ios");
+      expect(textOut).toContain("0F4A9B7E-1111-2222-3333-444455556666");
+      expect(textOut).toContain("android");
+
+      const jsonIo = fakeIo();
+      expect(await runCommand(["device", "list", "--json"], { client, io: jsonIo })).toBe(0);
+      const parsed = JSON.parse(jsonIo.written.join(""));
+      expect(parsed[0]).toMatchObject({
+        id: 1,
+        platform: "ios",
+        udid: "0F4A9B7E-1111-2222-3333-444455556666",
+      });
+      expect(parsed[1]).toMatchObject({ id: 2, platform: "android", udid: null });
     });
 
-    it("device create passes avdName and flags", async () => {
-      const client = fakeClient();
+    it("device get calls device.get, prints platform and udid in text and --json, and requires deviceId", async () => {
+      const row = {
+        id: 7,
+        platform: "ios",
+        kind: "emulator",
+        udid: "1A2B3C4D-1111-2222-3333-444455556666",
+        name: "My Sim",
+        status: "active",
+      };
+      const client = fakeClient({ request: vi.fn(async () => row) });
       const io = fakeIo();
-      await runCommand(["device", "create", "dev35", "--project", "1", "--name", "My Em"], {
-        client,
-        io,
+      expect(await runCommand(["device", "get", "7"], { client, io })).toBe(0);
+      expect(client.request).toHaveBeenCalledWith("device.get", { deviceId: "7" });
+      const textOut = io.written.join("");
+      expect(textOut).toContain("ios");
+      expect(textOut).toContain("1A2B3C4D-1111-2222-3333-444455556666");
+
+      const jsonIo = fakeIo();
+      expect(await runCommand(["device", "get", "7", "--json"], { client, io: jsonIo })).toBe(0);
+      expect(JSON.parse(jsonIo.written.join(""))).toMatchObject({
+        id: 7,
+        platform: "ios",
+        udid: "1A2B3C4D-1111-2222-3333-444455556666",
       });
+      expect(await runCommand(["device", "get"], { client: fakeClient(), io: fakeIo() })).toBe(2);
+    });
+
+    it("device create, pair, connect, discovered, and pair-and-connect validate args and call ops", async () => {
+      const client = fakeClient();
+      const run = (a: string[]) => runCommand(["device", ...a], { client, io: fakeIo() });
+      const bad = (a: string[]) =>
+        runCommand(["device", ...a], { client: fakeClient(), io: fakeIo() });
+
+      await run(["create", "dev35", "--project", "1", "--name", "My Em"]);
       expect(client.request).toHaveBeenCalledWith("device.create", {
         avdName: "dev35",
         projectId: "1",
         name: "My Em",
       });
-    });
+      expect(await bad(["create"])).toBe(2);
 
-    it("device create without avdName throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "create"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device pair passes pairingAddress and code", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "pair", "192.168.1.23:41234", "123456"], { client, io });
+      await run(["pair", "192.168.1.23:41234", "123456"]);
       expect(client.request).toHaveBeenCalledWith("device.pair", {
         pairingAddress: "192.168.1.23:41234",
         pairingCode: "123456",
       });
-    });
+      expect(await bad(["pair", "192.168.1.23:41234"])).toBe(2);
+      expect(await bad(["pair"])).toBe(2);
 
-    it("device pair without a code throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(
-        await runCommand(["device", "pair", "192.168.1.23:41234"], { client: fakeClient(), io }),
-      ).toBe(2);
-    });
-
-    it("device pair without an address throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "pair"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device connect passes kind/address and flags through device.create — the kind: physical counterpart to create", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(
-        ["device", "connect", "192.168.1.23:37251", "--project", "1", "--name", "My Pixel"],
-        { client, io },
-      );
+      await run(["connect", "192.168.1.23:37251", "--project", "1", "--name", "My Pixel"]);
       expect(client.request).toHaveBeenCalledWith("device.create", {
         kind: "physical",
         address: "192.168.1.23:37251",
         projectId: "1",
         name: "My Pixel",
       });
-    });
+      expect(await bad(["connect"])).toBe(2);
 
-    it("device connect without an address throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "connect"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device discovered forwards to device.discovered with no args", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "discovered"], { client, io });
+      await run(["discovered"]);
       expect(client.request).toHaveBeenCalledWith("device.discovered", {});
-    });
+      expect(await bad(["discovered", "extra"])).toBe(2);
 
-    it("device discovered rejects positional args (exit 2)", async () => {
-      const io = fakeIo();
-      expect(
-        await runCommand(["device", "discovered", "extra"], { client: fakeClient(), io }),
-      ).toBe(2);
-    });
-
-    it("device pair-and-connect with --discovery-id forwards to device.pair-and-connect", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(
-        [
-          "device",
-          "pair-and-connect",
-          "--discovery-id",
-          "192.168.1.23",
-          "--pairing-code",
-          "123456",
-        ],
-        { client, io },
-      );
+      await run(["pair-and-connect", "--discovery-id", "192.168.1.23", "--pairing-code", "123456"]);
       expect(client.request).toHaveBeenCalledWith("device.pair-and-connect", {
         discoveryId: "192.168.1.23",
         pairingCode: "123456",
       });
-    });
-
-    it("device pair-and-connect with --pairing-address+--connect-address (manual fallback) forwards both", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(
-        [
-          "device",
-          "pair-and-connect",
-          "--pairing-address",
-          "192.168.1.23:41234",
-          "--connect-address",
-          "192.168.1.23:37251",
-          "--pairing-code",
-          "123456",
-          "--name",
-          "My Pixel",
-        ],
-        { client, io },
-      );
-      expect(client.request).toHaveBeenCalledWith("device.pair-and-connect", {
+      await run([
+        "pair-and-connect",
+        "--pairing-address",
+        "192.168.1.23:41234",
+        "--connect-address",
+        "192.168.1.23:37251",
+        "--pairing-code",
+        "123456",
+        "--name",
+        "My Pixel",
+      ]);
+      expect(client.request).toHaveBeenLastCalledWith("device.pair-and-connect", {
         pairingAddress: "192.168.1.23:41234",
         connectAddress: "192.168.1.23:37251",
         pairingCode: "123456",
         name: "My Pixel",
       });
-    });
-
-    it("device pair-and-connect without --pairing-code throws usage error (exit 2)", async () => {
-      const io = fakeIo();
+      expect(await bad(["pair-and-connect", "--discovery-id", "192.168.1.23"])).toBe(2);
       expect(
-        await runCommand(["device", "pair-and-connect", "--discovery-id", "192.168.1.23"], {
-          client: fakeClient(),
-          io,
-        }),
+        await bad([
+          "pair-and-connect",
+          "--discovery-id",
+          "192.168.1.23",
+          "--pairing-address",
+          "192.168.1.23:41234",
+          "--pairing-code",
+          "123456",
+        ]),
       ).toBe(2);
+      expect(await bad(["pair-and-connect", "--pairing-code", "123456"])).toBe(2);
     });
 
-    it("device pair-and-connect with both --discovery-id AND --pairing-address throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(
-        await runCommand(
-          [
-            "device",
-            "pair-and-connect",
-            "--discovery-id",
-            "192.168.1.23",
-            "--pairing-address",
-            "192.168.1.23:41234",
-            "--pairing-code",
-            "123456",
-          ],
-          { client: fakeClient(), io },
-        ),
-      ).toBe(2);
-    });
-
-    it("device pair-and-connect with neither --discovery-id nor --pairing-address throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(
-        await runCommand(["device", "pair-and-connect", "--pairing-code", "123456"], {
-          client: fakeClient(),
-          io,
-        }),
-      ).toBe(2);
-    });
-
-    it("device stop passes deviceId", async () => {
+    it("device stop, start, and delete pass deviceId and require it", async () => {
       const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "stop", "5"], { client, io });
+      await runCommand(["device", "stop", "5"], { client, io: fakeIo() });
       expect(client.request).toHaveBeenCalledWith("device.terminate", { deviceId: "5" });
-    });
-
-    it("device stop without deviceId throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "stop"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device start passes deviceId", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "start", "5"], { client, io });
+      await runCommand(["device", "start", "5"], { client, io: fakeIo() });
       expect(client.request).toHaveBeenCalledWith("device.start", { deviceId: "5" });
-    });
-
-    it("device start without deviceId throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "start"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device delete passes deviceId to the irreversible op (not device.terminate)", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "delete", "5"], { client, io });
+      await runCommand(["device", "delete", "5"], { client, io: fakeIo() });
       expect(client.request).toHaveBeenCalledWith("device.delete", { deviceId: "5" });
-      expect(client.request).not.toHaveBeenCalledWith("device.terminate", expect.anything());
+
+      for (const verb of ["stop", "start", "delete"]) {
+        expect(await runCommand(["device", verb], { client: fakeClient(), io: fakeIo() })).toBe(2);
+      }
     });
 
-    it("device delete without deviceId throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "delete"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device screenshot passes deviceId and action", async () => {
+    it("device screenshot, tap, swipe, text, and key validate args and call device.action", async () => {
       const client = fakeClient({
         request: vi.fn(async () => ({ screenshot: "aGVsbG8=" })),
       });
-      const io = fakeIo();
-      await runCommand(["device", "screenshot", "5"], { client, io });
+      await runCommand(["device", "screenshot", "5"], { client, io: fakeIo() });
       expect(client.request).toHaveBeenCalledWith("device.action", {
         deviceId: "5",
         action: "screenshot",
       });
-    });
+      expect(
+        await runCommand(["device", "screenshot"], { client: fakeClient(), io: fakeIo() }),
+      ).toBe(2);
 
-    it("device screenshot writes to file with --out", async () => {
       const tmpDir = mkdtempSync(path.join(os.tmpdir(), "mullion-cli-dev-"));
       const outPath = path.join(tmpDir, "screen.png");
       try {
-        const client = fakeClient({
+        const outClient = fakeClient({
           request: vi.fn(async () => ({ screenshot: Buffer.from("png-bytes").toString("base64") })),
         });
-        const io = fakeIo();
-        await runCommand(["device", "screenshot", "5", "--out", outPath], { client, io });
+        await runCommand(["device", "screenshot", "5", "--out", outPath], {
+          client: outClient,
+          io: fakeIo(),
+        });
         expect(readFileSync(outPath, "utf8")).toBe("png-bytes");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
-    });
 
-    it("device screenshot without deviceId throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "screenshot"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device tap passes coordinates", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "tap", "5", "100", "200"], { client, io });
-      expect(client.request).toHaveBeenCalledWith("device.action", {
+      const actClient = fakeClient();
+      await runCommand(["device", "tap", "5", "100", "200"], { client: actClient, io: fakeIo() });
+      expect(actClient.request).toHaveBeenCalledWith("device.action", {
         deviceId: "5",
         action: "tap",
         x: 100,
         y: 200,
       });
-    });
+      expect(
+        await runCommand(["device", "tap", "5", "100"], { client: fakeClient(), io: fakeIo() }),
+      ).toBe(2);
 
-    it("device tap missing coordinates throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "tap", "5", "100"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device swipe passes coordinates and durationMs", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "swipe", "5", "10", "20", "30", "40", "300"], { client, io });
-      expect(client.request).toHaveBeenCalledWith("device.action", {
+      await runCommand(["device", "swipe", "5", "10", "20", "30", "40", "300"], {
+        client: actClient,
+        io: fakeIo(),
+      });
+      expect(actClient.request).toHaveBeenCalledWith("device.action", {
         deviceId: "5",
         action: "swipe",
         x1: 10,
@@ -3056,48 +2995,38 @@ describe("runCommand", () => {
         y2: 40,
         durationMs: 300,
       });
-    });
-
-    it("device swipe missing coordinates throws usage error (exit 2)", async () => {
-      const io = fakeIo();
       expect(
-        await runCommand(["device", "swipe", "5", "10", "20", "30"], { client: fakeClient(), io }),
+        await runCommand(["device", "swipe", "5", "10", "20", "30"], {
+          client: fakeClient(),
+          io: fakeIo(),
+        }),
       ).toBe(2);
-    });
 
-    it("device text passes text string", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "text", "5", "hello", "world"], { client, io });
-      expect(client.request).toHaveBeenCalledWith("device.action", {
+      await runCommand(["device", "text", "5", "hello", "world"], {
+        client: actClient,
+        io: fakeIo(),
+      });
+      expect(actClient.request).toHaveBeenCalledWith("device.action", {
         deviceId: "5",
         action: "text",
         text: "hello world",
       });
-    });
+      expect(
+        await runCommand(["device", "text", "5"], { client: fakeClient(), io: fakeIo() }),
+      ).toBe(2);
 
-    it("device text missing text throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "text", "5"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device key passes androidKeyCode", async () => {
-      const client = fakeClient();
-      const io = fakeIo();
-      await runCommand(["device", "key", "5", "4"], { client, io });
-      expect(client.request).toHaveBeenCalledWith("device.action", {
+      await runCommand(["device", "key", "5", "4"], { client: actClient, io: fakeIo() });
+      expect(actClient.request).toHaveBeenCalledWith("device.action", {
         deviceId: "5",
         action: "key",
         androidKeyCode: 4,
       });
+      expect(await runCommand(["device", "key", "5"], { client: fakeClient(), io: fakeIo() })).toBe(
+        2,
+      );
     });
 
-    it("device key missing androidKeyCode throws usage error (exit 2)", async () => {
-      const io = fakeIo();
-      expect(await runCommand(["device", "key", "5"], { client: fakeClient(), io })).toBe(2);
-    });
-
-    it("device logcat passes lines and filter", async () => {
+    it("device logcat and its logs alias pass lines and filter and print output", async () => {
       const client = fakeClient({
         request: vi.fn(async () => ({ logcat: "log line 1\nlog line 2" })),
       });
@@ -3113,13 +3042,66 @@ describe("runCommand", () => {
         filter: "Test:*",
       });
       expect(io.stdout.write).toHaveBeenCalledWith(expect.stringContaining("log line 1"));
+
+      const logsIo = fakeIo();
+      const code = await runCommand(["device", "logs", "5", "--lines", "50", "--filter", "App"], {
+        client,
+        io: logsIo,
+      });
+      expect(code).toBe(0);
+      expect(client.request).toHaveBeenLastCalledWith("device.action", {
+        deviceId: "5",
+        action: "logcat",
+        lines: 50,
+        filter: "App",
+      });
+      expect(logsIo.written.join("")).toBe("log line 1\nlog line 2\n");
+    });
+
+    it("device button sends home|lock|side|siri and rejects invalid button names", async () => {
+      const client = fakeClient();
+      for (const btn of ["home", "lock", "side", "siri"]) {
+        expect(await runCommand(["device", "button", "5", btn], { client, io: fakeIo() })).toBe(0);
+        expect(client.request).toHaveBeenLastCalledWith("device.action", {
+          deviceId: "5",
+          action: "button",
+          button: btn,
+        });
+      }
+      expect(await runCommand(["device", "button"], { client: fakeClient(), io: fakeIo() })).toBe(
+        2,
+      );
+      expect(
+        await runCommand(["device", "button", "5"], { client: fakeClient(), io: fakeIo() }),
+      ).toBe(2);
+      const ioInvalidBtn = fakeIo();
+      expect(
+        await runCommand(["device", "button", "5", "power"], {
+          client: fakeClient(),
+          io: ioInvalidBtn,
+        }),
+      ).toBe(2);
+      expect(ioInvalidBtn.stderr.write).toHaveBeenCalledWith(
+        expect.stringContaining("button must be one of: home, lock, side, siri"),
+      );
+    });
+
+    it("an unsupported action prints the server's 4xx message verbatim on stderr and exits non-zero without retrying", async () => {
+      const msg = 'action "key" is not supported on ios devices';
+      const request = vi.fn(async () => {
+        throw new MullionSocketError(400, msg);
+      });
+      const client = fakeClient({ request });
+      const io = fakeIo();
+      const code = await runCommand(["device", "key", "5", "4"], { client, io });
+      expect(code).toBe(1);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(io.stderr.write).toHaveBeenCalledWith(`${msg}\n`);
     });
 
     describe("device clipboard (issue #1422)", () => {
-      it("device clipboard get forwards op: get and prints the cached text", async () => {
-        const client = fakeClient({
-          request: vi.fn(async () => ({ text: "copied text" })),
-        });
+      it("device clipboard get forwards op: get, prints cached text or empty line, and requires deviceId", async () => {
+        const client = fakeClient({ request: vi.fn(async () => ({ text: "copied text" })) });
         const io = fakeIo();
         await runCommand(["device", "clipboard", "get", "5"], { client, io });
         expect(client.request).toHaveBeenCalledWith("device.action", {
@@ -3128,58 +3110,54 @@ describe("runCommand", () => {
           op: "get",
         });
         expect(io.stdout.write).toHaveBeenCalledWith(expect.stringContaining("copied text"));
+
+        const emptyIo = fakeIo();
+        await runCommand(["device", "clipboard", "get", "5"], {
+          client: fakeClient({ request: vi.fn(async () => ({ text: null })) }),
+          io: emptyIo,
+        });
+        expect(emptyIo.stdout.write).toHaveBeenCalledWith("\n");
+        expect(
+          await runCommand(["device", "clipboard", "get"], { client: fakeClient(), io: fakeIo() }),
+        ).toBe(2);
       });
 
-      it("device clipboard get prints an empty line when nothing is cached", async () => {
-        const client = fakeClient({ request: vi.fn(async () => ({ text: null })) });
-        const io = fakeIo();
-        await runCommand(["device", "clipboard", "get", "5"], { client, io });
-        expect(io.stdout.write).toHaveBeenCalledWith("\n");
-      });
-
-      it("device clipboard get without a device id throws usage error (exit 2)", async () => {
-        const io = fakeIo();
-        expect(await runCommand(["device", "clipboard", "get"], { client: fakeClient(), io })).toBe(
-          2,
-        );
-      });
-
-      it("device clipboard set forwards op: set and text", async () => {
+      it("device clipboard set forwards op: set, text, and --paste; rejects missing text or bad op", async () => {
         const client = fakeClient();
-        const io = fakeIo();
-        await runCommand(["device", "clipboard", "set", "5", "hello", "world"], { client, io });
+        await runCommand(["device", "clipboard", "set", "5", "hello", "world"], {
+          client,
+          io: fakeIo(),
+        });
         expect(client.request).toHaveBeenCalledWith("device.action", {
           deviceId: "5",
           action: "clipboard",
           op: "set",
           text: "hello world",
         });
-      });
 
-      it("device clipboard set --paste forwards paste: true", async () => {
-        const client = fakeClient();
-        const io = fakeIo();
-        await runCommand(["device", "clipboard", "set", "5", "--paste", "hi"], { client, io });
-        expect(client.request).toHaveBeenCalledWith("device.action", {
+        await runCommand(["device", "clipboard", "set", "5", "--paste", "hi"], {
+          client,
+          io: fakeIo(),
+        });
+        expect(client.request).toHaveBeenLastCalledWith("device.action", {
           deviceId: "5",
           action: "clipboard",
           op: "set",
           text: "hi",
           paste: true,
         });
-      });
 
-      it("device clipboard set without text throws usage error (exit 2)", async () => {
-        const io = fakeIo();
         expect(
-          await runCommand(["device", "clipboard", "set", "5"], { client: fakeClient(), io }),
+          await runCommand(["device", "clipboard", "set", "5"], {
+            client: fakeClient(),
+            io: fakeIo(),
+          }),
         ).toBe(2);
-      });
-
-      it("device clipboard with an invalid sub-command throws usage error (exit 2)", async () => {
-        const io = fakeIo();
         expect(
-          await runCommand(["device", "clipboard", "bogus", "5"], { client: fakeClient(), io }),
+          await runCommand(["device", "clipboard", "bogus", "5"], {
+            client: fakeClient(),
+            io: fakeIo(),
+          }),
         ).toBe(2);
       });
     });

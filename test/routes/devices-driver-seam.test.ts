@@ -55,6 +55,7 @@ function fakeDriver(
     swipe: vi.fn(),
     text: vi.fn(),
     key: vi.fn(),
+    button: vi.fn().mockResolvedValue(undefined),
     logs: vi.fn(),
     clipboard: { get: vi.fn(), set: vi.fn() },
     supports: (action) => !unsupported.includes(action),
@@ -127,6 +128,51 @@ describe("POST /api/devices/:id/action through the DeviceDriver seam", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(driver.tap).toHaveBeenCalledWith(10, 20);
+  });
+
+  it("executes button action on an iOS driver (200) and rejects it on an Android driver (400)", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const id = await createDevice(app);
+    const iosDriver = fakeDriver({ platform: "ios", unsupported: ["key"] });
+    vi.spyOn(app.device, "getDriver").mockReturnValue(iosDriver);
+
+    for (const button of ["home", "lock", "side", "siri"] as const) {
+      const ok = await app.inject({
+        method: "POST",
+        url: `/api/devices/${id}/action`,
+        payload: { action: "button", button },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ ok: true });
+      expect(iosDriver.button).toHaveBeenLastCalledWith(button);
+    }
+
+    // Closed schema: unknown button name or stray field is rejected with 400.
+    const badName = await app.inject({
+      method: "POST",
+      url: `/api/devices/${id}/action`,
+      payload: { action: "button", button: "power" },
+    });
+    expect(badName.statusCode).toBe(400);
+
+    const extraKey = await app.inject({
+      method: "POST",
+      url: `/api/devices/${id}/action`,
+      payload: { action: "button", button: "home", extra: true },
+    });
+    expect(extraKey.statusCode).toBe(400);
+
+    const androidDriver = fakeDriver({ platform: "android", unsupported: ["button"] });
+    vi.spyOn(app.device, "getDriver").mockReturnValue(androidDriver);
+
+    const unsupported = await app.inject({
+      method: "POST",
+      url: `/api/devices/${id}/action`,
+      payload: { action: "button", button: "home" },
+    });
+    expect(unsupported.statusCode).toBe(400);
+    expect(unsupported.json().message).toBe('action "button" is not supported on android devices');
+    expect(androidDriver.button).not.toHaveBeenCalled();
   });
 
   it("maps a DeviceActionError to its own status", async () => {
