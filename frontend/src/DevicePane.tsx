@@ -611,6 +611,10 @@ export function DevicePane(props: {
       sendControl({ type: "keyEvent", androidKeyCode, action: "up", metaState });
     }
 
+    // Tracks hardware keys dispatched as `hidKey` down on iOS so `onKeyUp` only
+    // releases keys that did not take the printable `{ type: "text" }` branch.
+    const activeIosHidUsages = new Set<number>();
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (platformRef.current === "ios") {
         const chord =
@@ -622,9 +626,22 @@ export function DevicePane(props: {
           event.preventDefault();
           return;
         }
+        // Space and printable keys that need Shift or have no unshifted HID
+        // usage go through `{ type: "text", text: event.key }` so the iOS
+        // driver's `textToHidEvents` expands shifted characters (uppercase
+        // letters, `! ? @ : ( ) # % $ & * +` and friends) with LEFT_SHIFT and
+        // unmapped printable keys still type, while unshifted hardware keys
+        // and non-printable keys (Enter, Escape, Backspace, Tab, arrows, ...)
+        // go through `{ type: "hidKey", usage, action }`.
         const usage = keyboardEventToHidUsage(event.code);
+        if (event.key.length === 1 && (event.shiftKey || usage === null)) {
+          event.preventDefault();
+          sendControl({ type: "text", text: event.key });
+          return;
+        }
         if (usage !== null) {
           event.preventDefault();
+          activeIosHidUsages.add(usage);
           sendControl({ type: "hidKey", usage, action: "down" });
         }
         return;
@@ -688,7 +705,7 @@ export function DevicePane(props: {
         (event.ctrlKey || event.metaKey) && !event.altKey && !event.getModifierState("AltGraph");
       if (chord) return;
       const usage = keyboardEventToHidUsage(event.code);
-      if (usage !== null) {
+      if (usage !== null && activeIosHidUsages.delete(usage)) {
         event.preventDefault();
         sendControl({ type: "hidKey", usage, action: "up" });
       }

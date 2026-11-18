@@ -15,7 +15,9 @@ const FIXED_HID_USAGES: Record<string, number> = {
   Digit9: 0x26,
   Digit0: 0x27,
 
-  // Numpad digits
+  // Numpad digits & operators intentionally alias top-row usages (0x1e..0x27,
+  // 0x28, 0x2d, 0x2e, 0x37, 0x38) rather than the keypad usage range
+  // (0x54..0x63, 0x67) so they type identically regardless of simulator NumLock.
   Numpad1: 0x1e,
   Numpad2: 0x1f,
   Numpad3: 0x20,
@@ -35,7 +37,7 @@ const FIXED_HID_USAGES: Record<string, number> = {
   Tab: 0x2b,
   Space: 0x2c,
 
-  // Common punctuation
+  // Common punctuation (IntlBackslash aliases Backslash 0x31)
   Minus: 0x2d,
   NumpadSubtract: 0x2d,
   Equal: 0x2e,
@@ -64,6 +66,10 @@ const FIXED_HID_USAGES: Record<string, number> = {
   ArrowLeft: 0x50,
   ArrowDown: 0x51,
   ArrowUp: 0x52,
+
+  // Keypad operators without an unshifted top-row equivalent
+  NumpadMultiply: 0x55,
+  NumpadAdd: 0x57,
 };
 
 export function keyboardEventToHidUsage(code: string): number | null {

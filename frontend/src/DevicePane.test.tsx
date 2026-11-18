@@ -838,7 +838,7 @@ describe("DevicePane (issue #1326)", () => {
       ]);
     });
 
-    it("sends hidKey down then up on key press and never sends Android keyCode messages for an iOS device", () => {
+    it("sends hidKey down then up on key press, forwards shifted and unmapped printable keys as text, and never sends Android keyCode messages for an iOS device", () => {
       resetStore({
         devices: [
           makeDevice({
@@ -876,6 +876,30 @@ describe("DevicePane (issue #1326)", () => {
       expect(sent()).toEqual([
         { type: "hidKey", usage: 0x04, action: "down" },
         { type: "hidKey", usage: 0x04, action: "up" },
+      ]);
+
+      // Shifted printable keys (uppercase letters, ! ? @ : ( ) # % $ & * +) and
+      // printable keys not in the hidKey map send `{ type: "text", text: event.key }`
+      // so the iOS driver's `textToHidEvents` expands LEFT_SHIFT, and their keyup
+      // does not emit an orphan `hidKey` up.
+      for (const init of [
+        { key: "A", code: "KeyA", shiftKey: true },
+        { key: "!", code: "Digit1", shiftKey: true },
+        { key: "_", code: "IntlRo" },
+      ]) {
+        act(() => {
+          canvas.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
+          );
+          canvas.dispatchEvent(
+            new KeyboardEvent("keyup", { bubbles: true, cancelable: true, ...init }),
+          );
+        });
+      }
+      expect(sent().slice(2)).toEqual([
+        { type: "text", text: "A" },
+        { type: "text", text: "!" },
+        { type: "text", text: "_" },
       ]);
 
       // Named keys and chords that would send Android keyEvent on Android
@@ -956,6 +980,9 @@ describe("DevicePane (issue #1326)", () => {
       expect(keyboardEventToHidUsage("ArrowLeft")).toBe(0x50);
       expect(keyboardEventToHidUsage("ArrowDown")).toBe(0x51);
       expect(keyboardEventToHidUsage("ArrowUp")).toBe(0x52);
+      expect(keyboardEventToHidUsage("NumpadDivide")).toBe(0x38);
+      expect(keyboardEventToHidUsage("NumpadMultiply")).toBe(0x55);
+      expect(keyboardEventToHidUsage("NumpadAdd")).toBe(0x57);
     });
 
     it("returns null for unmapped key codes", () => {
