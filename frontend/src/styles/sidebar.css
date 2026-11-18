@@ -852,6 +852,14 @@
 .session-item:active {
   cursor: grabbing;
 }
+/* #3106 — the row's one keyboard control is a visually hidden "Open session"
+   button (SessionRow.tsx): show its focus on the row, not on a 1px clipped
+   box. The project header's hidden disclosure button does the same. */
+.session-item:has(.session-item-open:focus-visible),
+.project-row-header:has(.project-row-toggle:focus-visible) {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: -2px;
+}
 .session-item:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
@@ -890,23 +898,34 @@
    cannot opt back out — the fade has to stop short of the label.
 
    Since issue #3286 the label lives in `.session-meta-line` (SessionRow.tsx),
-   the row's second line and a direct child of `.session-item`. Fading every
-   other direct child of the row (the `.session-item-row` title strip, the now
-   line, the details) keeps the name, the dot and the actions at half
-   strength — the same fade the whole row used to have — so an ended session
-   still reads as quieter than a live one. The meta line is exempt as a whole:
-   it is already dim, and its host and branch stay at full strength with the
-   label rather than being multiplied by the fade (the host badge's old
+   the row's second line and a direct child of `.session-item`; it is not
+   faded, and neither are its host and branch (the host badge's old
    `opacity: 0.75` is gone for the same reason).
+
+   Issue #3106 — the same multiplication put the rest of the row's text
+   under the 4.5:1 that text needs: the agent's name (`--dim` at half
+   strength, 2.7:1 dark, 2.2:1 light) and, in the light theme, the title
+   (3.3:1). So the fade now reaches only what is not text: the title strip's
+   dot, logo and controls (`.session-row-control`, Header.tsx). The title is
+   quieter by colour instead, `--dim` rather than `--fg` (7.0:1 dark, 6.5:1
+   light), and the now line, the details and the meta line keep the colours
+   they have on a live row.
 
    Only `.status-exited`. `rowClassNameForSeverity` never returns
    `.status-killed` — a killed session is filtered out before a row is
    built — so a killed half of this rule could not match. */
-.session-item.status-exited > :not(.session-meta-line) {
+.session-item.status-exited .session-dot-wrap,
+.session-item.status-exited .session-agent-logo,
+.session-item.status-exited .session-row-control {
   opacity: 0.5;
 }
-.session-item.status-exited:hover > :not(.session-meta-line) {
+.session-item.status-exited:hover .session-dot-wrap,
+.session-item.status-exited:hover .session-agent-logo,
+.session-item.status-exited:hover .session-row-control {
   opacity: 0.7;
+}
+.session-item.status-exited .session-name {
+  color: var(--dim);
 }
 /* Issue #319 — a session whose status can't be confirmed by its agent's
    hook capabilities renders with a dotted inset border + dimmed dot to

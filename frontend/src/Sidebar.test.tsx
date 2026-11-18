@@ -1761,13 +1761,13 @@ describe("sidebar workspace scope (issue #1877)", () => {
 
     const openRow = screen.getByRole("button", {
       name: /^Open session claude code, .*, already open in this workspace$/,
-    });
+    }).parentElement!; // #3106 — the row's hidden open button carries the name
     // #3286 — the word "open" is gone; the title's weight carries it.
     expect(openRow.querySelector(".session-name")).toHaveClass("open");
     expect(openRow).not.toHaveTextContent(/\bopen\b/);
-    const closedRow = screen.getByRole("button", { name: /^Open session npm run build, / });
-    expect(closedRow.getAttribute("aria-label")).not.toMatch(/already open/);
-    expect(closedRow.querySelector(".session-name")).not.toHaveClass("open");
+    const closedOpen = screen.getByRole("button", { name: /^Open session npm run build, / });
+    expect(closedOpen.getAttribute("aria-label")).not.toMatch(/already open/);
+    expect(closedOpen.parentElement!.querySelector(".session-name")).not.toHaveClass("open");
   });
 
   it("activates an already-open session through onOpenSession, the path that focuses the existing pane", async () => {
@@ -1806,7 +1806,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
 
     const openRow = screen.getByRole("button", {
       name: /^Open session session-0, .*, already open in this workspace$/,
-    });
+    }).parentElement!;
     expect(openRow.querySelector(".session-name")).toHaveClass("open");
   });
 });

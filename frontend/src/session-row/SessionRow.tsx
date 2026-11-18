@@ -528,7 +528,6 @@ export function SessionRow({
         className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}${
           isActiveSession ? " active" : ""
         }`}
-        aria-current={isActiveSession ? "true" : undefined}
         // CSS custom property, not a computed inline margin — styles.css
         // owns the actual indent math (base + depth * step), same "component
         // supplies data, CSS supplies presentation" split as every other
@@ -537,42 +536,29 @@ export function SessionRow({
         onClick={onOpen}
         draggable={true}
         onDragStart={onDragStart}
-        // P10 — this is the single most-used control in the app ("opening a
-        // session is mouse-only" before this fix), so it gets the same
-        // role="button"/tabIndex/Enter-Space pattern as UnifiedBoard.tsx's
-        // TaskCard and NotificationBell.tsx's EventRow. Unlike either of
-        // those two, this row nests a REAL focusable rename `<input>` plus
-        // several of its own buttons (git-details toggle, kebab menu, end
-        // session) — every one of those already stops click propagation
-        // (the `onClick={(e) => e.stopPropagation()}` wrapper spans below),
-        // which keeps a mouse click on any of them from also opening the
-        // session. That alone doesn't cover keyboard: a nested `<button>`'s
-        // native Enter/Space activation dispatches its own click AND a raw
-        // keydown that bubbles here independently of that click's
-        // stopPropagation (a different event entirely) — so tabbing to,
-        // say, the kebab menu and pressing Enter would fire this row's
-        // onOpen too without a guard. `e.target !== e.currentTarget` is that
-        // guard: it only treats Enter/Space as "open" when the KEYDOWN's own
-        // target is the row itself (i.e. the row, not some focused
-        // descendant, has focus), which also covers typing Enter into the
-        // rename input for free — no per-descendant stopPropagation needed,
-        // unlike NotificationBell's GateActions, which has to do that by
-        // hand for its nested reason field.
-        role="button"
-        tabIndex={0}
-        // The name says what the row shows, in the same order: the agent's
-        // name when it is shown as text (no logo), the title, then line 2.
-        aria-label={`Open session ${showAgentFallback ? `${agentBinary} ` : ""}${title}, ${metaParts
-          .map((p) => p.text)
-          .join(", ")}${openInWorkspace ? ", already open in this workspace" : ""}`}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onOpen();
-          }
-        }}
+        // #3106 — a plain container, not a role="button": the row holds its
+        // own buttons (details toggle, kebab menu, end session) and a rename
+        // input, and a control inside a control is axe's nested-interactive.
+        // Pointers still open the session by clicking anywhere on the row
+        // (onClick above; each nested control stops its own click). Keyboard
+        // and assistive-technology users get the one real button below,
+        // first in tab order, with the row's other controls as their own
+        // tab stops after it — the task card's pattern (#2873).
       >
+        {/* No onClick of its own: Enter/Space on a button fires a click that
+            bubbles to the row's onClick, so the session opens exactly once.
+            The name says what the row shows, in the same order: the agent's
+            name when it is shown as text (no logo), the title, then line 2.
+            It shows nothing itself, so there is no visible text for the name
+            to mismatch (#3106). */}
+        <button
+          type="button"
+          className="visually-hidden row-open-btn session-item-open"
+          aria-current={isActiveSession ? "true" : undefined}
+          aria-label={`Open session ${showAgentFallback ? `${agentBinary} ` : ""}${title}, ${metaParts
+            .map((p) => p.text)
+            .join(", ")}${openInWorkspace ? ", already open in this workspace" : ""}`}
+        />
         <Header
           title={title}
           showCommand={showCommand}

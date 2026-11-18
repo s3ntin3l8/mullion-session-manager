@@ -59,6 +59,9 @@ describe("styles/motion.css", () => {
       ".rail-ws-row",
       ".phone-more-row",
       ".pane-tab-overflow-item",
+      // #3106 — containers now, no longer [role="button"].
+      ".project-row-header",
+      ".notif-event-row",
     ]) {
       expect(selectors, control).toContain(control);
     }
@@ -69,6 +72,8 @@ describe("styles/motion.css", () => {
     // Disabled controls stay still; the key bar keeps its own JS press state.
     expect(selectors).toContain(":disabled");
     expect(selectors).toContain(".mobile-key-bar-btn");
+    // #3106 — a row's hidden open button never presses itself; the row does.
+    expect(selectors).toContain(".row-open-btn");
   });
 
   // #3053 — `:active` matches every ancestor of the pressed element too, so
@@ -92,9 +97,10 @@ describe("styles/motion.css", () => {
     }
     for (const [selector] of press) {
       const guard = selector.match(
-        // A workspace row's .ws-row-btn and a banner's .update-banner-open
+        // A workspace row's .ws-row-btn, a sidebar or notification row's
+        // hidden .row-open-btn (#3106) and a banner's .update-banner-open
         // (#2886) do not count: the row or banner presses for them.
-        /:where\(\s*:has\(\s*:is\(([\s\S]*?)\):active:not\(\.ws-row-btn, \.update-banner-open\)\s*\)\s*\)/,
+        /:where\(\s*:has\(\s*:is\(([\s\S]*?)\):active:not\(\.ws-row-btn, \.row-open-btn, \.update-banner-open\)\s*\)\s*\)/,
       );
       expect(guard, selector).not.toBeNull();
       const inner = new Set(controls(guard![1]!));
