@@ -2838,6 +2838,19 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       expect(await screen.findByText("Open browser: agent's browser · hotfix")).toBeInTheDocument();
     });
 
+    it.each(["preview browser", "open preview browser", "new blank preview browser"])(
+      "still finds the preview entries by the old words (%s)",
+      async (query) => {
+        useDashboardStore.setState({ sessions: [session], activePanelId: null, workspaces: [] });
+        const user = userEvent.setup();
+        renderPalette(openers());
+        await user.type(await screen.findByPlaceholderText(/Run a command/), query);
+        expect(
+          await screen.findAllByText(/^Open browser: (preview…|blank preview)$/),
+        ).not.toHaveLength(0);
+      },
+    );
+
     it("opens the active session's Agent Browser pane, naming the session", async () => {
       useDashboardStore.setState({
         sessions: [session],

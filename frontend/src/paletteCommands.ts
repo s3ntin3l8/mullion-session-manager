@@ -97,7 +97,7 @@ export interface PaletteCommandOpeners {
   hosts?: () => void;
   settings?: () => void;
   timeline?: (session: Session) => void;
-  // The pane menu's "Open Agent Browser" for the active session: the
+  // The pane menu's "Open browser" for the active session: the
   // session's server-side browser, the one its agent drives (#3215).
   // CommandPalette decides where it opens (a grid pane, or the right
   // sidebar's Browser view in the companion bands).
@@ -281,8 +281,8 @@ export function buildPaletteCommands({
       {
         id: "preview",
         movesFocus: true,
-        // #3215: every embedded-browser entry says "preview", so none can be
-        // mistaken for the session's Agent Browser below.
+        // #3215/#3374: the preview rows say "preview" or the saved label; only the
+        // session's row says "agent's browser".
         title: "Open browser: preview…",
         subtitle: "Choose a preview target for this project",
         icon: GlobeIcon,

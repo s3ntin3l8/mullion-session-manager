@@ -99,7 +99,7 @@ export interface UsePanelOpenerResult {
   // Issue #270 — notification-row click opens the timeline instead of the
   // terminal.
   onOpenTimeline: (session: Session) => void;
-  // The command palette's "Open Agent Browser" (#3215): the same pane the
+  // The command palette's "Open browser" (#3215): the same pane the
   // pane menu's item opens, the session's server-side browser.
   onOpenAgentBrowser: (session: Session) => void;
   // Opens (or focuses) a project's GitHub panel.
