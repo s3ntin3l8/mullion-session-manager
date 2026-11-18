@@ -201,13 +201,6 @@ describe("sessions route: which host owns a session operation", () => {
   // to any backend, so the assertion is on resolveBackend's own argument:
   // that is the host the operation was routed to.
   describe("the session's own host decides where a session operation goes (issue #1722)", () => {
-    // The resolveBackend spies below must NOT leak into the next test: a
-    // faked backend has no spawn(), so a leaked spy breaks the next
-    // test's session creation with a 502.
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
     /** A remote host row (unreachable — the backend is faked below). */
     async function createRemoteHost(
       app: Awaited<ReturnType<typeof buildApp>>,

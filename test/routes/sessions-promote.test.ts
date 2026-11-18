@@ -4,18 +4,22 @@
 // empirically confirmed hoisting/ordering failure mode.
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import {
+  createProjectWithGitRepo,
   fakeChildProcess,
   mockSpawnModule,
   opencodeTransferMock,
   setupSessionsRouteLifecycle,
   waitUntil,
 } from "../helpers/sessions-routes.js";
+// AFTER sessions-routes.js: this helper imports node:child_process, so
+// importing it earlier would run the node:child_process mock factory before
+// mockSpawnModule is initialised (see mock-pty.ts's header).
+import { createGitRepo } from "../helpers/git-fixture-repo.js";
 import { describe, expect, it, vi } from "vitest";
 import type * as ChildProcess from "node:child_process";
 import { execFileSync, spawn as spawnChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -54,36 +58,6 @@ const { transferOpencodeSession } = await import("../../src/services/opencode-se
 setupSessionsRouteLifecycle("promote");
 
 describe("sessions route: promoting a session into a worktree", () => {
-  // env: gitEnv() (issue #205) — this test file runs as a subprocess of
-  // `npm test`, itself sometimes invoked from inside a git hook (e.g. the
-  // pre-push hook that runs this very suite): a leaked GIT_DIR/
-  // GIT_INDEX_FILE/etc. from that outer git operation would otherwise
-  // redirect these fixture-repo commands onto the REAL repo's .git
-  // instead of the temp dir passed via `cwd` — exactly the corruption
-  // class gitEnv() exists to prevent (see git-refs.test.ts's identical
-  // guard on its own git() helper).
-  function git(cwd: string, args: string[]) {
-    execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
-  }
-
-  function createGitRepo(): string {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-worktree-test-"));
-    git(cwd, ["init", "-b", "main"]);
-    fs.writeFileSync(path.join(cwd, "a.txt"), "a");
-    git(cwd, ["add", "-A"]);
-    git(cwd, ["commit", "-m", "initial", "--no-verify"]);
-    return cwd;
-  }
-
-  async function createProjectWithGitRepo(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/projects",
-      payload: { allowDuplicate: true, createDir: true, name: "worktree-p", cwd },
-    });
-    return res.json().id as number;
-  }
-
   describe("option 2 — POST /:id/promote", () => {
     async function createActiveSession(
       app: Awaited<ReturnType<typeof buildApp>>,

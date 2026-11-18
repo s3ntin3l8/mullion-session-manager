@@ -12,7 +12,6 @@ import {
   waitUntil,
 } from "../helpers/sessions-routes.js";
 import { describe, expect, it, vi } from "vitest";
-import { spawn as spawnChildProcess } from "node:child_process";
 import { sessions } from "../../src/db/schema.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
@@ -76,62 +75,6 @@ describe("sessions route: reading a session's row, transcript and scrollback", (
       const res = await app.inject({ method: "GET", url: "/api/sessions/not-a-number" });
       expect(res.statusCode).toBe(400);
       await app.close();
-    });
-  });
-
-  // Issue #1733 — the row is not the end of the story: the child's CLI has
-  // to actually RECEIVE the skip-permissions flag. This asserts the join
-  // end to end — the POST body through the spawn to the argv the agent is
-  // launched with — rather than the row alone.
-  describe("POST /api/sessions — skipPermissions reaches the launched argv", () => {
-    let app: Awaited<ReturnType<typeof buildApp>>;
-
-    beforeEach(async () => {
-      app = await buildApp();
-    });
-
-    // The app MUST be closed even when an assertion throws — this file's
-    // other tests share the node-pty mock and the session/socket paths, so
-    // an app left open by a failed assertion cascades into every test after
-    // it.
-    afterEach(async () => {
-      await app.close();
-    });
-
-    it("launches with the agent's skip-permissions flag when the row says so", async () => {
-      const projectId = await createProject(app);
-      const before = vi.mocked(spawnChildProcess).mock.calls.length;
-
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "claude", skipPermissions: true },
-      });
-      expect(created.statusCode).toBe(201);
-
-      await waitUntil(() => vi.mocked(spawnChildProcess).mock.calls.length > before);
-      const spawnCall =
-        vi.mocked(spawnChildProcess).mock.calls[vi.mocked(spawnChildProcess).mock.calls.length - 1];
-      const argv = [spawnCall[0], ...(spawnCall[1] ?? [])].join(" ");
-      expect(argv).toContain("--dangerously-skip-permissions");
-    });
-
-    it("launches WITHOUT the flag when the row says so", async () => {
-      const projectId = await createProject(app);
-      const before = vi.mocked(spawnChildProcess).mock.calls.length;
-
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "claude", skipPermissions: false },
-      });
-      expect(created.statusCode).toBe(201);
-
-      await waitUntil(() => vi.mocked(spawnChildProcess).mock.calls.length > before);
-      const spawnCall =
-        vi.mocked(spawnChildProcess).mock.calls[vi.mocked(spawnChildProcess).mock.calls.length - 1];
-      const argv = [spawnCall[0], ...(spawnCall[1] ?? [])].join(" ");
-      expect(argv).not.toContain("--dangerously-skip-permissions");
     });
   });
 

@@ -173,6 +173,23 @@ export async function createProject(app: SessionsRouteApp): Promise<number> {
 }
 
 /**
+ * A project whose checkout root is `cwd` — the git repo the worktree/promote
+ * suites create first (see git-fixture-repo.ts's createGitRepo) and then
+ * register as a project, so the route has a repo to make a worktree of.
+ */
+export async function createProjectWithGitRepo(
+  app: SessionsRouteApp,
+  cwd: string,
+): Promise<number> {
+  const res = await app.inject({
+    method: "POST",
+    url: "/api/projects",
+    payload: { allowDuplicate: true, createDir: true, name: "worktree-p", cwd },
+  });
+  return res.json().id as number;
+}
+
+/**
  * Register the beforeAll/afterAll/beforeEach/afterEach hooks every
  * sessions-route suite needs:
  *
@@ -185,6 +202,11 @@ export async function createProject(app: SessionsRouteApp): Promise<number> {
  * - `vi.restoreAllMocks()` after every test, so a `vi.spyOn` a test installs
  *   on a `src/` module cannot leak into the next one (a leaked
  *   `resolveBackend` spy breaks the next test's session creation with a 502).
+ *
+ * The spawn reset requires the importing suite to have installed the
+ * `node:child_process` mock: `vi.mocked(spawn).mockClear()` throws when
+ * `spawn` is not a mock, so a suite that wants only the database lifecycle
+ * must mock that module too.
  */
 export function setupSessionsRouteLifecycle(suiteSlug: string): void {
   const dbPath = path.join(os.tmpdir(), `sessions-route-${suiteSlug}-${process.pid}.db`);
