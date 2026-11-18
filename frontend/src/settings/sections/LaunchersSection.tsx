@@ -96,7 +96,9 @@ export function LaunchersSection() {
                       ? versionWarning
                       : a.available
                         ? (a.path ?? "")
-                        : "not found on PATH") + (skipFlag ? `  •  ${skipFlag}` : "");
+                        : a.probeError
+                          ? "could not be checked — press Refresh"
+                          : "not found on PATH") + (skipFlag ? `  •  ${skipFlag}` : "");
                 return (
                   <div
                     key={a.id}

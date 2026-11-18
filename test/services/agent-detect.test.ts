@@ -272,6 +272,63 @@ describe("probe() timeout (B7)", () => {
   });
 });
 
+describe("probe failure vs. not installed", () => {
+  async function detectWithHungBin(bin: string, previous?: Parameters<typeof detectAgents>[0]) {
+    hangBins = new Set([bin]);
+    vi.useFakeTimers();
+    try {
+      const p = detectAgents(previous);
+      await vi.advanceTimersByTimeAsync(5_000);
+      return await p;
+    } finally {
+      vi.useRealTimers();
+      hangBins = new Set();
+    }
+  }
+
+  it("flags a timed-out probe with probeError, but a clean empty result stays plain not-found", async () => {
+    available = { claude: "/usr/local/bin/claude" };
+    const results = await detectWithHungBin("codex");
+    const byId = Object.fromEntries(results.map((r) => [r.id, r]));
+    expect(byId["agent:codex"].available).toBe(false);
+    expect(byId["agent:codex"].probeError).toBe("timeout");
+    // Probed cleanly, printed nothing: not installed, and no probeError key.
+    expect(byId["agent:pi"].available).toBe(false);
+    expect("probeError" in byId["agent:pi"]).toBe(false);
+  });
+
+  it("keeps a previous available result when the probe times out", async () => {
+    available = { codex: "/usr/local/bin/codex" };
+    const before = await detectAgents();
+    const results = await detectWithHungBin("codex", before);
+    const codex = results.find((r) => r.id === "agent:codex");
+    expect(codex?.available).toBe(true);
+    expect(codex?.path).toBe("/usr/local/bin/codex");
+    expect(codex?.probeError).toBeUndefined();
+  });
+
+  it("does not cache a batch with a failed probe for the full TTL", async () => {
+    available = {};
+    clearAgentsCacheForTests();
+    const spawnMock = vi.mocked((await import("node:child_process")).spawn);
+    hangBins = new Set(["codex"]);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const p = getCachedAgents();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await p;
+      hangBins = new Set();
+      vi.setSystemTime(Date.now() + 6_000); // past the short TTL, well under 60 s
+      spawnMock.mockClear();
+      await getCachedAgents(); // stale data now, re-probe in the background
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
+    } finally {
+      vi.useRealTimers();
+      hangBins = new Set();
+    }
+  });
+});
+
 describe("getCachedAgents", () => {
   it("settles the interactive-PATH resolve before spawning any probe", async () => {
     available = {};

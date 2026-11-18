@@ -159,6 +159,27 @@ describe("Settings -> Launchers", () => {
     });
   });
 
+  describe("probe failure vs. not installed", () => {
+    it("says the CLI could not be checked, not 'not found on PATH', when detection failed", async () => {
+      agentsDb = agentsDb.map((a) =>
+        a.id === "pi" ? { ...a, available: false, path: null, probeError: "timeout" } : a,
+      );
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const row = await screen.findByTestId("launcher-row-pi");
+      expect(within(row).getByText("could not be checked — press Refresh")).toBeInTheDocument();
+      expect(within(row).queryByText("not found on PATH")).not.toBeInTheDocument();
+    });
+
+    it("still says 'not found on PATH' for a CLI whose probe ran cleanly and found nothing", async () => {
+      agentsDb = agentsDb.map((a) => (a.id === "pi" ? { ...a, available: false, path: null } : a));
+      render(<Settings onClose={vi.fn()} initialSection="launchers" />);
+
+      const row = await screen.findByTestId("launcher-row-pi");
+      expect(within(row).getByText("not found on PATH")).toBeInTheDocument();
+    });
+  });
+
   // Issue #882 — this badge (and the config-column remediation text) is the
   // ONLY frontend surface of getCodexHookTrust() that had no test coverage
   // at all; the store-slice logic that produces `hookTrust` is covered
