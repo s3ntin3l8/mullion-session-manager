@@ -4,47 +4,43 @@ Design note for [#3218](https://github.com/s3ntin3l8/mullion-session-manager/iss
 It proposes a presentation only. Neither browser engine changes, and no code
 changes with this note. It describes `feat-tasks-mode` as of 7090fce9.
 
-## Decisions for the owner
+## Decisions
 
-The rest of the note assumes the recommendations.
+The owner decided these on 2026-11-18. The rest of the note follows them.
 
-1. **One pane with a switch, or two linked panes?**
-   A: one Browser pane whose switch changes its content in place. B: keep two
-   panes, each with a button that opens the other.
-   **Recommend A.** The two browsers read as two features today; a switch
-   inside one pane shows they are two views of one thing. B only adds a link.
+1. **One Browser pane with a switch.** The switch changes the pane's content
+   in place between Preview and Agent's browser. Two panes that only link to
+   each other were rejected: the two browsers read as two features today, and a
+   link does not change that.
 
-2. **Below 1100px, where does a preview open?**
-   A: in the right rail's Browser view, which gets the same switch. B: as a
-   pane, as today.
-   **Recommend A.** The design's rule for the rails is that anything you look
-   at beside a session is a rail view, and the left half is always a session.
-   A preview pane breaks that rule today. Cost: below 1100px you see one page
-   at a time.
+2. **Below 1100px a preview opens in the right rail's Browser view**, which
+   gets the same switch. The agent's browser is already a rail view there; the
+   preview still opens as a pane and takes a half. With this, anything you look
+   at beside a session is a rail view and the left half is always a session.
+   Cost: below 1100px you see one page at a time.
 
-3. **Which entry points to the agent's browser stay on `rails-full` (700 to
-   799.98px)?** That is the only band where the palette and the pane menu both
-   offer it, and they open different things (the palette the rail view, the
-   pane menu a grid pane).
-   A: below 1100px only the rail's Browser icon (the phone's "More" → Browser)
-   and the palette stay; the pane menu drops its item in `rails-full` too. B:
-   keep the pane menu's item in every band and make it open the rail view.
-   **Recommend A.** One rule by band ("below 1100px the browser is a rail
-   view"), which the palette already follows and #3214 applied to the halves
-   and the phone.
+3. **Below 1100px the pane menu has no browser entry**, in `rails-full` (700
+   to 799.98px) too. That was the only band where the palette and the pane menu
+   both offered the agent's browser and opened different things. The rail's
+   Browser icon (the phone's "More" → Browser) and the palette stay.
 
-4. **Which session does a pane opened as a preview show when switched to the
-   agent's browser?**
-   A: the session the rail would follow (the project's focused or last-focused
-   session), fixed at the moment of the switch. B: always follow focus.
-   **Recommend A for a grid pane, B for the rail view.** Focus moves every
-   time you click into a terminal; a grid pane should not change page with it.
-   The rail view is "the browser of the session on the left" by design.
+4. **A grid pane fixes its session at the switch; the rail view follows
+   focus.** A pane opened as a preview and switched to Agent's browser takes
+   the project's focused or last-focused session at that moment and stays on
+   it, and the switch names that session. Focus moves every time you click into
+   a terminal, and a pane placed beside one should not change page with it. The
+   rail view stays "the browser of the session on the left".
 
-5. **Names.** **Recommend "Preview" and "Agent's browser"**, as in #3218, and
-   "Browser" as the pane's name: "Browser · Preview: <target>", "Browser ·
-   Agent's browser: <session>". Keeping "Agent Browser" as a product name reads
-   as a second feature, which is the problem.
+5. **Names.** The pane is "Browser"; its two modes are "Preview" and "Agent's
+   browser": "Browser · Preview: <target>", "Browser · Agent's browser:
+   <session>". "Agent Browser" is dropped as a product name, because it reads
+   as a second feature.
+
+6. **Where the switch sits.** In a wide pane it is at the left of the toolbar,
+   in the same row as the address. In a narrow pane or view (the rail's Browser
+   view on the fold, the phone) it moves to its own row above the address, so
+   the labelled switch and the session name do not squeeze the address field.
+   "Narrow" is measured on the pane (a container query), not on the window.
 
 ## What exists today
 
@@ -106,8 +102,9 @@ place), has one toolbar:
 [ Preview | Agent's browser · <session> ]  ‹ ›  [ address ▾ ]  ⟳  ☆  ⇄
 ```
 
-- **The switch**, a two-way segmented control at the left, is the only new
-  control.
+- **The switch**, a two-way segmented control, is the only new control. It
+  sits at the left of the toolbar in a wide pane and on its own row above the
+  address in a narrow one (decision 6).
 - **One address bar**, the same field in both modes. Preview keeps the target
   dropdown and the star. Agent's browser keeps back and forward; they are hidden
   in Preview, since a cross-origin iframe's history cannot be read. The "▾" is
@@ -230,24 +227,31 @@ written back to the layout, so a reload keeps it, belongs to follow-up 2.
 - Typing into the agent's browser on a touch screen (#3030).
 - The quick pick beside the address (#3003). The note only says where it sits.
 
-## Follow-up issues to file once the owner agrees
+## Follow-up issues
 
-1. `fix(browser): the pane menu offers the agent's browser by band, not presentation`.
+Filed on 2026-11-18, as sub-issues of #2186:
+
+1. [#3370](https://github.com/s3ntin3l8/mullion-session-manager/issues/3370)
+   `fix(browser): the pane menu offers the agent's browser by band, not presentation`.
    Drops "Open Agent Browser" from the pane menu in `rails-full`, so palette and
    pane menu agree (decision 3). Small and independent; can go first.
-2. `feat(browser): one Browser pane with a Preview / Agent's browser switch`.
-   From 1100px: the shared toolbar, the switch and its probe, the
+2. [#3371](https://github.com/s3ntin3l8/mullion-session-manager/issues/3371)
+   `feat(browser): one Browser pane with a Preview / Agent's browser switch`.
+   From 1100px: the shared toolbar, the switch, its position and its probe, the
    missing-session states, the titles, both old panel ids loading as the
-   Browser pane (decisions 1, 4, 5).
-3. `feat(browser): the right rail's Browser view gets the Preview / Agent's browser switch`.
+   Browser pane (decisions 1, 4, 5, 6).
+3. [#3372](https://github.com/s3ntin3l8/mullion-session-manager/issues/3372)
+   `feat(browser): the right rail's Browser view gets the Preview / Agent's browser switch`.
    Below 1100px; every preview entry point opens the view in Preview instead of
    a pane (decision 2). Keeps the view's mode and address when the width
-   crosses 1100px and back. Blocked by 2.
-4. `feat(browser): open the current address in the other browser`. The ⇄
+   crosses 1100px and back. Blocked by #3371.
+4. [#3373](https://github.com/s3ntin3l8/mullion-session-manager/issues/3373)
+   `feat(browser): open the current address in the other browser`. The ⇄
    button and its rules, including which address the agent's browser loads for
-   a project preview. Blocked by 2.
-5. `feat(browser): one set of browser entry point labels`. Palette, Dock, pane
-   menu and Inbox entries renamed to "Open browser …". Can land with 2.
+   a project preview. Blocked by #3371.
+5. [#3374](https://github.com/s3ntin3l8/mullion-session-manager/issues/3374)
+   `feat(browser): one set of browser entry point labels`. Palette, Dock, pane
+   menu and Inbox entries renamed to "Open browser …". Can land with #3371.
 
-#3003 (quick pick) is already filed; its scope gets one line saying it sits in
-the shared address bar, in both modes.
+#3003 (quick pick) is already filed; it sits in the shared address bar, in both
+modes.
