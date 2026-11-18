@@ -37,7 +37,13 @@ import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
 // module's header.
-import { readPrCheckRuns, type PrCheckRuns } from "./pr-check-runs.js";
+import { readPrCheckRuns } from "./pr-check-runs.js";
+import {
+  clearConflictHold,
+  fetchCurrentCiStatus,
+  holdConflictingReview,
+  resolveReviewCi,
+} from "./task-review-gate.js";
 import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
 // One bounded, exponential-backoff retry ledger behind every retry site in
 // this file (draft PR, merge, release, auto-approve) — see the module's
@@ -104,7 +110,6 @@ import {
   parseCommitTitle,
   renderReviewFindingsMarkdown,
   resolvePrTitle,
-  type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
 import { resolveWorkerDelegation } from "./task-delegation.js";
@@ -159,8 +164,6 @@ import {
   updatePullRequestTitle,
 } from "./github-write.js";
 import {
-  computeCiStatus,
-  fetchRunsForHeadChecked,
   isRedCheckConclusion,
   actionsRunIdFromCheckUrl,
   getPRsStatus,
@@ -282,182 +285,6 @@ async function detectReviewStall(
  */
 // Actually spawning — `spawnReviewAgentNow` and `clearReviewSpawnClaim` —
 // live in task-review-spawn.ts.
-
-/**
- * Shared primitive behind both `resolveReviewCi` below (which layers a
- * wait-then-give-up deadline on top, for gating a review-agent spawn) and
- * the auto-approve gate's own CI check (`processAutoApprovals`, which never
- * gives up — see that function's own doc comment on why). Reads the task's
- * PR and its Actions runs for the current head commit; returns `null` for
- * every "nothing to check yet" case (no PR, no resolvable repo/token) with
- * no logging, since that's an ordinary, expected state for plenty of tasks,
- * not a failure. Can still throw on a real lookup failure (a thrown
- * `getPullRequestByNumber` call) — callers decide their own retry/deadline
- * posture around that. The Actions-runs lookup itself never throws: a failed
- * one comes back as `runsAnswered: false` with `status: null`, which reads the
- * same as "no Actions runs" unless the caller checks the flag.
- */
-async function fetchCurrentCiStatus(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  project: typeof projects.$inferSelect,
-): Promise<{
-  headSha: string;
-  status: ReturnType<typeof computeCiStatus>;
-  runs: ReviewCiInfo["runs"];
-  // #755 — the PR's own repo/base branch, for the red-CI-return gate.
-  // Returned here (rather than re-resolved by that gate) since this function already has both in scope from the
-  // `getPullRequestByNumber` call below — one fewer redundant GitHub call.
-  repoRef: GitHubRepoRef;
-  baseRef: string;
-  mergeable: boolean | null;
-  mergeableState: string;
-  // Set by the red-CI return once it has read this head's check runs, so the
-  // approval gate does not read the same list again this tick.
-  checkRuns?: PrCheckRuns;
-  // False when the Actions-runs lookup itself failed (a non-2xx or a network
-  // error): `status` is then `null`, which reads the same as "no Actions runs".
-  // Only the red-CI gate's `unstable` arm needs to tell the two apart.
-  runsAnswered: boolean;
-  // #2103 — the PR's own lifecycle state, already in the payload: a closed or
-  // merged PR is the end of a reviewing task, not something to keep polling.
-  prState: "open" | "closed";
-  merged: boolean;
-  mergedAt: string | null;
-} | null> {
-  if (task.prNumber === null) return null;
-  const repoRef = await resolveRepoRef(app, project);
-  if (!repoRef) return null;
-  // "read" scope (#489's least-privilege split) — this only ever reads the
-  // PR and its Actions runs, never writes.
-  const token = await resolveGitHubToken(app, repoRef, "read");
-  if (!token) return null;
-  const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-  const { ok: runsAnswered, runs } = await fetchRunsForHeadChecked(
-    token,
-    repoRef.owner,
-    repoRef.repo,
-    pr.headSha,
-  );
-  const status = computeCiStatus(runs);
-  const runSummaries = runs.map((r) => ({
-    name: r.name,
-    conclusion: r.conclusion,
-    htmlUrl: r.htmlUrl,
-  }));
-  return {
-    headSha: pr.headSha,
-    status,
-    runs: runSummaries,
-    repoRef,
-    baseRef: pr.baseRef,
-    mergeable: pr.mergeable,
-    mergeableState: pr.mergeableState,
-    runsAnswered,
-    prState: pr.state,
-    merged: pr.merged,
-    mergedAt: pr.mergedAt,
-  };
-}
-
-/**
- * Resolves the CI signal for a task's PR head commit, or reports that the
- * caller should wait and re-check next tick. Never throws — a resolution
- * failure (no repo, no token, the PR/runs lookup itself throwing) waits up
- * to the same deadline as `in_progress`/`null` below, then degrades to
- * `undefined` (spawn with no CI context at all, the pre-#738-followup
- * behavior) past it, rather than blocking the spawn forever. The reviewer
- * must never be the thing a task gets stuck on.
- *
- * `undefined` also covers the case with nothing to check in the first
- * place: an issue-only task, or one whose draft PR hasn't opened yet.
- *
- * `null` (Hermes review, #742) waits too, same as `"in_progress"` — not
- * "proceed." `openDraftPRForTask` and this pass's own call both run inside
- * the SAME reconcile tick as the `→ reviewing` transition (`maybeOpenDraftPR`
- * above, then `processPendingReviewSpawns` at the very end of
- * `reconcileTasks`), so the very first lookup here almost always lands
- * within a second or two of the push that created the head commit —
- * GitHub's Actions runs for a just-pushed commit routinely aren't registered
- * yet, so the runs lookup answers `[]` and `computeCiStatus` returns
- * `null` indistinguishably from "this repo genuinely has no CI" (a lookup that
- * did not answer at all also gives `null`, but carries `runsAnswered: false`,
- * which only changes the wording of the note below). Treating
- * `null` as "proceed" on that very first check reproduces the #213782
- * incident this whole change exists to fix: the reviewer spawns before a
- * real check has even registered, let alone failed. Waiting on `null` the
- * same as `in_progress` costs nothing for a no-CI repo — it just spawns at
- * the deadline instead of instantly — and is what actually closes the gap
- * for the common case of a CI-having repo whose runs simply haven't shown
- * up yet.
- */
-async function resolveReviewCi(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  project: typeof projects.$inferSelect,
-  waitMinutes: number,
-  now: number,
-): Promise<"wait" | ReviewCiInfo | undefined> {
-  if (task.prNumber === null) return undefined;
-
-  try {
-    const current = await fetchCurrentCiStatus(app, task, project);
-    if (!current) return undefined;
-    const { headSha, status, runs: runSummaries, runsAnswered } = current;
-
-    if (status !== "in_progress" && status !== null) {
-      return { headSha, status, runs: runSummaries };
-    }
-
-    // `waitMinutes === 0` disables waiting entirely — `now - reviewingAt`
-    // is always `>= 0`, so this deadline is already "past" on the very
-    // first check, same effect as never having entered this branch at all.
-    // `reviewingAt` is set in the very same DB write that put this task in
-    // "reviewing" (both `→ reviewing` transition sites), so it's never
-    // actually null here — the `?? now` is defensive, not load-bearing.
-    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
-    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
-    if (!pastDeadline) return "wait";
-    return {
-      headSha,
-      status,
-      runs: runSummaries,
-      // `status: null` is "no runs" only when GitHub actually answered; a failed
-      // lookup must not tell the reviewer there is no CI (`runsAnswered`).
-      note:
-        status === null
-          ? runsAnswered
-            ? `no CI checks found after the ${waitMinutes}-minute wait`
-            : `CI status could not be read after the ${waitMinutes}-minute wait (the Actions lookup failed)`
-          : `still running after the ${waitMinutes}-minute wait`,
-    };
-  } catch (err) {
-    // Same reasoning as the `null`-status branch above (Hermes review, PR
-    // #742, second pass) — a thrown lookup (a transient network blip, or
-    // GitHub not yet consistent on the brand-new PR) in the exact
-    // just-pushed window is indistinguishable from "will succeed on the
-    // next tick," and spawning without CI on the very first failure would
-    // reintroduce the same #213782 gap this whole change exists to close.
-    // Wait up to the same deadline; past it (a persistently broken
-    // repo/token, not a blip), fall through to "spawn without CI" exactly
-    // as before — this lookup must never be the reason a task wedges in
-    // "reviewing" forever.
-    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
-    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
-    if (!pastDeadline) {
-      app.log.warn(
-        { err, taskId: task.id, prNumber: task.prNumber },
-        "task reconcile: CI lookup for review spawn failed — waiting to retry",
-      );
-      return "wait";
-    }
-    app.log.warn(
-      { err, taskId: task.id, prNumber: task.prNumber },
-      "task reconcile: CI lookup for review spawn still failing past the wait deadline — spawning without it",
-    );
-    return undefined;
-  }
-}
 
 /**
  * Spawns the review agent for every "reviewing" task that doesn't have one
@@ -628,6 +455,18 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           now,
         );
         if (ci === "wait") continue;
+        if (ci !== undefined && "conflict" in ci) {
+          await holdConflictingReview(
+            app,
+            task,
+            project,
+            ci.conflict.baseRef,
+            resolvedTaskMaster,
+            autoReturnTask,
+          );
+          continue;
+        }
+        clearConflictHold(app, task);
 
         // Claim the slot immediately before the spawn's own I/O (the CI
         // lookup above is read-only — nothing to protect there) — CAS
@@ -776,6 +615,18 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
         now,
       );
       if (ci === "wait") return;
+      if (ci !== undefined && "conflict" in ci) {
+        await holdConflictingReview(
+          app,
+          task,
+          project,
+          ci.conflict.baseRef,
+          resolvedTaskMaster,
+          autoReturnTask,
+        );
+        return;
+      }
+      clearConflictHold(app, task);
 
       // Same claim slot and stale rule as the session spawn.
       const claimed = app.db
@@ -3518,7 +3369,7 @@ const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
 // across a growing list of triggers (review feedback here; a red
 // CI check and an unresolved PR review comment are later triggers on the
 // same model — see the roadmap plan).
-export type AutoReturnReason = "review" | "ci" | "pr-comment" | "suggestions";
+export type AutoReturnReason = "review" | "ci" | "pr-comment" | "suggestions" | "conflict";
 
 // `via` naming for recordTaskTransition — kept distinct from
 // AutoReturnReason itself (rather than reusing the reason string directly)
@@ -3529,6 +3380,7 @@ const AUTO_RETURN_VIA: Record<AutoReturnReason, string> = {
   ci: "ci-feedback",
   "pr-comment": "pr-comment-feedback",
   suggestions: "suggestions-feedback",
+  conflict: "conflict-feedback",
 };
 
 // The round cap lives in its own module: the review spawner needs it too, and
@@ -3653,14 +3505,19 @@ export async function autoReturnTask(
   // a task that has used every round it had. It also marks the approval as
   // carried, so the worker's return skips the review (see the
   // `in_progress -> reviewing` transition).
-  const spendsRound = opts.reason !== "suggestions";
+  // A "conflict" return (a PR that cannot merge, handed back before its review
+  // was dispatched) spends nothing either: no review ran, so no fix-up round
+  // was used. Unlike a suggestions round it carries no approval — the head the
+  // worker pushes has never been reviewed.
+  const spendsRound = opts.reason !== "suggestions" && opts.reason !== "conflict";
   const roundAfter = task.autoReturnRounds + (spendsRound ? 1 : 0);
   const updated = app.db
     .update(tasks)
     .set({
       status: "in_progress",
       autoReturnRounds: roundAfter,
-      approvalCarriedAt: (opts.carryApproval ?? false) || !spendsRound ? new Date() : null,
+      approvalCarriedAt:
+        (opts.carryApproval ?? false) || opts.reason === "suggestions" ? new Date() : null,
       lastAutoReturnReason: opts.reason,
       // Issue #1038 — every caller of autoReturnTask already gated on
       // !capReached, so this is null already in every designed path; clear

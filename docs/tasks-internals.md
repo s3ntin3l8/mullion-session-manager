@@ -727,6 +727,41 @@ reviewing` transition itself — `task-reconciler.ts`'s
   #742) given this pass has no per-task backoff, acceptable at this tool's
   scale.
 
+  **A conflicting PR is not reviewed (#3339).** The same lookup reads the PR's
+  `mergeableState`. GitHub runs no `pull_request` workflows on a PR it cannot
+  merge, so a `dirty` PR has no CI to wait for and a review of its stale head
+  is wasted; this holds past the CI deadline too. Both dispatch passes (the
+  session spawn and `processHermesDispatch`) then call `holdConflictingReview`
+  instead of spawning: while the project auto-rebases (`autoApprove`) and
+  `rebaseAttempts < MAX_REBASE_ATTEMPTS` it calls `attemptAutoRebase`, which
+  owns the attempt counter. The dispatch queries already skip a task whose
+  rebase worker is in flight (`rebaseStartedAt` within
+  `REBASE_ATTEMPT_STALE_MS`) or in rapid-exit backoff, so a running rebase is
+  never stranded or doubled. Once the attempts are spent, the rebase declines
+  (it cannot run: no worktree, no seed-capable agent, a failed spawn) or the
+  project does not auto-rebase, `returnConflictingPrToWorker` sends the task back to its
+  worker through `autoReturnTask` with `reason: "conflict"` and a prompt
+  (`buildMergeConflictPrompt`) to merge `origin/<base>`, resolve the conflicts
+  and finish its turn (Mullion pushes as for any auto-return). That return spends
+  no `autoReturnRounds` round, carries no approval and does not touch
+  `inconclusiveReviewRearmCount`. It has no cap of its own, so it happens at most
+  once in a row: if `lastAutoReturnReason` is already `conflict` and the PR still
+  conflicts, the task is parked for a human (`needsHumanReason: "rebase-exhausted"`,
+  or the review-loop reason it already carried, which is preserved).
+  The same park happens, once and without a retry on later ticks, when
+  `attemptAutoRebase` returns `blocked` (a session that had to stop first could
+  not be stopped), when the task has no worktree or agent command to send back
+  to, when the worker's agent cannot take a seed prompt, or when the return
+  itself fails (the reseed could not spawn). A park is recognised by the
+  ` (Mullion will not retry automatically)` suffix on `mergeError` together
+  with a non-null `needsHumanReason`, not by the reason alone: a human reject or
+  a re-arm clears the reason, which lifts the park even though `mergeError` is
+  left alone.
+  A `null`/`unknown` mergeability (GitHub still computing) waits a tick like an
+  unfinished CI run, bounded by the same `reviewCiWaitMinutes` deadline, then
+  dispatches as before. Once the PR reads mergeable again, the `Conflicts with`
+  note the rebase flow left in `mergeError` is cleared.
+
   Model resolution for the reviewer follows the same per-CLI split as the
   worker's own (see [`tasks.md`](tasks.md#agent-selection)) — `commandIsOpencode`/
   `commandModelCli` pick opencode's `Reviewer-Model:`/`Model:` fallback chain
@@ -1026,7 +1061,8 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   distinguishable from a task that was never going to auto-return in the
   first place — and stays in `reviewing` for a human either way. Only a
   `changes-requested` review (and the CI / PR-comment triggers) spends a
-  round; the `suggestions` return above never does.
+  round; the `suggestions` return above never does, and neither does the
+  `conflict` return (see review dispatch gating, #3339).
 - **A loop that stops converging asks a human.** When a `changes-requested`
   review would otherwise send the task back again, `detectReviewStall`
   (`task-reconciler.ts`) checks two signals, and either one parks the task
@@ -1908,12 +1944,16 @@ Turning that on has consequences worth knowing before you do it:
 
 `dirty` is different from the rest of that table: a
 real conflict with the base branch never resolves on its own. `attemptAutoRebase`
-(task-reconciler.ts) has **two call sites**, not one: the merge sweep's
+(task-reconciler.ts) has **three call sites**, not one: the merge sweep's
 `dirty` row above (a `done` task, already approved, whose worktree
 `approveTask` already removed at approve time), and — separately —
 [Auto-approve](#auto-approve)'s own gate below, for a still-`reviewing` task
-whose PR is already `dirty`/unmergeable before it has ever been approved.
-Both share the exact same function and the exact same opt-in: with
+whose PR is already `dirty`/unmergeable before it has ever been approved,
+and the review dispatch gate (`holdConflictingReview`, #3339), which attempts it
+before a review is spawned for a `dirty` PR and, once `attemptAutoRebase`
+declines (cap spent, or it cannot run: no worktree, no seed-capable agent, a
+failed spawn) or `autoApprove` is off, auto-returns the task to its worker with
+the `conflict` reason (no review round spent). All share the exact same function and the exact same opt-in: with
 `projects.autoApprove` on (the same "nobody is watching" opt-in `#755`'s
 red-CI-return and `#757`'s PR-comment-ingest use), it spawns a worker into
 the task's branch to fix the conflict instead of just backing off:
@@ -1936,7 +1976,7 @@ the task's branch to fix the conflict instead of just backing off:
   and — unlike every other Task Master spawn — pushes the result inside its
   own turn, but through Mullion (`mullion task push` / the `push_task_branch`
   tool, #2102), never with `git push`: Mullion's own automatic push only ever
-  happens once, at the `-> reviewing` transition, and neither call site
+  happens once, at the `-> reviewing` transition, and no call site
   revisits it through the ordinary path. The push goes through the workflow-
   change approval gate with the bot's identity, as a force-with-lease, and any
   failure (a stale lease, a held workflow change, refused credentials) comes
@@ -1951,7 +1991,7 @@ the task's branch to fix the conflict instead of just backing off:
   same "stay running" contract every other re-seed uses). This is a sibling
   to the merge sweep's own retry loop, not an `autoReturnTask` round:
   `tasks.rebaseAttempts` is a separate, dedicated counter (default cap: **2**,
-  no per-project override yet, shared across both call sites), and
+  no per-project override yet, shared across all three call sites), and
   `tasks.rebaseStartedAt` tracks whether an attempt is still in its window
   (30 minutes) so consecutive sweep ticks don't spawn a second worker into
   the same worktree — deliberately NOT session-exit detection, since a Task
@@ -1965,7 +2005,8 @@ the task's branch to fix the conflict instead of just backing off:
 - If `resumeTaskWorktree` can't recreate the worktree (branch deleted or
   checked out elsewhere), or the attempt cap is spent, the sweep falls back to
   today's plain `dirty` backoff — surfaced in `tasks.mergeError` for a human,
-  same as `mergeOnApprove` without `autoApprove`.
+  same as `mergeOnApprove` without `autoApprove`. The review dispatch gate
+  instead sends the task back to its worker (the function returns `declined`).
 - **A rebase waits for other work in the worktree.** `attemptAutoRebase` does
   not spawn while another worker round could push into the same worktree: the
   task is neither `reviewing` nor `done` (a worker round is in flight), a

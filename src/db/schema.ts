@@ -1161,7 +1161,7 @@ export const tasks = sqliteTable(
     // from the verdict itself (`lastReviewVerdict`, below), since not every
     // trigger is a review verdict. Null until the first auto-return.
     lastAutoReturnReason: text("last_auto_return_reason", {
-      enum: ["review", "ci", "pr-comment", "suggestions"],
+      enum: ["review", "ci", "pr-comment", "suggestions", "conflict"],
     }),
     // Set when a "suggestions" round (an APPROVED review that left only
     // suggestions) returns to `reviewing`: the approving verdict still holds
