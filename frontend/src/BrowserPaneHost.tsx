@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DockviewPanelApi } from "dockview-react";
 import type { Session } from "./api/index.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
@@ -153,7 +153,24 @@ export function BrowserPaneHost({
   // show, so a pane saved or opened in Agent's browser shows Preview, and lets
   // go of any attachment it made before the server answered.
   const featureOff = browserFeature === false && mode === "agent" && projectId != null;
-  if (featureOff) setMode("preview");
+  // An explicit open (the pane menu, the palette) asked for the agent's
+  // browser: say why it got Preview instead of renaming itself silently.
+  // Recorded with the switch to Preview, since that render is discarded.
+  const [deniedOpen, setDeniedOpen] = useState(false);
+  if (featureOff) {
+    setMode("preview");
+    if (pinnedId != null && explicit.has(pinnedId)) setDeniedOpen(true);
+  }
+  const toldRef = useRef(false);
+  useEffect(() => {
+    if (!deniedOpen || toldRef.current) return;
+    toldRef.current = true;
+    useDashboardStore.getState().pushToast({
+      kind: "info",
+      message:
+        "The agent's browser is off on this server (BROWSER_ENABLED), so this shows Preview.",
+    });
+  }, [deniedOpen]);
 
   const changeMode = (next: BrowserMode) => {
     if (next === mode) return;

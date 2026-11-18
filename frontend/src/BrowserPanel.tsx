@@ -10,6 +10,7 @@ import { SavedUrlModal } from "./SavedUrlModal.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { describeError } from "./lib/describeError.js";
 import { TextInput } from "./ui/primitives.js";
+import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 
 export interface BrowserPanelParams {
   projectId?: number;
@@ -447,11 +448,7 @@ export function BrowserPanel({
   }, [panelApi, currentUrl, fetchState, activeSavedUrlId, activeSavedUrlLabel]);
 
   // Follow Agent URL sync
-  const activeSessionId = useDashboardStore((s) => {
-    if (!s.activePanelId) return null;
-    const match = s.activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
-    return match ? parseInt(match[1], 10) : null;
-  });
+  const activeSessionId = useDashboardStore((s) => sessionIdFromSessionPaneId(s.activePanelId));
 
   const activeSession = useDashboardStore((s) =>
     activeSessionId !== null ? s.sessions.find((sess) => sess.id === activeSessionId) : undefined,

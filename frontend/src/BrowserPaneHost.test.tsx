@@ -298,6 +298,10 @@ describe("BrowserPaneHost (#3371)", () => {
       expect(screen.queryByTestId("agent-5")).toBeNull();
       expect(screen.queryByRole("radiogroup")).toBeNull();
       await waitFor(() => expect(panel.params.mode).toBe("preview"));
+      // It was opened for this session's browser, so the pane says why.
+      expect(useDashboardStore.getState().toasts.map((t) => t.message)).toEqual([
+        "The agent's browser is off on this server (BROWSER_ENABLED), so this shows Preview.",
+      ]);
     });
 
     it("disables Agent's browser when the project has no session", async () => {

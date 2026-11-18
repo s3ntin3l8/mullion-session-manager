@@ -191,11 +191,8 @@ export function resolveActiveProjectId(
   if (!activePanelId) return null;
   const projectMatch = activePanelId.match(/^(?:git|github|agent-rules|dock-config)-(\d+)$/);
   if (projectMatch) return parseInt(projectMatch[1], 10);
-  const sessionMatch = activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
-  if (sessionMatch) {
-    const sessionId = parseInt(sessionMatch[1], 10);
-    return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
-  }
+  const sessionId = sessionIdFromSessionPaneId(activePanelId);
+  if (sessionId != null) return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
   return null;
 }
 
