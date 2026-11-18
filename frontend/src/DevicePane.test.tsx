@@ -878,15 +878,16 @@ describe("DevicePane (issue #1326)", () => {
         { type: "hidKey", usage: 0x04, action: "up" },
       ]);
 
-      // Shifted printable keys (uppercase letters, ! ? @ : ( ) # % $ & * +) and
-      // printable keys not in the hidKey map send `{ type: "text", text: event.key }`
-      // so the iOS driver's `textToHidEvents` expands LEFT_SHIFT, and their keyup
-      // does not emit an orphan `hidKey` up.
+      // Shifted, CapsLock, AltGr and unmapped printable keys send
+      // `{ type: "text", text: event.key }` so the iOS driver's `textToHidEvents`
+      // expands LEFT_SHIFT, and their keyup does not emit an orphan `hidKey` up.
       for (const init of [
         { key: "A", code: "KeyA", shiftKey: true },
+        { key: "A", code: "KeyA", modifierCapsLock: true },
+        { key: "@", code: "KeyQ", ctrlKey: true, altKey: true },
         { key: "!", code: "Digit1", shiftKey: true },
         { key: "_", code: "IntlRo" },
-      ]) {
+      ] as Array<KeyboardEventInit & { modifierCapsLock?: boolean }>) {
         act(() => {
           canvas.dispatchEvent(
             new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }),
@@ -898,14 +899,62 @@ describe("DevicePane (issue #1326)", () => {
       }
       expect(sent().slice(2)).toEqual([
         { type: "text", text: "A" },
+        { type: "text", text: "A" },
+        { type: "text", text: "@" },
         { type: "text", text: "!" },
         { type: "text", text: "_" },
       ]);
 
-      // Named keys and chords that would send Android keyEvent on Android
+      // Two aliased codes held concurrently (Digit1 and Numpad1 both map to 0x1e)
+      // each release their own hidKey up because tracking is keyed by event.code.
+      act(() => {
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "1",
+            code: "Digit1",
+          }),
+        );
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "1",
+            code: "Numpad1",
+          }),
+        );
+        canvas.dispatchEvent(
+          new KeyboardEvent("keyup", {
+            bubbles: true,
+            cancelable: true,
+            key: "1",
+            code: "Digit1",
+          }),
+        );
+        canvas.dispatchEvent(
+          new KeyboardEvent("keyup", {
+            bubbles: true,
+            cancelable: true,
+            key: "1",
+            code: "Numpad1",
+          }),
+        );
+      });
+      expect(sent().slice(7)).toEqual([
+        { type: "hidKey", usage: 0x1e, action: "down" },
+        { type: "hidKey", usage: 0x1e, action: "down" },
+        { type: "hidKey", usage: 0x1e, action: "up" },
+        { type: "hidKey", usage: 0x1e, action: "up" },
+      ]);
+
+      // Named keys (including Shift+Tab and Shift+ArrowLeft, which wrap the key
+      // in explicit LEFT_SHIFT 0xE1 down/up) and chords that would send Android
+      // keyEvent on Android.
       for (const init of [
         { key: "Enter", code: "Enter" },
         { key: "Backspace", code: "Backspace" },
+        { key: "Tab", code: "Tab", shiftKey: true },
         { key: "ArrowLeft", code: "ArrowLeft", shiftKey: true },
         { key: "c", code: "KeyC", ctrlKey: true },
         { key: "a", code: "KeyA", metaKey: true },
@@ -920,6 +969,20 @@ describe("DevicePane (issue #1326)", () => {
           );
         });
       }
+      expect(sent().slice(11)).toEqual([
+        { type: "hidKey", usage: 0x28, action: "down" },
+        { type: "hidKey", usage: 0x28, action: "up" },
+        { type: "hidKey", usage: 0x2a, action: "down" },
+        { type: "hidKey", usage: 0x2a, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x2b, action: "down" },
+        { type: "hidKey", usage: 0x2b, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "up" },
+      ]);
 
       // Paste still works via the native paste event (Ctrl/Cmd+V keydown is not cancelled).
       const pasteKey = new KeyboardEvent("keydown", {
