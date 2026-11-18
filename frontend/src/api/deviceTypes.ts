@@ -41,6 +41,9 @@ export interface Device {
   status: "active" | "killed";
   createdAt: string;
   live: DeviceInfo | null;
+  // True when the device's agent host did not answer; `live` is then null for
+  // lack of an answer, not because the device is stopped. Absent otherwise.
+  hostUnreachable?: boolean;
 }
 
 // A phone advertising Wireless debugging over mDNS (issue #1378,

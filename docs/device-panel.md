@@ -379,9 +379,9 @@ needs:
   browser pane's JPEG can).
 
 A host that is down does not fail the list: `GET /api/devices` marks its rows
-`hostUnreachable: true` with `live: null` (the Settings UI does not read the
-flag yet, so the panel shows them as not running until
-[#3270](https://github.com/s3ntin3l8/mullion-session-manager/issues/3270)), and a mutating call answers 503 (or 502 when the request may have
+`hostUnreachable: true` with `live: null` (Settings → Devices and the sidebar read
+the flag: the row shows "unavailable — host unreachable" and its Start/Stop are
+disabled), and a mutating call answers 503 (or 502 when the request may have
 been delivered), like every other forwarded host call.
 
 `GET /api/devices/hosts` lists the hosts that could hold a device (the primary
@@ -395,11 +395,10 @@ Not covered yet, each tracked on its own issue: pairing and mDNS discovery
 still run on the primary only, so a physical device on an agent host is added
 by its adb address ([#3271](https://github.com/s3ntin3l8/mullion-session-manager/issues/3271));
 AVD and system-image management (`/api/avds`, `/api/system-images`) is
-primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272));
-the panel's socket to an agent reached only over the outbound channel needs a
-`device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273));
-and Settings → Devices has no per-host kinds or host picker yet
-([#3270](https://github.com/s3ntin3l8/mullion-session-manager/issues/3270)).
+primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)), so the
+create form's Host picker offers remote hosts but its AVD list is still the primary's;
+and the panel's socket to an agent reached only over the outbound channel needs a
+`device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
 
 ### Toolbar and gestures (issue #1419)
 
