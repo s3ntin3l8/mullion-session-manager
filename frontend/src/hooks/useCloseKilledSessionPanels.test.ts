@@ -5,7 +5,7 @@ import type { DockviewApi } from "dockview-react";
 import { makeSession } from "../test/fixtures.js";
 import { useCloseKilledSessionPanels } from "./useCloseKilledSessionPanels.js";
 
-function panel(id: string, params?: { sessionId?: number }) {
+function panel(id: string, params?: { sessionId?: number; projectId?: number }) {
   const close = vi.fn();
   return { id, params, close, api: { close } };
 }
@@ -38,7 +38,13 @@ describe("useCloseKilledSessionPanels", () => {
     const liveTimeline = panel("timeline-2", { sessionId: 2 });
     const undecodable = panel("timeline-nope");
     const activeParsed = panel("browserPane-2");
+    // #3371 — a Browser pane whose session is gone closes only when it has no
+    // project to preview; with one, the pane switches itself to Preview.
+    const missingBrowser = panel("browserPane-9");
+    const missingBrowserWithProject = panel("browserPane-10", { projectId: 1 });
     const api = makeApi([
+      missingBrowser,
+      missingBrowserWithProject,
       killedTerminal,
       liveTerminal,
       missingTimeline,
@@ -65,7 +71,9 @@ describe("useCloseKilledSessionPanels", () => {
     expect(liveTerminal.close).not.toHaveBeenCalled();
     expect(missingTimeline.close).toHaveBeenCalledTimes(1);
     expect(killedTimeline.close).toHaveBeenCalledTimes(1);
-    expect(exitedBrowser.close).toHaveBeenCalledTimes(1);
+    expect(exitedBrowser.close).not.toHaveBeenCalled();
+    expect(missingBrowser.close).toHaveBeenCalledTimes(1);
+    expect(missingBrowserWithProject.close).not.toHaveBeenCalled();
     expect(liveTimeline.close).not.toHaveBeenCalled();
     expect(undecodable.close).not.toHaveBeenCalled();
     // browserPane-2 has no params, so the id is parsed; session 2 is active.

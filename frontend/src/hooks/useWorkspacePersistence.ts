@@ -323,8 +323,19 @@ export function useWorkspacePersistence({
             if (session?.status === "killed") {
               stalePanelIds.push(panel.id);
             }
-          } else if (panel.id.startsWith("timeline-") || panel.id.startsWith("browserPane-")) {
+          } else if (panel.id.startsWith("timeline-")) {
             if (!session || session.status === "killed" || session.status === "exited") {
+              stalePanelIds.push(panel.id);
+            }
+          } else if (panel.id.startsWith("browserPane-")) {
+            // A Browser pane with a project switches itself to Preview
+            // (BrowserPaneHost.tsx, #3371); only one without is pruned.
+            const projectId =
+              session?.projectId ?? (panel.params as { projectId?: number } | undefined)?.projectId;
+            if (
+              (!session || session.status === "killed" || session.status === "exited") &&
+              projectId == null
+            ) {
               stalePanelIds.push(panel.id);
             }
           }

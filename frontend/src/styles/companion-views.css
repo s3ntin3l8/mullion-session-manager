@@ -254,3 +254,94 @@
 .dock-view-sheet-row.danger.armed {
   color: var(--r);
 }
+
+/* The Browser pane (BrowserShell.tsx, #3371): Preview and Agent's browser
+   behind one switch, in the grid and (#3372) in the rail's Browser view. Each mode's body stays mounted while the other shows,
+   so the pane is the container and a body is hidden, not removed. The
+   container is named so the query below never answers to another one. */
+.browser-host {
+  container: browser-host / inline-size;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.browser-host-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.browser-host-body[hidden] {
+  display: none;
+}
+.browser-host-body > .browser-panel,
+.browser-host-body > .browser-pane {
+  flex: 1;
+  min-height: 0;
+}
+/* Same shape as the sidebar's .sb-seg: one bordered strip, the chosen
+   segment filled. The session's name may be long, so the agent segment
+   shrinks and ends in an ellipsis rather than squeezing the address. */
+.browser-mode-switch {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.browser-mode-switch-seg {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 560;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.browser-mode-switch-seg:first-child {
+  flex-shrink: 0;
+}
+.browser-mode-switch-seg + .browser-mode-switch-seg {
+  border-left: 1px solid var(--border);
+}
+.browser-mode-switch-seg.active {
+  background: var(--seg);
+  color: var(--fg);
+}
+.browser-mode-switch-seg[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+.browser-mode-switch-seg:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+.browser-mode-switch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Decision 6: in a narrow pane the switch takes its own row above the
+   address, so its label and the session's name do not squeeze the address
+   field. Measured on the pane (the container), not the window. */
+@container browser-host (max-width: 559.98px) {
+  .browser-host .browser-panel-toolbar {
+    flex-wrap: wrap;
+  }
+  .browser-host .browser-mode-switch {
+    flex: 1 0 100%;
+    max-width: 100%;
+  }
+  .browser-host .browser-mode-switch-seg {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}

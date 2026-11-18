@@ -44,12 +44,16 @@ import {
   toggleRight,
 } from "../../lib/foldHalves.js";
 import type { FoldHalvesState } from "../../lib/foldHalves.js";
+import { sessionIdFromOwnPaneId } from "../../lib/panelIds.js";
 import {
   currentSidebarLocation,
   pruneSidebarHistory,
   pushSidebarHistory,
   sameSidebarTarget,
 } from "../sidebarHistory.js";
+
+// How many recently focused sessions the store remembers (recentSessionIds).
+const RECENT_SESSION_LIMIT = 20;
 
 // Right sidebar views that are not reopened on load, though left open (#3053):
 // the ones right-sidebar/views-registry.ts restricts to the two halves (their
@@ -294,6 +298,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     highlightedPanelId: null,
     newPanelIds: [],
     activePanelId: null,
+    recentSessionIds: [],
     activeWorkspaceId: readStoredActiveWorkspaceId(),
     dockConfigRefreshTrigger: 0,
     currentVersion: null,
@@ -332,7 +337,20 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
           : state,
       ),
 
-    setActivePanelId: (id) => set({ activePanelId: id }),
+    setActivePanelId: (id) =>
+      set((s) => {
+        // Only the panes that are the session itself (not its browser or a file).
+        const sessionId = sessionIdFromOwnPaneId(id);
+        if (sessionId == null) return { activePanelId: id };
+        if (s.recentSessionIds[0] === sessionId) return { activePanelId: id };
+        return {
+          activePanelId: id,
+          recentSessionIds: [sessionId, ...s.recentSessionIds.filter((x) => x !== sessionId)].slice(
+            0,
+            RECENT_SESSION_LIMIT,
+          ),
+        };
+      }),
 
     setActiveWorkspaceId: (id) => {
       set({ activeWorkspaceId: id });

@@ -15,6 +15,8 @@ import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
 import type { ProjectHubTab } from "./ProjectHubPanel.js";
+import { browserAgentTitle } from "./lib/browserTitles.js";
+import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 
 // U9 — App.tsx's global Escape handler's own action list, extracted here
 // (App.tsx itself can only export components — react-refresh/only-export-
@@ -189,11 +191,8 @@ export function resolveActiveProjectId(
   if (!activePanelId) return null;
   const projectMatch = activePanelId.match(/^(?:git|github|agent-rules|dock-config)-(\d+)$/);
   if (projectMatch) return parseInt(projectMatch[1], 10);
-  const sessionMatch = activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
-  if (sessionMatch) {
-    const sessionId = parseInt(sessionMatch[1], 10);
-    return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
-  }
+  const sessionId = sessionIdFromSessionPaneId(activePanelId);
+  if (sessionId != null) return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
   return null;
 }
 
@@ -530,8 +529,9 @@ export function openTerminalSessionIds(panels: ReadonlyArray<{ id: string }>): n
  */
 export function sessionIdFromPanelId(panelId: string | null | undefined): number | null {
   if (!panelId) return null;
-  const match =
-    panelId.match(/^(?:session|timeline|browserPane)-(\d+)$/) ?? panelId.match(/^file-\d+-@(\d+)-/);
+  const own = sessionIdFromSessionPaneId(panelId);
+  if (own != null) return own;
+  const match = panelId.match(/^file-\d+-@(\d+)-/);
   return match ? parseInt(match[1]!, 10) : null;
 }
 
@@ -1042,8 +1042,12 @@ export function openBrowserPanePanel(
     `browserPane-${session.id}`,
     {
       component: "browserPane",
-      title: `Agent Browser: ${sessionPaneTitle(session, titleCtx)}`,
+      title: browserAgentTitle(sessionPaneTitle(session, titleCtx)),
       params: { sessionId: session.id },
+      // The pane can show Preview by now (#3371): focusing it to open the
+      // session's browser switches it back, to this session, and attaches
+      // (a fresh openRev, so a pane already in Agent's browser still does).
+      retargetParams: { mode: "agent", agentSessionId: undefined, openRev: nextRev() },
     },
     layout,
   );

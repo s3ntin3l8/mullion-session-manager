@@ -403,6 +403,9 @@ describe("useWorkspacePersistence", () => {
     // No `params.sessionId` — falls back to parsing the id itself; session 4
     // isn't in `sessions` at all, so this must close as an orphan.
     const orphanBrowserPanePanel = addPanel("browserPane-4");
+    // #3371 — a Browser pane with a project is kept: it switches itself to
+    // Preview when its session ends.
+    const exitedBrowserWithProject = addPanel("browserPane-3", { sessionId: 3, projectId: 7 });
     const workspace = makeWorkspace();
     const setPanelsVersion = makeSetPanelsVersion();
 
@@ -419,6 +422,7 @@ describe("useWorkspacePersistence", () => {
     expect(killedSessionPanel.api.close).toHaveBeenCalledTimes(1);
     expect(exitedTimelinePanel.api.close).toHaveBeenCalledTimes(1);
     expect(orphanBrowserPanePanel.api.close).toHaveBeenCalledTimes(1);
+    expect(exitedBrowserWithProject.api.close).not.toHaveBeenCalled();
     expect(activeSessionPanel.api.close).not.toHaveBeenCalled();
 
     // The closes above happened while restoringRef.current was still true,

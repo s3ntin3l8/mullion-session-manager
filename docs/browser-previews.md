@@ -23,6 +23,25 @@ the session's server-side Chromium its agent drives, which opens from a
 session pane's menu or the palette's "Open Agent Browser: <session>" (on the
 phone and the rails layouts, the right sidebar's Browser view).
 
+**One Browser pane, two modes.** From 1100px both open in the same pane,
+titled "Browser · Preview: <target>" or "Browser · Agent's browser:
+<session>". A switch at the left of its toolbar (on its own row above the
+address when the pane is narrow) flips the pane between **Preview** and
+**Agent's browser** in place; each mode keeps its page while the pane is
+open. Preview keeps its target dropdown and the favorites star; back and
+forward are in Agent's browser only, since an iframe's history cannot be
+read. A pane opened as a preview and switched to Agent's browser takes the
+project's focused (or last-focused) session at that moment and stays on it;
+the switch names that session. The switch never starts a browser by itself:
+it first asks whether the session has one, and a session without one shows
+"<session> has no browser yet." and an **Open browser** button. Agent's
+browser is unavailable (with the reason on hover) when the project has no
+session, or for a blank or external preview with no project. When the
+session ends the pane falls back to Preview, or closes if it has no
+project. Without `BROWSER_ENABLED` there is no switch and the pane is
+Preview only. The mode is saved with the workspace layout, so a reload
+keeps it.
+
 There are two kinds of preview, in either mode:
 
 - **Project preview** — one per project (opening it again reuses the same
@@ -62,8 +81,8 @@ session without one shows "… has no browser yet." and an **Open browser**
 button, which does what "Open Agent Browser" does.
 
 The pane menu's "Open Agent Browser" (which adds the browser as a pane of
-its own) is offered only where there is a grid: not in the two halves
-(800-1099px) and not on the phone, where this view is the agent browser.
+its own) is offered only from 1100px: below it, `rails-full` included, this
+view is the agent browser (#3370).
 
 On a touch screen a one-finger drag on the page scrolls it (in the view and
 in the grid pane); a tap clicks.

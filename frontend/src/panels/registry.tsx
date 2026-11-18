@@ -8,10 +8,9 @@ import type { GitHubPanelParams } from "../GitHubPanel.js";
 import { GitPanelRedirect } from "../GitPanelRedirect.js";
 import { ProjectHubPanel } from "../ProjectHubPanel.js";
 import type { ProjectHubPanelParams, ProjectHubTab } from "../ProjectHubPanel.js";
-import type { BrowserPanelParams } from "../BrowserPanel.js";
+import type { BrowserHostComponent, BrowserHostParams } from "../BrowserPaneHost.js";
 import type { FileEditorPanelParams } from "../FileEditorPanel.js";
 import type { ExternalFilePanelParams } from "../ExternalFilePanel.js";
-import type { BrowserPaneParams } from "../BrowserPane.js";
 import type { DevicePaneParams } from "../DevicePane.js";
 import { SessionTimeline } from "../SessionTimeline.js";
 import type { SessionTimelineParams } from "../SessionTimeline.js";
@@ -46,13 +45,12 @@ import { useRetriableLazy } from "../lib/retriableLazy.js";
 // comment for the full trace), leaving "Reload pane" unable to ever retry.
 const loadUnifiedBoard = () =>
   import("../UnifiedBoard.js").then((m) => ({ default: m.UnifiedBoard }));
-const loadBrowserPanel = () =>
-  import("../BrowserPanel.js").then((m) => ({ default: m.BrowserPanel }));
+const loadBrowserPaneHost = () =>
+  import("../BrowserPaneHost.js").then((m) => ({ default: m.BrowserPaneHost }));
 const loadFileEditorPanel = () =>
   import("../FileEditorPanel.js").then((m) => ({ default: m.FileEditorPanel }));
 const loadExternalFilePanel = () =>
   import("../ExternalFilePanel.js").then((m) => ({ default: m.ExternalFilePanel }));
-const loadBrowserPane = () => import("../BrowserPane.js").then((m) => ({ default: m.BrowserPane }));
 const loadDevicePane = () => import("../DevicePane.js").then((m) => ({ default: m.DevicePane }));
 
 // Shared Suspense fallback for the lazy dockview panels above (the Browser
@@ -418,7 +416,7 @@ const DockConfigPanelWrapper = makeLegacyHubWrapper("dock");
 const SkillsPanelWrapper = makeLegacyHubWrapper("skills");
 
 // Lazy because it pulls in CodeMirror (the only place in the app that does);
-// hand-written for the same reason as BrowserPanelWrapper below — it needs
+// hand-written for the same reason as the Browser wrapper below — it needs
 // useRetriableLazy so "Reload pane" can retry a failed chunk load.
 function FileEditorPanelWrapper(props: IDockviewPanelProps<FileEditorPanelParams>) {
   const [resetKey, resetPanel] = useResetKey();
@@ -428,7 +426,7 @@ function FileEditorPanelWrapper(props: IDockviewPanelProps<FileEditorPanelParams
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
         <Suspense fallback={<LazyPanelFallback />}>
           {/* Same intentional per-resetKey component identity as
-              BrowserPanelWrapper below. */}
+              the Browser wrapper below. */}
           {/* eslint-disable-next-line react-hooks/static-components */}
           <LazyFileEditorPanel key={resetKey} params={props.params} />
         </Suspense>
@@ -454,64 +452,45 @@ function ExternalFilePanelWrapper(props: IDockviewPanelProps<ExternalFilePanelPa
   );
 }
 
-// Same reasoning as GitHubPanelWrapper above — a crashing iframe/preview
-// fetch shouldn't blank the whole dashboard either. Hand-written (rather
-// than makePanelWrapper, which every other suspense-less/no-extra-hooks
-// panel above uses) because it needs its own hook call — useRetriableLazy —
+// The Browser pane (#3371). Both browser components a saved layout can hold
+// load the same pane: `browser` (a preview) starts in Preview and
+// `browserPane` (`browserPane-<sessionId>`) in Agent's browser; the pane's
+// switch changes the mode inside the panel without renaming it. Same
+// reasoning as GitHubPanelWrapper above — a crashing iframe or canvas
+// stream shouldn't blank the whole dashboard. Hand-written (rather than
+// makePanelWrapper) because it needs its own hook call — useRetriableLazy —
 // to rebuild the lazy() payload on every "Reload pane" (see that hook's own
-// comment).
-function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
-  const [resetKey, resetPanel] = useResetKey();
-  const LazyBrowserPanel = useRetriableLazy(loadBrowserPanel, resetKey);
-  return (
-    <ErrorBoundary onReset={resetPanel}>
-      {/* Same host-div fix as makePanelWrapper's own suspense branch above —
-          see its comment. */}
-      <div style={{ position: "relative", width: "100%", height: "100%" }}>
-        <Suspense fallback={<LazyPanelFallback />}>
-          {/* useRetriableLazy deliberately returns a NEW component identity
-              per resetKey — that's the whole retry mechanism (see its own
-              comment) — so this intentionally isn't the stable
-              once-per-render component reference the rule expects. */}
-          {/* eslint-disable-next-line react-hooks/static-components */}
-          <LazyBrowserPanel key={resetKey} params={props.params} api={props.api} />
-        </Suspense>
-      </div>
-    </ErrorBoundary>
-  );
+// comment). The pane sets its own title, so no page title is reported up.
+function makeBrowserWrapper(component: BrowserHostComponent) {
+  return function BrowserWrapper(props: IDockviewPanelProps<BrowserHostParams>) {
+    const [resetKey, resetPanel] = useResetKey();
+    const LazyBrowserPaneHost = useRetriableLazy(loadBrowserPaneHost, resetKey);
+    return (
+      <ErrorBoundary onReset={resetPanel}>
+        {/* Same host-div fix as makePanelWrapper's own suspense branch above —
+            see its comment. */}
+        <div style={{ position: "relative", width: "100%", height: "100%" }}>
+          <Suspense fallback={<LazyPanelFallback />}>
+            {/* useRetriableLazy deliberately returns a NEW component identity
+                per resetKey — that's the whole retry mechanism (see its own
+                comment). The static-components rule does not look inside a
+                component a factory returns, so no disable is needed here. */}
+            <LazyBrowserPaneHost
+              key={resetKey}
+              params={props.params}
+              api={props.api}
+              component={component}
+            />
+          </Suspense>
+        </div>
+      </ErrorBoundary>
+    );
+  };
 }
+const BrowserPanelWrapper = makeBrowserWrapper("browser");
+const BrowserPaneWrapper = makeBrowserWrapper("browserPane");
 
-// Same reasoning as GitHubPanelWrapper above — a stream-parsing/canvas
-// crash shouldn't blank the whole dashboard either. Reports the Playwright
-// page's title up via props.api.setTitle, same shape as
-// TerminalPanelWrapper's onTitleChange but simpler (no nameLocked/rename
-// concept for this panel type yet).
-function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
-  const [resetKey, resetPanel] = useResetKey();
-  const LazyBrowserPane = useRetriableLazy(loadBrowserPane, resetKey);
-  const onTitleChange = useCallback(
-    (pageTitle: string) => {
-      props.api.setTitle(pageTitle ? `Agent Browser: ${pageTitle}` : "Agent Browser");
-    },
-    [props.api],
-  );
-  return (
-    <ErrorBoundary onReset={resetPanel}>
-      {/* Same host-div fix as makePanelWrapper's own suspense branch above —
-          see its comment. */}
-      <div style={{ position: "relative", width: "100%", height: "100%" }}>
-        <Suspense fallback={<LazyPanelFallback />}>
-          {/* Same intentional new-identity-per-resetKey reasoning as
-              BrowserPanelWrapper above. */}
-          {/* eslint-disable-next-line react-hooks/static-components */}
-          <LazyBrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
-        </Suspense>
-      </div>
-    </ErrorBoundary>
-  );
-}
-
-// Same shape as BrowserPaneWrapper just above (a stream-parsing/canvas
+// Same shape as the Browser wrapper just above (a stream-parsing/canvas
 // crash shouldn't blank the whole dashboard either), with no title reported
 // up — a device has no equivalent of a page title.
 function DevicePaneWrapper(props: IDockviewPanelProps<DevicePaneParams>) {
@@ -554,7 +533,7 @@ export function KanbanBoardOverlay(props: {
       <ErrorBoundary onReset={resetPanel}>
         <Suspense fallback={<LazyPanelFallback />}>
           {/* Same intentional new-identity-per-resetKey reasoning as
-              BrowserPanelWrapper above. */}
+              the Browser wrapper above. */}
           {/* eslint-disable-next-line react-hooks/static-components */}
           <LazyUnifiedBoard
             key={resetKey}

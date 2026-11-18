@@ -24,6 +24,7 @@ import type { ProjectPanelKindConfig } from "../panelUtils.js";
 import { subscribeFilePathGone } from "../lib/filePathEvents.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
 import type { ProjectHubTab } from "../ProjectHubPanel.js";
+import { BROWSER_PREVIEW_TITLE, browserPreviewTitle } from "../lib/browserTitles.js";
 
 // The near-identical project-scoped panel kinds (GitHub, Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
@@ -56,7 +57,7 @@ const FILE_EDITOR_CONFIG: ProjectPanelKindConfig = {
 // it could before.
 const BROWSER_CONFIG: ProjectPanelKindConfig = {
   kind: "browser",
-  titleLabel: "Preview",
+  titleLabel: BROWSER_PREVIEW_TITLE,
   applyDesktopPositioning: false,
 };
 
@@ -403,6 +404,9 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, BROWSER_CONFIG);
+      // An open project pane may show Agent's browser by now (#3371); the
+      // preview was asked for.
+      dockviewApi.getPanel(`browser-${projectId}`)?.api.updateParameters({ mode: "preview" });
     },
     [dockviewApi, projects, layout, leaveTaskView],
   );
@@ -430,7 +434,7 @@ export function usePanelOpener({
       const panel = dockviewApi.addPanel({
         id: `browser-url-${projectId}-${randomPanelId()}`,
         component: "browser",
-        title: label,
+        title: browserPreviewTitle(label),
         params: { kind: "external", url, projectId },
       });
       // Bug fix (independent review) — no explicit position/floating option
@@ -454,7 +458,7 @@ export function usePanelOpener({
     const panel = dockviewApi.addPanel({
       id: `browser-ext-${randomPanelId()}`,
       component: "browser",
-      title: "Preview",
+      title: BROWSER_PREVIEW_TITLE,
       params: { kind: "external" },
     });
     // Same guard as onOpenBrowserUrl above — see its own comment.
@@ -476,16 +480,14 @@ export function usePanelOpener({
             targetName,
             targetRev: Date.now(),
           });
+        // The pane may show Agent's browser by now (#3371).
+        existing.api.updateParameters({ mode: "preview" });
         focusPanelForTier(dockviewApi, existing, layout.tier);
       } else {
         const panel = dockviewApi.addPanel({
           id,
           component: "browser",
-          title: targetName
-            ? `Preview · ${targetName}`
-            : branch
-              ? `Preview · ${branch}`
-              : "Preview",
+          title: browserPreviewTitle(targetName ?? branch),
           params: { projectId, previewSlug: slug, targetName },
         });
         // Same guard as onOpenBrowserUrl above — see its own comment.
