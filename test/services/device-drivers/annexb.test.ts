@@ -136,6 +136,28 @@ describe("AnnexBPacketizer", () => {
     expect(run(cut(fixture, () => Math.floor(r() * 300)))).toEqual(whole);
   });
 
+  it("does not re-announce identical parameter sets", () => {
+    const sps = nal(0x67);
+    const pps = nal(0x68);
+    const idr = nal(0x65);
+    const p = new AnnexBPacketizer();
+    const out = [
+      ...p.push(cat(sc4(sps), sc4(pps), sc4(idr))),
+      ...p.push(cat(sc4(nal(0x41)), sc4(sps), sc4(pps), sc4(nal(0x41)), sc4(sps))),
+      ...p.flush(),
+    ];
+    expect(out.filter((x) => x.type === "configuration")).toHaveLength(1);
+    // The delta after the repeated sets still decodes (the run was kept).
+    expect(out.filter((x) => x.type === "data" && !x.keyframe).length).toBeGreaterThanOrEqual(1);
+    // A different SPS is announced again.
+    const q = new AnnexBPacketizer();
+    const out2 = [
+      ...q.push(cat(sc4(sps), sc4(pps), sc4(sps), sc4(nal(0x68, 9)), sc4(idr))),
+      ...q.flush(),
+    ];
+    expect(out2.filter((x) => x.type === "configuration")).toHaveLength(2);
+  });
+
   it("holds an IDR (and its slices) that arrives before SPS/PPS", () => {
     const idr = nal(0x65, 1);
     const slice = nal(0x41, 2);

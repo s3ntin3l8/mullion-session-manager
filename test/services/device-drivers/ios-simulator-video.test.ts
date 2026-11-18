@@ -238,11 +238,78 @@ describe("IosSimulatorDriver video (in-process companion)", () => {
     handle.start.mockRejectedValue(new Error("no companion"));
     streams[0]!.emit("end");
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(handle.start).toHaveBeenCalledTimes(5);
+    // The first stream's keyframe-less end counts as a failure too.
+    expect(handle.start).toHaveBeenCalledTimes(4);
     expect(driver.toInfo()).toMatchObject({ status: "error", error: "no companion" });
     await driver.stop();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(handle.start).toHaveBeenCalledTimes(5);
+    expect(handle.start).toHaveBeenCalledTimes(4);
+  });
+
+  it("gives up when streams keep ending without a keyframe", async () => {
+    const { driver, streams, handle } = make();
+    await driver.start();
+    for (let i = 0; i < 12; i++) {
+      streams.at(-1)!.emit("error", new Error("UNAVAILABLE: target not ready"));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(streams.length).toBeLessThanOrEqual(6);
+    expect(handle.start).not.toHaveBeenCalled();
+    expect(driver.toInfo()).toMatchObject({ status: "error" });
+    await driver.stop();
+  });
+
+  it("a stream that ends without any error still counts as a failure", async () => {
+    const { driver, streams } = make();
+    await driver.start();
+    for (let i = 0; i < 12; i++) {
+      streams.at(-1)!.emit("end");
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(streams.length).toBeLessThanOrEqual(6);
+    expect(driver.toInfo().status).toBe("error");
+    await driver.stop();
+  });
+
+  it("opens no stream when stopped while a reopen awaits the companion", async () => {
+    const { driver, streams, handle } = make();
+    await driver.start();
+    streams[0]!.feed(fixture);
+    handle.isRunning = false;
+    let release!: () => void;
+    handle.start.mockImplementationOnce(
+      () =>
+        new Promise<void>((r) => {
+          release = () => {
+            handle.isRunning = true;
+            r();
+          };
+        }),
+    );
+    streams[0]!.emit("end");
+    await vi.advanceTimersByTimeAsync(1000);
+    await driver.stop();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(streams).toHaveLength(1);
+  });
+
+  it("never gives a late subscriber a delta before a keyframe after an overflowed GOP", async () => {
+    const { driver, streams } = make();
+    await driver.start();
+    const sps = Uint8Array.of(0, 0, 0, 1, 0x67, 1, 2);
+    const pps = Uint8Array.of(0, 0, 0, 1, 0x68, 3);
+    const idr = Uint8Array.of(0, 0, 0, 1, 0x65, 4);
+    streams[0]!.feed(Uint8Array.of(...sps, ...pps, ...idr), 1024);
+    const slice = new Uint8Array(1024 * 1024).fill(0xaa);
+    slice.set([0, 0, 0, 1, 0x41], 0);
+    for (let i = 0; i < 9; i++) streams[0]!.emit("data", { payload: { data: Buffer.from(slice) } });
+    streams[0]!.emit("data", { payload: { data: Buffer.from(Uint8Array.of(0, 0, 0, 1, 0x41)) } });
+    const late: DeviceVideoPacket[] = [];
+    driver.onVideoPacket((p) => late.push(p));
+    streams[0]!.emit("data", { payload: { data: Buffer.from(Uint8Array.of(0, 0, 0, 1, 0x41)) } });
+    expect(kinds(late)).not.toContain("delta");
+    await driver.stop();
   });
 
   it("reports an error and keeps trying when the companion will not start", async () => {

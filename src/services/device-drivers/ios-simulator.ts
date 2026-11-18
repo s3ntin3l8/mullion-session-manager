@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { CLIPBOARD_MAX_BYTES } from "../device-defaults.js";
 import { pngDimensions } from "../screenshot-image.js";
-import { AnnexBPacketizer, GopBuffer } from "./annexb.js";
+import { AnnexBPacketizer, GOP_BUFFER_MAX_BYTES, GopBuffer } from "./annexb.js";
 import type { IdbGrpcClient, IdbVideoStreamResponse } from "./idb-grpc.js";
 import {
   DeviceActionError,
@@ -90,7 +90,8 @@ const KEYFRAME_RESTART_MIN_INTERVAL_MS = 5000;
 const STREAM_REOPEN_DELAY_MS = 1000;
 const MAX_STREAM_REOPEN_FAILURES = 5;
 
-/** idb `video_stream` start request: H.264, an IDR about every second. */
+/** idb `video_stream` start request: H.264, an IDR about every 4 s
+ * (idb's default; `1` would give ~1 s, docs/spikes/ios-simulator-idb.md). */
 const VIDEO_STREAM_START = {
   fps: 30,
   format: "H264",
@@ -132,11 +133,16 @@ export class IosSimulatorDriver implements DeviceDriver {
   private polling = false;
   private exited = false;
   private readonly exitListeners = new Set<() => void>();
-  private readonly videoListeners = new Set<(packet: DeviceVideoPacket) => void>();
+  /** Per listener: has it received a keyframe since its last configuration? A
+   * delta is never delivered before one. */
+  private readonly videoListeners = new Map<
+    (packet: DeviceVideoPacket) => void,
+    { key: boolean }
+  >();
   private readonly clipboardListeners = new Set<(text: string) => void>();
   private readonly companion: IdbCompanionHandle | null;
   private readonly streamReopenDelayMs: number;
-  private readonly gop = new GopBuffer();
+  private readonly gop = new GopBuffer(GOP_BUFFER_MAX_BYTES);
   private stream: VideoStream | null = null;
   /** Identifies the live stream; events of a replaced stream are ignored. */
   private streamGeneration = 0;
@@ -236,14 +242,9 @@ export class IosSimulatorDriver implements DeviceDriver {
   onVideoPacket(listener: (packet: DeviceVideoPacket) => void): Unsubscribe {
     // Replay the GOP before registering, so a late joiner starts with the
     // configuration and an IDR and never sees a delta before a keyframe.
-    for (const packet of this.gop.snapshot()) {
-      try {
-        listener(packet);
-      } catch {
-        // A throwing listener must not break the subscription.
-      }
-    }
-    this.videoListeners.add(listener);
+    const state = { key: false };
+    for (const packet of this.gop.snapshot()) deliver(listener, state, packet);
+    this.videoListeners.set(listener, state);
     return () => void this.videoListeners.delete(listener);
   }
 
@@ -339,11 +340,14 @@ export class IosSimulatorDriver implements DeviceDriver {
       // once the simulator has rebooted. Subscribed after, so the restart's own
       // stop is not mistaken for a crash.
       await companion.restart();
+      // Stopped (or exited) while the companion was starting: open nothing.
+      if (!this.alive) return;
       this.offCompanionExit = companion.onExit(() => this.scheduleReopen());
       const client = companion.client;
       if (!client) throw new Error("idb companion has no client");
       this.openStream(client);
     } catch (err) {
+      if (!this.alive) return;
       this.status = "error";
       this.error = errorText(err);
       this.scheduleReopen();
@@ -354,6 +358,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.closeStream();
     const generation = ++this.streamGeneration;
     const packetizer = new AnnexBPacketizer();
+    let sawKeyframe = false;
     const stream = client.videoStream({ ...VIDEO_STREAM_START });
     this.stream = stream;
     this.lastStreamOpenAt = Date.now();
@@ -361,12 +366,20 @@ export class IosSimulatorDriver implements DeviceDriver {
       if (generation !== this.streamGeneration) return;
       const data = response.payload?.data;
       if (!data || data.length === 0) return;
-      for (const packet of packetizer.push(data)) this.emitVideo(packet);
+      for (const packet of packetizer.push(data)) {
+        if (packet.type === "data" && packet.keyframe && !sawKeyframe) {
+          sawKeyframe = true;
+          this.reopenFailures = 0;
+        }
+        this.emitVideo(packet);
+      }
     });
     const ended = (err?: Error) => {
       if (generation !== this.streamGeneration) return;
       this.stream = null;
       if (err && this.alive) this.error = errorText(err);
+      // A stream that ended without ever producing a keyframe is a failure.
+      if (!sawKeyframe) this.reopenFailures++;
       this.scheduleReopen();
     };
     stream.on("error", ended);
@@ -375,13 +388,7 @@ export class IosSimulatorDriver implements DeviceDriver {
 
   private emitVideo(packet: DeviceVideoPacket): void {
     this.gop.push(packet);
-    for (const listener of [...this.videoListeners]) {
-      try {
-        listener(packet);
-      } catch {
-        // One throwing listener must not starve the rest.
-      }
-    }
+    for (const [listener, state] of [...this.videoListeners]) deliver(listener, state, packet);
     if (packet.type === "data" && packet.keyframe && !this.keyframeSent) {
       this.keyframeSent = true;
       this.reopenFailures = 0;
@@ -428,7 +435,11 @@ export class IosSimulatorDriver implements DeviceDriver {
   private scheduleReopen(): void {
     const companion = this.companion;
     if (!companion || !this.alive || this.reopenTimer || this.reopening) return;
-    if (this.reopenFailures >= MAX_STREAM_REOPEN_FAILURES) return;
+    if (this.reopenFailures >= MAX_STREAM_REOPEN_FAILURES) {
+      this.status = "error";
+      this.error ??= "idb video stream failed repeatedly";
+      return;
+    }
     this.reopenTimer = setTimeout(() => {
       this.reopenTimer = null;
       void this.reopen(companion);
@@ -441,6 +452,7 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.reopening = true;
     try {
       if (!companion.isRunning || !companion.client) await companion.start();
+      if (!this.alive) return;
       const client = companion.client;
       if (!client) throw new Error("idb companion has no client");
       // A restarted stream opens with fresh SPS/PPS/IDR: forget the old GOP
@@ -449,6 +461,10 @@ export class IosSimulatorDriver implements DeviceDriver {
       this.keyframeSent = false;
       this.openStream(client);
     } catch (err) {
+      if (!this.alive) {
+        this.reopening = false;
+        return;
+      }
       this.reopenFailures++;
       this.status = "error";
       this.error = errorText(err);
@@ -519,6 +535,22 @@ export class IosSimulatorDriver implements DeviceDriver {
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** Hands a packet to one listener, never a delta before its first keyframe. */
+function deliver(
+  listener: (packet: DeviceVideoPacket) => void,
+  state: { key: boolean },
+  packet: DeviceVideoPacket,
+): void {
+  if (packet.type === "configuration") state.key = false;
+  else if (packet.keyframe) state.key = true;
+  else if (!state.key) return;
+  try {
+    listener(packet);
+  } catch {
+    // One throwing listener must not starve the rest.
+  }
+}
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

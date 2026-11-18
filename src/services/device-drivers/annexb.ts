@@ -104,6 +104,10 @@ function trimTrailingZeros(buf: Buffer): Buffer {
   return buf.subarray(0, end);
 }
 
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && Buffer.compare(a, b) === 0;
+}
+
 function withStartCode(...nals: Uint8Array[]): Uint8Array {
   let size = 0;
   for (const n of nals) size += START_CODE.length + n.length;
@@ -131,6 +135,9 @@ export class AnnexBPacketizer {
   private pps: Uint8Array | null = null;
   /** True once a configuration packet has been emitted for the current SPS/PPS. */
   private configured = false;
+  /** The parameter sets of the last emitted configuration packet. */
+  private emittedSps: Uint8Array | null = null;
+  private emittedPps: Uint8Array | null = null;
   /** True once an IDR has been emitted: later slices are decodable. */
   private haveKeyframe = false;
   /** NALs (an IDR first) that arrived before the configuration did. */
@@ -164,6 +171,19 @@ export class AnnexBPacketizer {
         if (!this.sps) return;
         this.pps = nal;
         this.configured = true;
+        // Repeated identical parameter sets change nothing: re-announcing them
+        // would invalidate the GOP cache and stall decoders until the next IDR.
+        if (
+          this.emittedSps &&
+          this.emittedPps &&
+          sameBytes(this.emittedSps, this.sps) &&
+          sameBytes(this.emittedPps, nal)
+        ) {
+          this.releaseHeldKeepingRun(out);
+          return;
+        }
+        this.emittedSps = this.sps;
+        this.emittedPps = nal;
         out.push({ type: "configuration", data: withStartCode(this.sps, this.pps) });
         this.releaseHeld(out);
         return;
@@ -194,6 +214,13 @@ export class AnnexBPacketizer {
       default:
         return;
     }
+  }
+
+  private releaseHeldKeepingRun(out: DeviceVideoPacket[]): void {
+    const held = this.held;
+    this.held = [];
+    this.heldBytes = 0;
+    for (const nal of held) this.onNal(nal, out);
   }
 
   private releaseHeld(out: DeviceVideoPacket[]): void {
