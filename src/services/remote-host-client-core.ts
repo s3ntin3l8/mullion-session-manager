@@ -95,7 +95,7 @@ export type {
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
 // `Authorization: Bearer <token>`; a bearer WS header (not a query-string
 // token) is only settable via the `ws` package's client, not the global
-// WebSocket — see src/routes/internal.test.ts's identical reasoning.
+// WebSocket — see test/helpers/internal-routes.ts (`waitForNodeWsOutcome`).
 
 // A network blip must never read as "the agent said no sessions are alive"
 // (landmine #1 — an unreachable host's sessions must be skipped, not
