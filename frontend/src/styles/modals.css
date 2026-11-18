@@ -710,11 +710,11 @@
 }
 /* Native popups can keep a light OS background despite the select's theme.
    Leave light mode and native selection highlighting to the browser. */
-.cmux-root:not(.light) .settings-dropdown select option {
+.cmux-root:not(.light) select option {
   background-color: var(--field);
   color: var(--fg);
 }
-.cmux-root:not(.light) .settings-dropdown select option:disabled {
+.cmux-root:not(.light) select option:disabled {
   color: var(--muted);
 }
 .settings-dropdown {

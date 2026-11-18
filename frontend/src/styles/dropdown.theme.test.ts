@@ -14,17 +14,17 @@ function rule(file: string, selector: string): string {
   return css.slice(start, css.indexOf("}", start));
 }
 
-describe("Dropdown native popup theme", () => {
-  it("pairs dark option text with an opaque themed background, excluding light mode", () => {
-    const option = rule("./modals.css", ".cmux-root:not(.light) .settings-dropdown select option");
+describe("Native select popup theme", () => {
+  it("themes Dropdown and standalone select options in dark mode, excluding light mode", () => {
+    const option = rule("./modals.css", ".cmux-root:not(.light) select option");
     expect(option).toMatch(/background-color:\s*var\(--field\)/);
     expect(option).toMatch(/color:\s*var\(--fg\)/);
   });
 
   it("keeps disabled dark options readable with the muted text token", () => {
-    expect(
-      rule("./modals.css", ".cmux-root:not(.light) .settings-dropdown select option:disabled"),
-    ).toMatch(/color:\s*var\(--muted\)/);
+    expect(rule("./modals.css", ".cmux-root:not(.light) select option:disabled")).toMatch(
+      /color:\s*var\(--muted\)/,
+    );
   });
 
   it("lets native highlighting and disabled states use the active theme's color scheme", () => {
