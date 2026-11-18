@@ -281,6 +281,55 @@ describe.each([
     await app.close();
   });
 
+  it("parks once even when the row already carries a review-loop needs-human reason", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("blocked");
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, {
+      task: { rebaseAttempts: 0, needsHumanReason: "no-progress" },
+    });
+
+    await reconcileTasks(app);
+    await reconcileTasks(app);
+
+    expect(mockAttemptAutoRebase).toHaveBeenCalledTimes(1);
+    expect((await getTask(app, taskId)).needsHumanReason).toBe("no-progress");
+    await app.close();
+  });
+
+  it("stops rebasing a task already parked after a conflict return", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("declined");
+    const app = await buildApp();
+    await createReviewingTask(app, agent, {
+      task: { rebaseAttempts: 0, lastAutoReturnReason: "conflict" },
+    });
+
+    await reconcileTasks(app);
+    await reconcileTasks(app);
+
+    expect(mockAttemptAutoRebase).toHaveBeenCalledTimes(1);
+    expect(mockReseedTaskIfSessionExited).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("parks a task whose worker agent cannot take a seed prompt", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("declined");
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, {
+      task: { rebaseAttempts: 0, agentCommand: "gemini" },
+    });
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    expect(row.needsHumanReason).toBe("rebase-exhausted");
+    expect(mockReseedTaskIfSessionExited).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("sends the task back directly when the project has auto-rebase off", async () => {
     mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
     const app = await buildApp();

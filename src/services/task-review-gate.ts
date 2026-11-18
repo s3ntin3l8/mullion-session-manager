@@ -247,11 +247,11 @@ export async function holdConflictingReview(
   resolvedTaskMaster: ReturnType<typeof resolveTaskMasterConfig>,
   autoReturn: AutoReturn,
 ): Promise<void> {
-  // Judge a finished attempt first: a rapid exit is refunded, which can take
-  // the task back under the cap.
   // Parked for a human by an earlier tick (a worker that could not be stopped,
   // a return that failed): retrying would repeat the same failure every tick.
   if (isParkedForHuman(task)) return;
+  // Judge a finished attempt first: a rapid exit is refunded, which can take
+  // the task back under the cap.
   await settleRapidRebaseExit(app, task, project);
   if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
     const outcome = await attemptAutoRebase(app, task, project, baseRef, { alreadySettled: true });
@@ -279,7 +279,9 @@ function parkConflict(app: FastifyInstance, task: typeof tasks.$inferSelect, mes
 }
 
 function isParkedForHuman(task: typeof tasks.$inferSelect): boolean {
-  return task.needsHumanReason === "rebase-exhausted" && !!task.mergeError?.endsWith(PARKED_SUFFIX);
+  // Keyed on the suffix alone: `recordMergeError` keeps an existing review-loop
+  // `needsHumanReason` (cap, no-progress, ...), so the reason is not reliable.
+  return !!task.mergeError?.endsWith(PARKED_SUFFIX);
 }
 
 /**
@@ -299,20 +301,18 @@ async function returnConflictingPrToWorker(
   autoReturn: AutoReturn,
 ): Promise<void> {
   if (task.lastAutoReturnReason === "conflict") {
-    recordMergeError(
+    parkConflict(
       app,
-      task.id,
+      task,
       `Conflicts with ${baseRef} — the worker was already sent back once to resolve it and the PR still conflicts, needs manual resolution`,
-      "rebase-exhausted",
     );
     return;
   }
   if (!task.worktreePath || !task.agentCommand) {
-    recordMergeError(
+    parkConflict(
       app,
-      task.id,
+      task,
       `Conflicts with ${baseRef} — no worker to send it back to, needs manual resolution`,
-      "rebase-exhausted",
     );
     return;
   }
