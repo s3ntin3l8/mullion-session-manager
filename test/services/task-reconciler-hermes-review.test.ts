@@ -734,6 +734,101 @@ describe("reconcileTasks — Hermes review agent (#2369)", () => {
         await app.close();
       });
 
+      it("ingests the findings JSON of a failed run (turn cap) as a normal verdict", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "failed",
+          error: "max_iterations_reached",
+          output: cleanReply,
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("approved");
+        expect(row.reviewFindings).toContain("All good.");
+        await app.close();
+      });
+
+      it("notes an unfinished run on its verdict and does not auto-return it", async () => {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+        try {
+          const app = await buildApp();
+          const taskId = await createDispatchedTask(app);
+          mockPollTaskReview.mockResolvedValue({
+            status: "failed",
+            error: "max_iterations_reached",
+            output: JSON.stringify({
+              verdict: "changes-requested",
+              summary: "Needs work.",
+              findings: [{ path: "src/foo.ts", line: 1, severity: "blocker", body: "Fix this." }],
+            }),
+            terminal: true,
+            gone: false,
+          });
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.lastReviewVerdict).toBe("changes-requested");
+          expect(row.reviewFindings).toContain("ran out of turns");
+          // The note must also reach the review's own text, which is what lands
+          // on the PR when a finding is anchored inline.
+          const review = mockCreatePullRequestReview.mock.calls[0];
+          expect(review?.[4]?.body).toContain("ran out of turns");
+          expect(row.status).toBe("reviewing");
+          expect(row.autoReturnRounds).toBe(0);
+          await app.close();
+        } finally {
+          delete process.env.MULLION_TASK_MASTER_ENABLED;
+        }
+      });
+
+      it("keeps a capped tail of an unparseable failed reply in the inconclusive note", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        const output = `HEAD_MARKER ${"x".repeat(5000)} TAIL_MARKER`;
+        mockPollTaskReview.mockResolvedValue({
+          status: "failed",
+          error: "max_iterations_reached",
+          output,
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(row.reviewFindings).toContain("The Hermes review failed: max_iterations_reached");
+        expect(row.reviewFindings).toContain("TAIL_MARKER");
+        expect(row.reviewFindings).not.toContain("HEAD_MARKER");
+        expect(row.reviewFindings!.length).toBeLessThan(3000);
+        await app.close();
+      });
+
+      it("keeps the plain wording for a failed run with an empty reply", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "failed",
+          output: "  ",
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(row.reviewFindings).toContain("The Hermes review failed — treat");
+        expect(row.reviewFindings).not.toContain("End of the reply");
+        await app.close();
+      });
+
       it("waits for three consecutive gone answers before giving up on a run", async () => {
         const app = await buildApp();
         const taskId = await createDispatchedTask(app, { reviewRunId: "run_gone" });

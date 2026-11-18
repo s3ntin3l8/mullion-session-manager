@@ -1193,7 +1193,12 @@ has no fresh id per round the way a session does. Two reconcile passes drive it:
   by id, so a Mullion restart resumes it. A completed run's reply goes through
   `extractFindingsJson` and `parseReviewFindings`; a reply that is not the
   findings JSON is **inconclusive**, never a freeform changes-requested. A
-  failed or cancelled run is inconclusive; a run Hermes no longer knows is
+  **failed** run with a non-empty reply gets the same parse (a run that hit the
+  bot's turn cap has often already written the JSON); a structured result is
+  ingested as a normal verdict, but with `finished: false`, so it never
+  auto-returns. When nothing parses, the inconclusive note keeps the last 2000
+  characters of the reply after the "failed" line. A failed run with an empty
+  reply, or a cancelled one, is inconclusive; a run Hermes no longer knows is
   inconclusive after three consecutive polls; a run still going 60 minutes
   after dispatch is stopped and recorded inconclusive. The outcome finishes
   through the same `ingestReviewOutcome` a session review ends in (round
@@ -1213,6 +1218,15 @@ session would be killed: re-entering `reviewing`, auto-rebase, the inconclusive
 re-arm, approve / give-up / merge cleanup (`cleanupTaskSessions`) and the
 abandon teardown. Task Master never uses the GitHub relay's
 `stopHermesReview` / `getHermesReviewStatus` for these runs.
+
+**Turn budget.** The review bot has a tool-turn limit (`hermes_review_bot_max_turns`
+in ansible-playbooks) that Mullion cannot read, so `buildReviewPrompt`'s `reply`
+mode states `HERMES_REVIEW_TURN_BUDGET` (`task-prompt.ts`, keep it equal to that
+setting): lean on the PR's CI result (that sentence is dropped when the prompt
+carries no CI summary), review in priority order, and emit the
+findings JSON before the budget runs out, marking unreviewed areas `not-checked`. A failed run's structured verdict is
+ingested with `finished: false` (never auto-returns) and its round comment
+ends with a note that the review ran out of turns.
 
 **What Hermes must do.** Nothing is installed on the Hermes host for this: the
 run message (`buildTaskReviewMessage` plus `buildReviewPrompt` in `reply`

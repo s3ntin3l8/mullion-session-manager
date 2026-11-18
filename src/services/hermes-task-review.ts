@@ -10,6 +10,7 @@ import {
 } from "./hermes-client.js";
 import type { HermesRun, PostRunResult } from "./hermes-client.js";
 import { buildRelayTargetLines } from "./hermes-review.js";
+import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
 
 /**
  * A Task Master review run on Hermes. Unlike the GitHub relay
@@ -275,4 +276,51 @@ export function stopHermesRunQuietly(app: FastifyInstance, runId: string | null 
       app.log.warn({ err, runId }, "task reconcile: failed to stop the Hermes review run");
     }
   })();
+}
+
+/** How much of a failed run's unparseable reply the inconclusive note keeps. */
+const FAILED_REPLY_TAIL_CHARS = 2000;
+
+/** The inconclusive reason for a terminal run whose reply is not the findings
+ * JSON: a completed run's own reason, or a failed run's `failed` line followed
+ * by the tail of what it did say (never the whole reply). */
+export function failedReplyReason(
+  poll: Pick<TaskReviewPoll, "status" | "output" | "notFindingsReason">,
+  failedLine: string,
+): string {
+  if (poll.status === "completed") return poll.notFindingsReason;
+  const text = (poll.output ?? "").trim();
+  const tail =
+    text.length > FAILED_REPLY_TAIL_CHARS ? `…${text.slice(-FAILED_REPLY_TAIL_CHARS)}` : text;
+  return `${failedLine}\n\nEnd of the reply:\n${tail}`;
+}
+
+/** Appended to a structured verdict's round comment when a Hermes run ended
+ * before finishing (turn cap), so a reader knows the review was cut short. */
+export function cutShortNote(finished: boolean, latch: { kind: string }): string {
+  return !finished && latch.kind === "run"
+    ? "\n\n_This review ran out of turns; only the areas it reached were reviewed._"
+    : "";
+}
+
+/**
+ * Reads a terminal run's reply into a structured verdict (or null) plus the
+ * inconclusive reason for when there is none. A failed run (typically one that
+ * hit the bot's turn cap) with a non-empty reply is parsed exactly like a
+ * completed one; any other terminal status is never parsed.
+ */
+export function parseTerminalReply(
+  poll: Pick<TaskReviewPoll, "status" | "output" | "error" | "notFindingsReason">,
+  opts: { ignorePrevious: boolean },
+): { parsed: ParsedReviewFindings | null; reason: string } {
+  const reason = `The Hermes review ${poll.status}${poll.error ? `: ${poll.error}` : ""}`;
+  if (poll.status !== "completed" && !(poll.status === "failed" && poll.output?.trim())) {
+    return { parsed: null, reason };
+  }
+  const json = extractFindingsJson(poll.output ?? "");
+  const candidate = json === null ? null : parseReviewFindings(json, opts);
+  // An unstructured reply parses as a freeform changes-requested; from an
+  // external reviewer that is noise, not a verdict.
+  if (candidate?.structured) return { parsed: candidate, reason };
+  return { parsed: null, reason: failedReplyReason(poll, reason) };
 }
