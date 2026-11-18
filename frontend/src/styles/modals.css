@@ -692,7 +692,7 @@
 }
 
 /* ---------------------------------------------------------------- */
-/* Dropdown (font family, default shell/agent, sound)                */
+/* Dropdown controls and app-wide native select popups               */
 /* ---------------------------------------------------------------- */
 .settings-dropdown select {
   appearance: none;
@@ -708,7 +708,8 @@
   /* Chevron in the padding-right reserve; drawn as a --muted-coloured mask because a
      var() can't live inside a data URI. */
 }
-/* Native popups can keep a light OS background despite the select's theme.
+/* App-wide: these option rules cover every native select in the theme root.
+   Native popups can keep a light OS background despite the select's theme.
    Leave light mode and native selection highlighting to the browser. */
 .cmux-root:not(.light) select option {
   background-color: var(--field);
