@@ -4,7 +4,21 @@
 // browser a Chromium on the session's host. The server translates a project
 // preview (src/services/browser-handoff.ts); what the client can decide on its
 // own lives here.
-import type { BrowserPanelParams } from "../BrowserPanel.js";
+
+/** The preview params a retarget names: BrowserPanelParams' target keys,
+ * spelled out here so this module does not import the lazy BrowserPanel. */
+export interface PreviewTargetParams {
+  projectId?: number;
+  kind?: "external";
+  url?: string;
+  slug?: string;
+  previewSlug?: string;
+  targetName?: string;
+  targetRev?: number;
+  previewPath?: string;
+  activeSavedUrlId?: number | null;
+  activeSavedUrlLabel?: string | null;
+}
 
 /**
  * What the preview loaded, as BrowserPanel reports it. Never the iframe's own
@@ -63,8 +77,8 @@ export function addressHandoffRefusal(url: string): string | null {
  * merge of a write-back) clears what the previous target had set. */
 export function retargetedPreviewParams(
   projectId: number | undefined,
-  next: Pick<BrowserPanelParams, "kind" | "url" | "previewSlug" | "targetName" | "previewPath">,
-): BrowserPanelParams {
+  next: Pick<PreviewTargetParams, "kind" | "url" | "previewSlug" | "targetName" | "previewPath">,
+): PreviewTargetParams {
   return {
     projectId,
     kind: next.kind,
@@ -95,7 +109,7 @@ export function addressLabel(url: string): string {
  * already shows it. `previewRev` tells the pane to drop what ⇄ opened.
  */
 export function previewResetPatch(
-  current: Partial<BrowserPanelParams> | undefined,
+  current: Partial<PreviewTargetParams> | undefined,
   home: { projectId: number; previewSlug?: string; targetName?: string },
 ): Record<string, unknown> | null {
   if (!current) return null;

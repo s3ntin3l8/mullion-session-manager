@@ -27,7 +27,7 @@ import {
   resolvePreviewTarget,
   resolveUpstreamBase,
   type PreviewTarget,
-} from "../plugins/preview-proxy.js";
+} from "./preview-upstream.js";
 import { bindingBrowserTarget } from "./browser-binding-target.js";
 import { resolveExecutionContext } from "./execution-context.js";
 import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
