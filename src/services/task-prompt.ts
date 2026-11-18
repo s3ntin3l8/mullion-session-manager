@@ -1300,11 +1300,11 @@ export const HERMES_REVIEW_TURN_BUDGET = 150;
 
 /** The budget paragraph a `reply` review's prompt carries (see
  * `HERMES_REVIEW_TURN_BUDGET`). */
-export function renderHermesTurnBudget(): string {
+export function renderHermesTurnBudget(hasCi: boolean): string {
   return [
     `You have a limited budget of about ${HERMES_REVIEW_TURN_BUDGET} tool turns for this review.`,
-    "Rely on the PR's CI result above instead of re-running full test suites. Review the",
-    "diff in priority order (correctness and invariants first, style last). Emit the",
+    ...(hasCi ? ["Rely on the PR's CI result above instead of re-running full test suites."] : []),
+    "Review the diff in priority order (correctness and invariants first, style last). Emit the",
     "findings JSON before the budget runs out, even if the review is incomplete, and mark",
     'any area you did not get to as "not-checked" rather than leaving it out.',
   ].join("\n");
@@ -1620,7 +1620,7 @@ export function buildReviewPrompt(opts: {
     ...(opts.roundsRemaining !== undefined && Number.isFinite(opts.roundsRemaining)
       ? [renderRoundsRemaining(opts.roundsRemaining), ""]
       : []),
-    ...(reply ? [renderHermesTurnBudget(), ""] : []),
+    ...(reply ? [renderHermesTurnBudget(!!opts.ci), ""] : []),
     ...(reply
       ? []
       : [

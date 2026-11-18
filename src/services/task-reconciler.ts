@@ -51,8 +51,8 @@ import {
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
   dispatchTaskReview,
-  extractFindingsJson,
-  failedReplyReason,
+  parseTerminalReply,
+  cutShortNote,
   isUnsentRunId,
   pollTaskReview,
   stopHermesRunQuietly,
@@ -1003,22 +1003,9 @@ async function processHermesRuns(app: FastifyInstance): Promise<void> {
           return;
         }
 
-        let parsed: ReturnType<typeof parseReviewFindings> | null = null;
-        let reason = `The Hermes review ${poll.status}${poll.error ? `: ${poll.error}` : ""}`;
-        // A failed run (typically one that hit the bot's turn cap) can still
-        // hold the findings JSON, so it is parsed exactly like a completed one.
-        if (poll.status === "completed" || (poll.status === "failed" && !!poll.output?.trim())) {
-          const json = extractFindingsJson(poll.output ?? "");
-          if (json !== null) {
-            const candidate = parseReviewFindings(json, {
-              ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
-            });
-            // An unstructured reply parses as a freeform changes-requested;
-            // from an external reviewer that is noise, not a verdict.
-            if (candidate.structured) parsed = candidate;
-          }
-          if (parsed === null) reason = failedReplyReason(poll, reason);
-        }
+        const { parsed, reason } = parseTerminalReply(poll, {
+          ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
+        });
         await ingestReviewOutcome(app, {
           ...row,
           parsed,
@@ -4171,7 +4158,7 @@ async function ingestReviewOutcome(
   const roundLabel = reviewRoundLabel(task, input.supersedeInconclusive, task.reviewFindings);
 
   const commentBody = parsed
-    ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
+    ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}${cutShortNote(finished, latch)}`
     : `${roundLabel}\n\n${noFindingsReason} — treat this review as inconclusive.`;
 
   const appendedFindings = task.reviewFindings

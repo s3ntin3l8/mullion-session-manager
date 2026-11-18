@@ -753,6 +753,36 @@ describe("reconcileTasks — Hermes review agent (#2369)", () => {
         await app.close();
       });
 
+      it("notes an unfinished run on its verdict and does not auto-return it", async () => {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+        try {
+          const app = await buildApp();
+          const taskId = await createDispatchedTask(app);
+          mockPollTaskReview.mockResolvedValue({
+            status: "failed",
+            error: "max_iterations_reached",
+            output: JSON.stringify({
+              verdict: "changes-requested",
+              summary: "Needs work.",
+              findings: [{ path: "src/foo.ts", line: 1, severity: "blocker", body: "Fix this." }],
+            }),
+            terminal: true,
+            gone: false,
+          });
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.lastReviewVerdict).toBe("changes-requested");
+          expect(row.reviewFindings).toContain("ran out of turns");
+          expect(row.status).toBe("reviewing");
+          expect(row.autoReturnRounds).toBe(0);
+          await app.close();
+        } finally {
+          delete process.env.MULLION_TASK_MASTER_ENABLED;
+        }
+      });
+
       it("keeps a capped tail of an unparseable failed reply in the inconclusive note", async () => {
         const app = await buildApp();
         const taskId = await createDispatchedTask(app);

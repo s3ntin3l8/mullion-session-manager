@@ -1222,8 +1222,11 @@ abandon teardown. Task Master never uses the GitHub relay's
 **Turn budget.** The review bot has a tool-turn limit (`hermes_review_bot_max_turns`
 in ansible-playbooks) that Mullion cannot read, so `buildReviewPrompt`'s `reply`
 mode states `HERMES_REVIEW_TURN_BUDGET` (`task-prompt.ts`, keep it equal to that
-setting): lean on the PR's CI result, review in priority order, and emit the
-findings JSON before the budget runs out, marking unreviewed areas `not-checked`.
+setting): lean on the PR's CI result (that sentence is dropped when the prompt
+carries no CI summary), review in priority order, and emit the
+findings JSON before the budget runs out, marking unreviewed areas `not-checked`. A failed run's structured verdict is
+ingested with `finished: false` (never auto-returns) and its round comment
+ends with a note that the review ran out of turns.
 
 **What Hermes must do.** Nothing is installed on the Hermes host for this: the
 run message (`buildTaskReviewMessage` plus `buildReviewPrompt` in `reply`

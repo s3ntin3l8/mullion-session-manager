@@ -10,6 +10,7 @@ import {
 } from "./hermes-client.js";
 import type { HermesRun, PostRunResult } from "./hermes-client.js";
 import { buildRelayTargetLines } from "./hermes-review.js";
+import { parseReviewFindings, type ParsedReviewFindings } from "./task-prompt.js";
 
 /**
  * A Task Master review run on Hermes. Unlike the GitHub relay
@@ -292,4 +293,34 @@ export function failedReplyReason(
   const tail =
     text.length > FAILED_REPLY_TAIL_CHARS ? `…${text.slice(-FAILED_REPLY_TAIL_CHARS)}` : text;
   return `${failedLine}\n\nEnd of the reply:\n${tail}`;
+}
+
+/** Appended to a structured verdict's round comment when a Hermes run ended
+ * before finishing (turn cap), so a reader knows the review was cut short. */
+export function cutShortNote(finished: boolean, latch: { kind: string }): string {
+  return !finished && latch.kind === "run"
+    ? "\n\n_This review ran out of turns; only the areas it reached were reviewed._"
+    : "";
+}
+
+/**
+ * Reads a terminal run's reply into a structured verdict (or null) plus the
+ * inconclusive reason for when there is none. A failed run (typically one that
+ * hit the bot's turn cap) with a non-empty reply is parsed exactly like a
+ * completed one; any other terminal status is never parsed.
+ */
+export function parseTerminalReply(
+  poll: Pick<TaskReviewPoll, "status" | "output" | "error" | "notFindingsReason">,
+  opts: { ignorePrevious: boolean },
+): { parsed: ParsedReviewFindings | null; reason: string } {
+  const reason = `The Hermes review ${poll.status}${poll.error ? `: ${poll.error}` : ""}`;
+  if (poll.status !== "completed" && !(poll.status === "failed" && poll.output?.trim())) {
+    return { parsed: null, reason };
+  }
+  const json = extractFindingsJson(poll.output ?? "");
+  const candidate = json === null ? null : parseReviewFindings(json, opts);
+  // An unstructured reply parses as a freeform changes-requested; from an
+  // external reviewer that is noise, not a verdict.
+  if (candidate?.structured) return { parsed: candidate, reason };
+  return { parsed: null, reason: failedReplyReason(poll, reason) };
 }

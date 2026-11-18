@@ -16,6 +16,21 @@ describe("buildReviewPrompt turn budget", () => {
     expect(out).toContain("not-checked");
   });
 
+  it("only points at the CI result when the prompt carries one", () => {
+    const base = {
+      task,
+      output: "reply" as const,
+      workspace: "clone" as const,
+      remote: { owner: "acme", repo: "widgets", headSha: "h1", prNumber: 7 },
+    };
+    expect(buildReviewPrompt(base)).not.toContain("CI result above");
+    const withCi = buildReviewPrompt({
+      ...base,
+      ci: { headSha: "abc1234", status: "success", runs: [] },
+    });
+    expect(withCi).toContain("CI result above");
+  });
+
   it("does not mention a turn budget to a session reviewer", () => {
     const out = buildReviewPrompt({
       task,
