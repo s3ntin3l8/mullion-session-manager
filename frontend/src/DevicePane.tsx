@@ -668,10 +668,12 @@ export function DevicePane(props: {
         }
         if (usage !== null) {
           event.preventDefault();
-          const shift = event.shiftKey;
-          activeIosHidKeys.set(event.code, { usage, shift });
-          if (shift) {
-            sendControl({ type: "hidKey", usage: 0xe1, action: "down" });
+          if (!activeIosHidKeys.has(event.code)) {
+            const shift = event.shiftKey;
+            activeIosHidKeys.set(event.code, { usage, shift });
+            if (shift) {
+              sendControl({ type: "hidKey", usage: 0xe1, action: "down" });
+            }
           }
           sendControl({ type: "hidKey", usage, action: "down" });
         }

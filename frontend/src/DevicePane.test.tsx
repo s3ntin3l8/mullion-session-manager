@@ -881,6 +881,7 @@ describe("DevicePane (issue #1326)", () => {
       // Shifted, CapsLock, Alt/Option, AltGr and unmapped printable keys send
       // `{ type: "text", text: event.key }` so the iOS driver's `textToHidEvents`
       // expands LEFT_SHIFT, and their keyup does not emit an orphan `hidKey` up.
+      const beforePrintable = sent().length;
       for (const init of [
         { key: "A", code: "KeyA", shiftKey: true },
         { key: "A", code: "KeyA", modifierCapsLock: true },
@@ -899,7 +900,7 @@ describe("DevicePane (issue #1326)", () => {
           );
         });
       }
-      expect(sent().slice(2)).toEqual([
+      expect(sent().slice(beforePrintable)).toEqual([
         { type: "text", text: "A" },
         { type: "text", text: "A" },
         { type: "text", text: "@" },
@@ -911,6 +912,7 @@ describe("DevicePane (issue #1326)", () => {
 
       // Two aliased codes held concurrently (Digit1 and Numpad1 both map to 0x1e)
       // each release their own hidKey up because tracking is keyed by event.code.
+      const beforeAliased = sent().length;
       act(() => {
         canvas.dispatchEvent(
           new KeyboardEvent("keydown", {
@@ -945,7 +947,7 @@ describe("DevicePane (issue #1326)", () => {
           }),
         );
       });
-      expect(sent().slice(9)).toEqual([
+      expect(sent().slice(beforeAliased)).toEqual([
         { type: "hidKey", usage: 0x1e, action: "down" },
         { type: "hidKey", usage: 0x1e, action: "down" },
         { type: "hidKey", usage: 0x1e, action: "up" },
@@ -955,6 +957,7 @@ describe("DevicePane (issue #1326)", () => {
       // Named keys (including Shift+Tab and Shift+ArrowLeft, which wrap the key
       // in explicit LEFT_SHIFT 0xE1 down/up) and chords that would send Android
       // keyEvent on Android.
+      const beforeNamed = sent().length;
       for (const init of [
         { key: "Enter", code: "Enter" },
         { key: "Backspace", code: "Backspace" },
@@ -973,7 +976,7 @@ describe("DevicePane (issue #1326)", () => {
           );
         });
       }
-      expect(sent().slice(13)).toEqual([
+      expect(sent().slice(beforeNamed)).toEqual([
         { type: "hidKey", usage: 0x28, action: "down" },
         { type: "hidKey", usage: 0x28, action: "up" },
         { type: "hidKey", usage: 0x2a, action: "down" },
@@ -990,6 +993,7 @@ describe("DevicePane (issue #1326)", () => {
 
       // Releasing a shift-wrapped key while Ctrl/Cmd is held still releases
       // both the key usage and LEFT_SHIFT (0xE1) instead of latching shift.
+      const beforeChordKeyup = sent().length;
       act(() => {
         canvas.dispatchEvent(
           new KeyboardEvent("keydown", {
@@ -1011,8 +1015,54 @@ describe("DevicePane (issue #1326)", () => {
           }),
         );
       });
-      expect(sent().slice(25)).toEqual([
+      expect(sent().slice(beforeChordKeyup)).toEqual([
         { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "up" },
+        { type: "hidKey", usage: 0xe1, action: "up" },
+      ]);
+
+      // Releasing Shift before a repeat keydown of a shift-wrapped key keeps
+      // the original shift flag so the final keyup still releases LEFT_SHIFT.
+      const beforeShiftRepeat = sent().length;
+      act(() => {
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowLeft",
+            code: "ArrowLeft",
+            shiftKey: true,
+          }),
+        );
+        canvas.dispatchEvent(
+          new KeyboardEvent("keyup", {
+            bubbles: true,
+            cancelable: true,
+            key: "Shift",
+            code: "ShiftLeft",
+          }),
+        );
+        canvas.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowLeft",
+            code: "ArrowLeft",
+          }),
+        );
+        canvas.dispatchEvent(
+          new KeyboardEvent("keyup", {
+            bubbles: true,
+            cancelable: true,
+            key: "ArrowLeft",
+            code: "ArrowLeft",
+          }),
+        );
+      });
+      expect(sent().slice(beforeShiftRepeat)).toEqual([
+        { type: "hidKey", usage: 0xe1, action: "down" },
+        { type: "hidKey", usage: 0x50, action: "down" },
         { type: "hidKey", usage: 0x50, action: "down" },
         { type: "hidKey", usage: 0x50, action: "up" },
         { type: "hidKey", usage: 0xe1, action: "up" },
@@ -1020,6 +1070,7 @@ describe("DevicePane (issue #1326)", () => {
 
       // Focus loss (window blur / canvas blur) and unmount sweep any held
       // hidKey entries and release LEFT_SHIFT once if any held key was shifted.
+      const beforeWindowBlur = sent().length;
       act(() => {
         canvas.dispatchEvent(
           new KeyboardEvent("keydown", {
@@ -1032,13 +1083,14 @@ describe("DevicePane (issue #1326)", () => {
         );
         window.dispatchEvent(new Event("blur"));
       });
-      expect(sent().slice(29)).toEqual([
+      expect(sent().slice(beforeWindowBlur)).toEqual([
         { type: "hidKey", usage: 0xe1, action: "down" },
         { type: "hidKey", usage: 0x50, action: "down" },
         { type: "hidKey", usage: 0x50, action: "up" },
         { type: "hidKey", usage: 0xe1, action: "up" },
       ]);
 
+      const beforeCanvasBlur = sent().length;
       act(() => {
         canvas.dispatchEvent(
           new KeyboardEvent("keydown", {
@@ -1051,7 +1103,7 @@ describe("DevicePane (issue #1326)", () => {
         );
         canvas.dispatchEvent(new FocusEvent("blur"));
       });
-      expect(sent().slice(33)).toEqual([
+      expect(sent().slice(beforeCanvasBlur)).toEqual([
         { type: "hidKey", usage: 0xe1, action: "down" },
         { type: "hidKey", usage: 0x2b, action: "down" },
         { type: "hidKey", usage: 0x2b, action: "up" },
@@ -1078,6 +1130,7 @@ describe("DevicePane (issue #1326)", () => {
       });
 
       // Unmounting while a shifted key is held releases it before closing.
+      const beforeUnmount = sent().length;
       act(() => {
         canvas.dispatchEvent(
           new KeyboardEvent("keydown", {
@@ -1090,7 +1143,7 @@ describe("DevicePane (issue #1326)", () => {
         );
       });
       unmount();
-      expect(sent().slice(38)).toEqual([
+      expect(sent().slice(beforeUnmount)).toEqual([
         { type: "hidKey", usage: 0xe1, action: "down" },
         { type: "hidKey", usage: 0x4f, action: "down" },
         { type: "hidKey", usage: 0x4f, action: "up" },
