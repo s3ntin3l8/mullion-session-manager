@@ -85,6 +85,12 @@ const renderDetail = (id: number, onBack = vi.fn()) =>
 beforeEach(() => vi.restoreAllMocks());
 
 describe("TaskDetailView layout", () => {
+  it("shows the startup warning for a worker that never started", () => {
+    const t = task({ status: "in_progress", needsHumanReason: "worker-not-started" });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.getByText(/Needs a human: worker has not started a turn/)).toBeInTheDocument();
+  });
   it("shares the detail inset and boxes the state sections as cards", () => {
     const t = task({ status: "reviewing" });
     setTasks([t]);

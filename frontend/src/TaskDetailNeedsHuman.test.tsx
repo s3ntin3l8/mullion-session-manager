@@ -50,6 +50,12 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
 
+  it("labels a worker that never started while it is in progress", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", needsHumanReason: "worker-not-started" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/Needs a human: worker has not started a turn/)).toBeInTheDocument();
+  });
+
   it("shows the review-post-failed block with the sync error, and not once it is cleared", () => {
     tasks = [
       makeTask({

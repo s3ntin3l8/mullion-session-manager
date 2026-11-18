@@ -78,3 +78,10 @@ describe("needsYouReason: a parked red CI check", () => {
     ).toBeNull();
   });
 });
+
+it("includes an unstarted worker in needs-you tasks only while in progress", () => {
+  const task = t({ status: "in_progress", needsHumanReason: "worker-not-started" });
+  expect(needsYouTasks([task])).toHaveLength(1);
+  expect(needsYouReason(task)).toMatch(/worker has not started a turn/);
+  expect(needsYouReason({ ...task, status: "done" })).toBeNull();
+});

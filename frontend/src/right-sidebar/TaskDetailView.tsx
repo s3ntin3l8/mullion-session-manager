@@ -10,7 +10,7 @@ import type { Session, Task, TaskBlocker } from "../api/types.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
 import { prStatuses, prTriadItems, type PrStatusInput } from "../github/prPhase.js";
 import { parseReviewRounds } from "../lib/reviewRounds.js";
-import { reviewPhaseText } from "../needsHuman.js";
+import { needsHumanText, reviewPhaseText } from "../needsHuman.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "../sessionStatus.js";
 import { useDashboardStore } from "../store/index.js";
 import {
@@ -269,6 +269,12 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
           );
         }}
       />
+
+      {task.status === "in_progress" && task.needsHumanReason === "worker-not-started" && (
+        <div className="sc-callout sc-callout--warn" role="status">
+          {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
+        </div>
+      )}
 
       {showReview && (
         <SidebarSection title="Review" persistKey="task-detail-review" variant="card">
