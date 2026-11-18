@@ -585,7 +585,7 @@
           "click": "role=button[name=/switch workspace/]"
         },
         {
-          "waitFor": "text=\"Experiments\" >> nth=-1"
+          "waitFor": "role=dialog[name=\"Workspaces\"] >> text=\"Experiments\""
         },
         {
           "wait": 500

@@ -230,6 +230,29 @@ describe("seedDemo sessions", () => {
   });
 });
 
+describe("seedDemo workspace groups", () => {
+  it("seeds groups (one empty), their workspaces and an ungrouped workspace", async () => {
+    const root = mkdtempSync(path.join(dir, "seed-"));
+    const calls: { url: string; method?: string; body: Record<string, unknown> }[] = [];
+    const api = async (url: string, init?: { method?: string; body?: string }) => {
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : {} });
+      return { id: 1, taskMaster: { enabled: "on", autoClaimPaused: true } };
+    };
+    await seedDemo({ api, root });
+    const groups = calls.filter((c) => c.url === "/api/groups").map((c) => c.body.name);
+    expect(groups).toEqual(["Product", "Platform", "Experiments"]);
+    const created = calls
+      .filter((c) => c.url === "/api/workspaces" && c.method === "POST")
+      .map((c) => c.body.name);
+    expect(created).toEqual(["Web app", "Mobile app", "API", "Scratchpad"]);
+    const grouped = calls.filter(
+      (c) => /^\/api\/workspaces\/\d+$/.test(c.url) && c.method === "PATCH",
+    );
+    expect(grouped).toHaveLength(3);
+    expect(grouped.every((c) => c.body.groupId === 1)).toBe(true);
+  });
+});
+
 describe("seedDemo git depth and dock", () => {
   it("gives aurora-web branches, a worktree, a dev-server port and a dock control", async () => {
     const root = mkdtempSync(path.join(dir, "seed-"));
