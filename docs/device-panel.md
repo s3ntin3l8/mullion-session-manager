@@ -67,7 +67,11 @@ reading it as "dead" lets the next launch reclaim the id instead of wedging it.
 On a platform without a capability, the routes that **add, start or change**
 such a device answer **400** with the platform named ("Emulator devices are not
 supported on `<platform>` …") rather than a raw spawn error. `GET
-/api/server-info` reports the kinds a host can run as `features.deviceKinds`,
+/api/server-info` reports the kinds a host can run as `features.deviceKinds`
+and the platforms as `features.devicePlatforms` (`android`, plus `ios` when the
+iOS Simulator is available: macOS, `DEVICE_IOS_ENABLED`, the `xcode` host
+capability and an executable `DEVICE_IDB_COMPANION_PATH`; empty when the panel
+is off),
 and the Settings → Devices page hides the emulator controls when `"emulator"` is
 not listed. The `/api/devices` reads and the teardown routes (`POST
 /api/devices/:id/stop`, `DELETE /api/devices/:id`) stay open on purpose — an
@@ -340,7 +344,7 @@ address** remains the manual path.
 A device runs on the host its `devices` row names (`hostId`, default `"local"`).
 `POST /api/devices` takes an optional `hostId` (otherwise the project's host,
 else the primary) and refuses, before inserting a row, a kind that host cannot
-serve: an agent reports the kinds it can run at `GET /internal/devices/kinds`
+serve: an agent reports the kinds it can run, and its `platforms`, at `GET /internal/devices/kinds` (an answer without `platforms` is read as Android-only)
 (empty while its own
 `DEVICE_ENABLED` is off); an agent that predates the route is refused with
 "update its agent".

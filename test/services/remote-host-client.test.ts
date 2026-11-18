@@ -11,7 +11,7 @@ import {
 } from "../../src/services/request-signature.js";
 
 // Issue #249 / roadmap 7.5 — the 5 non-request() sites (openAttach,
-// openBrowserWs, openEventsStream, openPreviewWs, openSshAgentStream)
+// browser.openSocket, openEventsStream, openPreviewWs, openSshAgentStream)
 // construct a real `ws` package WebSocket; mocked here the same way
 // `fetch` is stubbed above, so
 // the exact constructor args (in particular the headers option, which is
@@ -2181,8 +2181,8 @@ describe("RemoteHostClient", () => {
         expect(options.headers[SIGNATURE_HEADER]).toBeUndefined();
       });
 
-      it("openBrowserWs signs the WS upgrade for a session-credentialed host", () => {
-        sessionClient("the-secret").openBrowserWs(1, { projectId: 2 } as never); // only the signed upgrade is under test
+      it("browser.openSocket signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").browser.openSocket(1, { projectId: 2 } as never); // only the signed upgrade is under test
         const [url, options] = wsConstructorCalls[0] as [
           string,
           { headers: Record<string, string> },

@@ -5,6 +5,7 @@ import type {
   DeviceActionResult,
   DeviceInfo,
   DeviceKind,
+  DevicePlatform,
 } from "./device-drivers/types.js";
 import type {
   DeviceKindsResponse,
@@ -24,6 +25,12 @@ import type {
 //   `devices.openSocket(id, query)` instead of `spawnDevice` / `openDeviceWs`).
 // - RemoteHostClient exposes one `readonly <domain> = create<Domain>Client(...)`
 //   property and no delegating methods on the core class.
+
+/** What a host can run: the Android kinds and the device platforms. */
+export interface HostDeviceSupport {
+  deviceKinds: DeviceKind[];
+  platforms: DevicePlatform[];
+}
 
 /** The client's `request`, bound. An omitted timeout means the client default. */
 export type DeviceRequest = <T>(path: string, init?: RequestInit, timeoutMs?: number) => Promise<T>;
@@ -60,11 +67,16 @@ function deviceWsTarget(id: string, query: DeviceWsQuery): string {
 
 export function createDevicesClient({ request, openInbound }: DevicesClientDeps) {
   return {
-    /** The device kinds this host can run, or null when the agent predates the
-     * device routes (a 404), which a caller must tell apart from "none". */
-    async kinds(): Promise<DeviceKind[] | null> {
+    /** The device kinds and platforms this host can run, or null when the agent
+     * predates the device routes (a 404), which a caller must tell apart from
+     * "none". An agent that omits `platforms` is Android-only. */
+    async kinds(): Promise<HostDeviceSupport | null> {
       try {
-        return (await request<DeviceKindsResponse>("/internal/devices/kinds")).deviceKinds;
+        const res = await request<DeviceKindsResponse>("/internal/devices/kinds");
+        return {
+          deviceKinds: res.deviceKinds,
+          platforms: res.platforms ?? (res.deviceKinds.length > 0 ? ["android"] : []),
+        };
       } catch (err) {
         if (err instanceof HostRequestError && err.statusCode === 404) return null;
         throw err;

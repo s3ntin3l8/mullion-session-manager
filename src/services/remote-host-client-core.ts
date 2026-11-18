@@ -1,5 +1,4 @@
 import type { AgentProtocolInfo } from "../shared/agent-protocol.js";
-import { browserTargetQuery, type BrowserTarget } from "./browser-manager.js";
 import { renderScrollback } from "./scrollback-render.js";
 import type { TerminalPalette } from "./terminal-query-reply.js";
 import type { TranscriptQuery, TranscriptResult } from "./session-transcript.js";
@@ -37,6 +36,7 @@ import {
 import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
+import { createBrowserClient, type BrowserClient } from "./remote-host-browser.js";
 import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
 import { probeHealth } from "./host-health-probe.js";
 
@@ -360,11 +360,16 @@ export class RemoteHostClient {
     return this.transport.request<T>(path, init, timeoutMs);
   }
 
-  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts).
+  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts, remote-host-browser.ts).
   private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
 
   readonly devices: DevicesClient = createDevicesClient({
+    request: this.boundRequest,
+    openInbound: (target) => this.inboundStream(target, false),
+  });
+
+  readonly browser: BrowserClient = createBrowserClient({
     request: this.boundRequest,
     openInbound: (target) => this.inboundStream(target, false),
   });
@@ -1766,30 +1771,6 @@ export class RemoteHostClient {
       query.set("env", JSON.stringify(opts.env));
     }
     const requestTarget = `/internal/ws/attach?${query.toString()}`;
-    return this.inboundStream(requestTarget, false);
-  }
-
-  /** POST to an agent browser route, naming the target in the query. */
-  postBrowser(path: string, target: BrowserTarget, body?: unknown): Promise<unknown> {
-    return this.request(`${path}?${browserTargetQuery(target)}`, {
-      method: "POST",
-      // No JSON content type without a body: Fastify refuses an empty body
-      // under it, which failed every close against a real agent (#2688).
-      headers: body === undefined ? undefined : { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  }
-
-  browserAutomationAction(sessionId: number, target: BrowserTarget, body: unknown) {
-    return this.postBrowser(`/internal/sessions/${sessionId}/browser`, target, body);
-  }
-
-  browserAutomationFind(sessionId: number, target: BrowserTarget, body: unknown) {
-    return this.postBrowser(`/internal/sessions/${sessionId}/browser/find`, target, body);
-  }
-
-  openBrowserWs(sessionId: number, target: BrowserTarget): NodeWebSocket {
-    const requestTarget = `/internal/ws/browser/${sessionId}?${browserTargetQuery(target)}`;
     return this.inboundStream(requestTarget, false);
   }
 

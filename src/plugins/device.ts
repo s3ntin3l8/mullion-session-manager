@@ -10,6 +10,7 @@ import {
 } from "../services/device-manager.js";
 import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
+import type { DeviceKind } from "../services/device-drivers/types.js";
 import { resolveSessionsDirs } from "./pty.js";
 import {
   resolveDeviceDiscoveryEnabled,
@@ -97,7 +98,12 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   app.decorate("deviceEmulatorSupported", emulatorSupported);
   app.decorate("deviceEmulatorEnabled", app.config.DEVICE_ENABLED && emulatorSupported);
   app.decorate("deviceEmulatorUnavailableMessage", emulatorUnavailableMessage);
-  app.decorate("deviceKinds", [...capabilities]);
+  // The Android device KINDS only: "ios-simulator" is a capability, not a kind,
+  // and is reported through the platforms list instead.
+  app.decorate(
+    "deviceKinds",
+    [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator"),
+  );
 
   // Issue #1770 — resolved ONCE, here: the dir the sockets live in and the
   // set of dirs this instance may own scopes in (the current one plus every
@@ -231,6 +237,6 @@ declare module "fastify" {
     deviceEmulatorEnabled: boolean;
     deviceEmulatorUnavailableMessage: string;
     /** The device kinds this platform supports (reported via /api/server-info). */
-    deviceKinds: ("physical" | "emulator")[];
+    deviceKinds: DeviceKind[];
   }
 }

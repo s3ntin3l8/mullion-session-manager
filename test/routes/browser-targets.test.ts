@@ -6,7 +6,8 @@ import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { projects, sessionBrowsers, sessions } from "../../src/db/schema.js";
-import { RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
+import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 import {
   AGENT_OPERATIONS,
   LEGACY_BASELINE,
@@ -41,6 +42,19 @@ import { EventEmitter } from "node:events";
 // never falls back to the project's host or checkout.
 const tmpDb = path.join(os.tmpdir(), `browser-targets-test-${process.pid}.db`);
 
+// Fastify plugins (like browserAutomationRoutes) receive an encapsulated child
+// FastifyInstance, which would otherwise get its own clientCache entry; route
+// all lookups through the root `app` so instance spies on `client.browser` hit.
+let rootApp: unknown;
+vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof RemoteHostClientModule>();
+  return {
+    ...actual,
+    getRemoteHostClient: (a: Parameters<typeof actual.getRemoteHostClient>[0], hostId: string) =>
+      actual.getRemoteHostClient((rootApp as typeof a) ?? a, hostId),
+  };
+});
+
 describe("browser execution targets", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let n = 0;
@@ -50,6 +64,7 @@ describe("browser execution targets", () => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.BROWSER_ENABLED = "true";
     app = await buildApp();
+    rootApp = app;
   });
   afterAll(async () => {
     await app.close();
@@ -211,14 +226,14 @@ describe("browser execution targets", () => {
     const projectId = addProject("/work/p", a, { [b]: "/srv/p" });
     const onB = addSession(projectId, "/srv/p", b);
     const calls: { host: string; target: unknown }[] = [];
-    vi.spyOn(RemoteHostClient.prototype, "browserAutomationAction").mockImplementation(function (
-      this: unknown,
-      _sessionId: number,
-      target: unknown,
-    ) {
-      calls.push({ host: (this as { hostId: string }).hostId, target });
-      return Promise.resolve({ ok: true });
-    });
+    for (const h of [a, b]) {
+      vi.spyOn(getRemoteHostClient(app, h).browser, "action").mockImplementation(
+        (_sessionId, target) => {
+          calls.push({ host: h, target });
+          return Promise.resolve({ ok: true });
+        },
+      );
+    }
     const res = await app.inject({
       method: "POST",
       url: `/api/sessions/${onB}/browser`,
@@ -238,7 +253,7 @@ describe("browser execution targets", () => {
     );
     const projectId = addProject("/work/p", a);
     const sessionId = addSession(projectId, "/work/p", a);
-    const spy = vi.spyOn(RemoteHostClient.prototype, "browserAutomationAction");
+    const spy = vi.spyOn(getRemoteHostClient(app, a).browser, "action");
     const res = await app.inject({
       method: "POST",
       url: `/api/sessions/${sessionId}/browser`,
@@ -362,7 +377,7 @@ describe("browser execution targets", () => {
       for (const id of [s1, s2]) recordSessionBrowserBinding(app, id, target);
       recordSessionBrowserBinding(app, other, { ...target, checkoutRoot: "/work/other" });
       const close = vi
-        .spyOn(RemoteHostClient.prototype, "postBrowser")
+        .spyOn(getRemoteHostClient(app, a).browser, "post")
         .mockResolvedValue({ ok: true });
 
       closeSessionBrowserBindings(app, s1);
@@ -387,7 +402,7 @@ describe("browser execution targets", () => {
         checkoutRoot: "/work/p",
         legacy: false,
       });
-      const close = vi.spyOn(RemoteHostClient.prototype, "postBrowser");
+      const close = vi.spyOn(getRemoteHostClient(app, a).browser, "post");
       closeSessionBrowserBindings(app, s1);
       await new Promise((r) => setTimeout(r, 20));
       expect(close).not.toHaveBeenCalled();
@@ -466,7 +481,7 @@ describe("browser execution targets", () => {
       const ok = addSession(projectId, "/work/p", a);
       const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
       const upstreams: ReturnType<typeof fakeUpstream>[] = [];
-      vi.spyOn(RemoteHostClient.prototype, "openBrowserWs").mockImplementation((() => {
+      vi.spyOn(getRemoteHostClient(app, a).browser, "openSocket").mockImplementation((() => {
         const up = fakeUpstream();
         upstreams.push(up);
         return up;
@@ -492,7 +507,7 @@ describe("browser execution targets", () => {
       const s1 = addSession(projectId, "/work/p", a);
       const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
       recordSessionBrowserBinding(app, s1, target);
-      const close = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+      const close = vi.spyOn(getRemoteHostClient(app, a).browser, "post").mockResolvedValue({});
       const done = beginBrowserAttach(target);
       closeSessionBrowserBindings(app, s1);
       await new Promise((r) => setTimeout(r, 20));
@@ -512,7 +527,7 @@ describe("browser execution targets", () => {
       const s1 = addSession(projectId, "/work/p", a);
       const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
       recordSessionBrowserBinding(app, s1, target);
-      const post = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+      const post = vi.spyOn(getRemoteHostClient(app, a).browser, "post").mockResolvedValue({});
 
       closeSessionBrowserBindings(app, s1);
       await vi.waitFor(() =>
@@ -572,7 +587,7 @@ describe("browser execution targets", () => {
         })
         .run();
       negotiate(a, AGENT_OPERATIONS);
-      const post = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+      const post = vi.spyOn(getRemoteHostClient(app, a).browser, "post").mockResolvedValue({});
       await processPendingBrowserCloses(app, new Date());
       expect(post).not.toHaveBeenCalled();
       expect(app.db.select().from(pendingBrowserCloses).all()).toHaveLength(0);
@@ -648,8 +663,8 @@ describe("browser execution targets", () => {
       const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
       const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
       const up = fakeUpstream();
-      vi.spyOn(RemoteHostClient.prototype, "openBrowserWs").mockReturnValue(up as never);
-      const post = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+      vi.spyOn(getRemoteHostClient(app, a).browser, "openSocket").mockReturnValue(up as never);
+      const post = vi.spyOn(getRemoteHostClient(app, a).browser, "post").mockResolvedValue({});
       const socket = fakeSocket();
 
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -677,8 +692,8 @@ describe("browser execution targets", () => {
       const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
       const target = { projectId, hostId: a, checkoutRoot: "/work/p", legacy: false };
       const up = fakeUpstream();
-      vi.spyOn(RemoteHostClient.prototype, "openBrowserWs").mockReturnValue(up as never);
-      const post = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+      vi.spyOn(getRemoteHostClient(app, a).browser, "openSocket").mockReturnValue(up as never);
+      const post = vi.spyOn(getRemoteHostClient(app, a).browser, "post").mockResolvedValue({});
       const socket = fakeSocket();
       proxyToRemoteBrowser(app, socket as never, MISSING_SESSION, target);
       up.readyState = 1;
@@ -695,7 +710,7 @@ describe("browser execution targets", () => {
       const failing = addSession(projectId, "/work/p", a);
       const working = addSession(projectId, "/work/p", a);
       const call = vi
-        .spyOn(RemoteHostClient.prototype, "browserAutomationAction")
+        .spyOn(getRemoteHostClient(app, a).browser, "action")
         .mockRejectedValueOnce(new Error("agent unreachable"))
         .mockResolvedValue({ ok: true });
       const failed = await app.inject({
@@ -848,7 +863,7 @@ describe("browser execution targets", () => {
       negotiate(a, AGENT_OPERATIONS);
       const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
       const post = vi
-        .spyOn(RemoteHostClient.prototype, "postBrowser")
+        .spyOn(getRemoteHostClient(app, a).browser, "post")
         .mockRejectedValueOnce(new Error("boom"))
         .mockResolvedValue({});
       await closeCheckoutBrowsers(app, projectId, a, "/work/p-wt");
@@ -866,7 +881,7 @@ describe("browser execution targets", () => {
       negotiate(a, AGENT_OPERATIONS);
       const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
       const post = vi
-        .spyOn(RemoteHostClient.prototype, "postBrowser")
+        .spyOn(getRemoteHostClient(app, a).browser, "post")
         .mockRejectedValueOnce(new Error("close failed"))
         .mockRejectedValueOnce(new Error("forget failed"))
         .mockResolvedValue({});

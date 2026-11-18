@@ -46,11 +46,31 @@ describe("remote-host-devices", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ devices: [] })
-      .mockResolvedValueOnce({ deviceKinds: ["physical"] });
+      .mockResolvedValueOnce({ deviceKinds: ["physical"], platforms: ["android"] });
     const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
     await expect(devices.live()).resolves.toEqual([]);
-    await expect(devices.kinds()).resolves.toEqual(["physical"]);
+    await expect(devices.kinds()).resolves.toEqual({
+      deviceKinds: ["physical"],
+      platforms: ["android"],
+    });
     expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1]);
+  });
+
+  it("reads an agent answer with no platforms as Android-only", async () => {
+    const some = vi.fn().mockResolvedValue({ deviceKinds: ["physical", "emulator"] });
+    await expect(
+      createDevicesClient({ request: some, openInbound: unusedOpenInbound }).kinds(),
+    ).resolves.toEqual({ deviceKinds: ["physical", "emulator"], platforms: ["android"] });
+    const none = vi.fn().mockResolvedValue({ deviceKinds: [] });
+    await expect(
+      createDevicesClient({ request: none, openInbound: unusedOpenInbound }).kinds(),
+    ).resolves.toEqual({ deviceKinds: [], platforms: [] });
+    const ios = vi
+      .fn()
+      .mockResolvedValue({ deviceKinds: ["physical"], platforms: ["android", "ios"] });
+    await expect(
+      createDevicesClient({ request: ios, openInbound: unusedOpenInbound }).kinds(),
+    ).resolves.toEqual({ deviceKinds: ["physical"], platforms: ["android", "ios"] });
   });
 
   it("answers null for an agent that predates the kinds route, and rethrows anything else", async () => {

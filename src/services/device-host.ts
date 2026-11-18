@@ -8,7 +8,8 @@ import {
   type DeviceInfo,
   type DeviceKind,
 } from "./device-drivers/types.js";
-import { localDeviceKinds } from "./device-kinds.js";
+import { localDeviceKinds, localDevicePlatforms } from "./device-kinds.js";
+import type { HostDeviceSupport } from "./remote-host-devices.js";
 import { performDeviceAction } from "./device-drivers/actions.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -40,7 +41,7 @@ export interface DeviceHost {
   readonly hostId: string;
   readonly isLocal: boolean;
   /** The kinds this host can run, or null when it predates the device routes. */
-  kinds(): Promise<DeviceKind[] | null>;
+  kinds(): Promise<HostDeviceSupport | null>;
   /** Get-or-create the row's device (idempotent; reattaches a surviving scope). */
   getOrCreate(row: DeviceRow): Promise<SpawnedDevice>;
   /** Tears the live device down; never touches the row. */
@@ -55,8 +56,11 @@ class LocalDeviceHost implements DeviceHost {
   readonly isLocal = true;
   constructor(private readonly app: FastifyInstance) {}
 
-  async kinds(): Promise<DeviceKind[]> {
-    return localDeviceKinds(this.app);
+  async kinds(): Promise<HostDeviceSupport> {
+    return {
+      deviceKinds: localDeviceKinds(this.app),
+      platforms: await localDevicePlatforms(this.app),
+    };
   }
 
   async getOrCreate(row: DeviceRow): Promise<SpawnedDevice> {
@@ -108,7 +112,7 @@ class RemoteDeviceHost implements DeviceHost {
     return getRemoteHostClient(this.app, this.hostId);
   }
 
-  kinds(): Promise<DeviceKind[] | null> {
+  kinds(): Promise<HostDeviceSupport | null> {
     return this.client.devices.kinds();
   }
 

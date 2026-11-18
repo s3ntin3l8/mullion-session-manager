@@ -327,7 +327,7 @@ async function deliverRemoteClose(
     if (forget || !project || !targetInUse(app, project, legacyKey)) targets.push(legacyKey);
   }
   try {
-    for (const t of targets) await getRemoteHostClient(app, target.hostId).postBrowser(path, t);
+    for (const t of targets) await getRemoteHostClient(app, target.hostId).browser.post(path, t);
     return null;
   } catch (err) {
     return (err as Error).message;
