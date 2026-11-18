@@ -10,6 +10,7 @@ import type {
   AvailableSystemImage,
 } from "../../api/index.js";
 import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
+import { hostDisplayName } from "../../lib/hostBadge.js";
 import { deviceDotClass } from "../../deviceStatus.js";
 import { matchesQuery } from "../../matchQuery.js";
 import { usePolling } from "../../hooks/usePolling.js";
@@ -222,9 +223,10 @@ export function DevicesSection() {
   const hosts = useDashboardStore(useShallow((s) => s.hosts));
   const [createOpen, setCreateOpen] = useState(false);
   // Hosts that could hold the new device (GET /api/devices/hosts), fetched
-  // with the AVD list once the create form opens. `null` until answered; a
-  // failed fetch leaves it empty, which means no picker (primary only).
-  const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[]>([]);
+  // with the AVD list once the create form opens. `null` until answered (no
+  // picker yet); a failed fetch answers with an empty list, which also means
+  // no picker (primary only).
+  const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[] | null>(null);
   const [createHostId, setCreateHostId] = useState(LOCAL_HOST_ID);
   // Physical phones are paired from their own dialog (issue #1379) — see
   // PairDeviceDialog.tsx. This section only owns whether it's open.
@@ -572,7 +574,7 @@ export function DevicesSection() {
   // disabled with the reason; a usable one must run the emulator kind this
   // form creates.
   const hostOptions = useMemo(() => {
-    if (deviceHosts.length < 2) return [];
+    if (!deviceHosts || deviceHosts.length < 2) return [];
     return deviceHosts.flatMap((h) => {
       if (h.status === "unsupported") {
         return [
@@ -595,10 +597,6 @@ export function DevicesSection() {
   const effectiveHostId = hostOptions.some((o) => o.value === createHostId && !o.disabled)
     ? createHostId
     : LOCAL_HOST_ID;
-  const hostName = (hostId: string) =>
-    hosts.find((h) => h.id === hostId)?.name ??
-    deviceHosts.find((h) => h.hostId === hostId)?.name ??
-    hostId;
 
   const submitCreate = () => {
     if (creating) return;
@@ -776,7 +774,7 @@ export function DevicesSection() {
                 title={device.name || device.avdName || device.serial}
                 subtitle={
                   device.hostId !== LOCAL_HOST_ID
-                    ? `${device.avdName ?? device.serial ?? ""} · ${hostName(device.hostId)}`
+                    ? `${device.avdName ?? device.serial ?? ""} · ${hostDisplayName(device.hostId, hosts)}`
                     : (device.avdName ?? device.serial)
                 }
                 unavailable={device.status === "killed" || device.hostUnreachable === true}
@@ -929,7 +927,10 @@ export function DevicesSection() {
             </div>
           )}
           {showHostPicker && (
-            <Row label="Host" desc="The machine that runs this emulator.">
+            <Row
+              label="Host"
+              desc="The machine that runs this emulator. The virtual device below is chosen from this machine's list; its name is resolved on the host you pick here."
+            >
               <Dropdown
                 ariaLabel="Host"
                 options={hostOptions}
@@ -939,7 +940,10 @@ export function DevicesSection() {
             </Row>
           )}
           {avdsLoaded && avds.length > 0 && (
-            <Row label="Virtual device" desc="An Android virtual device (AVD) on this machine.">
+            <Row
+              label="Virtual device"
+              desc="An Android virtual device (AVD) on this machine. Listing AVDs on other hosts is not supported yet."
+            >
               <Dropdown
                 options={avds.map((n) => ({ value: n, label: n }))}
                 value={avdName}

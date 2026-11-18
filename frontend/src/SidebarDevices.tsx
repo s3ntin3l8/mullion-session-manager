@@ -2,9 +2,11 @@ import { useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import type { Device } from "./api/index.js";
+import { LOCAL_HOST_ID } from "../../src/shared/constants.js";
 import { deviceDotClass } from "./deviceStatus.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { describeError } from "./lib/describeError.js";
+import { hostDisplayName } from "./lib/hostBadge.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import { DeviceIcon, PlayIcon, StopIcon } from "./ui/icons.js";
 
@@ -49,6 +51,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
   // management surface (create/pair/edit-address/delete); this section is
   // start/stop + open.
   const devices = useDashboardStore(useShallow((s) => s.devices));
+  const hosts = useDashboardStore(useShallow((s) => s.hosts));
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
   const startDevice = useDashboardStore((s) => s.startDevice);
   const stopDevice = useDashboardStore((s) => s.stopDevice);
@@ -135,8 +138,14 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
         const label = deviceLabel(device);
         // This row's own failure, or nothing — never another row's.
         const rowError = lifecycleError?.id === device.id ? lifecycleError.message : null;
+        const unreachable = device.hostUnreachable === true;
         const title =
-          rowError ?? (stopped ? "Stopped — click to start" : (device.live?.error ?? undefined));
+          rowError ??
+          (unreachable
+            ? "Unavailable — host unreachable"
+            : stopped
+              ? "Stopped — click to start"
+              : (device.live?.error ?? undefined));
         return (
           // role/tabIndex/Enter-Space + `e.target !== e.currentTarget`, same
           // P10 pattern as Sidebar.tsx's SessionRow/project-row-header (see
@@ -173,6 +182,14 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
           >
             <DeviceIcon size={14} />
             <span className="sidebar-tasks-entry-label">{label}</span>
+            {device.hostId !== LOCAL_HOST_ID && (
+              <span
+                data-testid={`device-host-${device.id}`}
+                style={{ fontSize: "0.65625rem", color: "var(--dim)" }}
+              >
+                {hostDisplayName(device.hostId, hosts)}
+              </span>
+            )}
             <span className={`settings-status-dot ${deviceDotClass(device)}`} />
             <span className="device-row-actions">
               {stopped ? (
@@ -181,7 +198,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                   data-testid={`device-start-${device.id}`}
                   aria-label={`Start ${label}`}
                   title="Start"
-                  disabled={pendingId !== null || device.hostUnreachable === true}
+                  disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
                     e.stopPropagation();
                     void runLifecycle(device, "start");
@@ -195,7 +212,7 @@ export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device
                   data-testid={`device-stop-${device.id}`}
                   aria-label={`Stop ${label}`}
                   title="Stop"
-                  disabled={pendingId !== null}
+                  disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
                     e.stopPropagation();
                     void runLifecycle(device, "stop");
