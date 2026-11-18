@@ -84,6 +84,9 @@ function installBackend(overrides: Partial<Record<RouteName, Handler>> = {}) {
   const { fetchMock, unexpectedCalls } = mockFetch({
     "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
     "GET /api/devices": () => jsonResponse(200, []),
+    // Opening the create form also asks which hosts can run an emulator;
+    // an empty list means primary-only, so no host picker.
+    "GET /api/devices/hosts": () => jsonResponse(200, []),
     "GET /api/avds": track("avds", handlers.avds),
     "GET /api/system-images": track("systemImages", handlers.systemImages),
     "GET /api/device-profiles": track("deviceProfiles", handlers.deviceProfiles),
