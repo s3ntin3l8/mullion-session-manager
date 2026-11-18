@@ -1410,7 +1410,8 @@ same as a fresh boot.
 
 Issue [#2306](https://github.com/s3ntin3l8/mullion-session-manager/issues/2306)
 — a host reports what it can do beyond running agent CLIs: `xcode` (the iOS
-Simulator toolchain) and `android-emulator` (an emulator Mullion can start).
+Simulator toolchain; also one of the conditions for the device panel's iOS
+Simulator, together with `DEVICE_IOS_ENABLED` and `DEVICE_IDB_COMPANION_PATH`) and `android-emulator` (an emulator Mullion can start).
 `GET /internal/capabilities` on the agent answers `{ "capabilities": [...] }`,
 and the primary keeps it beside the agent list (same TTL, same invalidation).
 `GET /api/hosts` exposes it as `capabilities`; Settings → Hosts shows chips.

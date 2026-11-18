@@ -5,7 +5,7 @@ import {
   DEVICE_SPAWN_SCHEMA,
   DEVICE_TERMINATE_SCHEMA,
 } from "./internal-schemas.js";
-import { localDeviceKinds } from "../services/device-kinds.js";
+import { localDeviceKinds, localDevicePlatforms } from "../services/device-kinds.js";
 import { isDeviceAction, performDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceKind } from "../services/device-drivers/types.js";
@@ -33,6 +33,7 @@ function isDeviceKind(value: unknown): value is DeviceKind {
 export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: object }): void {
   app.get<{ Reply: DeviceKindsResponse }>("/internal/devices/kinds", rateLimit, async () => ({
     deviceKinds: localDeviceKinds(app),
+    platforms: await localDevicePlatforms(app),
   }));
 
   // Idempotent get-or-create: a device already live under this id is returned as

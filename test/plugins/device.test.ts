@@ -19,6 +19,7 @@ import {
   deviceCapabilities,
   isDeviceKindSupported,
   isDevicePanelSupported,
+  unsupportedKindMessage,
 } from "../../src/services/device-manager.js";
 
 const ptyMock = createNodePtyMock();
@@ -82,7 +83,26 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
       expect(isDevicePanelSupported("darwin")).toBe(true);
       expect(isDeviceKindSupported("physical", "darwin")).toBe(true);
       expect(isDeviceKindSupported("emulator", "darwin")).toBe(true);
-      expect([...deviceCapabilities("darwin")]).toEqual(["physical", "emulator"]);
+      expect([...deviceCapabilities("darwin")]).toEqual(["physical", "emulator", "ios-simulator"]);
+    });
+
+    it("only darwin supports the iOS Simulator", () => {
+      expect(isDeviceKindSupported("ios-simulator", "darwin")).toBe(true);
+      expect(isDeviceKindSupported("ios-simulator", "linux")).toBe(false);
+      expect(isDeviceKindSupported("ios-simulator", "win32")).toBe(false);
+      expect([...deviceCapabilities("linux")]).toEqual(["physical", "emulator"]);
+    });
+
+    it("words the refusals per kind, keeping the Android wording", () => {
+      expect(unsupportedKindMessage("ios-simulator", "linux")).toBe(
+        "iOS Simulator devices are not supported on linux.",
+      );
+      expect(unsupportedKindMessage("emulator", "linux", new Set(["physical"]))).toBe(
+        "Emulator devices are not supported on linux — only physical devices are.",
+      );
+      expect(unsupportedKindMessage("physical", "win32")).toBe(
+        "Physical devices are not supported on win32.",
+      );
     });
 
     it("windows has no capability at all — the whole panel is off", () => {
@@ -268,6 +288,8 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           expect(app.deviceKinds).toEqual(["physical", "emulator"]);
           const res = await app.inject({ method: "GET", url: "/api/server-info" });
           expect(res.json().features.deviceKinds).toEqual(["physical", "emulator"]);
+          // iOS is off by default, so a Mac still reports Android only.
+          expect(res.json().features.devicePlatforms).toEqual(["android"]);
         } finally {
           await app.close();
         }

@@ -44,6 +44,9 @@ export interface LiveDevicesResponse {
 export interface DeviceKindsResponse {
   /** The device kinds this host can run right now; empty when the panel is off. */
   deviceKinds: DeviceKind[];
+  /** The device platforms this host can run right now. Absent from an agent that
+   * predates iOS support, which is Android-only. */
+  platforms?: DevicePlatform[];
 }
 
 /** The query of `/internal/ws/device/:id` (every value is a string on the wire). */

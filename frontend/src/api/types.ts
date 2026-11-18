@@ -50,6 +50,7 @@ import type { NeedsHumanReason } from "../needsHuman.js";
 import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
 import type { HostSettings } from "./host-types.js";
 import type { UpdateStatus } from "./update-types.js";
+import type { DevicePlatform } from "./deviceTypes.js";
 import type {
   PlacementCapability,
   PlacementMode,
@@ -2005,6 +2006,8 @@ export interface ServerInfo {
     deviceDiscovery: boolean;
     // Device kinds this host can run (#1854). Optional: an older server omits it.
     deviceKinds?: ("physical" | "emulator")[];
+    // Device platforms this host can run. Optional: an older server omits it.
+    devicePlatforms?: DevicePlatform[];
   };
 }
 
