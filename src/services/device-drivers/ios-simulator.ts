@@ -376,6 +376,8 @@ export class IosSimulatorDriver implements DeviceDriver {
     });
     const ended = (err?: Error) => {
       if (generation !== this.streamGeneration) return;
+      // grpc-js emits `end` and then `error` for a non-OK status: count once.
+      this.streamGeneration++;
       this.stream = null;
       if (err && this.alive) this.error = errorText(err);
       // A stream that ended without ever producing a keyframe is a failure.
@@ -452,7 +454,10 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.reopening = true;
     try {
       if (!companion.isRunning || !companion.client) await companion.start();
-      if (!this.alive) return;
+      if (!this.alive) {
+        this.reopening = false;
+        return;
+      }
       const client = companion.client;
       if (!client) throw new Error("idb companion has no client");
       // A restarted stream opens with fresh SPS/PPS/IDR: forget the old GOP

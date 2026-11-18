@@ -292,6 +292,28 @@ describe("IosSimulatorDriver video (in-process companion)", () => {
     release();
     await vi.advanceTimersByTimeAsync(0);
     expect(streams).toHaveLength(1);
+    // A restarted driver must still reopen video after its next stream end.
+    await driver.start();
+    expect(streams).toHaveLength(2);
+    streams[1]!.emit("end");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(streams).toHaveLength(3);
+    await driver.stop();
+  });
+
+  it("counts a real gRPC stream end (end then error) as one failure", async () => {
+    const { driver, streams } = make();
+    await driver.start();
+    for (let i = 0; i < 12; i++) {
+      const s = streams.at(-1)!;
+      s.emit("end");
+      s.emit("error", new Error("UNAVAILABLE"));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    // Budget of 5 failures: the initial stream plus 4 reopens.
+    expect(streams).toHaveLength(5);
+    expect(driver.toInfo().status).toBe("error");
+    await driver.stop();
   });
 
   it("never gives a late subscriber a delta before a keyframe after an overflowed GOP", async () => {
