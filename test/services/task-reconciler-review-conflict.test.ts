@@ -111,7 +111,7 @@ describe.each([
   setupReconcilerTestLifecycle(`task-reconciler-review-conflict-${agent}`);
 
   beforeEach(() => {
-    mockAttemptAutoRebase.mockReset().mockResolvedValue(undefined);
+    mockAttemptAutoRebase.mockReset().mockResolvedValue("spawned");
     mockHermesUsable.mockReset().mockReturnValue(true);
     mockDispatchTaskReview.mockReset().mockResolvedValue({
       runId: "run_1",
@@ -206,6 +206,23 @@ describe.each([
     expect(prompt).toContain("conflicts with main");
     expect(prompt).toContain("git merge");
     expect(prompt).toContain("origin/main");
+    await app.close();
+  });
+
+  it("sends the task back to its worker when auto-rebase declines before reaching the cap", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("declined");
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, { task: { rebaseAttempts: 0 } });
+
+    await reconcileTasks(app);
+
+    expect(await dispatched(app, taskId)).toBe(false);
+    expect(mockAttemptAutoRebase).toHaveBeenCalledTimes(1);
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("in_progress");
+    expect(row.lastAutoReturnReason).toBe("conflict");
+    expect(row.autoReturnRounds).toBe(3);
     await app.close();
   });
 

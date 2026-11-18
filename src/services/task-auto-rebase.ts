@@ -259,6 +259,13 @@ export async function settleRapidRebaseExit(
  * unattended worker against a task nobody asked to be re-touched is exactly
  * the kind of action that opt-in exists to gate.
  */
+/**
+ * What an `attemptAutoRebase` call did: `spawned` a worker, is `waiting` (an
+ * attempt in flight, a backoff or hold, a transient failure — a later tick
+ * retries), or `declined` for good (the rebase cannot run, or the cap is spent).
+ */
+export type RebaseOutcome = "spawned" | "waiting" | "declined";
+
 export async function attemptAutoRebase(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -267,10 +274,10 @@ export async function attemptAutoRebase(
   // The caller already judged the previous attempt this tick (settleRapidRebaseExit),
   // so judging it again would cost a second liveStatus call.
   opts: { alreadySettled?: boolean } = {},
-): Promise<void> {
+): Promise<RebaseOutcome> {
   if (!project.autoApprove) {
     recordMergeError(app, task.id, "Conflicts with main — needs manual resolution");
-    return;
+    return "declined";
   }
 
   if (opts.alreadySettled !== true) await settleRapidRebaseExit(app, task, project);
@@ -298,7 +305,7 @@ export async function attemptAutoRebase(
       task.id,
       "Conflicts with main — the worker's host has no path for this project, so the rebase cannot run there",
     );
-    return;
+    return "declined";
   }
   const backend = resolveBackend(app, workerHostId);
 
@@ -311,7 +318,7 @@ export async function attemptAutoRebase(
       // and it's still in flight, it should be allowed to finish, not be
       // reported as "gave up" while it may yet succeed.
       recordMergeError(app, task.id, "Conflicts with main — an auto-rebase attempt is in progress");
-      return;
+      return "waiting";
     }
   }
 
@@ -328,7 +335,7 @@ export async function attemptAutoRebase(
       `Conflicts with main — auto-rebase gave up after ${MAX_REBASE_ATTEMPTS} attempt(s), needs manual resolution`,
       "rebase-exhausted",
     );
-    return;
+    return "declined";
   }
 
   // The previous worker's agent died at once: wait out the backoff before
@@ -339,7 +346,7 @@ export async function attemptAutoRebase(
       task.id,
       "Conflicts with main — the last auto-rebase worker exited at once, retrying shortly",
     );
-    return;
+    return "waiting";
   }
 
   // Checked before anything is terminated: killing a live round only to bail
@@ -350,7 +357,7 @@ export async function attemptAutoRebase(
       task.id,
       "Conflicts with main — no seed-capable agent recorded for this task, needs manual resolution",
     );
-    return;
+    return "declined";
   }
 
   const blocker = await findRebaseBlocker(app, task, backend);
@@ -359,7 +366,7 @@ export async function attemptAutoRebase(
     rebaseHeldSince.set(task.id, heldSince);
     if (now - heldSince < REBASE_HOLD_MAX_MS) {
       recordMergeError(app, task.id, `Conflicts with main — auto-rebase waiting: ${blocker}`);
-      return;
+      return "waiting";
     }
     app.log.warn(
       { taskId: task.id, blocker, heldMs: now - heldSince },
@@ -423,7 +430,7 @@ export async function attemptAutoRebase(
               ? "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution"
               : "Conflicts with main — the task's previous worker could not be stopped, needs manual resolution",
         );
-        return;
+        return "waiting";
       }
     }
   }
@@ -466,7 +473,7 @@ export async function attemptAutoRebase(
           task.id,
           "Conflicts with main — active review session appears stuck and could not be stopped, needs manual resolution",
         );
-        return;
+        return "waiting";
       }
     }
   }
@@ -502,7 +509,7 @@ export async function attemptAutoRebase(
       task.id,
       `Conflicts with main — could not recreate the worktree for ${branchName} (branch missing or checked out elsewhere), needs manual resolution`,
     );
-    return;
+    return "declined";
   }
 
   const spawnHeadSha = await readPrHeadSha(app, task, project);
@@ -577,7 +584,7 @@ export async function attemptAutoRebase(
       task.id,
       `Conflicts with main — failed to spawn an auto-rebase worker (${result.reason}), needs manual resolution`,
     );
-    return;
+    return "declined";
   }
   const spawnedSessionId = result.ok ? result.row.id : kept!;
   const seedDelivered =
@@ -619,13 +626,14 @@ export async function attemptAutoRebase(
     // lost, so the task never took the session as its handle and no later tick
     // would find it.
     await killSession(app, spawnedSessionId);
-    return;
+    return "waiting";
   }
 
   app.log.info(
     { taskId: task.id, sessionId: spawnedSessionId, attempt: task.rebaseAttempts + 1 },
     "task auto-rebase: spawned a worker to resolve a merge conflict",
   );
+  return "spawned";
 }
 
 /**

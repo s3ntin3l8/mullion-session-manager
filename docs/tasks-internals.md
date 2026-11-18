@@ -1919,12 +1919,16 @@ Turning that on has consequences worth knowing before you do it:
 
 `dirty` is different from the rest of that table: a
 real conflict with the base branch never resolves on its own. `attemptAutoRebase`
-(task-reconciler.ts) has **two call sites**, not one: the merge sweep's
+(task-reconciler.ts) has **three call sites**, not one: the merge sweep's
 `dirty` row above (a `done` task, already approved, whose worktree
 `approveTask` already removed at approve time), and — separately —
 [Auto-approve](#auto-approve)'s own gate below, for a still-`reviewing` task
-whose PR is already `dirty`/unmergeable before it has ever been approved.
-Both share the exact same function and the exact same opt-in: with
+whose PR is already `dirty`/unmergeable before it has ever been approved,
+and the review dispatch gate (`holdConflictingReview`, #3339), which attempts it
+before a review is spawned for a `dirty` PR and, once `attemptAutoRebase`
+declines (cap spent, or it cannot run: no worktree, no seed-capable agent, a
+failed spawn) or `autoApprove` is off, auto-returns the task to its worker with
+the `conflict` reason (no review round spent). All share the exact same function and the exact same opt-in: with
 `projects.autoApprove` on (the same "nobody is watching" opt-in `#755`'s
 red-CI-return and `#757`'s PR-comment-ingest use), it spawns a worker into
 the task's branch to fix the conflict instead of just backing off:
@@ -1976,7 +1980,8 @@ the task's branch to fix the conflict instead of just backing off:
 - If `resumeTaskWorktree` can't recreate the worktree (branch deleted or
   checked out elsewhere), or the attempt cap is spent, the sweep falls back to
   today's plain `dirty` backoff — surfaced in `tasks.mergeError` for a human,
-  same as `mergeOnApprove` without `autoApprove`.
+  same as `mergeOnApprove` without `autoApprove`. The review dispatch gate
+  instead sends the task back to its worker (the function returns `declined`).
 - **A rebase waits for other work in the worktree.** `attemptAutoRebase` does
   not spawn while another worker round could push into the same worktree: the
   task is neither `reviewing` nor `done` (a worker round is in flight), a

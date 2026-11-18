@@ -233,7 +233,7 @@ export async function resolveReviewCi(
  * call this in place of the spawn/run: the task goes to the auto-rebase flow
  * (`attemptAutoRebase`, which owns the attempt counter, `rebaseStartedAt`
  * hold-back and rapid-exit backoff the loops already honour before they get
- * here), and once that cannot run or has given up, back to its worker. Every
+ * here), and once that cannot run or has given up (`declined`), back to its worker. Every
  * tick either spawns/awaits a rebase attempt (capped by MAX_REBASE_ATTEMPTS),
  * returns the task (once, see `returnConflictingPrToWorker`) or parks it for a
  * human, so the loop cannot spin.
@@ -250,8 +250,11 @@ export async function holdConflictingReview(
   // the task back under the cap.
   await settleRapidRebaseExit(app, task, project);
   if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
-    await attemptAutoRebase(app, task, project, baseRef, { alreadySettled: true });
-    return;
+    const outcome = await attemptAutoRebase(app, task, project, baseRef, { alreadySettled: true });
+    // A rebase that cannot run (no worktree, no seed-capable agent, a failed
+    // spawn) would otherwise leave the task in `reviewing` every tick with no
+    // attempt counted: send it back to its worker instead.
+    if (outcome !== "declined") return;
   }
   await returnConflictingPrToWorker(app, task, project, baseRef, resolvedTaskMaster, autoReturn);
 }
@@ -297,7 +300,7 @@ async function returnConflictingPrToWorker(
   });
   const issueContext = await resolveTaskIssueContextSafe(app, task, project);
   const reason = project.autoApprove
-    ? `Mullion's automatic rebase gave up after ${MAX_REBASE_ATTEMPTS} attempt(s).`
+    ? `Mullion's automatic rebase could not resolve it (${task.rebaseAttempts} of ${MAX_REBASE_ATTEMPTS} attempt(s) used).`
     : "Automatic rebase is off for this project.";
   const returned = await autoReturn(app, task, project, {
     reason: "conflict",
