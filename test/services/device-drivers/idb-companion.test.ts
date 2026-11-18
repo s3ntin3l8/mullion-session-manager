@@ -216,7 +216,15 @@ describe("IdbCompanion", () => {
     });
     trackedCompanions.push(mismatched);
 
-    await expect(mismatched.start()).rejects.toThrow(/unexpected udid/);
+    const t0 = Date.now();
+    try {
+      await mismatched.start();
+      expect.unreachable();
+    } catch (err) {
+      expect((err as Error).message).toMatch(/describe returned unexpected udid/);
+      expect((err as Error).message).not.toMatch(/failed to become ready/);
+    }
+    expect(Date.now() - t0).toBeLessThan(2000);
 
     const mismatchedPid = trackedChildren[0].pid!;
     expect(await waitForPidDead(mismatchedPid)).toBe(true);
