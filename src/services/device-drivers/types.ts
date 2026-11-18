@@ -6,8 +6,9 @@
 //
 // The driver wraps a live engine; it does NOT own its lifecycle yet.
 // DeviceManager still spawns/attaches/terminates (scope backend, port pool),
-// so there is no `start()` here — it arrives with the first driver whose
-// lifecycle is not the manager's.
+// so the Android driver has no `start()`. The iOS Simulator driver is the
+// driver whose lifecycle is not the manager's: it has its own `start()`/`stop()`
+// beyond this interface, which the manager calls once it is wired in.
 
 export type DevicePlatform = "android" | "ios";
 

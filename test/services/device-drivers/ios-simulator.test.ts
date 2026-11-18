@@ -152,8 +152,55 @@ describe("IosSimulatorDriver", () => {
     const before = calls.length;
     await vi.advanceTimersByTimeAsync(20_000);
     expect(calls.length).toBe(before);
+    // The user rebooted it: that boot is not ours, so stop() must not shut it down.
+    res.state = "Booted";
     await driver.stop();
+    expect(verbs(calls)).not.toContain("shutdown");
     expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed shutdown keeps ownership so a second stop() retries", async () => {
+    const f = fakeSimctl();
+    const { driver, calls, res } = make(f);
+    await driver.start();
+    res.fail.shutdown = new Error("CoreSimulatorService restarted");
+    await expect(driver.stop()).rejects.toThrow("CoreSimulatorService restarted");
+    expect(driver.toInfo().status).toBe("exited");
+    delete res.fail.shutdown;
+    await driver.stop();
+    expect(verbs(calls).filter((v) => v === "shutdown")).toHaveLength(2);
+    expect(res.state).toBe("Shutdown");
+  });
+
+  it("treats 'current state: Shutdown' from shutdown as success", async () => {
+    const f = fakeSimctl();
+    const { driver, res } = make(f);
+    await driver.start();
+    res.fail.shutdown = new Error("Unable to shutdown device in current state: Shutdown");
+    await expect(driver.stop()).resolves.toBeUndefined();
+  });
+
+  it("a retried start() after a failed one still remembers it booted the simulator", async () => {
+    const f = fakeSimctl();
+    const { driver, calls, res } = make(f);
+    res.fail.bootstatus = new Error("timeout");
+    await expect(driver.start()).rejects.toThrow("timeout");
+    delete res.fail.bootstatus;
+    await driver.start();
+    await driver.stop();
+    expect(verbs(calls)).toContain("shutdown");
+  });
+
+  it("one throwing exit listener does not starve the rest", async () => {
+    const { driver } = make();
+    const second = vi.fn();
+    driver.onExit(() => {
+      throw new Error("boom");
+    });
+    driver.onExit(second);
+    await driver.start();
+    await driver.stop();
+    expect(second).toHaveBeenCalledTimes(1);
   });
 
   it("keeps polling through a failed probe", async () => {

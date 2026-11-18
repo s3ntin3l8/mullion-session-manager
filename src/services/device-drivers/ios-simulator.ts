@@ -134,16 +134,15 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.status = "booting";
     this.error = null;
     try {
-      if (await this.isBooted()) {
-        this.bootedByUs = false;
-      } else {
+      // Only the boot branch (and stop) ever writes bootedByUs: a retry after
+      // a failed start must not forget a boot this process already did.
+      if (!(await this.isBooted())) {
         try {
           await this.simctl(["boot", this.udid], { timeoutMs: BOOT_TIMEOUT_MS });
           this.bootedByUs = true;
         } catch (err) {
           // Lost a race with another booter: already Booted is success.
           if (!/current state: Booted/i.test(errorText(err))) throw err;
-          this.bootedByUs = false;
         }
       }
       await this.simctl(["bootstatus", this.udid, "-b"], { timeoutMs: BOOT_TIMEOUT_MS });
@@ -162,10 +161,17 @@ export class IosSimulatorDriver implements DeviceDriver {
    * deletes or erases. */
   async stop(): Promise<void> {
     this.stopPolling();
-    const shutdown = this.bootedByUs;
-    this.bootedByUs = false;
     try {
-      if (shutdown) await this.simctl(["shutdown", this.udid]);
+      if (this.bootedByUs) {
+        try {
+          await this.simctl(["shutdown", this.udid]);
+        } catch (err) {
+          // Already Shutdown is the outcome we wanted.
+          if (!/current state: Shutdown/i.test(errorText(err))) throw err;
+        }
+        // Cleared only once the shutdown landed, so a failed one can be retried.
+        this.bootedByUs = false;
+      }
     } finally {
       this.markExited();
     }
@@ -284,6 +290,8 @@ export class IosSimulatorDriver implements DeviceDriver {
     try {
       if (!(await this.isBooted())) {
         this.stopPolling();
+        // Ownership ends with the boot: any later boot is not ours.
+        this.bootedByUs = false;
         this.markExited();
       }
     } catch {
@@ -298,7 +306,13 @@ export class IosSimulatorDriver implements DeviceDriver {
     if (this.status !== "error") this.status = "exited";
     if (this.exited) return;
     this.exited = true;
-    for (const listener of [...this.exitListeners]) listener();
+    for (const listener of [...this.exitListeners]) {
+      try {
+        listener();
+      } catch {
+        // One throwing listener must not starve the rest.
+      }
+    }
   }
 }
 
