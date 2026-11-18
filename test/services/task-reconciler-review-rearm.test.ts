@@ -937,6 +937,45 @@ describe("reconcileTasks — review round cap and re-arm", () => {
         await app.close();
       });
 
+      it("stamps the live head as the baseline when the PR cache is warm", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          inconclusiveReviewRearmCount: 1,
+          prNumber: 9,
+          lastReviewedHeadSha: null,
+        });
+        mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+        setRepoPRsStatus("o", "r", {
+          prs: [
+            {
+              number: 9,
+              title: "test pr",
+              htmlUrl: "https://github.com/o/r/pull/9",
+              author: "dev",
+              ...PR_REVIEW_DEFAULTS,
+              headSha: "sha-live",
+              headBranch: "feature",
+              baseBranch: "main",
+              ciStatus: null,
+              actionsRuns: [],
+            },
+          ],
+          prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+        });
+
+        await reconcileTasks(app);
+        const first = await getTask(app, task.id);
+        expect(first.needsHumanReason).toBe("review-inconclusive");
+        expect(first.lastReviewedHeadSha).toBe("sha-live");
+
+        await reconcileTasks(app);
+        const row = await getTask(app, task.id);
+        expect(row.needsHumanReason).toBe("review-inconclusive");
+        expect(row.lastReviewedHeadSha).toBe("sha-live");
+        expect(row.reviewSessionId).toBe(first.reviewSessionId);
+        await app.close();
+      });
+
       it("does not flag while an automatic re-arm is still left", async () => {
         const app = await buildApp();
         const { task } = await createStalledInconclusiveTask(app, {

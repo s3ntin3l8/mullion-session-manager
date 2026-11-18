@@ -78,18 +78,19 @@ describe("a review that is still inconclusive after its re-arm", () => {
     expect(screen.queryByText(/Round \d/)).toBeNull();
   });
 
-  it("shows nothing once the stop stamp is cleared", () => {
+  it("shows the line from the reason alone, even without the stop stamp", () => {
     tasks = [
       makeTask({
         id: 1,
         status: "reviewing",
         autoReturnCapAnnouncedAt: null,
+        autoReturnRounds: 2,
         reviewSessionId: 9,
         lastReviewVerdict: "inconclusive",
         needsHumanReason: "review-inconclusive",
       }),
     ];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect(screen.queryByTestId("review-inconclusive-needs-human")).toBeNull();
+    expect(screen.getAllByTestId("review-inconclusive-needs-human")).toHaveLength(1);
   });
 });

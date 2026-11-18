@@ -843,7 +843,7 @@ export function TaskDetail({
                 {task.githubSyncError ? ` — ${task.githubSyncError}` : ""}
               </div>
             )}
-          {capAnnounced && task.needsHumanReason === "review-inconclusive" && (
+          {task.needsHumanReason === "review-inconclusive" && (
             <div
               className="task-detail-review-round task-detail-review-round-capped"
               data-testid="review-inconclusive-needs-human"
