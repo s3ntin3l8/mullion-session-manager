@@ -35,12 +35,14 @@ export function agentBrowserIsRailView(band: LayoutBand): boolean {
 
 /**
  * Whether a preview opens in the rail's Browser view rather than as a pane
- * (#3372, decision 2): below 1100px, where the Browser view exists. Read at
+ * (#3372, decision 2): wherever the agent's browser is that view, since it is
+ * one view with both modes. Read at
  * the moment of opening, so the openers need no subscription of their own.
  */
 export function previewOpensInRail(): boolean {
-  const band = resolveLayoutBand(useDashboardStore.getState().settings.layoutMode);
-  return viewInBand({ bands: COMPANION_BANDS }, band);
+  return agentBrowserIsRailView(
+    resolveLayoutBand(useDashboardStore.getState().settings.layoutMode),
+  );
 }
 
 /** The live layout band, from the user's layout-mode setting. */

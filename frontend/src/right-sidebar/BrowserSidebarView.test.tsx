@@ -231,6 +231,34 @@ describe("BrowserSidebarView", () => {
     });
   });
 
+  it("lets go of an agent's browser attached before the server said it is off", async () => {
+    bindings[5] = [{}];
+    let answer!: (r: Response) => void;
+    const late = new Promise<Response>((resolve) => (answer = resolve));
+    const { fetchMock } = mockFetch({
+      "GET /api/sessions/:id/browser": ({ params }) =>
+        jsonResponse(200, bindings[Number(params.id)] ?? []),
+      "GET /api/server-info": () => late,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ activePanelId: "session-5" });
+    renderView();
+    // Attached while the flag is still unknown.
+    expect(await screen.findByTestId("browser-pane")).toHaveAttribute("data-session-id", "5");
+    await act(async () => {
+      answer(
+        jsonResponse(200, {
+          ...SERVER_INFO_FIXTURE,
+          features: { ...SERVER_INFO_FIXTURE.features, browser: false },
+        }),
+      );
+      await late;
+    });
+    await waitFor(() => expect(screen.queryByTestId("browser-pane")).toBeNull());
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(visiblePreview()).not.toHaveAttribute("hidden");
+  });
+
   describe("the mode it was last in (#3372)", () => {
     it("reopens in the mode the switch left it in", async () => {
       useDashboardStore.setState({ activePanelId: "session-5" });

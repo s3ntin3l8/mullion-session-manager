@@ -70,7 +70,9 @@ export function BrowserSidebarView({ projectId }: RightSidebarViewProps) {
         browserEnabled={!featureOff}
         previewParams={previewParams}
         previewApi={previewApi}
-        agentSession={session}
+        // Off, there is no agent's browser to show: a null session also lets
+        // go of one attached before the server answered, as the grid pane does.
+        agentSession={featureOff ? null : session}
         agentSessionTitle={title}
         // With no session in focus, Agent's browser shows this note; the
         // switch's tooltip gives the same reason from Preview.
