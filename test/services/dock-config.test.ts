@@ -400,7 +400,7 @@ describe("dock-config service", () => {
   // re-flagging a real, manually-verified guard it doesn't recognize as a
   // sanitizer shape) — these tests exercise it directly, independent of
   // and in addition to the route-layer resolveWithinRoots check
-  // (test/routes/internal.test.ts's own "/internal/dock-config" describe
+  // (test/routes/internal-agent-assets.test.ts's own "/internal/dock-config" describe
   // block) that already gates `cwd` before either route ever calls in
   // here.
   describe("resolveDockConfigPath (path-safety guard, CodeQL: uncontrolled data in path expression)", () => {

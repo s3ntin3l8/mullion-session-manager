@@ -110,7 +110,7 @@ describe("session-lifecycle.ts — sessions.injectMullionBundle threading (issue
     // separate agent-side half of the fix (an explicit opts value actually
     // winning over the agent's own default) is proven directly against
     // PtyManager.getOrCreate() in pty-manager.test.ts, and against the
-    // agent-role /internal/sessions route in routes/internal.test.ts.
+    // agent-role /internal/sessions route in routes/internal-sessions-spawn.test.ts.
     expect(app.pty.get(sessionId)?.injectMullionBundle).toBe(false);
 
     await app.close();

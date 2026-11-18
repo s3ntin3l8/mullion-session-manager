@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // a discriminated HostGitResult. Every collaborator is mocked so this file
 // tests exactly that dispatch/mapping logic, not git itself (covered by
 // git-status.test.ts/git-refs.test.ts/git-push.test.ts) or the wire format
-// (covered by test/routes/internal.test.ts).
+// (covered by test/routes/internal-git-ops.test.ts and test/routes/internal-git-status.test.ts).
 
 const mockGetGitStatus = vi.fn();
 const mockIsGitRepo = vi.fn();
