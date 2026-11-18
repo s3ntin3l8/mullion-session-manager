@@ -698,6 +698,7 @@ export class IosSimulatorDriver implements DeviceDriver {
   private resetCompanionSession(): void {
     this.closeHidStream();
     this.screenDimensions = null;
+    this.describeEpoch += 1;
     this.describePromise = null;
     this.hidStale = false;
   }
@@ -743,7 +744,7 @@ export class IosSimulatorDriver implements DeviceDriver {
       ) {
         throw new DeviceActionError(502, "idb describe did not return valid screen dimensions");
       }
-      this.screenDimensions = dims;
+      if (this.describeEpoch === epoch) this.screenDimensions = dims;
       return dims;
     })();
     this.describePromise = promise;
@@ -838,6 +839,53 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
   }
 
+  private async sendHidBatch(
+    client: IdbGrpcClient,
+    events: IdbHidEvent[],
+    forAction: boolean,
+  ): Promise<{ ok: true } | { ok: false; invalidated: boolean; err: unknown }> {
+    if (forAction && client.hidOnce) {
+      if (this.hidStream) {
+        const prev = this.hidStream;
+        this.hidStream = null;
+        await new Promise<void>((resolve) => {
+          prev.once("status", () => resolve());
+          prev.once("error", () => resolve());
+          try {
+            prev.end();
+          } catch {
+            resolve();
+          }
+        });
+      }
+      try {
+        await client.hidOnce(events);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, invalidated: isInvalidatedHidError(err), err };
+      }
+    }
+    const stream = this.ensureHidStream(client);
+    try {
+      await this.writeBatchToStream(stream, events);
+      if (!this.hidStale && this.hidStream === stream) {
+        return { ok: true };
+      }
+      this.closeHidStream();
+      this.hidStale = false;
+      return {
+        ok: false,
+        invalidated: true,
+        err: new Error("idb HID stream became stale during write"),
+      };
+    } catch (err) {
+      const wasStale = this.hidStale;
+      this.closeHidStream();
+      this.hidStale = false;
+      return { ok: false, invalidated: isInvalidatedHidError(err) || wasStale, err };
+    }
+  }
+
   private async sendHid(events: IdbHidEvent[], forAction: boolean): Promise<void> {
     if (events.length === 0) return;
     if (!this.alive || !this.companion) {
@@ -863,18 +911,15 @@ export class IosSimulatorDriver implements DeviceDriver {
       }
       return;
     }
-    try {
-      await this.writeBatchToStream(this.ensureHidStream(client), events);
-      return;
-    } catch (err) {
-      this.closeHidStream();
-      if (!isInvalidatedHidError(err)) {
-        if (forAction) {
-          throw new DeviceActionError(502, `idb HID write failed: ${errorText(err)}`);
-        }
-        this.log.warn("iOS HID input failed; dropping event", err);
-        return;
+
+    const first = await this.sendHidBatch(client, events, forAction);
+    if (first.ok) return;
+    if (!first.invalidated) {
+      if (forAction) {
+        throw new DeviceActionError(502, `idb HID write failed: ${errorText(first.err)}`);
       }
+      this.log.warn("iOS HID input failed; dropping event", first.err);
+      return;
     }
 
     // Stale HID connection: restart the companion once, reopen the stream and retry.
@@ -884,7 +929,10 @@ export class IosSimulatorDriver implements DeviceDriver {
       if (!retryClient) {
         throw new Error("idb companion unavailable after restart");
       }
-      await this.writeBatchToStream(this.ensureHidStream(retryClient), events);
+      const retry = await this.sendHidBatch(retryClient, events, forAction);
+      if (!retry.ok) {
+        throw retry.err;
+      }
     } catch (retryErr) {
       this.closeHidStream();
       if (forAction) {

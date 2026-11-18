@@ -125,6 +125,10 @@ export interface IdbGrpcClient {
     start: IdbVideoStreamStart,
   ): grpc.ClientDuplexStream<IdbVideoStreamRequest, IdbVideoStreamResponse>;
   hid(): grpc.ClientWritableStream<IdbHidEvent>;
+  /** Sends a one-shot HID event batch, half-closes the stream, and awaits
+   * the server's completion status so stale-HID errors are observed before
+   * returning. */
+  hidOnce?(events: IdbHidEvent[]): Promise<void>;
   describe(options?: IdbDescribeOptions): Promise<IdbTargetDescriptionResponse>;
   close(): void;
 }
@@ -193,6 +197,30 @@ export function createIdbGrpcClient(port: number): IdbGrpcClient {
         else stream.destroy();
       });
       return stream;
+    },
+
+    hidOnce(events: IdbHidEvent[]): Promise<void> {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (err?: Error | null) => {
+          if (settled) return;
+          settled = true;
+          if (err) reject(err);
+          else resolve();
+        };
+        const stream = client.hid((err: grpc.ServiceError | null) => {
+          finish(err);
+        });
+        stream.on("error", (err: Error) => finish(err));
+        try {
+          for (const event of events) {
+            stream.write(event);
+          }
+          stream.end();
+        } catch (err) {
+          finish(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
     },
 
     describe(options: IdbDescribeOptions = {}): Promise<IdbTargetDescriptionResponse> {

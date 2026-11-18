@@ -445,6 +445,53 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     await d2.stop();
   });
+
+  it("retries when stream becomes stale mid-batch or throws destroyed-stream error after hidStale", async () => {
+    let stream0Writes = 0;
+    const c = fakeCompanion();
+    const origHid = c.handle.client!.hid.bind(c.handle.client);
+    c.handle.client!.hid = () => {
+      const stream = origHid();
+      if (c.hidStreams.length === 1) {
+        const origWrite = stream.write.bind(stream);
+        stream.write = ((event: IdbHidEvent, cb?: (err?: Error | null) => void) => {
+          stream0Writes += 1;
+          if (stream0Writes === 1) {
+            // Simulate grpc-js flushing the write callback, then delivering the
+            // invalidated status on the stream before the batch finishes.
+            const ok = origWrite(event, cb);
+            stream.emit(
+              "error",
+              new Error("13 INTERNAL: The dtuhidd connection has been invalidated"),
+            );
+            return ok;
+          }
+          cb?.(new Error("Cannot call write after a stream was destroyed"));
+          return false;
+        }) as typeof stream.write;
+      }
+      return stream;
+    };
+
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion: c.handle,
+    });
+    await driver.start();
+    expect(c.handle.restart).toHaveBeenCalledTimes(1);
+
+    await driver.input({ type: "button", button: "home" });
+    expect(c.handle.restart).toHaveBeenCalledTimes(2);
+    expect(c.hidStreams).toHaveLength(2);
+    expect(c.hidStreams[1]!.written).toEqual([
+      { press: { action: { button: { button: "HOME" } }, direction: "DOWN" } },
+      { press: { action: { button: { button: "HOME" } }, direction: "UP" } },
+    ]);
+    await driver.stop();
+  });
 });
 
 describe("IosSimulatorDriver input (fake idb_companion)", () => {
@@ -532,6 +579,53 @@ describe("IosSimulatorDriver input (fake idb_companion)", () => {
       { press: { action: { key: { keycode: 0x04 } }, direction: "DOWN" } },
       { press: { action: { key: { keycode: 0x04 } }, direction: "UP" } },
       { press: { action: { key: { keycode: HID_KEY_LEFT_SHIFT } }, direction: "UP" } },
+    ]);
+  }, 15_000);
+
+  it("restarts and retries one-shot tap immediately on stale HID over real gRPC", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-hid-action-stale-"));
+    dirs.push(dir);
+    const hidLog = path.join(dir, "hid.jsonl");
+    const staleMarker = path.join(dir, "stale");
+    writeFileSync(staleMarker, "1");
+
+    const companion = new IdbCompanion({
+      udid: UDID,
+      executablePath: FAKE_COMPANION_SCRIPT,
+      killStaleCompanions: async () => {},
+      spawn: (cmd, args, opts) =>
+        spawn(process.execPath, [cmd, ...args], {
+          ...opts,
+          env: {
+            ...process.env,
+            FAKE_IDB_HID_LOG: hidLog,
+            FAKE_IDB_STALE_HID_MARKER: staleMarker,
+          },
+        }) as unknown as ChildProcess,
+    });
+    companions.push(companion);
+
+    const driver = new IosSimulatorDriver({
+      id: "1",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion,
+    });
+
+    await driver.start();
+    // No delay: a one-shot action awaits the gRPC completion status, so stale HID
+    // restarts the companion and retries within the same tap() call.
+    await driver.tap(300, 600);
+    await driver.stop();
+
+    const recorded = readFileSync(hidLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as IdbHidEvent);
+    expect(recorded).toMatchObject([
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
+      { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "UP" } },
     ]);
   }, 15_000);
 });

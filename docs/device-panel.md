@@ -262,8 +262,11 @@ deliberately a **separate** implementation from `PtyManager`/
   e.g. the Ctrl/Shift bits a modifier chord sets; defaults to `0`),
   `clipboard`
   (`{text: string}`, host clipboard text to paste onto the device — see
-  below), `back` (no fields), and `rotate` (no fields — toggles the
-  emulator's orientation). Neither a malformed (unparseable JSON,
+  below), `back` (no fields), `rotate` (no fields — toggles the
+  emulator's orientation), `button` (`{button: "home"|"lock"|"side"|"siri"}` —
+  iOS hardware/assistant buttons, ignored on Android), and `hidKey`
+  (`{usage: number, action: "down"|"up"}`, USB HID usage integer `0`–`0xFFFF` —
+  iOS HID key events, ignored on Android). Neither a malformed (unparseable JSON,
   server-logged) nor an unrecognized (valid JSON, wrong shape, silently
   ignored) message ever produces an error frame back to the client — see
   `parseDeviceInput`'s own comment (`services/device-drivers/input.ts`).
