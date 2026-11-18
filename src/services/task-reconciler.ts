@@ -52,6 +52,7 @@ import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
   dispatchTaskReview,
   extractFindingsJson,
+  failedReplyReason,
   isUnsentRunId,
   pollTaskReview,
   stopHermesRunQuietly,
@@ -1004,7 +1005,9 @@ async function processHermesRuns(app: FastifyInstance): Promise<void> {
 
         let parsed: ReturnType<typeof parseReviewFindings> | null = null;
         let reason = `The Hermes review ${poll.status}${poll.error ? `: ${poll.error}` : ""}`;
-        if (poll.status === "completed") {
+        // A failed run (typically one that hit the bot's turn cap) can still
+        // hold the findings JSON, so it is parsed exactly like a completed one.
+        if (poll.status === "completed" || (poll.status === "failed" && !!poll.output?.trim())) {
           const json = extractFindingsJson(poll.output ?? "");
           if (json !== null) {
             const candidate = parseReviewFindings(json, {
@@ -1014,7 +1017,7 @@ async function processHermesRuns(app: FastifyInstance): Promise<void> {
             // from an external reviewer that is noise, not a verdict.
             if (candidate.structured) parsed = candidate;
           }
-          if (parsed === null) reason = poll.notFindingsReason;
+          if (parsed === null) reason = failedReplyReason(poll, reason);
         }
         await ingestReviewOutcome(app, {
           ...row,

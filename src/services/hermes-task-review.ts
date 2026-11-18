@@ -276,3 +276,20 @@ export function stopHermesRunQuietly(app: FastifyInstance, runId: string | null 
     }
   })();
 }
+
+/** How much of a failed run's unparseable reply the inconclusive note keeps. */
+const FAILED_REPLY_TAIL_CHARS = 2000;
+
+/** The inconclusive reason for a terminal run whose reply is not the findings
+ * JSON: a completed run's own reason, or a failed run's `failed` line followed
+ * by the tail of what it did say (never the whole reply). */
+export function failedReplyReason(
+  poll: Pick<TaskReviewPoll, "status" | "output" | "notFindingsReason">,
+  failedLine: string,
+): string {
+  if (poll.status === "completed") return poll.notFindingsReason;
+  const text = (poll.output ?? "").trim();
+  const tail =
+    text.length > FAILED_REPLY_TAIL_CHARS ? `…${text.slice(-FAILED_REPLY_TAIL_CHARS)}` : text;
+  return `${failedLine}\n\nEnd of the reply:\n${tail}`;
+}

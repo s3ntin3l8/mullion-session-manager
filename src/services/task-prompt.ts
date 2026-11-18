@@ -1291,6 +1291,25 @@ export function renderCiSummary(ci: ReviewCiInfo): string {
   return lines.join("\n");
 }
 
+/**
+ * The tool-turn limit of the external (Hermes) review bot. It must match
+ * `hermes_review_bot_max_turns` in the ansible-playbooks repo, which Mullion
+ * cannot read — change both together. A run that exhausts it ends `failed`.
+ */
+export const HERMES_REVIEW_TURN_BUDGET = 150;
+
+/** The budget paragraph a `reply` review's prompt carries (see
+ * `HERMES_REVIEW_TURN_BUDGET`). */
+export function renderHermesTurnBudget(): string {
+  return [
+    `You have a limited budget of about ${HERMES_REVIEW_TURN_BUDGET} tool turns for this review.`,
+    "Rely on the PR's CI result above instead of re-running full test suites. Review the",
+    "diff in priority order (correctness and invariants first, style last). Emit the",
+    "findings JSON before the budget runs out, even if the review is incomplete, and mark",
+    'any area you did not get to as "not-checked" rather than leaving it out.',
+  ].join("\n");
+}
+
 /** Renders `buildReviewPrompt`'s `roundsRemaining` option into the paragraph
  * that follows the findings-shape instructions. Two deliberate wording
  * choices, both load-bearing:
@@ -1601,6 +1620,7 @@ export function buildReviewPrompt(opts: {
     ...(opts.roundsRemaining !== undefined && Number.isFinite(opts.roundsRemaining)
       ? [renderRoundsRemaining(opts.roundsRemaining), ""]
       : []),
+    ...(reply ? [renderHermesTurnBudget(), ""] : []),
     ...(reply
       ? []
       : [
