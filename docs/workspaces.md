@@ -47,4 +47,11 @@ Every row has a drag handle (⠿) on its left.
 - Reordering is off while a search filters the list, since the rows shown
   are then not the group's full order: clear the search first.
 
+The docked desktop sidebar's Workspaces section drags the same way: drag a
+row's handle between rows, into a group, onto a group's header (it lands
+first in that group, a collapsed group included) or into the ungrouped list
+("Drop here to ungroup" when it is empty). Escape, or letting go away from
+the section, puts the row back. Its handle has no keyboard reordering: use
+the picker for that.
+
 The order is saved on the server, so every device sees it.

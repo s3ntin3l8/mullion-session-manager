@@ -4,8 +4,9 @@ import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 // #3217 — drag a workspace by its handle to reorder it within its group, move
 // it into another group, or out of all groups, with Pointer Events and pointer
 // capture, so one code path serves a mouse and a finger. The browser's native
-// drag (`draggable`, what the docked sidebar's switcher uses) does not start
-// reliably from a touch. No drag library: this is all of it.
+// drag (`draggable`) does not start reliably from a touch. No drag library:
+// this is all of it. The rail's picker (rail/WorkspaceChip.tsx) and, since
+// #3224, the docked sidebar's switcher (WorkspaceSwitcher.tsx) both use it.
 //
 // The list it drives marks its parts with data attributes, and the hook reads
 // their positions on screen at each move rather than keeping a model of its
@@ -118,12 +119,18 @@ export interface PointerReorderState {
 
 export function usePointerReorder({
   scrollRef,
+  listRef,
   enabled,
   onDrop,
 }: {
-  /** The scrolling list: drop zones are looked up inside it, and it scrolls
-   *  while the pointer is near its top or bottom edge. */
+  /** The scrolling element: it scrolls while the pointer is near its top or
+   *  bottom edge. Also the list (below) unless `listRef` is given. */
   scrollRef: RefObject<HTMLElement | null>;
+  /** The list, when it is not itself the scrolling element but sits in a
+   *  larger one (the docked sidebar's switcher scrolls with the whole
+   *  sidebar): drop zones are looked up inside it, and a release away from
+   *  it drops nothing, even over the rest of the scrolling element. */
+  listRef?: RefObject<HTMLElement | null>;
   /** False while the list is filtered (its rows are then not the buckets'). */
   enabled: boolean;
   onDrop: (id: number, target: DropTarget) => void;
@@ -159,7 +166,7 @@ export function usePointerReorder({
       let frame = 0;
 
       const retarget = () => {
-        const root = scrollRef.current;
+        const root = (listRef ?? scrollRef).current;
         target =
           root && overList(lastX, lastY, root.getBoundingClientRect())
             ? dropTargetAt(lastY, measureZones(root), id)
@@ -230,7 +237,7 @@ export function usePointerReorder({
       window.addEventListener("keydown", onKey, true);
       cleanupRef.current = cleanup;
     },
-    [enabled, scrollRef],
+    [enabled, scrollRef, listRef],
   );
 
   return { dragging, onPointerDown };

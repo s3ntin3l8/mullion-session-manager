@@ -71,17 +71,31 @@ describe("edgeScrollSpeed", () => {
 });
 
 // A list laid out by data attributes: group 1 holds 1, 2, 3; group 2 is
-// empty; No group holds 4. Positions come from data-top/data-bottom.
-function Harness({ onDrop }: { onDrop: (id: number, target: DropTarget) => void }) {
+// empty; No group holds 4. Positions come from data-top/data-bottom. With
+// `split`, the list (0-200) sits inside a larger scrolling element, as the
+// docked sidebar's switcher does (#3224).
+function Harness({
+  onDrop,
+  split = false,
+}: {
+  onDrop: (id: number, target: DropTarget) => void;
+  split?: boolean;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { dragging, onPointerDown } = usePointerReorder({ scrollRef, enabled: true, onDrop });
+  const listRef = useRef<HTMLDivElement>(null);
+  const { dragging, onPointerDown } = usePointerReorder({
+    scrollRef,
+    listRef: split ? listRef : undefined,
+    enabled: true,
+    onDrop,
+  });
   const row = (id: number, top: number) => (
     <div key={id} data-drag-id={id} data-top={top} data-bottom={top + 30}>
       <button aria-label={`grip ${id}`} onPointerDown={(e) => onPointerDown(id, e)} />
     </div>
   );
-  return (
-    <div ref={scrollRef} data-testid="scroll" data-top={-1000} data-bottom={1000}>
+  const zones = (
+    <>
       <div data-drop-zone="1" data-top={0} data-bottom={100}>
         {row(1, 10)}
         {row(2, 40)}
@@ -91,6 +105,17 @@ function Harness({ onDrop }: { onDrop: (id: number, target: DropTarget) => void 
       <div data-drop-zone="none" data-top={160} data-bottom={200}>
         {row(4, 160)}
       </div>
+    </>
+  );
+  return (
+    <div ref={scrollRef} data-testid="scroll" data-top={-1000} data-bottom={1000}>
+      {split ? (
+        <div ref={listRef} data-top={0} data-bottom={200}>
+          {zones}
+        </div>
+      ) : (
+        zones
+      )}
       <output data-testid="state">{JSON.stringify(dragging)}</output>
     </div>
   );
@@ -187,6 +212,23 @@ describe("usePointerReorder", () => {
     expect(state()).toEqual({ id: 1, target: null });
     up(1, 5000);
     expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it("hit-tests the list, not the larger element scrolling it, when they differ", () => {
+    const onDrop = vi.fn();
+    render(<Harness onDrop={onDrop} split />);
+    down(1, 20);
+    move(1, 80);
+    expect(state().target).toEqual({ groupId: 1, index: 1 });
+    // Inside the scrolling element but well below the list: no target.
+    move(1, 500);
+    expect(state()).toEqual({ id: 1, target: null });
+    up(1, 500);
+    expect(onDrop).not.toHaveBeenCalled();
+    down(4, 170);
+    move(4, 130);
+    up(4, 130);
+    expect(onDrop).toHaveBeenCalledWith(4, { groupId: 2, index: 0 });
   });
 
   it("treats a press without travel as a click, not a drop", () => {

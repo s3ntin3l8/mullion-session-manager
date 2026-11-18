@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { DragEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { CreateGroupModal } from "./CreateGroupModal.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
@@ -29,6 +29,8 @@ import {
   RenameIcon,
 } from "./ui/icons.js";
 import { WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
+import { usePointerReorder } from "./hooks/usePointerReorder.js";
+import type { PointerReorderState } from "./hooks/usePointerReorder.js";
 import { TextInput } from "./ui/primitives.js";
 import { InlineRenameInput } from "./ui/InlineRenameInput.js";
 
@@ -48,35 +50,35 @@ import { InlineRenameInput } from "./ui/InlineRenameInput.js";
 // choreograph); only workspaces are.
 //
 // Phase 4d added drag-and-drop for workspace reordering/group-assignment
-// (design section 07, "workspace-group choreography") — native HTML5 DnD, no
-// library, matching the rest of this app's zero-dependency style. See
-// reorder.ts for the pure reindex math this file drives. (Group reordering
-// was part of that same phase but was later dropped in favor of alphabetical
-// sort — see git history if resurrecting it.)
-
-// --- Drag-and-drop orchestration -------------------------------------------
+// (design section 07, "workspace-group choreography"). See reorder.ts for the
+// pure reindex math it drives. (Group reordering was part of that same phase
+// but was later dropped in favor of alphabetical sort — see git history if
+// resurrecting it.)
 //
-// Design decision (advisor-reviewed, see the plan's Phase 4d): the grip
-// handle is the drag *source*, never the row/header itself — this keeps
-// click-to-select, double-click-rename, and text selection inside the
-// rename input completely unaffected. A group header plays three roles at
-// once (drag source for its own grip, drop target for a workspace being
-// dragged in, drop-position indicator when another group is dragged) —
-// disambiguated below by branching on `dragging.kind`, not by which handler
-// fired.
-type DragState = { kind: "workspace"; id: number };
+// #3224 — the drag is the same pointer drag as the rail's workspace picker
+// (hooks/usePointerReorder.ts), so it works with a finger as well as a
+// mouse. Only the grip handle starts it, never the row or header itself, so
+// click-to-select, double-click-rename and text selection inside the rename
+// input are unaffected. The hook hit-tests what this list renders:
+//
+// - each group's whole `.ws-group` box, header included, is a drop zone
+//   (`data-drop-zone="<group id>"`): the header sits above the group's rows,
+//   so a drop on it lands at index 0, and a collapsed group (a header and no
+//   body) is still a target;
+// - the ungrouped `.ws-drop-list` is the "no group" zone
+//   (`data-drop-zone="none"`);
+// - each workspace row is `data-drag-id="<workspace id>"`.
+//
+// Zones must not nest: a group's own inner list carries no zone attribute.
 
-type DropTarget =
-  | { mode: "workspace-reorder"; groupId: number | null; index: number }
-  | { mode: "workspace-assign"; groupId: number };
-
-interface DragCtx {
-  dragging: DragState | null;
-  dropTarget: DropTarget | null;
-  setDropTarget: (t: DropTarget | null) => void;
-  startWorkspaceDrag: (id: number) => void;
-  commitWorkspaceDrop: (groupId: number | null, index: number) => void;
-  endDrag: () => void;
+/** The nearest ancestor of `el` that scrolls vertically (the docked
+ *  sidebar), where the drag auto-scrolls; `el` itself when none does. */
+function scrollParent(el: HTMLElement): HTMLElement {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return node;
+  }
+  return el;
 }
 
 export interface WorkspaceSwitcherProps {
@@ -110,8 +112,6 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
   const displayActiveWorkspaceId = viewMode === "kanban" ? null : activeWorkspaceId;
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [addGroupOpen, setAddGroupOpen] = useState(false);
-  const [dragging, setDragging] = useState<DragState | null>(null);
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   // Sidebar declutter (issue #1465) — collapses the whole section, same
   // localStorage-backed boolean shape as App.tsx's own sidebarCollapsed.
   // Read once at mount (not through the Zustand store — this is a per-
@@ -150,42 +150,27 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
     return working ? "working" : null;
   }, [workspaces, sessionIdsByWorkspace, sessions]);
 
-  // dragTokenRef guards the deferred setDragging call below (see
-  // startWorkspaceDrag): applying dragging state synchronously inside the
-  // native `dragstart` handler races with the browser's own drag-session
-  // setup — a DOM mutation landing in that same tick (e.g. the
-  // `.ws-dragging` class + transform) can make Chrome cancel the drag it
-  // just started, which showed up as "grabbing an ungrouped workspace does
-  // nothing" (mid-drag `dragend` firing within ~5ms, no `drag` events ever
-  // fired). Deferring the state update by a tick avoids that, but introduces
-  // its own race: a very fast drag can call endDrag() (from the native
-  // `dragend`) *before* the deferred update lands, and without a guard the
-  // stale update would resurrect `dragging` after the drag already ended,
-  // permanently stuck. The token makes the deferred update a no-op if any
-  // start/end has happened since it was scheduled.
-  const dragTokenRef = useRef(0);
-
-  const endDrag = () => {
-    dragTokenRef.current += 1;
-    setDragging(null);
-    setDropTarget(null);
-  };
-
-  const dragCtx: DragCtx = {
-    dragging,
-    dropTarget,
-    setDropTarget,
-    startWorkspaceDrag: (id) => {
-      const token = (dragTokenRef.current += 1);
-      setTimeout(() => {
-        if (dragTokenRef.current === token) setDragging({ kind: "workspace", id });
-      }, 0);
+  // The list the drag hit-tests (the section body) and the element that
+  // scrolls it (the whole sidebar), found when a drag starts.
+  const listRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
+  const { dragging, onPointerDown } = usePointerReorder({
+    scrollRef,
+    listRef,
+    enabled: true,
+    onDrop: (id, target) => {
+      const w = workspaces.find((x) => x.id === id);
+      if (!w) return;
+      const bucket = target.groupId === null ? ungrouped : groupWorkspaces(target.groupId);
+      const from = bucket.findIndex((x) => x.id === id);
+      // Dropped back where it was: nothing to save.
+      if (target.groupId === w.groupId && target.index === from) return;
+      moveWorkspace(workspaces, id, target.groupId, target.index);
     },
-    commitWorkspaceDrop: (groupId, index) => {
-      if (!dragging || dragging.kind !== "workspace") return;
-      moveWorkspace(workspaces, dragging.id, groupId, index);
-    },
-    endDrag,
+  });
+  const startDrag = (id: number, e: ReactPointerEvent<HTMLElement>) => {
+    if (listRef.current) scrollRef.current = scrollParent(listRef.current);
+    onPointerDown(id, e);
   };
 
   return (
@@ -254,7 +239,7 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
       )}
 
       {!sectionCollapsed && (
-        <div id="workspaces-section-body">
+        <div id="workspaces-section-body" ref={listRef}>
           {sortedGroups.map((group) => (
             <GroupSection
               key={group.id}
@@ -278,27 +263,17 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
               }
               onRenameGroup={(name) => renameGroup(group.id, name)}
               onDeleteGroup={() => deleteGroup(group.id)}
-              dragCtx={dragCtx}
-              onHeaderDragOver={(e) => {
-                if (!dragCtx.dragging) return;
-                e.preventDefault();
-                dragCtx.setDropTarget({ mode: "workspace-assign", groupId: group.id });
-              }}
-              onHeaderDrop={(e) => {
-                if (!dragCtx.dragging) return;
-                e.preventDefault();
-                if (dragCtx.dropTarget?.mode === "workspace-assign") {
-                  dragCtx.commitWorkspaceDrop(dragCtx.dropTarget.groupId, 0);
-                }
-                dragCtx.endDrag();
-              }}
+              dragging={dragging}
+              onDragStart={startDrag}
             />
           ))}
 
           <WorkspaceList
             bucketGroupId={null}
             items={ungrouped}
-            dragCtx={dragCtx}
+            dropZone
+            dragging={dragging}
+            onDragStart={startDrag}
             activeWorkspaceId={displayActiveWorkspaceId}
             sessions={sessions}
             sessionIdsByWorkspace={sessionIdsByWorkspace}
@@ -347,9 +322,8 @@ function GroupSection({
   onEditGroup,
   onRenameGroup,
   onDeleteGroup,
-  dragCtx,
-  onHeaderDragOver,
-  onHeaderDrop,
+  dragging,
+  onDragStart,
 }: {
   group: Group;
   workspaces: Workspace[];
@@ -363,25 +337,24 @@ function GroupSection({
   onEditGroup: (name: string, color: string) => void;
   onRenameGroup: (name: string) => void;
   onDeleteGroup: () => void;
-  dragCtx: DragCtx;
-  onHeaderDragOver?: (e: DragEvent<HTMLDivElement>) => void;
-  onHeaderDrop?: (e: DragEvent<HTMLDivElement>) => void;
+  dragging: PointerReorderState | null;
+  onDragStart: (id: number, e: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
 
-  const isAssignTarget =
-    dragCtx.dragging?.kind === "workspace" &&
-    dragCtx.dropTarget?.mode === "workspace-assign" &&
-    dragCtx.dropTarget.groupId === group.id;
+  // A collapsed group has no rows to draw the drop line between, so its
+  // header lights up instead when the drag would land in it. (An expanded
+  // group shows the line, or its empty "Drop here" box.)
+  const isAssignTarget = group.collapsed && dragging?.target?.groupId === group.id;
 
   return (
-    <div className="ws-group">
+    // The whole group, header included, is one drop zone (see the top of
+    // this file).
+    <div className="ws-group" data-drop-zone={group.id}>
       <div
         className={`ws-group-header${isAssignTarget ? " ws-group-drop-target" : ""}`}
         onClick={onToggleCollapsed}
-        onDragOver={onHeaderDragOver}
-        onDrop={onHeaderDrop}
         // Not itself a button (#2886, axe `nested-interactive`): it holds a
         // color swatch button, a rename input and an actions strip. The
         // chevron is the disclosure button; a click anywhere else on the
@@ -485,7 +458,8 @@ function GroupSection({
           <WorkspaceList
             bucketGroupId={group.id}
             items={workspaces}
-            dragCtx={dragCtx}
+            dragging={dragging}
+            onDragStart={onDragStart}
             activeWorkspaceId={activeWorkspaceId}
             sessions={sessions}
             sessionIdsByWorkspace={sessionIdsByWorkspace}
@@ -500,18 +474,18 @@ function GroupSection({
 }
 
 // Renders one bucket's worth of workspace rows (either a specific group's
-// body, or the top-level ungrouped list) with drag-to-reorder and drag-to-
-// reassign support. The dragged row itself stays rendered in place (with
-// `.ws-dragging` styling) rather than being removed from the tree — native
-// drag-and-drop snapshots the drag image at dragstart, so removing the
-// source element mid-drag is an unnecessary risk for no benefit — while a
-// running index counter that skips it gives every other row the correct
-// "index within this bucket, excluding the dragged item" for
-// reorder.ts's computeReorder, which expects exactly that.
+// body, or the top-level ungrouped list) with the drop indicator where a
+// dragged row would land. The dragged row itself stays rendered in place
+// (with `.ws-dragging` styling): its handle holds the drag's pointer
+// capture, and unmounting it would cancel the drag. A running index that
+// skips it gives every other row its "index within this bucket, excluding
+// the dragged item", the index rule of moveWorkspace and the drag hook.
 function WorkspaceList({
   bucketGroupId,
   items,
-  dragCtx,
+  dropZone = false,
+  dragging,
+  onDragStart,
   activeWorkspaceId,
   sessions,
   sessionIdsByWorkspace,
@@ -521,7 +495,11 @@ function WorkspaceList({
 }: {
   bucketGroupId: number | null;
   items: Workspace[];
-  dragCtx: DragCtx;
+  /** Whether this list is itself a drop zone (the ungrouped one); a group's
+   *  list sits inside its group's zone. */
+  dropZone?: boolean;
+  dragging: PointerReorderState | null;
+  onDragStart: (id: number, e: ReactPointerEvent<HTMLElement>) => void;
   activeWorkspaceId: number | null;
   sessions: Session[];
   sessionIdsByWorkspace: Map<number, Set<number>>;
@@ -529,49 +507,22 @@ function WorkspaceList({
   onRename: (id: number, name: string) => void;
   onDelete: (id: number) => void;
 }) {
-  const { dragging, dropTarget, setDropTarget, commitWorkspaceDrop, endDrag } = dragCtx;
-  const draggingWorkspaceId = dragging?.kind === "workspace" ? dragging.id : null;
-
+  const draggingWorkspaceId = dragging?.id ?? null;
+  const target = dragging?.target;
   const showIndicator = (idx: number) =>
-    draggingWorkspaceId !== null &&
-    dropTarget?.mode === "workspace-reorder" &&
-    dropTarget.groupId === bucketGroupId &&
-    dropTarget.index === idx;
+    target != null && target.groupId === bucketGroupId && target.index === idx;
 
-  // Same lookup-not-mutation approach as the top-level group list above.
   const nonDraggedIds = items.filter((w) => w.id !== draggingWorkspaceId).map((w) => w.id);
 
   return (
-    <div
-      className="ws-drop-list"
-      onDragOver={(e) => {
-        if (draggingWorkspaceId === null) return;
-        e.preventDefault();
-        const nonDraggedCount = items.filter((w) => w.id !== draggingWorkspaceId).length;
-        setDropTarget({
-          mode: "workspace-reorder",
-          groupId: bucketGroupId,
-          index: nonDraggedCount,
-        });
-      }}
-      onDrop={(e) => {
-        if (draggingWorkspaceId === null) return;
-        e.preventDefault();
-        const nonDraggedCount = items.filter((w) => w.id !== draggingWorkspaceId).length;
-        commitWorkspaceDrop(
-          bucketGroupId,
-          dropTarget?.mode === "workspace-reorder" ? dropTarget.index : nonDraggedCount,
-        );
-        endDrag();
-      }}
-    >
+    <div className="ws-drop-list" data-drop-zone={dropZone ? "none" : undefined}>
       {items.length === 0 && draggingWorkspaceId !== null && (
         // An empty bucket has no rows to hover — without this, dragging a
         // workspace out of every group and into an all-empty ungrouped list
         // (this app's own real starting state: every workspace can start
         // out grouped, with nothing ungrouped to drop next to) would have
         // nowhere to land, since a childless `.ws-drop-list` collapses to
-        // zero height. This placeholder gives it real, always-visible drop
+        // its 6px minimum. This placeholder gives it real, always-visible drop
         // area, matching the same dashed-dropzone idiom used elsewhere in
         // this app (e.g. the empty tiled grid).
         <div className="ws-drop-list-empty-hint">
@@ -598,34 +549,7 @@ function WorkspaceList({
               drag={{
                 isDragging: isThisDragging,
                 isDimmed: draggingWorkspaceId !== null && !isThisDragging,
-                onGripDragStart: () => dragCtx.startWorkspaceDrag(workspace.id),
-                onGripDragEnd: endDrag,
-                onRowDragOver: isThisDragging
-                  ? undefined
-                  : (e) => {
-                      if (draggingWorkspaceId === null) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      const before = e.clientY < rect.top + rect.height / 2;
-                      setDropTarget({
-                        mode: "workspace-reorder",
-                        groupId: bucketGroupId,
-                        index: before ? idx : idx + 1,
-                      });
-                    },
-                onRowDrop: isThisDragging
-                  ? undefined
-                  : (e) => {
-                      if (draggingWorkspaceId === null) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      commitWorkspaceDrop(
-                        bucketGroupId,
-                        dropTarget?.mode === "workspace-reorder" ? dropTarget.index : idx,
-                      );
-                      endDrag();
-                    },
+                onHandlePointerDown: (e) => onDragStart(workspace.id, e),
               }}
             />
           </div>
@@ -639,10 +563,7 @@ function WorkspaceList({
 interface WorkspaceItemDrag {
   isDragging: boolean;
   isDimmed: boolean;
-  onGripDragStart: () => void;
-  onGripDragEnd: () => void;
-  onRowDragOver?: (e: DragEvent<HTMLDivElement>) => void;
-  onRowDrop?: (e: DragEvent<HTMLDivElement>) => void;
+  onHandlePointerDown: (e: ReactPointerEvent<HTMLElement>) => void;
 }
 
 function WorkspaceItem({
@@ -663,11 +584,10 @@ function WorkspaceItem({
   drag: WorkspaceItemDrag;
 }) {
   const [editing, setEditing] = useState(false);
-  const rowRef = useRef<HTMLDivElement>(null);
 
   return (
     <div
-      ref={rowRef}
+      data-drag-id={workspace.id}
       className={`workspace-item${active ? " active" : ""}${drag.isDragging ? " ws-dragging" : ""}${
         drag.isDimmed ? " ws-sibling-dim" : ""
       }`}
@@ -675,29 +595,12 @@ function WorkspaceItem({
       // a grip handle, a rename input and a delete/kebab strip. The name is
       // the row's one button; a click anywhere else on the row still selects.
       onClick={onSelect}
-      onDragOver={drag.onRowDragOver}
-      onDrop={drag.onRowDrop}
     >
       <span
         className="ws-drag-handle"
-        draggable
         title="Drag to reorder"
         onClick={(e) => e.stopPropagation()}
-        onDragStart={(e) => {
-          e.stopPropagation();
-          e.dataTransfer.effectAllowed = "move";
-          e.dataTransfer.setData("text/plain", String(workspace.id));
-          if (rowRef.current) {
-            const rect = rowRef.current.getBoundingClientRect();
-            e.dataTransfer.setDragImage(
-              rowRef.current,
-              e.clientX - rect.left,
-              e.clientY - rect.top,
-            );
-          }
-          drag.onGripDragStart();
-        }}
-        onDragEnd={drag.onGripDragEnd}
+        onPointerDown={drag.onHandlePointerDown}
       >
         <GripIcon size={13} />
       </span>

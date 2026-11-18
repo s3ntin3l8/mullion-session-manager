@@ -556,6 +556,13 @@
 .ws-drag-handle:active {
   cursor: grabbing;
 }
+/* #3224 — the switcher's drag is a pointer drag (hooks/usePointerReorder.ts):
+   a finger on the handle drags rather than scrolling the sidebar. The handle
+   only, so a swipe on the row still scrolls. Scoped to the workspace row:
+   Settings' bridges list reuses `.ws-drag-handle` with the native drag. */
+.workspace-item .ws-drag-handle {
+  touch-action: none;
+}
 
 /* The ACTIVE workspace row is a FILL surface, not a flat one: it paints
    `var(--accent-fill)` under white text (see `.workspace-item.active` above).
