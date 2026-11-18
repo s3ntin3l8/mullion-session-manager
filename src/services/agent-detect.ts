@@ -1,5 +1,9 @@
-import { runLoginShell } from "./login-shell.js";
-import { invalidateUserShellEnv, resolveUserShellEnv } from "./user-shell-env.js";
+import { runLoginShell, runLoginShellDetailed, type LoginShellFailure } from "./login-shell.js";
+import {
+  getUserShellEnvStatus,
+  invalidateUserShellEnv,
+  resolveUserShellEnv,
+} from "./user-shell-env.js";
 import { getCodexHookTrust, type CodexHookTrust } from "./hook-adapters/codex-trust.js";
 import type { HookMessageKind } from "./hook-protocol.js";
 import { claudeCodeAdapter } from "./hook-adapters/claude-code.js";
@@ -30,6 +34,13 @@ export interface DetectedAgent {
   available: boolean;
   /** Resolved absolute path, or null if not found on PATH. */
   path: string | null;
+  /** Set when "not found" cannot be trusted, and no earlier good result could
+   * stand in: `available: false` then means "could not be checked", NOT "not
+   * installed". Three causes: the probe timed out (`"timeout"`), it failed to
+   * run (`"error"`), or it ran cleanly but on an unverified PATH because the
+   * interactive-PATH resolve failed transiently (also `"error"`). Omitted for
+   * a probe that ran cleanly on a verified PATH. */
+  probeError?: LoginShellFailure;
   /** Codex's `/hooks` trust status for Mullion's merged forwarder hooks
    * (issue #259) — "trusted" | "pending" | "not-installed". Only set for the
    * "codex" agent; every other agent omits this field entirely. Computed
@@ -98,14 +109,36 @@ const HOOK_ADAPTER_EMITS_BY_BIN: Partial<Record<string, readonly HookMessageKind
 // SIGTERM is exactly as plausible as a wedged git process).
 
 /** Resolve one binary's path via `command -v`, run inside a login shell so
- * PATH matches exactly what a spawned session would see. Never rejects —
- * "not found" and "probe itself failed to launch" both resolve to null. */
-function probe(bin: string): Promise<string | null> {
-  return runLoginShell(`command -v ${bin}`);
+ * PATH matches exactly what a spawned session would see. Never rejects. A
+ * `failure` means the probe could not answer (timeout / error) — distinct
+ * from a clean run that printed nothing, i.e. "not installed". */
+function probe(bin: string): Promise<{ path: string | null; failure: LoginShellFailure | null }> {
+  return runLoginShellDetailed(`command -v ${bin}`).then((r) => ({
+    path: r.stdout,
+    failure: r.failure,
+  }));
 }
 
-/** Probe every known shell + agent CLI in parallel. Pure — no caching. */
-export async function detectAgents(): Promise<DetectedAgent[]> {
+/** True when the interactive-PATH resolve failed for a transient reason (not a
+ * deliberate opt-out or an unsupported shell), so a probe's "not found" may
+ * only mean the user's rc-file PATH entries are missing. */
+function interactivePathUnverified(): boolean {
+  const { interactiveResolve, reason } = getUserShellEnvStatus();
+  return (
+    interactiveResolve === "fallback" &&
+    (reason === "timeout" ||
+      reason === "spawn-failed" ||
+      reason === "unparseable" ||
+      reason === "pending")
+  );
+}
+
+/** Probe every known shell + agent CLI in parallel. `previous` is the last
+ * result: a binary whose probe failed (e.g. timed out on a loaded host) keeps
+ * its earlier answer rather than flipping to "not found". */
+export async function detectAgents(
+  previous: readonly DetectedAgent[] = [],
+): Promise<DetectedAgent[]> {
   const candidates: Array<{ bin: string; kind: AgentKind }> = [
     ...KNOWN_SHELLS.map((bin) => ({ bin, kind: "shell" as const })),
     ...KNOWN_AGENTS.map((bin) => ({ bin, kind: "agent" as const })),
@@ -113,7 +146,19 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
 
   return Promise.all(
     candidates.map(async ({ bin, kind }) => {
-      const resolvedPath = await probe(bin);
+      const probed = await probe(bin);
+      const resolvedPath = probed.path;
+      // "Nothing found" cannot be trusted when the interactive-PATH resolve
+      // itself failed transiently: the probe then ran on the bare service PATH,
+      // which lacks nvm/bun/... entries. Refresh re-runs the resolve.
+      const failure =
+        probed.failure ?? (resolvedPath === null && interactivePathUnverified() ? "error" : null);
+      if (failure) {
+        const prior = previous.find((p) => p.id === `${kind}:${bin}`);
+        // Keep a prior positive (or prior probe-failed) answer — a transient
+        // failure says nothing about whether the CLI is installed.
+        if (prior && (prior.available || prior.probeError)) return prior;
+      }
       // opencode's adapter is v2-only (issue #1593): record its version and,
       // if too old, why a hosted session would fail. The `--version` flag is
       // global (never starts a server).
@@ -129,6 +174,7 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
         kind,
         available: resolvedPath !== null,
         path: resolvedPath,
+        ...(failure ? { probeError: failure } : {}),
         // Trust is a hooks.json/config.toml read, not a PATH probe — safe to
         // compute even when Codex itself isn't installed (getCodexHookTrust
         // just reports "not-installed" in that case too).
@@ -159,7 +205,7 @@ function refreshAgents(): Promise<DetectedAgent[]> {
   // The probe's env (buildSessionEnv) only includes the user's interactive-rc
   // PATH once it has been resolved — wait for it so detection and launch agree.
   refreshPromise = resolveUserShellEnv()
-    .then(() => detectAgents())
+    .then(() => detectAgents(cache?.data))
     .then((data) => {
       cache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
       return data;
