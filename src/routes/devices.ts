@@ -15,7 +15,8 @@ import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceAction, DevicePlatform } from "../services/device-drivers/types.js";
 import { getDeviceHost, liveInfoForRows, type DeviceHost } from "../services/device-host.js";
 import { SimctlError } from "../services/ios-simulators.js";
-import { getHostRow, LOCAL_HOST_ID } from "../services/host-registry.js";
+import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.js";
+import { localDeviceKinds } from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
@@ -56,6 +57,89 @@ interface DeviceListItem {
   /** True when the device's host is an agent that did not answer, so `live`
    * is unknown rather than "not running" (#3200). Absent otherwise. */
   hostUnreachable?: true;
+}
+
+/** How long one host's kinds answer is reused by `GET /api/devices/hosts`, so a
+ * Settings page that polls does not hit every agent each time. */
+export const DEVICE_HOSTS_CACHE_MS = 10_000;
+/** The longest one agent may take to answer before it counts as unreachable. */
+export const DEVICE_HOSTS_TIMEOUT_MS = 5_000;
+
+export interface DeviceHostEntry {
+  hostId: string;
+  name: string;
+  status: "ok" | "unsupported" | "unreachable";
+  deviceKinds: DeviceKind[];
+}
+
+type RemoteKindsAnswer = Pick<DeviceHostEntry, "status" | "deviceKinds">;
+
+// Per app instance, so two apps in one process (tests) never share an answer.
+// The cached value is the in-flight promise: concurrent callers share one
+// request, and it never rejects (a failure is stored as "unreachable").
+const deviceHostsCache = new WeakMap<
+  FastifyInstance,
+  Map<string, { at: number; answer: Promise<RemoteKindsAnswer> }>
+>();
+
+async function askRemoteKinds(app: FastifyInstance, hostId: string): Promise<RemoteKindsAnswer> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out")), DEVICE_HOSTS_TIMEOUT_MS);
+    });
+    const support = await Promise.race([getDeviceHost(app, hostId).kinds(), timeout]);
+    return support === null
+      ? { status: "unsupported", deviceKinds: [] }
+      : { status: "ok", deviceKinds: support.deviceKinds };
+  } catch {
+    return { status: "unreachable", deviceKinds: [] };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function cachedRemoteKinds(
+  app: FastifyInstance,
+  cache: Map<string, { at: number; answer: Promise<RemoteKindsAnswer> }>,
+  hostId: string,
+): Promise<RemoteKindsAnswer> {
+  const now = Date.now();
+  const hit = cache.get(hostId);
+  if (hit && now - hit.at < DEVICE_HOSTS_CACHE_MS) return hit.answer;
+  const answer = askRemoteKinds(app, hostId);
+  cache.set(hostId, { at: now, answer });
+  return answer;
+}
+
+/** Every host that could hold a device: the primary and each registered agent. */
+async function listDeviceHosts(app: FastifyInstance): Promise<DeviceHostEntry[]> {
+  const all = listHosts(app);
+  const remotes = all.filter((host) => !host.isLocal && host.id !== LOCAL_HOST_ID);
+  let cache = deviceHostsCache.get(app);
+  if (!cache) deviceHostsCache.set(app, (cache = new Map()));
+  // Forget a removed host's answer, so the map cannot grow without bound.
+  const live = new Set(remotes.map((host) => host.id));
+  for (const id of cache.keys()) if (!live.has(id)) cache.delete(id);
+  const perHostCache = cache;
+
+  const remoteEntries = await Promise.all(
+    remotes.map(async (host): Promise<DeviceHostEntry> => ({
+      hostId: host.id,
+      name: host.name,
+      ...(await cachedRemoteKinds(app, perHostCache, host.id)),
+    })),
+  );
+  const local = all.find((host) => host.isLocal || host.id === LOCAL_HOST_ID);
+  return [
+    {
+      hostId: LOCAL_HOST_ID,
+      name: local?.name ?? "Local",
+      status: "ok",
+      deviceKinds: localDeviceKinds(app),
+    },
+    ...remoteEntries,
+  ];
 }
 
 function toListItem(
@@ -547,6 +631,11 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       return toListItem(row, found?.live, found?.unreachable);
     });
   });
+
+  // Which hosts could hold a device, and of what kind (#3270). Registered
+  // before `/api/devices/:id`. A down agent is an "unreachable" entry, never a
+  // 5xx for the whole answer.
+  app.get("/api/devices/hosts", async () => listDeviceHosts(app));
 
   // Issue #1378 — read-only mDNS snapshot of nearby Android phones that
   // are currently advertising `_adb-tls-pairing._tcp` and/or
