@@ -194,8 +194,8 @@ export function SidebarDevices({
           rowError ?? (stopped ? "Stopped — click to start" : (device.live?.error ?? undefined));
         return (
           // role/tabIndex/Enter-Space + `e.target !== e.currentTarget`, same
-          // P10 pattern as Sidebar.tsx's SessionRow/project-row-header (see
-          // that row's comment for the full rationale): this row nests a
+          // P10 pattern Sidebar.tsx's SessionRow/project-row-header had until
+          // #3106 moved them to a hidden inner button: this row nests a
           // real <button> below, whose keydown would otherwise bubble here
           // and open the panel when the user meant to start/stop it.
           <div

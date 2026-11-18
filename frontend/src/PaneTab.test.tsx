@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { expectNameHasVisibleText } from "./test/a11y.js";
 import { PaneTab } from "./PaneTab.js";
 import { api } from "./api/index.js";
 import type { GitStatus, Host, NotificationEvent, Project, Session } from "./api/index.js";
@@ -1267,11 +1268,45 @@ describe("failed rename (audit finding 9)", () => {
   });
 });
 
+// #3106 — dockview names its tab element with an aria-label of the bare
+// title, but the tab shows more than that (the branch, the status badge);
+// axe's label-content-name-mismatch. The tab is named by what it shows.
+describe("dock tab name (#3106)", () => {
+  it("names dockview's tab by its visible content, not by the bare title", () => {
+    session.liveBranch = "feat/login";
+    const { container } = render(
+      <div className="dv-tab" role="tab" aria-label="claude code">
+        <PaneTab {...makeProps()} />
+      </div>,
+    );
+    const tab = screen.getByRole("tab");
+    const leading = container.querySelector<HTMLElement>(".pane-tab-leading")!;
+    expect(tab).toHaveAttribute("aria-labelledby", leading.id);
+    expect(leading).toHaveTextContent("feat/login");
+    expectNameHasVisibleText(tab, leading);
+    // The close and actions buttons are not part of it.
+    expect(tab).not.toHaveAccessibleName(/close pane|more actions/i);
+  });
+
+  it("drops the reference when the tab unmounts", () => {
+    const host = document.createElement("div");
+    host.className = "dv-tab";
+    document.body.appendChild(host);
+    const { unmount } = render(<PaneTab {...makeProps()} />, { container: host });
+    expect(host).toHaveAttribute("aria-labelledby");
+    unmount();
+    expect(host).not.toHaveAttribute("aria-labelledby");
+    host.remove();
+  });
+});
+
 // #3122 — a pane a fold or phone open added here in the background carries a
 // "new" dot until it is first shown on this desktop.
 describe("new-pane mark (#3122)", () => {
   const panelId = () => `session-${BASE_SESSION.id}`;
-  // dockview's own tab element, which it names with the bare title.
+  // dockview's own tab element, which it names with the bare title. #3106 —
+  // the tab is named by its visible content instead (the title, then the
+  // status badge; jsdom has no layout, so it runs the parts together).
   const inDvTab = (props: ReturnType<typeof makeProps>) => (
     <div className="dv-tab" role="tab" aria-label="claude code">
       <PaneTab {...props} />
@@ -1282,27 +1317,27 @@ describe("new-pane mark (#3122)", () => {
     newPanelIds = [panelId()];
     const { container } = render(inDvTab(makeProps()));
     expect(container.querySelector(".pane-tab-new-dot")).not.toBeNull();
-    expect(screen.getByRole("tab", { name: "claude code, new" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^claude code.*, new$/ })).toBeInTheDocument();
   });
 
   it("shows neither when the pane is not marked", () => {
     const { container } = render(inDvTab(makeProps()));
     expect(container.querySelector(".pane-tab-new-dot")).toBeNull();
-    expect(screen.getByRole("tab", { name: "claude code" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^claude code(?!.*new)/ })).toBeInTheDocument();
   });
 
   it("clears both when the tab is activated", async () => {
     newPanelIds = [panelId()];
     const props = makeProps();
     const { container, rerender } = render(inDvTab(props));
-    expect(screen.getByRole("tab", { name: "claude code, new" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^claude code.*, new$/ })).toBeInTheDocument();
     expect(clearPanelNew).not.toHaveBeenCalled();
     (props.api as { isActive: boolean }).isActive = true;
     act(() => activeChangeHandler?.({ isActive: true }));
     await waitFor(() => expect(clearPanelNew).toHaveBeenCalledWith(panelId()));
     rerender(inDvTab(props));
     expect(container.querySelector(".pane-tab-new-dot")).toBeNull();
-    expect(screen.getByRole("tab", { name: "claude code" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^claude code(?!.*new)/ })).toBeInTheDocument();
   });
 
   it("clears when a background tab becomes its group's visible one", () => {
@@ -1318,11 +1353,11 @@ describe("new-pane mark (#3122)", () => {
     newPanelIds = [panelId()];
     const props = makeProps();
     const { container } = render(inDvTab(props));
-    const dvTab = container.querySelector(".dv-tab")!;
-    // What dockview's own Tab listener does first, then ours runs.
+    const dvTab = container.querySelector<HTMLElement>(".dv-tab")!;
+    // What dockview's own Tab listener does: the label is no longer the name.
     dvTab.setAttribute("aria-label", "renamed by the agent");
     act(() => titleChangeHandler?.({ title: "renamed by the agent" }));
-    expect(dvTab).toHaveAttribute("aria-label", "renamed by the agent, new");
+    expect(dvTab).toHaveAccessibleName(/^claude code.*, new$/);
   });
 
   it("keeps the mark on a split pane its group hides and shows again", () => {

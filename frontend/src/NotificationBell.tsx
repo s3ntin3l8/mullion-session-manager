@@ -1058,18 +1058,27 @@ function EventRow({
   return (
     <div
       className={`notif-event-row${item.read ? " read" : ""}`}
-      role="button"
-      tabIndex={0}
-      aria-label={
-        repeatCount > 1
-          ? `${label}: ${fullText} — ${age}, repeated ${repeatCount} times`
-          : `${label}: ${fullText} — ${age}`
-      }
+      // #3106 — a plain container, not a role="button": the row holds its own
+      // buttons (Approve/Deny, Session, Timeline, Mark read, Dismiss), and a
+      // control inside a control is axe's nested-interactive. A pointer still
+      // opens by clicking anywhere on it (each nested control stops its own
+      // click); the keyboard gets the one real button below, first in tab
+      // order, and the row's other controls are their own tab stops after it.
       onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") open();
-      }}
     >
+      {/* No onClick of its own: Enter/Space fire a click that bubbles to the
+          row's onClick, so it opens exactly once. The name carries the full
+          text the row truncates; the button shows nothing itself, so there is
+          no visible text for the name to mismatch. */}
+      <button
+        type="button"
+        className="visually-hidden notif-event-open"
+        aria-label={
+          repeatCount > 1
+            ? `${label}: ${fullText} — ${age}, repeated ${repeatCount} times`
+            : `${label}: ${fullText} — ${age}`
+        }
+      />
       <span className={`notif-event-icon ${className}`}>{icon}</span>
       <span className="notif-event-body">
         {/* Suppressed when the pill would just repeat the row's own text
@@ -1092,9 +1101,6 @@ function EventRow({
               e.stopPropagation();
               onOpen(session);
             }}
-            // Same guard as the Timeline button below: the row's own
-            // onKeyDown would otherwise treat Enter/Space here as "open PR".
-            onKeyDown={(e) => e.stopPropagation()}
           >
             Session
           </button>
@@ -1106,10 +1112,6 @@ function EventRow({
               e.stopPropagation();
               onTimeline(session);
             }}
-            // The row's own onKeyDown treats Enter/Space anywhere inside it
-            // as "open this session" (the terminal) — same guard GateActions
-            // uses, or keyboard-activating this would open the wrong view.
-            onKeyDown={(e) => e.stopPropagation()}
           >
             Timeline
           </button>
@@ -1203,11 +1205,10 @@ function GateActions({ sessionId, gateId }: { sessionId: number; gateId: string 
       <span
         className="notif-gate-deny-form"
         onClick={(e) => e.stopPropagation()}
-        // The row this renders inside (EventRow) treats a Space/Enter
-        // keydown as "open this session" (its own keyboard-activation
-        // handler, mirroring its role="button"/tabIndex=0) — without this,
-        // typing a space into the reason field below bubbles up and closes
-        // the whole notifications panel mid-keystroke.
+        // Keeps the reason field's keystrokes to itself. The row this renders
+        // in used to open on Space/Enter anywhere inside it, which closed the
+        // panel mid-keystroke; since #3106 only its own open button does, but
+        // the panel above still reads keydowns (Escape closes it).
         onKeyDown={(e) => e.stopPropagation()}
       >
         <TextInput

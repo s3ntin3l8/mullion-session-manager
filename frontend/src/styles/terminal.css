@@ -596,6 +596,12 @@
 .notif-event-row:hover {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
+/* #3106 — the row's one keyboard control is a visually hidden open button
+   (NotificationBell.tsx): show its focus on the row, not on a 1px box. */
+.notif-event-row:has(.notif-event-open:focus-visible) {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: -2px;
+}
 /* An already-read event stays in the feed (history, not just "unread
    inbox") but recedes visually — dimmer text, no unread accent — so the
    still-unread rows keep drawing the eye. */

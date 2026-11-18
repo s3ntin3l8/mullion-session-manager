@@ -19,8 +19,12 @@ const words = (s: string) =>
 // is checked too (aria-hidden text drops out of that name, not out of the
 // visible text). A control that shows no words (an icon, a "×") has nothing
 // to match.
-export function expectNameHasVisibleText(el: HTMLElement) {
-  const visible = words(el.textContent ?? "");
+// `shows` is the element whose text the user sees for this control, when that
+// is not the control itself: a row whose one keyboard control is a visually
+// hidden button (#3106) is read off the row, so the button's name has to carry
+// the row's words.
+export function expectNameHasVisibleText(el: HTMLElement, shows: HTMLElement = el) {
+  const visible = words(shows.textContent ?? "");
   if (visible === "") return;
   const escaped = visible.split(" ").map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   // The words in order, whole, with only spaces or punctuation between them.

@@ -148,29 +148,26 @@ export function ProjectHeader({
       <div
         className="project-row-header"
         onClick={onToggleCollapsed}
-        // P10 — same role="button"/tabIndex/Enter-Space pattern as
-        // SessionRow in ../session-row/SessionRow.tsx (see that row's own comment for the full
-        // rationale), including the `e.target !== e.currentTarget` guard:
-        // this header nests its own "+ session" button and a KebabMenu
-        // (both already wrapped in `onClick={(e) => e.stopPropagation()}`
-        // for the mouse case), and without the guard tabbing to either and
-        // pressing Enter/Space would ALSO toggle this row's collapse state.
-        role={onToggleCollapsed ? "button" : undefined}
-        tabIndex={onToggleCollapsed ? 0 : undefined}
-        aria-expanded={onToggleCollapsed ? !collapsed : undefined}
-        aria-controls={onToggleCollapsed ? bodyId : undefined}
-        onKeyDown={
-          onToggleCollapsed
-            ? (e) => {
-                if (e.target !== e.currentTarget) return;
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onToggleCollapsed();
-                }
-              }
-            : undefined
-        }
+        // #3106 — a plain container, not a role="button": it holds its own
+        // "+ session" button and kebab menu, and a control inside a control
+        // is axe's nested-interactive. A pointer still toggles by clicking
+        // anywhere on it (each nested control stops its own click); the
+        // keyboard gets the one real disclosure button below, first in tab
+        // order — the session row's pattern (SessionRow.tsx).
       >
+        {onToggleCollapsed && (
+          // No onClick of its own: Enter/Space fire a click that bubbles to
+          // the header's onClick, so the toggle runs exactly once. Named by
+          // the project, the header's first visible word; it shows nothing
+          // itself, so there is no visible text to mismatch.
+          <button
+            type="button"
+            className="visually-hidden project-row-toggle"
+            aria-label={project.name}
+            aria-expanded={!collapsed}
+            aria-controls={bodyId}
+          />
+        )}
         {onToggleCollapsed ? (
           <ChevronDownIcon
             size={12}

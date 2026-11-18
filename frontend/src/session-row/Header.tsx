@@ -204,7 +204,7 @@ export function Header({
         entirely when `alwaysExpandGit` is set (a caller with room to always
         show details) — there's nothing to toggle then. */}
         {hasDetails && !alwaysExpandGit && (
-          <span onClick={(e) => e.stopPropagation()}>
+          <span className="session-row-control" onClick={(e) => e.stopPropagation()}>
             <button
               className="session-git-toggle"
               title={gitLineExpanded ? "Hide details" : "Show details"}
@@ -219,7 +219,7 @@ export function Header({
           </span>
         )}
         {!isTerminal && (
-          <span onClick={(e) => e.stopPropagation()}>
+          <span className="session-row-control" onClick={(e) => e.stopPropagation()}>
             <KebabMenu
               menuPlacement="auto"
               title="More…"
@@ -276,7 +276,7 @@ export function Header({
           </span>
         )}
         {!isTerminal && (
-          <span onClick={(e) => e.stopPropagation()}>
+          <span className="session-row-control" onClick={(e) => e.stopPropagation()}>
             <ConfirmButton
               title={
                 childCount > 0

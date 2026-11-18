@@ -28,7 +28,7 @@ import {
   type Task,
 } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
-import { expectNameHasVisibleText } from "./test/a11y.js";
+import { expectNameHasVisibleText, expectNoNestedInteractive } from "./test/a11y.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
 // default it to false so the test doesn't need a full store hydrate. Every
@@ -53,6 +53,7 @@ let tasks: Task[] = [];
 // something to find.
 let hosts: Host[];
 let confirmBeforeKill = false;
+let activePanelId: string | null = null;
 // Issue #271 — PromoteDialog (rendered from SessionRow's kebab menu / the
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -71,6 +72,7 @@ vi.mock("./store/index.js", () => {
     selector({
       settings: { sessions: { confirmBeforeKill } },
       theme: "dark",
+      activePanelId,
       events,
       sessionGitStatuses,
       gitDiffStats,
@@ -522,7 +524,9 @@ describe("SessionRow", () => {
       const row = document.querySelector<HTMLElement>(".session-item")!;
       // No now line here: its text is not part of the name (it never was).
       expect(row.querySelector(".session-now-line")).toBeNull();
-      expectNameHasVisibleText(row);
+      // #3106 — the row's one keyboard control is its hidden open button,
+      // which a voice-control user reaches by what the row shows.
+      expectNameHasVisibleText(row.querySelector<HTMLElement>(".session-item-open")!, row);
     });
 
     it("caps a long status detail on the line and in the name; the tooltip keeps it", () => {
@@ -544,9 +548,9 @@ describe("SessionRow", () => {
       expect(label.textContent).toHaveLength(60);
       expect(label.textContent?.endsWith("…")).toBe(true);
       expect(label.getAttribute("title")).toBe(`exited: ${detail}`);
-      const row = document.querySelector(".session-item")!;
-      expect(row.getAttribute("aria-label")).not.toContain(detail);
-      expect(row.getAttribute("aria-label")).toContain(label.textContent);
+      const open = document.querySelector(".session-item-open")!;
+      expect(open.getAttribute("aria-label")).not.toContain(detail);
+      expect(open.getAttribute("aria-label")).toContain(label.textContent);
     });
 
     it("drops the word 'open' for an open session; the title is heavier and the name says it", () => {
@@ -559,9 +563,11 @@ describe("SessionRow", () => {
           onEnd={vi.fn()}
         />,
       );
-      const row = screen.getByRole("button", {
-        name: "Open session claude code, Working, already open in this workspace",
-      });
+      const row = screen
+        .getByRole("button", {
+          name: "Open session claude code, Working, already open in this workspace",
+        })
+        .closest(".session-item")!;
       expect(row).not.toHaveTextContent(/\bopen\b/);
       expect(row.querySelector(".session-name")).toHaveClass("open");
     });
@@ -597,35 +603,66 @@ describe("SessionRow", () => {
   });
 
   // P10 — the session row is the single most-used control in the app;
-  // before this fix it was a bare <div onClick draggable> with no keyboard
-  // support at all. Same role="button"/tabIndex/Enter-Space pattern as
-  // UnifiedBoard.tsx's TaskCard and NotificationBell.tsx's EventRow.
-  describe("keyboard accessibility (P10)", () => {
-    it("is a focusable role=button", () => {
+  // before that fix it was a bare <div onClick draggable> with no keyboard
+  // support at all. #3106 — the row itself is no longer a role="button"
+  // (it nests its own controls, axe's nested-interactive): it holds ONE real
+  // button, first in tab order, and its other controls are sibling tab stops.
+  describe("keyboard accessibility (P10, #3106)", () => {
+    it("has no interactive element inside another interactive element", () => {
       render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
-      const row = screen.getByRole("button", { name: /claude code/i });
-      expect(row).toHaveAttribute("tabIndex", "0");
+      const row = document.querySelector<HTMLElement>(".session-item")!;
+      expect(row).not.toHaveAttribute("role");
+      expect(row).not.toHaveAttribute("tabindex");
+      // The row's own controls exist, so the check is not vacuous.
+      expect(row.querySelectorAll("button").length).toBeGreaterThanOrEqual(3);
+      expectNoNestedInteractive(row);
     });
 
-    it("fires onOpen on Enter when the row itself is focused", async () => {
+    it("gives the row one real button, the first tab stop in it", async () => {
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+      const open = screen.getByRole("button", { name: /^Open session claude code/ });
+      expect(open.tagName).toBe("BUTTON");
+      await user.tab();
+      expect(open).toHaveFocus();
+      // The row's other controls follow it as their own tab stops.
+      await user.tab();
+      expect(document.activeElement).not.toBe(open);
+      expect(document.querySelector(".session-item")).toContainElement(
+        document.activeElement as HTMLElement,
+      );
+    });
+
+    it("marks the session shown in the active pane on its open button", () => {
+      activePanelId = `session-${SESSION.id}`;
+      try {
+        render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+        expect(screen.getByRole("button", { name: /^Open session/ })).toHaveAttribute(
+          "aria-current",
+          "true",
+        );
+      } finally {
+        activePanelId = null;
+      }
+    });
+
+    it("fires onOpen once on Enter on the open button", async () => {
       const onOpen = vi.fn();
       const user = userEvent.setup();
       render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
 
-      const row = screen.getByRole("button", { name: /claude code/i });
-      row.focus();
+      screen.getByRole("button", { name: /claude code/i }).focus();
       await user.keyboard("{Enter}");
 
       expect(onOpen).toHaveBeenCalledTimes(1);
     });
 
-    it("fires onOpen on Space when the row itself is focused", async () => {
+    it("fires onOpen once on Space on the open button", async () => {
       const onOpen = vi.fn();
       const user = userEvent.setup();
       render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
 
-      const row = screen.getByRole("button", { name: /claude code/i });
-      row.focus();
+      screen.getByRole("button", { name: /claude code/i }).focus();
       await user.keyboard(" ");
 
       expect(onOpen).toHaveBeenCalledTimes(1);

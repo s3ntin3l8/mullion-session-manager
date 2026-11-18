@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { expectNameHasVisibleText, expectNoNestedInteractive } from "./test/a11y.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 import { NotificationBell } from "./NotificationBell.js";
 import type { NotificationEvent, Project, Session } from "./api/index.js";
@@ -651,6 +652,76 @@ describe("NotificationBell", () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
     expect(screen.queryByRole("button", { name: "Timeline" })).not.toBeInTheDocument();
+  });
+
+  // #3106 — the row was a role="button" holding its own buttons (axe's
+  // nested-interactive) and named with text it did not show. It is a plain
+  // container now with ONE real open button, first in tab order.
+  describe("row keyboard and accessibility structure (#3106)", () => {
+    const renderWithTimeline = async () => {
+      events = { 1: [makeEvent({ seq: 1 })] };
+      const onOpenSession = vi.fn();
+      const onOpenTimeline = vi.fn();
+      render(
+        <NotificationBell
+          onOpenSession={onOpenSession}
+          onOpenTimeline={onOpenTimeline}
+          onOpenBrowser={vi.fn()}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+      const row = document.querySelector<HTMLElement>(".notif-event-row")!;
+      const open = row.querySelector<HTMLElement>("button.notif-event-open")!;
+      return { onOpenSession, onOpenTimeline, row, open };
+    };
+
+    it("has no interactive element inside another, and names the open button by what the row shows", async () => {
+      const { row, open } = await renderWithTimeline();
+      expect(row).not.toHaveAttribute("role");
+      expect(row).not.toHaveAttribute("tabindex");
+      expect(within(row).getAllByRole("button").length).toBeGreaterThanOrEqual(3);
+      expectNoNestedInteractive(row);
+      // The row's own words, without its other controls' labels. Its parts
+      // are separate boxes on screen; textContent alone would glue them.
+      const shown = row.cloneNode(true) as HTMLElement;
+      shown.querySelectorAll("button").forEach((b) => b.remove());
+      shown.querySelectorAll("span").forEach((part) => part.append(" "));
+      expectNameHasVisibleText(open, shown);
+    });
+
+    it("puts the open button first among the row's tab stops", async () => {
+      const { row, open } = await renderWithTimeline();
+      const stops = within(row).getAllByRole("button");
+      expect(stops[0]).toBe(open);
+      expect(stops.slice(1).map((b) => b.textContent || b.getAttribute("aria-label"))).toEqual([
+        "Timeline",
+        "Mark read",
+        "Dismiss",
+      ]);
+    });
+
+    it("opens the session once on Enter on the open button", async () => {
+      const { onOpenSession, open } = await renderWithTimeline();
+      open.focus();
+      await userEvent.keyboard("{Enter}");
+      expect(onOpenSession).toHaveBeenCalledTimes(1);
+      expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
+    });
+
+    it("opens the session once on Space on the open button", async () => {
+      const { onOpenSession, open } = await renderWithTimeline();
+      open.focus();
+      await userEvent.keyboard(" ");
+      expect(onOpenSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not open the session when Enter activates the row's Timeline button", async () => {
+      const { onOpenSession, onOpenTimeline } = await renderWithTimeline();
+      screen.getByRole("button", { name: "Timeline" }).focus();
+      await userEvent.keyboard("{Enter}");
+      expect(onOpenTimeline).toHaveBeenCalledTimes(1);
+      expect(onOpenSession).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps an already-read event visible in the feed (history, not just unread inbox), without a mark-read button", async () => {
