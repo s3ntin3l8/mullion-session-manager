@@ -576,6 +576,28 @@
       }
     },
     {
+      "name": "workspace-picker",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["desktop", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=/switch workspace/]"
+        },
+        {
+          "waitFor": "role=dialog[name=\"Workspaces\"] >> text=\"Experiments\""
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      },
+      "baseline": true
+    },
+    {
       "name": "tablet-notifications",
       "path": "/",
       "tags": ["audit"],
