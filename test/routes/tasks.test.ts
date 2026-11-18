@@ -284,8 +284,7 @@ describe("tasks route", () => {
     expect(res.statusCode).toBe(200);
     // GET /api/tasks has no project filter yet (that lands with 6.2's
     // ?projectId= — see routes/tasks.ts's own comment on the GET route),
-    // and this suite shares one DB across tests, so filter to this
-    // project's own rows rather than asserting the full cross-test list.
+    // so filter defensively to this project's own rows.
     const own = (res.json() as { projectId: number }[]).filter((t) => t.projectId === projectId);
     expect(own).toHaveLength(1);
     expect(own[0]).toMatchObject({

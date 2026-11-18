@@ -57,6 +57,7 @@ describe("local task clear-done & archive (#746, #1015)", () => {
     it("deletes every done task across all projects when projectIds is omitted", async () => {
       const app = await buildApp();
       const projectId = await createProject(app, "/tmp/clear-done-all");
+      const otherProjectId = await createProject(app, "/tmp/clear-done-all-other");
       const [row1] = app.db
         .insert(tasks)
         .values({ projectId, title: "done 1", status: "done" })
@@ -65,6 +66,11 @@ describe("local task clear-done & archive (#746, #1015)", () => {
       const [row2] = app.db
         .insert(tasks)
         .values({ projectId, title: "done 2", status: "done" })
+        .returning()
+        .all();
+      const [otherDone] = app.db
+        .insert(tasks)
+        .values({ projectId: otherProjectId, title: "other project done", status: "done" })
         .returning()
         .all();
       const [stillOpen] = app.db
@@ -76,12 +82,9 @@ describe("local task clear-done & archive (#746, #1015)", () => {
       const res = await app.inject({ method: "POST", url: "/api/tasks/clear-done", payload: {} });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      // Membership, not exact equality — this file shares one DB across
-      // its whole run, and an earlier test in this same describe block
-      // deliberately leaves an out-of-scope project's own done task
-      // behind (the project-scoping test above), which "omitted
-      // projectIds" is specifically supposed to also sweep up.
-      expect(body.deleted).toEqual(expect.arrayContaining([row1.id, row2.id]));
+      // Membership is asserted for every project's done rows, including the
+      // second project's row swept when projectIds is omitted.
+      expect(body.deleted).toEqual(expect.arrayContaining([row1.id, row2.id, otherDone.id]));
       expect(body.deleted).not.toContain(stillOpen.id);
 
       await app.close();

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  type TestApp,
   mockNodePtyFactory,
   mockChildProcessFactory,
   mockTaskPromoteFactory,
@@ -304,9 +305,8 @@ describe("local task CRUD (6.9/#233)", () => {
   });
 
   describe("hermes as a review agent (#2369)", () => {
-    type TestApp = Awaited<ReturnType<typeof buildApp>>;
-    // The DB is shared across this file, so every test that sets Hermes up
-    // takes it down again, pass or fail.
+    // Keep the teardown so withHermes leaves settings clean if a test throws
+    // mid-run (setupTasksRouteTestLifecycle also resets them in beforeEach).
     async function withHermes<T>(app: TestApp, run: () => Promise<T>): Promise<T> {
       applySettingsPatch(app, {
         reviewRelay: { apiUrl: "http://hermes.test:8643", taskMasterReviewer: true },
@@ -487,7 +487,7 @@ describe("local task CRUD (6.9/#233)", () => {
     expect(res.statusCode).toBe(202);
 
     // agentCommand is stamped at dispatch, not enqueue — called directly
-    // and awaited for determinism (see the claim describe block above).
+    // and awaited for determinism (see test/routes/tasks-claim.test.ts's dispatch test).
     const outcome = await dispatchClaimedTask(app, task.id);
     expect(outcome.ok).toBe(true);
 

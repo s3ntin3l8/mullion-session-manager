@@ -1,6 +1,7 @@
 /**
- * Shared mock factories, lifecycle hooks, and git/GitHub fixtures for
- * `test/routes/tasks*.test.ts` suites.
+ * Shared mock factories, lifecycle hooks, and git/GitHub fixtures for the
+ * `test/routes/tasks.test.ts` split suites (`tasks.test.ts` and the sibling
+ * `tasks-*.test.ts` files extracted from it).
  *
  * Import order constraint: `taskPromoteMocks` is a plain module-level object
  * (not `vi.hoisted`), which works because this file has no runtime `src/`
