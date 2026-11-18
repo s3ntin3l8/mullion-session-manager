@@ -15,7 +15,8 @@ The owner decided these on 2026-11-18. The rest of the note follows them.
 
 2. **Below 1100px a preview opens in the right rail's Browser view**, which
    gets the same switch. The agent's browser is already a rail view there; the
-   preview still opens as a pane and takes a half. With this, anything you look
+   preview still opens as a pane: it takes a half in `rails-halves`, a grid
+   cell in `rails-full` and the full screen on the phone. With this, anything you look
    at beside a session is a rail view and the left half is always a session.
    Cost: below 1100px you see one page at a time.
 
