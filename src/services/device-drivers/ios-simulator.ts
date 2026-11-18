@@ -376,7 +376,8 @@ export class IosSimulatorDriver implements DeviceDriver {
     });
     const ended = (err?: Error) => {
       if (generation !== this.streamGeneration) return;
-      // grpc-js emits `end` and then `error` for a non-OK status: count once.
+      // grpc-js emits `error` (and status) before `end` for a non-OK status:
+      // the first event counts, the later one is ignored.
       this.streamGeneration++;
       this.stream = null;
       if (err && this.alive) this.error = errorText(err);

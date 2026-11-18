@@ -301,18 +301,19 @@ describe("IosSimulatorDriver video (in-process companion)", () => {
     await driver.stop();
   });
 
-  it("counts a real gRPC stream end (end then error) as one failure", async () => {
+  it("counts a real gRPC stream end (error then end) as one failure", async () => {
     const { driver, streams } = make();
     await driver.start();
     for (let i = 0; i < 12; i++) {
       const s = streams.at(-1)!;
+      s.emit("error", new Error("UNAVAILABLE: gone"));
       s.emit("end");
-      s.emit("error", new Error("UNAVAILABLE"));
       await vi.advanceTimersByTimeAsync(1000);
     }
     // Budget of 5 failures: the initial stream plus 4 reopens.
     expect(streams).toHaveLength(5);
     expect(driver.toInfo().status).toBe("error");
+    expect(driver.toInfo().error).toContain("UNAVAILABLE: gone");
     await driver.stop();
   });
 
