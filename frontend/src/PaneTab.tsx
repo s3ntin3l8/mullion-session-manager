@@ -290,12 +290,15 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       tab?.setAttribute("aria-labelledby", nameId);
       labelled = tab;
     };
-    apply();
     let frame = 0;
     const later = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(apply);
     };
+    apply();
+    // Mounted before dockview put this content in its .dv-tab: try once more
+    // a frame later rather than leave the tab unnamed.
+    if (!labelled) later();
     const moved = [api.onDidGroupChange(later), api.onDidLocationChange(later)];
     return () => {
       cancelAnimationFrame(frame);

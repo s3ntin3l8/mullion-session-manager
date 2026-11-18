@@ -1323,6 +1323,27 @@ describe("dock tab name (#3106)", () => {
     }
   });
 
+  it("names the tab a frame later when it mounts before dockview attaches it", () => {
+    vi.useFakeTimers();
+    try {
+      const loose = document.createElement("div");
+      document.body.appendChild(loose);
+      render(<PaneTab {...makeProps()} />, { container: loose });
+      const tab = document.createElement("div");
+      tab.className = "dv-tab";
+      document.body.appendChild(tab);
+      tab.appendChild(loose);
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+      expect(tab).toHaveAttribute("aria-labelledby");
+      document.body.appendChild(loose);
+      tab.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops the reference when the tab unmounts", () => {
     const host = document.createElement("div");
     host.className = "dv-tab";
