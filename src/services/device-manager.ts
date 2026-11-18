@@ -1205,10 +1205,11 @@ export class DeviceManager {
   }
 
   /** The platform-neutral handle on a live device: what routes/device.ts and
-   * routes/devices.ts talk to, so neither imports adb/scrcpy types. Built on
-   * `get`/`getOrCreate` (which still return the Android `Device`) so there is
-   * one place that decides which engine a device runs on. Every device is
-   * Android until `devices.platform` lands (#3202). */
+   * routes/devices.ts talk to, so neither imports adb/scrcpy types. Two engines
+   * sit behind it: an Android `Device` (adb/scrcpy, wrapped in `AndroidDriver`)
+   * and an `IosDevice` (simctl + idb, whose driver is returned as is). The
+   * row's `platform` picks the engine in `getOrCreate`; `get` and `getDriver`
+   * look the id up in whichever registry holds it. */
   getDriver(id: string): DeviceDriver | undefined {
     const ios = this.iosDevices.get(id);
     if (ios) return ios.driver;

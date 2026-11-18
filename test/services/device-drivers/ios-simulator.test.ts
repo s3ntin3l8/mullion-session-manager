@@ -378,6 +378,49 @@ describe("IosSimulatorDriver", () => {
   });
 });
 
+describe("IosSimulatorDriver stop during start", () => {
+  it("a stop that lands mid-boot is not undone: no bootstatus, simulator shut down again", async () => {
+    const f = fakeSimctl();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const inner = f.simctl;
+    const gated: SimctlRunner = async (args, options) => {
+      const out = await inner(args, options);
+      if (args[0] === "boot") await gate;
+      return out;
+    };
+    const driver = new IosSimulatorDriver({ id: "9", udid: UDID, label: "iPhone", simctl: gated });
+    const starting = driver.start();
+    await vi.waitFor(() => expect(verbs(f.calls)).toContain("boot"));
+    await driver.stop();
+    release();
+    await starting;
+    expect(verbs(f.calls)).not.toContain("bootstatus");
+    expect(f.res.state).toBe("Shutdown");
+    expect(driver.isAlive).toBe(false);
+  });
+
+  it("a stop that lands during bootstatus leaves the driver not alive", async () => {
+    const f = fakeSimctl();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const inner = f.simctl;
+    const gated: SimctlRunner = async (args, options) => {
+      const out = await inner(args, options);
+      if (args[0] === "bootstatus") await gate;
+      return out;
+    };
+    const driver = new IosSimulatorDriver({ id: "9", udid: UDID, label: "iPhone", simctl: gated });
+    const starting = driver.start();
+    await vi.waitFor(() => expect(verbs(f.calls)).toContain("bootstatus"));
+    await driver.stop();
+    release();
+    await starting;
+    expect(driver.isAlive).toBe(false);
+    expect(f.res.state).toBe("Shutdown");
+  });
+});
+
 describe("execSimctl", () => {
   beforeEach(() => {
     execFileMock.mockReset();

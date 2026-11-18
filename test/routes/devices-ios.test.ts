@@ -254,6 +254,16 @@ describe("iOS Simulator devices (#1943)", () => {
       await app.close();
     });
 
+    it("names the disabled panel, not iOS config, when DEVICE_ENABLED is off", async () => {
+      delete process.env.DEVICE_ENABLED;
+      const app = await buildTestAppOnPlatform("darwin");
+      const res = await create(app, { udid: UDID });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toBe(app.devicePanelUnavailableMessage);
+      expect(listDeviceRows(app)).toHaveLength(0);
+      await app.close();
+    });
+
     it("stop and delete tear down through the engine and never the scope backend", async () => {
       const app = await buildTestAppOnPlatform("darwin");
       const { id } = (await create(app, { udid: UDID })).json();

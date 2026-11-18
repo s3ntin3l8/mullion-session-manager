@@ -233,6 +233,10 @@ async function createIosDevice(
       );
     }
     if (!support.platforms.includes("ios")) {
+      // The panel being off is its own cause: say so, as the Android branch does.
+      if (host.isLocal && !app.devicePanelEnabled) {
+        return reply.badRequest(app.devicePanelUnavailableMessage);
+      }
       return reply.badRequest(
         host.isLocal
           ? IOS_UNAVAILABLE_MESSAGE
