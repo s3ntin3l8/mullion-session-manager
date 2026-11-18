@@ -68,7 +68,7 @@ vi.mock("../../src/services/scope/index.js", async (importOriginal) => ({
 // The fake engine behind createIdbIosEngine.
 const engines: FakeEngine[] = [];
 class FakeEngine implements IosEngine {
-  readonly driver: ReturnType<FakeEngine["makeDriver"]>;
+  readonly driver: IosEngine["driver"];
   readonly start = vi.fn(async () => {
     this.status = "streaming";
   });
@@ -111,7 +111,7 @@ class FakeEngine implements IosEngine {
       requestKeyframe: async () => undefined,
       input: this.input,
       supports: () => true,
-    };
+    } as unknown as IosEngine["driver"];
   }
 }
 vi.mock("../../src/services/ios-device.js", async (importOriginal) => ({

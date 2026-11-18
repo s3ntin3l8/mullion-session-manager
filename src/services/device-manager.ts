@@ -1289,6 +1289,8 @@ export class DeviceManager {
    * nothing to reattach to and nothing to reconcile against a systemd
    * listing; connectPhysical() is unconditionally the right (and only)
    * thing to do for every call with this kind. */
+  async getOrCreate(opts: DeviceSpawnOptions & { platform?: "android" }): Promise<Device>;
+  async getOrCreate(opts: DeviceSpawnOptions): Promise<Device | IosDevice>;
   async getOrCreate(opts: DeviceSpawnOptions): Promise<Device | IosDevice> {
     if (opts.platform === "ios") return this.getOrCreateIos(opts);
     this.assertEnabled(opts.kind === "physical" ? "physical" : "emulator");
