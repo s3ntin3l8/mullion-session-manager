@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
 // The `attachImeInput` cases below drive a REAL `@xterm/xterm` Terminal (not the
-// module-level mock the TerminalPane test harness uses) with the event shapes captured
-// from Gboard on an Android 16 emulator: every key is a keyCode-229 keydown, a
-// `beforeinput` and an `input` (insertText) on the helper textarea, and a
-// suggestion tap fires TWO 229 keydowns before its single insert.
+// module-level mock the TerminalPane test harness uses) with the event shapes
+// captured from Gboard on an Android 16 emulator: every key is a keyCode-229
+// keydown, a `beforeinput` and an `input` (insertText) on the helper textarea,
+// and a suggestion tap fires TWO 229 keydowns before its single insert.
 import { Terminal } from "@xterm/xterm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
