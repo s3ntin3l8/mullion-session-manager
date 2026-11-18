@@ -345,3 +345,19 @@
     justify-content: center;
   }
 }
+
+/* The rail's Browser view (#3372) is a narrow view at every width it has, so
+   the switch always takes its own row there: on the phone and in rails-full
+   the view can be wider than the query above, yet it is still the one view
+   beside a session, not a wide pane. */
+.browser-sidebar-view .browser-panel-toolbar {
+  flex-wrap: wrap;
+}
+.browser-sidebar-view .browser-mode-switch {
+  flex: 1 0 100%;
+  max-width: 100%;
+}
+.browser-sidebar-view .browser-mode-switch-seg {
+  flex: 1 1 auto;
+  justify-content: center;
+}

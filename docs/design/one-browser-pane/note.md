@@ -42,6 +42,8 @@ The owner decided these on 2026-11-18. The rest of the note follows them.
    view on the fold, the phone) it moves to its own row above the address, so
    the labelled switch and the session name do not squeeze the address field.
    "Narrow" is measured on the pane (a container query), not on the window.
+   The rail's Browser view always counts as narrow, so its switch is on its
+   own row at every width it has, `rails-full` (about 650px) included (#3372).
 
 ## What exists today
 

@@ -11,21 +11,10 @@ import { useCoarsePointer } from "./lib/layoutTier.js";
 import { describeError } from "./lib/describeError.js";
 import { TextInput } from "./ui/primitives.js";
 import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
+import type { BrowserPanelParams } from "./lib/browserPanelParams.js";
 
-export interface BrowserPanelParams {
-  projectId?: number;
-  kind?: "external";
-  url?: string;
-  slug?: string;
-  /** Issues #2016/#2018 — a pane opened on one branch preview. Kept apart
-   * from `slug`, which the params write-back below rewrites from whatever
-   * the pane last loaded (and clears while it loads). */
-  previewSlug?: string;
-  targetName?: string;
-  targetRev?: number;
-  activeSavedUrlId?: number | null;
-  activeSavedUrlLabel?: string | null;
-}
+// Lives in lib/ so the store can name it without importing this component.
+export type { BrowserPanelParams } from "./lib/browserPanelParams.js";
 
 type BrowserPanelState =
   | { status: "empty" }
@@ -172,7 +161,7 @@ export function BrowserPanel({
   toolbarEnd,
 }: {
   params: BrowserPanelParams;
-  api?: DockviewPanelApi;
+  api?: Pick<DockviewPanelApi, "updateParameters">;
   /** Rendered first in the toolbar: the Browser pane's mode switch (#3371). */
   toolbarStart?: ReactNode;
   /** Rendered last in the toolbar, after reload. */

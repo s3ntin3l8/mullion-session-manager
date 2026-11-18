@@ -71,7 +71,7 @@ export interface BrowserShellProps {
   browserEnabled: boolean;
   previewParams: BrowserPanelParams;
   /** Lets BrowserPanel write its address back into a saved layout. */
-  previewApi?: DockviewPanelApi;
+  previewApi?: Pick<DockviewPanelApi, "updateParameters">;
   /** The session whose browser Agent's browser shows, or would show. */
   agentSession: Session | null;
   /** The title the sidebar gives that session. */

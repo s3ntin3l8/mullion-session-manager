@@ -267,6 +267,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     sidebarWidth: readStoredSidebarWidth(),
     rightSidebarView: storedRightSidebarView,
     rightSidebarProjectRequest: null,
+    railBrowser: { mode: "agent", preview: null, rev: 0 },
     rightSidebarHistoryRequest: null,
     rightSidebarBranchRequest: null,
     rightSidebarPruneRequest: null,
@@ -460,6 +461,22 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
           },
         }),
       }));
+    },
+
+    setRailBrowserMode: (mode) =>
+      set((s) => (s.railBrowser.mode === mode ? {} : { railBrowser: { ...s.railBrowser, mode } })),
+
+    setRailBrowserPreview: (preview) =>
+      set((s) => ({ railBrowser: { ...s.railBrowser, preview } })),
+
+    openRailBrowserPreview: (preview, projectId) => {
+      set((s) => ({ railBrowser: { mode: "preview", preview, rev: s.railBrowser.rev + 1 } }));
+      get().openRightSidebarView("browser", projectId);
+    },
+
+    openRailBrowserAgent: (projectId) => {
+      get().setRailBrowserMode("agent");
+      get().openRightSidebarView("browser", projectId);
     },
 
     // Intentionally shared by every GitHubPanel host of a project (right

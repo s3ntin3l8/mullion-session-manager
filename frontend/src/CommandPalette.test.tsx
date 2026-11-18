@@ -2874,6 +2874,8 @@ describe("CommandPalette -> Project drill-in and command search", () => {
         workspaces: [],
         rightSidebarView: "git",
         rightSidebarOpen: false,
+        // The view was last in Preview (#3372): this entry asks for the agent's.
+        railBrowser: { mode: "preview", preview: null, rev: 1 },
         // The "tablet" override resolves to the rails-halves band.
         settings: { ...useDashboardStore.getState().settings, layoutMode: "tablet" },
       });
@@ -2887,6 +2889,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       expect(state.rightSidebarView).toBe("browser");
       expect(state.rightSidebarOpen).toBe(true);
       expect(state.rightSidebarProjectRequest?.projectId).toBe(PROJECT.id);
+      expect(state.railBrowser.mode).toBe("agent");
     });
   });
 

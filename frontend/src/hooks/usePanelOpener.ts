@@ -25,6 +25,7 @@ import { subscribeFilePathGone } from "../lib/filePathEvents.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
 import type { ProjectHubTab } from "../ProjectHubPanel.js";
 import { BROWSER_PREVIEW_TITLE, browserPreviewTitle } from "../lib/browserTitles.js";
+import { previewOpensInRail } from "../right-sidebar/viewBands.js";
 
 // The near-identical project-scoped panel kinds (GitHub, Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
@@ -401,6 +402,13 @@ export function usePanelOpener({
 
   const onOpenBrowser = useCallback(
     (projectId: number) => {
+      // Below 1100px every preview opens in the rail's Browser view, never a
+      // pane (#3372): the left half stays a session.
+      if (previewOpensInRail()) {
+        leaveTaskView();
+        useDashboardStore.getState().openRailBrowserPreview(null, projectId);
+        return;
+      }
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, BROWSER_CONFIG);
@@ -429,6 +437,13 @@ export function usePanelOpener({
 
   const onOpenBrowserUrl = useCallback(
     (projectId: number, url: string, label: string) => {
+      if (previewOpensInRail()) {
+        leaveTaskView();
+        useDashboardStore
+          .getState()
+          .openRailBrowserPreview({ kind: "external", url, projectId }, projectId);
+        return;
+      }
       if (!dockviewApi) return;
       leaveTaskView();
       const panel = dockviewApi.addPanel({
@@ -453,6 +468,12 @@ export function usePanelOpener({
   }, []);
 
   const onOpenBlankBrowser = useCallback(() => {
+    if (previewOpensInRail()) {
+      // An empty address, on whatever project the rail follows.
+      leaveTaskView();
+      useDashboardStore.getState().openRailBrowserPreview({ kind: "external" });
+      return;
+    }
     if (!dockviewApi) return;
     leaveTaskView();
     const panel = dockviewApi.addPanel({
@@ -467,6 +488,13 @@ export function usePanelOpener({
 
   const onOpenPreview = useCallback(
     (projectId: number, slug: string, branch: string | null, targetName?: string) => {
+      if (previewOpensInRail()) {
+        leaveTaskView();
+        useDashboardStore
+          .getState()
+          .openRailBrowserPreview({ projectId, previewSlug: slug, targetName }, projectId);
+        return;
+      }
       if (!dockviewApi) return;
       leaveTaskView();
       const id = `browser-preview-${slug}`;
