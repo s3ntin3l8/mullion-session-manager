@@ -241,10 +241,6 @@ a.pr-dr-row:hover {
   color: var(--status-danger-fg);
 }
 /* The title bar and the action bar stay put while the body scrolls. */
-.pr-top-sentinel {
-  height: 1px;
-  margin-bottom: -1px;
-}
 .pr-detail-top {
   position: sticky;
   top: 0;

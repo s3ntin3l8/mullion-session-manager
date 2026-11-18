@@ -114,6 +114,7 @@ export function PrRow({
             </span>
           ) : undefined
         }
+        rowKey={`pr:${pr.number}`}
         onClick={() => onOpen(pr.number)}
         actions={
           <IconButton
