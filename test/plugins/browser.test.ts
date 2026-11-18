@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import { buildTestApp } from "../helpers/app.js";
 import { pendingBrowserCloses, projects } from "../../src/db/schema.js";
 import { PENDING_CLOSE_RETRY_INTERVAL_MS } from "../../src/plugins/browser.js";
-import { RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
 import { AGENT_OPERATIONS, PROTOCOL_VERSION } from "../../src/shared/agent-protocol.js";
 
 // buildApp() constructs a real BrowserManager (src/plugins/browser.ts), but
@@ -108,7 +108,7 @@ describe("browser plugin", () => {
       .insert(pendingBrowserCloses)
       .values({ projectId, hostId, checkoutRoot: "/work/p", nextAttemptAt: new Date(0) })
       .run();
-    const post = vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockResolvedValue({});
+    const post = vi.spyOn(getRemoteHostClient(app, hostId).browser, "post").mockResolvedValue({});
 
     (timer![0] as () => void)();
     await vi.waitFor(() =>

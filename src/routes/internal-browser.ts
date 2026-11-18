@@ -180,7 +180,7 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
         // executeBrowserAction above, which still resolves `frame`
         // internally. Missing this call would silently search the
         // top-level document instead of a named iframe for every
-        // multi-host `find` (RemoteHostClient.browserAutomationFind posts
+        // multi-host `find` (client.browser.find posts
         // here), with no error — caught by code review, PR #429.
         const root = await resolveSearchRoot(page, request.body.frame);
         return await executeBrowserFind(app, root, request.body);

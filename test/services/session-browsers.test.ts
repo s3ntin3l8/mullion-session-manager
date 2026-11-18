@@ -206,17 +206,17 @@ describe("session-browsers", () => {
         legacy: false,
       };
       recordSessionBrowserBinding(app, sessionIds[0], remote);
-      const postBrowser = vi.fn().mockResolvedValue({ ok: true });
+      const post = vi.fn().mockResolvedValue({ ok: true });
       const hostAgents = await import("../../src/services/host-agents.js");
       vi.spyOn(hostAgents, "requireOperation").mockReturnValue({ ok: true } as never);
       const remoteClient = await import("../../src/services/remote-host-client.js");
-      vi.spyOn(remoteClient, "getRemoteHostClient").mockReturnValue({ postBrowser } as never);
+      vi.spyOn(remoteClient, "getRemoteHostClient").mockReturnValue({
+        browser: { post },
+      } as never);
 
       closeSessionBrowserBindings(app, sessionIds[0]);
 
-      await vi.waitFor(() =>
-        expect(postBrowser).toHaveBeenCalledWith("/internal/browser/close", remote),
-      );
+      await vi.waitFor(() => expect(post).toHaveBeenCalledWith("/internal/browser/close", remote));
     });
 
     it("cascade-deletes a session's binding row when the session row itself is deleted", async () => {
