@@ -191,6 +191,21 @@ describe("IosSimulatorDriver", () => {
     expect(verbs(calls)).toContain("shutdown");
   });
 
+  it("a boot left unobserved after a failed start is no longer ours to shut down", async () => {
+    const { driver, calls, res } = make();
+    const onExit = vi.fn();
+    driver.onExit(onExit);
+    res.fail.bootstatus = new Error("timeout");
+    await expect(driver.start()).rejects.toThrow("timeout");
+    res.state = "Shutdown";
+    await vi.advanceTimersByTimeAsync(5000);
+    res.state = "Booted"; // the user reboots in Simulator.app
+    await vi.advanceTimersByTimeAsync(5000);
+    await driver.stop();
+    expect(verbs(calls)).not.toContain("shutdown");
+    expect(onExit).toHaveBeenCalledTimes(1); // only stop() latches it
+  });
+
   it("one throwing exit listener does not starve the rest", async () => {
     const { driver } = make();
     const second = vi.fn();

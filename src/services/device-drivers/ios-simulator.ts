@@ -134,8 +134,9 @@ export class IosSimulatorDriver implements DeviceDriver {
     this.status = "booting";
     this.error = null;
     try {
-      // Only the boot branch (and stop) ever writes bootedByUs: a retry after
-      // a failed start must not forget a boot this process already did.
+      // Only the boot branch, the poll and stop ever write bootedByUs: a retry
+      // after a failed start must not forget a boot this process already did,
+      // and the poll ends ownership when the simulator leaves Booted.
       if (!(await this.isBooted())) {
         try {
           await this.simctl(["boot", this.udid], { timeoutMs: BOOT_TIMEOUT_MS });
@@ -149,6 +150,9 @@ export class IosSimulatorDriver implements DeviceDriver {
     } catch (err) {
       this.status = "error";
       this.error = errorText(err);
+      // Ownership must be observed for as long as the flag is set: a boot of
+      // ours that left Booted unseen is no longer ours to shut down.
+      if (this.bootedByUs) this.startPolling();
       throw err;
     }
     this.alive = true;
@@ -292,7 +296,8 @@ export class IosSimulatorDriver implements DeviceDriver {
         this.stopPolling();
         // Ownership ends with the boot: any later boot is not ours.
         this.bootedByUs = false;
-        this.markExited();
+        // A failed start never had a live driver to exit.
+        if (this.alive) this.markExited();
       }
     } catch {
       // A failed probe is not evidence the simulator left Booted; retry next tick.
