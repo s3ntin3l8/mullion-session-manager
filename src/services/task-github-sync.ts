@@ -1082,12 +1082,15 @@ export async function postReviewFindingsComment(
         // reliably name the offender — retrying per-comment would mean up
         // to N extra round-trips to find it. Deliberately coarse for v1:
         // drop every anchor and fall back to `params.body`, which already
-        // has the findings folded in as plain bullets. #737: also drops
-        // back to a plain COMMENT from the primary identity — an
-        // unexpected 422 on a gating attempt (the reviewer App turning out
-        // not to be a distinct-enough identity after all, a GitHub
-        // behavior change) must still land the round's findings, same as
-        // it always has, rather than losing them entirely.
+        // has the findings folded in as plain bullets. A gating attempt
+        // with anchors first retries as the reviewer App, same verdict, no
+        // anchors (the verdict must keep its identity). #737: only if that
+        // also 422s (or there were no anchors to blame) does it drop back
+        // to a plain COMMENT from the primary identity — an unexpected 422
+        // on a gating attempt (the reviewer App turning out not to be a
+        // distinct-enough identity after all, a GitHub behavior change)
+        // must still land the round's findings, same as it always has,
+        // rather than losing them entirely.
         //
         // Independent review, PR #827: this retry must trigger on `event
         // !== undefined` too, not just `anchored.length > 0` — a `clean`
@@ -1103,14 +1106,44 @@ export async function postReviewFindingsComment(
           err.statusCode === 422 &&
           (anchored.length > 0 || event !== undefined)
         ) {
-          app.log.warn(
-            { taskId: task.id, prNumber: task.prNumber, err },
-            "[task-github-sync] PR review rejected (422) — retrying as a plain COMMENT from the primary identity, with findings folded into the body",
-          );
-          await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
-            body: marker + params.body,
-            commitId,
-          });
+          // Step down one level at a time. A 422 on an anchored gating
+          // attempt is most often a stale anchor (a finding on a file that
+          // dropped out of the PR diff after a fix — PR #3354 round 3), not
+          // an identity problem, so first retry WITHOUT anchors but with the
+          // same reviewer token and gating event: dropping to the primary
+          // identity there posts a COMMENT from the PR's author, which can
+          // never supersede the reviewer App's earlier CHANGES_REQUESTED.
+          let landed = false;
+          if (event !== undefined && reviewerToken && anchored.length > 0) {
+            app.log.warn(
+              { taskId: task.id, prNumber: task.prNumber, err },
+              "[task-github-sync] PR review rejected (422) — retrying as the reviewer App with the same verdict, anchors dropped and findings folded into the body",
+            );
+            try {
+              await createPullRequestReview(
+                reviewerToken,
+                repoRef.owner,
+                repoRef.repo,
+                task.prNumber,
+                { body: marker + params.body, commitId, event },
+              );
+              landed = true;
+            } catch (retryErr) {
+              if (!(retryErr instanceof GitHubApiError && retryErr.statusCode === 422)) {
+                throw retryErr;
+              }
+            }
+          }
+          if (!landed) {
+            app.log.warn(
+              { taskId: task.id, prNumber: task.prNumber, err },
+              "[task-github-sync] PR review rejected (422) — retrying as a plain COMMENT from the primary identity, with findings folded into the body",
+            );
+            await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
+              body: marker + params.body,
+              commitId,
+            });
+          }
         } else {
           throw err;
         }
