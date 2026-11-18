@@ -223,6 +223,61 @@ describe.each([
     expect(row.status).toBe("in_progress");
     expect(row.lastAutoReturnReason).toBe("conflict");
     expect(row.autoReturnRounds).toBe(3);
+    const prompt = mockReseedTaskIfSessionExited.mock.calls[0][3] as string;
+    expect(prompt).toContain("git merge");
+    expect(prompt).toContain("origin/main");
+    await app.close();
+  });
+
+  it("leaves the task reviewing while a rebase is waiting", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("waiting");
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, { task: { rebaseAttempts: 0 } });
+
+    await reconcileTasks(app);
+
+    expect(await dispatched(app, taskId)).toBe(false);
+    expect(mockReseedTaskIfSessionExited).not.toHaveBeenCalled();
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    expect(row.lastAutoReturnReason).toBeNull();
+    await app.close();
+  });
+
+  it("parks a task whose blocking session cannot be stopped, once", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("blocked");
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, { task: { rebaseAttempts: 0 } });
+
+    await reconcileTasks(app);
+    await reconcileTasks(app);
+
+    expect(mockAttemptAutoRebase).toHaveBeenCalledTimes(1);
+    expect(mockReseedTaskIfSessionExited).not.toHaveBeenCalled();
+    expect(await dispatched(app, taskId)).toBe(false);
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    expect(row.needsHumanReason).toBe("rebase-exhausted");
+    await app.close();
+  });
+
+  it("parks the task after one failed return instead of retrying every tick", async () => {
+    mockGetPullRequestByNumber.mockResolvedValue(mockPr(DIRTY));
+    mockAttemptAutoRebase.mockResolvedValue("declined");
+    mockReseedTaskIfSessionExited.mockResolvedValue(false);
+    const app = await buildApp();
+    const taskId = await createReviewingTask(app, agent, { task: { rebaseAttempts: 0 } });
+
+    await reconcileTasks(app);
+    await reconcileTasks(app);
+
+    expect(mockReseedTaskIfSessionExited).toHaveBeenCalledTimes(1);
+    expect(mockAttemptAutoRebase).toHaveBeenCalledTimes(1);
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    expect(row.needsHumanReason).toBe("rebase-exhausted");
     await app.close();
   });
 

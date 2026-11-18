@@ -248,6 +248,15 @@ export async function settleRapidRebaseExit(
 }
 
 /**
+ * What an `attemptAutoRebase` call did: `spawned` a worker, is `waiting` (an
+ * attempt in flight, a backoff or hold — a later tick retries), is `blocked`
+ * (a session that must stop first could not be stopped; nothing changes until
+ * a human acts, so a retry would only repeat the failure), or `declined` for
+ * good (the rebase cannot run, or the cap is spent).
+ */
+export type RebaseOutcome = "spawned" | "waiting" | "blocked" | "declined";
+
+/**
  * Spawns a worker to resolve a real merge conflict (`dirty` mergeableState)
  * found on a `done` or `reviewing` task's PR — attemptMerge's `case "dirty"` and
  * attemptAutoApprove call this instead of only recording the error. Never
@@ -259,13 +268,6 @@ export async function settleRapidRebaseExit(
  * unattended worker against a task nobody asked to be re-touched is exactly
  * the kind of action that opt-in exists to gate.
  */
-/**
- * What an `attemptAutoRebase` call did: `spawned` a worker, is `waiting` (an
- * attempt in flight, a backoff or hold, a transient failure — a later tick
- * retries), or `declined` for good (the rebase cannot run, or the cap is spent).
- */
-export type RebaseOutcome = "spawned" | "waiting" | "declined";
-
 export async function attemptAutoRebase(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -430,7 +432,7 @@ export async function attemptAutoRebase(
               ? "Conflicts with main — a previous auto-rebase attempt appears stuck and could not be stopped, needs manual resolution"
               : "Conflicts with main — the task's previous worker could not be stopped, needs manual resolution",
         );
-        return "waiting";
+        return "blocked";
       }
     }
   }
@@ -473,7 +475,7 @@ export async function attemptAutoRebase(
           task.id,
           "Conflicts with main — active review session appears stuck and could not be stopped, needs manual resolution",
         );
-        return "waiting";
+        return "blocked";
       }
     }
   }

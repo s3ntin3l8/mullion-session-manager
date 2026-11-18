@@ -14,6 +14,7 @@ import { computeCiStatus, fetchRunsForHeadChecked } from "./github.js";
 import type { PrCheckRuns } from "./pr-check-runs.js";
 import { resolveSessionsDirWithFallback, resolveBackend } from "./session-backend.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
+import { commandSupportsSeed } from "./task-agent-resolve.js";
 import { deriveTaskBranchName } from "./git-worktree.js";
 import {
   MAX_REBASE_ATTEMPTS,
@@ -248,15 +249,37 @@ export async function holdConflictingReview(
 ): Promise<void> {
   // Judge a finished attempt first: a rapid exit is refunded, which can take
   // the task back under the cap.
+  // Parked for a human by an earlier tick (a worker that could not be stopped,
+  // a return that failed): retrying would repeat the same failure every tick.
+  if (isParkedForHuman(task)) return;
   await settleRapidRebaseExit(app, task, project);
   if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
     const outcome = await attemptAutoRebase(app, task, project, baseRef, { alreadySettled: true });
+    if (outcome === "blocked") {
+      parkConflict(
+        app,
+        task,
+        `Conflicts with ${baseRef} — a session that has to stop before the rebase could not be stopped, needs manual resolution`,
+      );
+      return;
+    }
     // A rebase that cannot run (no worktree, no seed-capable agent, a failed
     // spawn) would otherwise leave the task in `reviewing` every tick with no
     // attempt counted: send it back to its worker instead.
     if (outcome !== "declined") return;
   }
   await returnConflictingPrToWorker(app, task, project, baseRef, resolvedTaskMaster, autoReturn);
+}
+
+// Suffix of a conflict hold this gate parked for good (see `parkConflict`).
+const PARKED_SUFFIX = " (Mullion will not retry automatically)";
+
+function parkConflict(app: FastifyInstance, task: typeof tasks.$inferSelect, message: string) {
+  recordMergeError(app, task.id, `${message}${PARKED_SUFFIX}`, "rebase-exhausted");
+}
+
+function isParkedForHuman(task: typeof tasks.$inferSelect): boolean {
+  return task.needsHumanReason === "rebase-exhausted" && !!task.mergeError?.endsWith(PARKED_SUFFIX);
 }
 
 /**
@@ -290,6 +313,15 @@ async function returnConflictingPrToWorker(
       task.id,
       `Conflicts with ${baseRef} — no worker to send it back to, needs manual resolution`,
       "rebase-exhausted",
+    );
+    return;
+  }
+  if (!commandSupportsSeed(task.agentCommand)) {
+    // The worker would spawn with no conflict prompt and burn its budget.
+    parkConflict(
+      app,
+      task,
+      `Conflicts with ${baseRef} — the worker's agent cannot take a seed prompt, needs manual resolution`,
     );
     return;
   }
@@ -327,6 +359,14 @@ async function returnConflictingPrToWorker(
     app.log.info(
       { taskId: task.id, prNumber: task.prNumber },
       "task reconcile: conflicting PR sent back to its worker before review dispatch",
+    );
+  } else {
+    // The return rolled back (e.g. the reseed could not spawn): park after one
+    // try rather than repeating it every tick.
+    parkConflict(
+      app,
+      task,
+      `Conflicts with ${baseRef} — sending it back to the worker failed, needs manual resolution`,
     );
   }
 }

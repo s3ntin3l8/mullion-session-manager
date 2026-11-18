@@ -737,8 +737,9 @@ reviewing` transition itself — `task-reconciler.ts`'s
   owns the attempt counter. The dispatch queries already skip a task whose
   rebase worker is in flight (`rebaseStartedAt` within
   `REBASE_ATTEMPT_STALE_MS`) or in rapid-exit backoff, so a running rebase is
-  never stranded or doubled. Once the attempts are spent, or the project does
-  not auto-rebase, `returnConflictingPrToWorker` sends the task back to its
+  never stranded or doubled. Once the attempts are spent, the rebase declines
+  (it cannot run: no worktree, no seed-capable agent, a failed spawn) or the
+  project does not auto-rebase, `returnConflictingPrToWorker` sends the task back to its
   worker through `autoReturnTask` with `reason: "conflict"` and a prompt
   (`buildMergeConflictPrompt`) to merge `origin/<base>`, resolve the conflicts
   and finish its turn (Mullion pushes as for any auto-return). That return spends
@@ -746,6 +747,10 @@ reviewing` transition itself — `task-reconciler.ts`'s
   `inconclusiveReviewRearmCount`. It has no cap of its own, so it happens at most
   once in a row: if `lastAutoReturnReason` is already `conflict` and the PR still
   conflicts, the task is parked with `needsHumanReason: "rebase-exhausted"`.
+  The same park happens, once and without a retry on later ticks, when
+  `attemptAutoRebase` returns `blocked` (a session that had to stop first could
+  not be stopped), when the worker's agent cannot take a seed prompt, or when
+  the return itself fails (the reseed could not spawn).
   A `null`/`unknown` mergeability (GitHub still computing) waits a tick like an
   unfinished CI run, bounded by the same `reviewCiWaitMinutes` deadline, then
   dispatches as before. Once the PR reads mergeable again, the `Conflicts with`
@@ -1951,7 +1956,7 @@ the task's branch to fix the conflict instead of just backing off:
   and — unlike every other Task Master spawn — pushes the result inside its
   own turn, but through Mullion (`mullion task push` / the `push_task_branch`
   tool, #2102), never with `git push`: Mullion's own automatic push only ever
-  happens once, at the `-> reviewing` transition, and neither call site
+  happens once, at the `-> reviewing` transition, and no call site
   revisits it through the ordinary path. The push goes through the workflow-
   change approval gate with the bot's identity, as a force-with-lease, and any
   failure (a stale lease, a held workflow change, refused credentials) comes
@@ -1966,7 +1971,7 @@ the task's branch to fix the conflict instead of just backing off:
   same "stay running" contract every other re-seed uses). This is a sibling
   to the merge sweep's own retry loop, not an `autoReturnTask` round:
   `tasks.rebaseAttempts` is a separate, dedicated counter (default cap: **2**,
-  no per-project override yet, shared across both call sites), and
+  no per-project override yet, shared across all three call sites), and
   `tasks.rebaseStartedAt` tracks whether an attempt is still in its window
   (30 minutes) so consecutive sweep ticks don't spawn a second worker into
   the same worktree — deliberately NOT session-exit detection, since a Task
