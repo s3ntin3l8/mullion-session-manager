@@ -62,11 +62,15 @@ export type PreviewForAddressResult =
   | { kind: "external"; url: string }
   | { kind: "disabled"; reason: string };
 
-/** `localhost`, `*.localhost`, 127.0.0.0/8 and `[::1]`: one machine's own. */
+/** `localhost`, `*.localhost`, 127.0.0.0/8, `[::1]`, and the unspecified
+ * addresses (`0.0.0.0`, `[::]`), which a browser dials as its own loopback:
+ * each names one machine's own, whichever machine dials it. */
 export function isLoopbackHostname(hostname: string): boolean {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (h === "localhost" || h.endsWith(".localhost")) return true;
-  if (h === "::1" || h === "0:0:0:0:0:0:0:1") return true;
+  if (h === "::1" || h === "::" || h === "0.0.0.0") return true;
+  // IPv4-mapped loopback, as URL normalizes it ([::ffff:7f00:1]).
+  if (/^::ffff:(?:127\.|7f[0-9a-f]{2}:)/.test(h)) return true;
   return /^127(?:\.\d{1,3}){3}$/.test(h);
 }
 

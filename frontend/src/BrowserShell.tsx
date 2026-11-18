@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { DockviewPanelApi } from "dockview-react";
 import { browserApi } from "./api/browser.js";
@@ -10,7 +10,7 @@ import { EmptyStateNote } from "./ui/EmptyState.js";
 import type { BrowserMode } from "./lib/browserTitles.js";
 import { HandoffButton } from "./BrowserHandoff.js";
 import { useAgentAddressForPreview, usePreviewForAgentAddress } from "./hooks/useBrowserHandoff.js";
-import { addressLabel, retargetedPreviewParams } from "./lib/browserHandoff.js";
+import { addressLabel, previewTargetKey, retargetedPreviewParams } from "./lib/browserHandoff.js";
 import type { PreviewSource } from "./lib/browserHandoff.js";
 import { useDashboardStore } from "./store/index.js";
 import { describeError } from "./lib/describeError.js";
@@ -154,6 +154,19 @@ export function BrowserShell({
     setPreviewOverride(null);
     setPreviewEpoch((e) => e + 1);
   }
+  // The host changed the preview's own target (an opener bumped targetRev,
+  // the rail follows another project): that wins over what ⇄ opened. The
+  // host's write-back of ⇄'s own retarget names the same target, so it does
+  // not count.
+  const paramsTarget = previewTargetKey(previewParams);
+  const [seenParamsTarget, setSeenParamsTarget] = useState(paramsTarget);
+  if (paramsTarget !== seenParamsTarget) {
+    setSeenParamsTarget(paramsTarget);
+    if (previewOverride != null && previewTargetKey(previewOverride) !== paramsTarget) {
+      setPreviewOverride(null);
+      setPreviewEpoch((e) => e + 1);
+    }
+  }
 
   if (attachedId != null && attachedId !== sessionId) {
     // A different session, or none (it was killed), drops the attachment.
@@ -221,8 +234,16 @@ export function BrowserShell({
     attachedId != null ? agentPageUrl : null,
   );
   const previewProjectId = previewParams.projectId ?? agentSession?.projectId;
+  // A click is stale once the pane left Agent's browser or its session
+  // changed while a named target's preview was being created.
+  const clickContext = `${mode}|${attachedId ?? ""}`;
+  const clickContextRef = useRef(clickContext);
+  useEffect(() => {
+    clickContextRef.current = clickContext;
+  });
   const openInPreview = async () => {
     if (!toPreview.ok) return;
+    const startedIn = clickContext;
     const found = toPreview.value;
     let next: BrowserPanelParams;
     let label: string;
@@ -236,9 +257,12 @@ export function BrowserShell({
           previewSlug = (await browserApi.createTargetPreview(previewProjectId, found.targetId))
             .slug;
         } catch (err) {
-          useDashboardStore.getState().reportError("Could not open preview", describeError(err));
+          if (clickContextRef.current === startedIn) {
+            useDashboardStore.getState().reportError("Could not open preview", describeError(err));
+          }
           return;
         }
+        if (clickContextRef.current !== startedIn) return;
       }
       next = retargetedPreviewParams(previewProjectId, {
         previewSlug,

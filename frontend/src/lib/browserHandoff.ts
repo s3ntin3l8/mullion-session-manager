@@ -44,7 +44,9 @@ export function isHttpAddress(url: string): boolean {
   }
 }
 
-/** `localhost`, `*.localhost`, 127.0.0.0/8 and `[::1]`: one machine's own. */
+/** `localhost`, `*.localhost`, 127.0.0.0/8, `[::1]` and the unspecified
+ * addresses (`0.0.0.0`, `[::]`), which a browser dials as its own loopback.
+ * Mirrors src/services/browser-handoff.ts's isLoopbackHostname. */
 export function isLoopbackAddress(url: string): boolean {
   let hostname: string;
   try {
@@ -53,13 +55,17 @@ export function isLoopbackAddress(url: string): boolean {
     return false;
   }
   const h = hostname.replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost") || h === "::1") return true;
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  if (h === "::1" || h === "::" || h === "0.0.0.0") return true;
+  if (/^::ffff:(?:127\.|7f[0-9a-f]{2}:)/.test(h)) return true;
   return /^127(?:\.\d{1,3}){3}$/.test(h);
 }
 
 export const HANDOFF_NOT_HTTP = "Only http and https addresses can open in the agent's browser";
 export const HANDOFF_LOOPBACK =
   "localhost here is your own machine, and in the agent's browser it is the session's host";
+export const HANDOFF_PROXY_ADDRESS =
+  "This is a preview proxy address; open the preview itself and use ⇄ from there";
 export const HANDOFF_NO_PREVIEW_ADDRESS = "The preview has no address to open";
 export const HANDOFF_NO_AGENT_PAGE = "The agent's browser has no page open";
 export const HANDOFF_PENDING = "Working out the address…";
@@ -70,7 +76,25 @@ export const HANDOFF_FAILED = "Could not work out the address";
 export function addressHandoffRefusal(url: string): string | null {
   if (!isHttpAddress(url)) return HANDOFF_NOT_HTTP;
   if (isLoopbackAddress(url)) return HANDOFF_LOOPBACK;
+  if (isPreviewProxyAddress(url)) return HANDOFF_PROXY_ADDRESS;
   return null;
+}
+
+/** A preview proxy address pasted or saved as is (the project toolbar shows
+ * the iframe's own one): `preview-<slug>.<host>`, or anything carrying the
+ * `__mullion_preview` token. Never handed to the agent's browser, where the
+ * token would sit in a page address the agent can read. */
+export function isPreviewProxyAddress(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      /^preview-[^.]+\./i.test(parsed.hostname) ||
+      parsed.searchParams.has("__mullion_preview") ||
+      /__mullion_preview/i.test(parsed.hash)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Preview params with every target key named, so a retarget (and dockview's
@@ -126,4 +150,16 @@ export function previewResetPatch(
     previewTarget: undefined,
     previewRev: Date.now(),
   };
+}
+
+/** The keys that name what a preview pane shows (not where the user went in
+ * it), as one comparable value. */
+export function previewTargetKey(params: PreviewTargetParams): string {
+  return JSON.stringify([
+    params.projectId ?? null,
+    params.kind ?? null,
+    params.previewSlug ?? null,
+    params.targetName ?? null,
+    params.targetRev ?? null,
+  ]);
 }

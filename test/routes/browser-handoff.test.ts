@@ -88,8 +88,9 @@ describe("browser handoff routes", () => {
   }
   async function previewFor(sessionId: number, url: string) {
     return app.inject({
-      method: "GET",
-      url: `/api/sessions/${sessionId}/browser/preview-for-address?url=${encodeURIComponent(url)}`,
+      method: "POST",
+      url: `/api/sessions/${sessionId}/browser/preview-for-address`,
+      payload: { url },
     });
   }
   function bindings(sessionId: number) {
@@ -139,6 +140,15 @@ describe("browser handoff routes", () => {
       const body = (await addressFor(sessionId)).json();
       expect(body.ok).toBe(false);
       expect(body.reason).toMatch(/runs on handoff-host-\d+, and this session's browser on/);
+    });
+
+    it("treats a 0.0.0.0 dev server as its host's own loopback", async () => {
+      const projectId = addProject("local", "http://0.0.0.0:5173");
+      const hostA = await addHost();
+      const remote = addSession(projectId, hostA);
+      expect((await addressFor(remote)).json().ok).toBe(false);
+      const local = addSession(projectId, "local");
+      expect((await addressFor(local)).json()).toEqual({ ok: true, url: "http://localhost:5173/" });
     });
 
     it("takes the host from the session's recorded browser binding", async () => {
@@ -316,8 +326,9 @@ describe("browser handoff routes", () => {
       const projectId = addProject("local", "5173");
       const sessionId = addSession(projectId, "local");
       const res = await app.inject({
-        method: "GET",
+        method: "POST",
         url: `/api/sessions/${sessionId}/browser/preview-for-address`,
+        payload: {},
       });
       expect(res.statusCode).toBe(400);
       expect((await previewFor(999_999, "https://example.com/")).statusCode).toBe(404);
@@ -325,7 +336,17 @@ describe("browser handoff routes", () => {
   });
 
   it("treats localhost, *.localhost, 127/8 and ::1 as loopback", () => {
-    for (const h of ["localhost", "app.localhost", "127.0.0.1", "127.1.2.3", "[::1]", "::1"]) {
+    for (const h of [
+      "localhost",
+      "app.localhost",
+      "127.0.0.1",
+      "127.1.2.3",
+      "[::1]",
+      "::1",
+      "0.0.0.0",
+      "[::]",
+      new URL("http://[::ffff:127.0.0.1]/").hostname,
+    ]) {
       expect(isLoopbackHostname(h)).toBe(true);
     }
     for (const h of ["example.com", "10.0.0.1", "localhost.example.com"]) {

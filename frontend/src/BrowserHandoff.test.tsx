@@ -15,6 +15,7 @@ import {
   HANDOFF_NOT_HTTP,
   HANDOFF_NO_AGENT_PAGE,
   HANDOFF_PENDING,
+  HANDOFF_PROXY_ADDRESS,
   previewResetPatch,
 } from "./lib/browserHandoff.js";
 import type { Session } from "./api/index.js";
@@ -168,9 +169,10 @@ describe("open in the other browser (#3373)", () => {
         requests.push(url);
         return addressAnswer(query.get("slug"));
       },
-      "GET /api/sessions/:id/browser/preview-for-address": ({ url, query }) => {
-        requests.push(url);
-        return previewAnswer(query.get("url") ?? "");
+      "POST /api/sessions/:id/browser/preview-for-address": ({ url, init }) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { url: string };
+        requests.push(`${url} ${body.url}`);
+        return previewAnswer(body.url);
       },
       "POST /api/previews": ({ init }) => {
         requests.push(`POST ${String(init?.body)}`);
@@ -212,7 +214,7 @@ describe("open in the other browser (#3373)", () => {
       await waitFor(() => expect(panel.params.mode).toBe("agent"));
     });
 
-    it("names a branch preview by slug, so the iframe's address and token never travel", async () => {
+    it("names a branch preview by slug in its request", async () => {
       addressAnswer = (slug) =>
         jsonResponse(200, { ok: true, url: `http://localhost:4100/?for=${slug}` });
       renderHost("browser", { projectId: 1, previewSlug: "feat-x-slug" });
@@ -259,6 +261,21 @@ describe("open in the other browser (#3373)", () => {
       expect(toAgent()).toHaveAttribute("aria-disabled", "true");
       // Not offered in the "unavailable" state either.
       expect(previewProps?.onShowInAgentBrowser).toBeUndefined();
+    });
+
+    it.each([
+      "https://preview-abc123.preview.example.com/?__mullion_preview=tok",
+      "https://example.com/?__mullion_preview=tok",
+    ])("refuses a preview proxy address pasted as an external one (%s)", async (url) => {
+      renderHost("browser", { projectId: 1, kind: "external", url });
+      await waitFor(() => expect(toAgent()).toHaveAttribute("title", HANDOFF_PROXY_ADDRESS));
+      await userEvent.click(toAgent());
+      expect(screen.queryByTestId("agent-5")).toBeNull();
+    });
+
+    it("is disabled for 0.0.0.0, which each engine dials as its own machine", async () => {
+      renderHost("browser", { projectId: 1, kind: "external", url: "http://0.0.0.0:3000/" });
+      await waitFor(() => expect(toAgent()).toHaveAttribute("title", HANDOFF_LOOPBACK));
     });
 
     it("shows the server's reason when the agent's browser cannot reach the preview", async () => {
@@ -330,8 +347,9 @@ describe("open in the other browser (#3373)", () => {
           "Open http://localhost:5173/a?b=1 in the preview",
         ),
       );
+      // In the body, never the query, so the page address stays out of logs.
       expect(requests).toEqual([
-        `/api/sessions/5/browser/preview-for-address?url=${encodeURIComponent("http://localhost:5173/a?b=1")}`,
+        "/api/sessions/5/browser/preview-for-address http://localhost:5173/a?b=1",
       ]);
       await userEvent.click(toPreview());
       await waitFor(() => expect(modeOf()).toBe("Preview"));
@@ -433,6 +451,67 @@ describe("open in the other browser (#3373)", () => {
       expect(params.kind).toBeUndefined();
       expect(params.previewSlug).toBeUndefined();
     });
+  });
+
+  it("a change to the pane's own preview target wins over what ⇄ opened", async () => {
+    previewAnswer = () =>
+      jsonResponse(200, { kind: "project", previewSlug: "br", label: "feat-x", path: "/" });
+    const { panel } = renderHost("browserPane", { sessionId: 5, projectId: 1 });
+    await waitFor(() => expect(screen.getByTestId("agent-5")).toBeInTheDocument());
+    act(() => agentProps?.onUrlChange?.("http://localhost:4100/"));
+    await waitFor(() => expect(toPreview()).not.toHaveAttribute("aria-disabled"));
+    await userEvent.click(toPreview());
+    await waitFor(() => expect(modeOf()).toBe("Preview"));
+    // The host's write-back of the retarget keeps it.
+    await waitFor(() => expect(panel.params.previewSlug).toBe("br"));
+    expect(
+      JSON.parse(screen.getByTestId("preview").getAttribute("data-params") ?? "{}").previewSlug,
+    ).toBe("br");
+    // An opener refreshes the target (onOpenPreview bumps targetRev).
+    act(() => panel.api.updateParameters({ targetName: "Docker", targetRev: 9 }));
+    await waitFor(() =>
+      expect(
+        JSON.parse(screen.getByTestId("preview").getAttribute("data-params") ?? "{}"),
+      ).toMatchObject({ previewSlug: "br", targetName: "Docker", targetRev: 9 }),
+    );
+  });
+
+  it("drops a ⇄ click whose named target arrives after the pane moved on", async () => {
+    previewAnswer = () =>
+      jsonResponse(200, { kind: "project", targetId: "t1", label: "Admin", path: "/" });
+    let release: (r: Response) => void = () => {};
+    const { fetchMock } = mockFetch({
+      "GET /api/sessions/:id/browser": () => jsonResponse(200, [{ id: 1 }]),
+      "POST /api/sessions/:id/browser/preview-for-address": () => previewAnswer(""),
+      "GET /api/sessions/:id/browser/address-for-preview": () =>
+        jsonResponse(200, { ok: true, url: "http://localhost:5173/" }),
+      "POST /api/previews": () => new Promise<Response>((r) => (release = r)),
+      "GET /api/server-info": () =>
+        jsonResponse(200, {
+          ...SERVER_INFO_FIXTURE,
+          features: { ...SERVER_INFO_FIXTURE.features, browser: true },
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { panel } = renderHost("browserPane", { sessionId: 5, projectId: 1 });
+    await waitFor(() => expect(screen.getByTestId("agent-5")).toBeInTheDocument());
+    act(() => agentProps?.onUrlChange?.("http://localhost:9000/"));
+    await waitFor(() => expect(toPreview()).not.toHaveAttribute("aria-disabled"));
+    await userEvent.click(toPreview());
+    // The user switches to Preview by hand while the target is created.
+    await userEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Browser mode" })).getByRole("radio", {
+        name: "Preview",
+      }),
+    );
+    await act(async () =>
+      release(jsonResponse(200, { slug: "late", kind: "target", projectId: 1 })),
+    );
+    await act(async () => {});
+    expect(panel.params.previewSlug).toBeUndefined();
+    expect(
+      JSON.parse(screen.getByTestId("preview").getAttribute("data-params") ?? "{}").previewSlug,
+    ).toBeUndefined();
   });
 
   it("an opener's reset drops what ⇄ opened in the preview", async () => {

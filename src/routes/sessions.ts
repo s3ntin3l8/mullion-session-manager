@@ -1721,12 +1721,15 @@ export async function sessionsRoute(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Params: { id: string }; Querystring: { url?: string } }>(
+  // A POST, though it changes nothing: the agent's page address goes in the
+  // body, so it stays out of the request log (it can carry an OAuth code or a
+  // session parameter).
+  app.post<{ Params: { id: string }; Body: { url?: unknown } | undefined }>(
     "/api/sessions/:id/browser/preview-for-address",
     async (request, reply) => {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
-      const url = typeof request.query.url === "string" ? request.query.url : "";
+      const url = typeof request.body?.url === "string" ? request.body.url : "";
       if (!url) return reply.badRequest("url is required");
       const result = await previewForAddress(app, sessionId, url);
       if (!result) return reply.notFound();

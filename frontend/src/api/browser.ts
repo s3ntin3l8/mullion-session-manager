@@ -47,9 +47,11 @@ export const browserApi = {
         (slug ? `?slug=${encodeURIComponent(slug)}` : ""),
     ),
   getPreviewForAgentAddress: (sessionId: number, url: string) =>
-    request<PreviewForAgentAddress>(
-      `/api/sessions/${sessionId}/browser/preview-for-address?url=${encodeURIComponent(url)}`,
-    ),
+    // A POST so the agent's page address stays out of the request log.
+    request<PreviewForAgentAddress>(`/api/sessions/${sessionId}/browser/preview-for-address`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
 
   getProjectPreviewTargets: (projectId: number) =>
     request<ProjectPreviewConfig>(`/api/projects/${projectId}/preview-targets`),

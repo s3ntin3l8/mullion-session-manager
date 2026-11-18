@@ -60,15 +60,20 @@ copy of the address field, because the two engines see addresses differently:
   ⇄ counts as an explicit open: it attaches, and so launches, the session's
   browser.
 - **Agent's browser → Preview** uses the page's own address as the server
-  reports it. `GET /api/sessions/:id/browser/preview-for-address?url=` says
-  whether its origin is one of the project's dev servers, branch previews or
+  reports it. `POST /api/sessions/:id/browser/preview-for-address` (the
+  address in the body, so it stays out of the request log) says whether its origin is one of the project's dev servers, branch previews or
   preview targets (from the session browser's host); if it is, the preview
   opens that target through the proxy, on the same page. Any other http(s)
   page opens as an external address, and the pane keeps its project.
 - ⇄ is disabled, with the reason as its tooltip, for anything that is not http
   or https, for a `localhost` address that is not one of the project's dev
-  servers (it means a different machine to each engine), and for a dev server
-  on another host than the session's browser.
+  servers (it means a different machine to each engine; `0.0.0.0` and `[::]`
+  count as `localhost`), for a dev server on another host than the session's
+  browser, and for a preview proxy address pasted as an external one
+  (`preview-<slug>.<host>`, or anything carrying `__mullion_preview`). A name
+  only one network resolves (a docker-compose service such as
+  `http://web:3000`) is sent as is: the agent's browser resolves it on its
+  own host.
 - An external preview that cannot load says "This site cannot be shown as a
   preview. The agent's browser can show it." and offers **Open in the agent's
   browser**. A page that forbids framing without going through the proxy
