@@ -172,20 +172,34 @@ describe("postReviewFindingsComment 422 fallback for gating reviews", () => {
     );
   });
 
-  it("rethrows a non-422 failure of the anchor-less gating retry instead of masking it as a COMMENT", async () => {
+  it("keeps REQUEST_CHANGES on the reviewer-App retry, and rethrows a non-422 failure of it instead of masking it as a COMMENT", async () => {
     mockCreatePullRequestReview
       .mockRejectedValueOnce(new GitHubApiError("Validation Failed", 422))
       .mockRejectedValueOnce(new GitHubApiError("Server Error", 502));
     const task = insertTask(false);
 
-    await postReviewFindingsComment(app, task, project, {
+    const outcome = await postReviewFindingsComment(app, task, project, {
       body: "## Round 1\n\nOne finding.\n\n- **a.go:42** — x",
       reviewSummary: "## Round 1\n\nOne finding.",
       findings: [{ path: "a.go", line: 42, side: "RIGHT", severity: null, body: "x" }],
       verdict: "changes-requested",
     });
 
+    // The retry is the reviewer App with the same gating event; had it been
+    // skipped, call 2 would be the primary-identity COMMENT.
     expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
+    expect(mockCreatePullRequestReview).toHaveBeenNthCalledWith(
+      2,
+      "reviewer_tok",
+      repoRef.owner,
+      repoRef.repo,
+      9,
+      expect.objectContaining({ event: "REQUEST_CHANGES" }),
+    );
+    // The 502 is surfaced (retryable, recorded), not swallowed as "posted".
+    expect(outcome).toBe("retry");
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(row.githubSyncError).toContain("Server Error");
   });
 
   // Independent review, PR #827: the retry above was gated on
