@@ -2,7 +2,7 @@
 // half, now that it's isolated from Session (pty-manager.ts) onto its own
 // AttentionTracker class. Before this extraction these transitions were
 // only reachable indirectly through Session's public surface (tick()/
-// write()/emitHookEvent()/toInfo() in test/services/pty-manager.test.ts,
+// write()/emitHookEvent()/toInfo() in test/services/pty-manager-activity.test.ts,
 // which stays green — see that file's own attention-related tests) — this
 // file exercises the same methods directly, with a spy `emitEvent` standing
 // in for Session, exactly the shape AttentionTrackerHost specifies.

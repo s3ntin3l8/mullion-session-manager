@@ -1,6 +1,6 @@
 // PR 32 (Wave 6) — unit tests for buildLaunchPlan(), extracted from
 // Session.bootstrapMaster() in pty-manager.ts. Unlike
-// test/services/pty-manager.test.ts's own integration-style coverage of the
+// the pty-manager suite's own integration-style coverage of the
 // master bootstrap (real Session, mocked node:child_process, assertions on
 // the eventual `systemd-run` call), these tests call buildLaunchPlan()
 // directly with a plain input object — no node-pty, no node:child_process,

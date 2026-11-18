@@ -9,7 +9,7 @@ import { WebSocket as NodeWebSocket } from "ws";
 // Real integration test: a genuine WebSocket client against a real listening
 // server, not app.inject() (which can't drive a full-duplex upgrade). The
 // underlying OS processes (systemd-run, dtach) are faked the same way as
-// test/services/pty-manager.test.ts and test/routes/sessions.test.ts, so this
+// test/helpers/pty-manager-harness.ts and test/routes/sessions.test.ts, so this
 // exercises the actual /ws/terminal route logic — session lookup,
 // preValidation rejection, binary I/O framing, resize control messages,
 // scrollback replay — without depending on a real systemd --user session.
@@ -156,7 +156,7 @@ describe("terminal route (/ws/terminal)", () => {
 
   // fakePtyChildren accumulates across every test in this file (it's
   // module-scoped, and each test's session needs to survive past its own
-  // `it` block, unlike pty-manager.test.ts's per-test reset) — snapshotting
+  // `it` block, unlike the pty-manager suite's per-test reset) — snapshotting
   // the length before creating a session and waiting for it to grow past
   // that snapshot is what actually identifies *this* test's own pty, since
   // `length > 0` alone is trivially already true after the first test.
@@ -490,7 +490,7 @@ describe("terminal route (/ws/terminal)", () => {
     ws.send(JSON.stringify({ type: "resize", cols: 5, rows: 3 }));
 
     // The pty itself only ever sees the floored size, exactly like a
-    // too-small resize at spawn time already did (pty-manager.test.ts) —
+    // too-small resize at spawn time already did (pty-manager-terminal-io.test.ts) —
     // never the raw below-floor request.
     await waitUntil(() => pty.resizeSpy.mock.calls.length > 0);
     expect(pty.resizeSpy).toHaveBeenCalledWith(40, 10);
@@ -624,7 +624,7 @@ describe("terminal route (/ws/terminal)", () => {
     // buffered bytes — a freshly-attaching xterm.js re-derives the correct
     // CoreMouseService state even once this fix's real value shows up: when
     // the original enabling escape has aged out of the scrollback ring
-    // buffer entirely (see the pty-manager.test.ts eviction test).
+    // buffer entirely (see the pty-manager-scrollback.test.ts eviction test).
     const replayed = Buffer.from(event.data as ArrayBuffer).toString("utf8");
     expect(replayed.startsWith("\x1b[?1049l\x1b[?1003h\x1b[?1006h")).toBe(true);
     expect(replayed).toContain("existing output");

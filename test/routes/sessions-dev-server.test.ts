@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { previews, projects } from "../../src/db/schema.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
-// PtyManager — faked here the same way as test/services/pty-manager.test.ts,
+// PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
 // systemd --user session existing in CI. See that file for why.
 //
@@ -52,7 +52,7 @@ describe("sessions route: the dev-server offer", () => {
   // state directly via app.pty.sweepDevServerDetection(...), the exact
   // entry point that timer calls, rather than waiting on the real interval
   // or re-testing the detection/dedup logic itself (already covered
-  // directly in test/services/pty-manager.test.ts).
+  // directly in test/services/pty-manager-dev-server.test.ts).
   describe("POST /api/sessions/:id/dev-server/accept and /dismiss (issue #404)", () => {
     async function createSessionWithPendingPort(
       app: Awaited<ReturnType<typeof buildApp>>,
