@@ -139,3 +139,30 @@ describe("formatBranchLabel", () => {
     expect(formatBranchLabel(null, true)).toBeNull();
   });
 });
+
+describe("initialPaneTitle — the session title order (#3292)", () => {
+  it("shows a task worker's task title, not the agent's terminal title", () => {
+    const s = makeSession({ lastTitle: "✳ Thinking", name: "claude" });
+    expect(initialPaneTitle(s, "demo", { taskTitle: "Fix the login form" })).toBe(
+      "Fix the login form",
+    );
+  });
+
+  it("keeps a locked name over a task title", () => {
+    const s = makeSession({ name: "mine", nameLocked: true });
+    expect(initialPaneTitle(s, "demo", { taskTitle: "Task" })).toBe("mine");
+  });
+
+  it("suffixes only the agent's terminal title with the project", () => {
+    expect(initialPaneTitle(makeSession({ lastTitle: "opencode" }), "demo", {})).toBe(
+      "opencode · demo",
+    );
+    expect(initialPaneTitle(makeSession({ worktreeBranch: "feat-x" }), "demo", {})).toBe("feat-x");
+  });
+
+  it("numbers an unnamed launch-named session", () => {
+    const s = makeSession({ name: "claude" });
+    expect(initialPaneTitle(s, "demo", { number: 2 })).toBe("claude 2");
+    expect(initialPaneTitle(s, "demo", { number: 1 })).toBe("claude");
+  });
+});

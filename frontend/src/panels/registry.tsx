@@ -23,7 +23,8 @@ import { PaneTab } from "../PaneTab.js";
 import { Spinner } from "../ui/Spinner.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Session } from "../api/index.js";
-import { formatPaneTitle } from "../paneTitle.js";
+import { paneTabTitle } from "../paneTitle.js";
+import { selectSessionTitleContexts } from "../lib/sessionDisplay.js";
 import { openSessionPanel } from "../panelUtils.js";
 import { openTerminalPath } from "../lib/openTerminalPath.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
@@ -182,17 +183,55 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // useDashboardStore selectors + a dep-array effect) so the always-current
   // nameLocked flag gates every OSC event without re-subscribing TerminalPane
   // on every store change.
+  // The latest live OSC title; it feeds only the agent-title step of the
+  // session's title order (#3292), so a locked name or a task title is never
+  // overwritten by it.
+  const oscTitleRef = useRef<string | null>(null);
+  // The title the tab shows. The tab was seeded with the store's title at
+  // addPanel time, so the first value is the baseline, not a change.
+  const lastStoreTitleRef = useRef<string | null | undefined>(undefined);
+  // Until the first live OSC title, the agent title stays at the value the
+  // tab was seeded with: the ~4s session poll refreshes `lastTitle` with the
+  // agent's elapsed-second counter, and following it would repaint (and
+  // autosave) the tab on every poll — the storm the throttle below prevents.
+  const seededLastTitleRef = useRef<string | null | undefined>(undefined);
+  const resolveTabTitle = useCallback(
+    (state: ReturnType<typeof useDashboardStore.getState>): string | null => {
+      const session = state.sessions.find((s) => s.id === sessionId);
+      if (!session) return null;
+      const projectName = state.projects.find((p) => p.id === session.projectId)?.name;
+      if (seededLastTitleRef.current === undefined) seededLastTitleRef.current = session.lastTitle;
+      const withOsc = {
+        ...session,
+        lastTitle: oscTitleRef.current ?? seededLastTitleRef.current,
+      };
+      return paneTabTitle(withOsc, projectName, selectSessionTitleContexts(state).get(sessionId));
+    },
+    [sessionId],
+  );
   const applyTitle = useCallback(
     (oscTitle: string) => {
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session || session.nameLocked) return; // pinned by an explicit rename
-      const projectName = projects.find((p) => p.id === session.projectId)?.name;
-      props.api.setTitle(formatPaneTitle(oscTitle, projectName));
+      oscTitleRef.current = oscTitle;
+      const title = resolveTabTitle(useDashboardStore.getState());
+      // A title the tab already shows (a locked name, a task title) is not
+      // re-applied: no repaint, no layout-change event.
+      if (title === null || title === lastStoreTitleRef.current) return;
+      lastStoreTitleRef.current = title;
+      props.api.setTitle(title);
       lastAppliedAtRef.current = Date.now();
     },
-    [props.api, sessionId],
+    [props.api, resolveTabTitle],
   );
+  // Re-title when the session's task link or number changes (e.g. the first
+  // `claude` ends and `claude 2` becomes the only one). The selector yields a
+  // string, so a store change that leaves the title alone does not re-render.
+  const storeTitle = useDashboardStore(resolveTabTitle);
+  if (lastStoreTitleRef.current === undefined) lastStoreTitleRef.current = storeTitle;
+  useEffect(() => {
+    if (storeTitle === lastStoreTitleRef.current) return;
+    lastStoreTitleRef.current = storeTitle;
+    if (storeTitle !== null) props.api.setTitle(storeTitle);
+  }, [storeTitle, props.api]);
   // Trailing-edge throttle: the first title in any OSC_TITLE_THROTTLE_MS
   // window applies immediately (lastAppliedAtRef starts at 0, so the very
   // first call in this panel's lifetime is always instant — no delay before

@@ -7,7 +7,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { makePanelWrapper, components, KanbanBoardOverlay } from "./registry.js";
 import type * as PanelUtilsModule from "../panelUtils.js";
 import { useDashboardStore } from "../store/index.js";
-import { makeSession, makeProject } from "../test/fixtures.js";
+import { makeSession, makeProject, makeTask } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
 import { ErrorBoundary } from "../ErrorBoundary.js";
 import { useRetriableLazy } from "../lib/retriableLazy.js";
@@ -219,6 +219,40 @@ describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave stor
     render(<components.terminal {...props} />);
   }
 
+  it("an OSC title does not replace a task worker's task title", () => {
+    useDashboardStore.setState({
+      tasks: [makeTask({ id: 9, sessionId: 1, title: "Fix the login form" })],
+    });
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+
+    capturedOnTitleChange?.("✳ Thinking");
+
+    // The tab already shows the task title, so the OSC title changes nothing.
+    expect(setTitle).not.toHaveBeenCalledWith("✳ Thinking · demo");
+    expect(setTitle).not.toHaveBeenCalled();
+  });
+
+  it("re-titles a numbered tab when the other session with its name goes away", () => {
+    useDashboardStore.setState({
+      sessions: [
+        makeSession({ id: 0, projectId: 1, name: "claude" }),
+        makeSession({ id: 1, projectId: 1, name: "claude" }),
+      ],
+    });
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+    expect(setTitle).not.toHaveBeenCalled(); // the seeded title is the baseline
+
+    act(() => {
+      useDashboardStore.setState({
+        sessions: [makeSession({ id: 1, projectId: 1, name: "claude" })],
+      });
+    });
+
+    expect(setTitle).toHaveBeenLastCalledWith("claude");
+  });
+
   it("applies the first OSC title immediately, with no delay", () => {
     const setTitle = vi.fn();
     renderTerminalPanel(setTitle);
@@ -261,7 +295,7 @@ describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave stor
 
   it("never calls setTitle once the session is nameLocked (an explicit rename pins it)", () => {
     useDashboardStore.setState({
-      sessions: [makeSession({ id: 1, projectId: 1, nameLocked: true })],
+      sessions: [makeSession({ id: 1, projectId: 1, name: "pinned", nameLocked: true })],
     });
     const setTitle = vi.fn();
     renderTerminalPanel(setTitle);
