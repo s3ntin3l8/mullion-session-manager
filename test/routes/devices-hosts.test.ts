@@ -9,6 +9,11 @@ import fs from "node:fs";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { createHost } from "../../src/services/host-registry.js";
+import {
+  DEVICE_HOSTS_CACHE_MS,
+  DEVICE_HOSTS_TIMEOUT_MS,
+  type DeviceHostEntry,
+} from "../../src/routes/devices.js";
 import { HostRequestError } from "../../src/services/remote-host-errors.js";
 
 // GET /api/devices/hosts (#3270): which hosts could hold a device, and of what
@@ -69,7 +74,7 @@ describe("GET /api/devices/hosts", () => {
     const app = await build();
     const res = await get(app);
     expect(res.statusCode).toBe(200);
-    const body = res.json();
+    const body: DeviceHostEntry[] = res.json();
     expect(body).toHaveLength(1);
     expect(body[0]).toMatchObject({ hostId: "local", status: "ok" });
     expect(body[0].deviceKinds).toEqual(app.deviceKinds);
@@ -80,7 +85,7 @@ describe("GET /api/devices/hosts", () => {
     const app = await build();
     const host = createHost(app, { name: "Mac mini", baseUrl: "http://agent:1", token: "t" });
     kindsByHost.set(host.id, async () => ({ deviceKinds: ["physical"], platforms: ["android"] }));
-    const body = (await get(app)).json();
+    const body: DeviceHostEntry[] = (await get(app)).json();
     expect(body[1]).toEqual({
       hostId: host.id,
       name: "Mac mini",
@@ -93,7 +98,7 @@ describe("GET /api/devices/hosts", () => {
     const app = await build();
     const host = createHost(app, { name: "Old", baseUrl: "http://agent:1", token: "t" });
     kindsByHost.set(host.id, async () => null);
-    const body = (await get(app)).json();
+    const body: DeviceHostEntry[] = (await get(app)).json();
     expect(body[1]).toMatchObject({ hostId: host.id, status: "unsupported", deviceKinds: [] });
   });
 
@@ -107,7 +112,7 @@ describe("GET /api/devices/hosts", () => {
     kindsByHost.set(up.id, async () => ({ deviceKinds: ["emulator"], platforms: ["android"] }));
     const res = await get(app);
     expect(res.statusCode).toBe(200);
-    const byId = Object.fromEntries(res.json().map((e: { hostId: string }) => [e.hostId, e]));
+    const byId = Object.fromEntries((res.json() as DeviceHostEntry[]).map((e) => [e.hostId, e]));
     expect(byId[down.id]).toMatchObject({ status: "unreachable", deviceKinds: [] });
     expect(byId[up.id]).toMatchObject({ status: "ok", deviceKinds: ["emulator"] });
   });
@@ -118,7 +123,7 @@ describe("GET /api/devices/hosts", () => {
     kindsByHost.set(host.id, () => new Promise(() => {}));
     vi.useFakeTimers();
     const pending = get(app);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(DEVICE_HOSTS_TIMEOUT_MS);
     const res = await pending;
     expect(res.statusCode).toBe(200);
     expect(res.json()[1]).toMatchObject({ status: "unreachable" });
@@ -130,7 +135,7 @@ describe("GET /api/devices/hosts", () => {
     kindsByHost.set(host.id, async () => ({ deviceKinds: ["emulator"], platforms: ["android"] }));
     vi.useFakeTimers();
     await get(app);
-    await vi.advanceTimersByTimeAsync(9_000);
+    await vi.advanceTimersByTimeAsync(DEVICE_HOSTS_CACHE_MS - 1_000);
     await get(app);
     expect(kindsCalls).toEqual([host.id]);
     await vi.advanceTimersByTimeAsync(1_500);

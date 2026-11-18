@@ -79,5 +79,5 @@ export interface DeviceHostEntry {
   hostId: string;
   name: string;
   status: "ok" | "unsupported" | "unreachable";
-  deviceKinds: ("emulator" | "physical")[];
+  deviceKinds: DeviceKind[];
 }

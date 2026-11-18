@@ -387,7 +387,7 @@ been delivered), like every other forwarded host call.
 `GET /api/devices/hosts` lists the hosts that could hold a device (the primary
 and each registered agent) as `{hostId, name, status, deviceKinds}`: `status` is
 `ok`, `unsupported` (an agent that predates the kinds route) or `unreachable`
-(it did not answer within 5 s). Each agent is asked in parallel and its answer
+(it did not answer within 5 s, or answered with an error). Each agent is asked in parallel and its answer
 is cached for 10 s; `features.deviceKinds` in `/api/server-info` still reports
 only the primary's own kinds.
 
