@@ -590,7 +590,7 @@ export function PaneActionsMenu({
           }}
         >
           <BotIcon size={14} style={{ color: "var(--muted)" }} />
-          <span style={{ flex: 1 }}>Open Agent Browser</span>
+          <span style={{ flex: 1 }}>Open browser</span>
         </button>
       )}
       {session && project && (

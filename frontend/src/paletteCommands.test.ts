@@ -139,7 +139,7 @@ describe("buildPaletteCommands", () => {
     });
     const url = buildPaletteCommands(context).find((c) => c.id === "url-1")!;
 
-    expect(url.title).toBe("Preview: App");
+    expect(url.title).toBe("Open browser: App");
     expect(url.subtitle).toBe("http://localhost:3000");
     url.run();
     expect(open.browserUrl).toHaveBeenCalledWith(5, "http://localhost:3000", "App");
@@ -154,8 +154,8 @@ describe("buildPaletteCommands", () => {
     const commands = buildPaletteCommands(ctx({ projectId: null, projectName: null }).context);
     expect(commands.map((c) => c.id)).toEqual([
       "settings-github",
-      "blank-browser",
       "new-workspace",
+      "blank-browser",
       "settings-review-relay",
       "settings-runway",
     ]);
@@ -192,8 +192,8 @@ describe("buildPaletteCommands", () => {
     expect(ids).toEqual([
       "settings-github",
       "blank-browser",
-      "external-file",
       "preview",
+      "external-file",
       "settings-review-relay",
       "settings-runway",
     ]);
@@ -227,7 +227,7 @@ describe("buildPaletteCommands", () => {
       activeSession: session,
       open: { ...context.open, agentBrowser },
     }).find((c) => c.id === "agent-browser")!;
-    expect(command.title).toBe("Open Agent Browser: hotfix");
+    expect(command.title).toBe("Open browser: agent's browser · hotfix");
     command.run();
     expect(agentBrowser).toHaveBeenCalledWith(session);
   });
@@ -242,7 +242,7 @@ describe("buildPaletteCommands", () => {
         open: { ...context.open, agentBrowser: vi.fn(), timeline: vi.fn() },
       }).map((c) => [c.id, c]),
     );
-    expect(byId["agent-browser"].title).toBe("Open Agent Browser: vim");
+    expect(byId["agent-browser"].title).toBe("Open browser: agent's browser · vim");
     expect(byId["session-timeline"].subtitle).toBe("vim");
   });
 
@@ -251,9 +251,9 @@ describe("buildPaletteCommands", () => {
       ctx({ favoriteUrls: [{ id: 1, url: "http://localhost:3000", label: "App" }] }).context,
     );
     const byId = Object.fromEntries(commands.map((c) => [c.id, c.title]));
-    expect(byId["preview"]).toBe("Open preview browser");
-    expect(byId["blank-browser"]).toBe("New blank preview browser");
-    expect(byId["url-1"]).toBe("Preview: App");
+    expect(byId["preview"]).toBe("Open browser: preview…");
+    expect(byId["blank-browser"]).toBe("Open browser: blank preview");
+    expect(byId["url-1"]).toBe("Open browser: App");
   });
 
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {

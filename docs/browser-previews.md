@@ -14,13 +14,13 @@ separate flag:
   is served over https (see "Why the proxy exists" below) and buys framing
   sites that refuse direct embedding.
 
-**Preview browser or Agent Browser?** The preview browser on this page is
-an iframe in _your_ browser: open it from the command palette ("Open preview
-browser" for a project target, "New blank preview browser" for any URL,
-"Preview: <label>" for a saved URL) or from a project's Preview menu. It is
-not the **Agent Browser** ([browser-automation.md](browser-automation.md)),
+**Preview or Agent's browser?** The Preview on this page is
+an iframe in _your_ browser: open it from the command palette ("Open browser:
+preview…" for a project target, "Open browser: blank preview" for any URL,
+"Open browser: <label>" for a saved URL) or from a project's Preview menu. It is
+not the **Agent's browser** ([browser-automation.md](browser-automation.md)),
 the session's server-side Chromium its agent drives, which opens from a
-session pane's menu or the palette's "Open Agent Browser: <session>" (on the
+session pane's menu or the palette's "Open browser: agent's browser · <session>" (on the
 phone and the rails layouts, the right sidebar's Browser view).
 
 **One Browser pane, two modes.** From 1100px both open in the same pane,
@@ -48,15 +48,15 @@ There are two kinds of preview, in either mode:
   slug in proxy mode). Resolves to the project's configured dev-server
   URL/port.
 - **External preview** — any URL you paste via "New preview tab" (the
-  palette's "New blank preview browser"), validated
+  palette's "Open browser: blank preview"), validated
   against SSRF guards at creation time in proxy mode (see Security below);
   direct-embed mode has no server-side fetch, so there's nothing to
   validate — the guard simply doesn't apply.
 
 Open a preview using **Preview ▾** in a project's Dock header (see [`dock.md`](dock.md)'s UI reference), the command palette
-("Open preview browser" to choose a preview target for the project,
-"New blank preview browser" for an empty pane with the address bar focused,
-for typing an arbitrary URL directly, or "Preview: `<label>`" for a saved
+("Open browser: preview…" to choose a preview target for the project,
+"Open browser: blank preview" for an empty pane with the address bar focused,
+for typing an arbitrary URL directly, or "Open browser: `<label>`" for a saved
 URL).
 
 ## The Browser view in the right sidebar (below 1100px)
@@ -66,7 +66,7 @@ them a foldable unfolded), the right rail has a **Browser** view. On a phone
 the "⋯" sheet lists it with the rail's other views, and it opens full screen
 for the current session's project. The view shows the agent
 browser of the session the right sidebar follows, the same CDP-streamed page
-as a session's "Open Agent Browser" pane. The page fills the view under the
+as a session's "Open browser" pane. The page fills the view under the
 pane's own address bar (back, forward, the address, reload). From 1100px the
 view is not registered and the agent browser stays a grid pane.
 
@@ -78,9 +78,9 @@ Opening the agent browser launches it, so the view does not open one by
 itself: it asks for the session's browser bindings first
 (`GET /api/sessions/:id/browser`). A session with one shows its page; a
 session without one shows "… has no browser yet." and an **Open browser**
-button, which does what "Open Agent Browser" does.
+button, which does what the pane menu's "Open browser" does.
 
-The pane menu's "Open Agent Browser" (which adds the browser as a pane of
+The pane menu's "Open browser" (which adds the browser as a pane of
 its own) is offered only from 1100px: below it, `rails-full` included, this
 view is the agent browser (#3370).
 

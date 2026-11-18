@@ -237,7 +237,7 @@ describe("CommandPalette -> Integrations section", () => {
     );
 
     await user.type(await screen.findByPlaceholderText(/Run a command/), "preview");
-    await user.click(await screen.findByText(/^Open preview browser$/));
+    await user.click(await screen.findByText(/^Open browser: preview…$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -267,7 +267,7 @@ describe("CommandPalette -> Integrations section", () => {
     );
 
     await user.type(await screen.findByPlaceholderText(/Run a command/), "new preview tab");
-    await user.click(await screen.findByText("New blank preview browser"));
+    await user.click(await screen.findByText("Open browser: blank preview"));
     expect(onOpenBlankBrowser).toHaveBeenCalled();
   });
 
@@ -1097,7 +1097,7 @@ describe("CommandPalette -> focus management (P11)", () => {
     const user = userEvent.setup();
     const { unmount } = renderPalette();
     await user.type(await screen.findByPlaceholderText(/Run a command/), "new preview tab");
-    await user.click(await screen.findByText("New blank preview browser"));
+    await user.click(await screen.findByText("Open browser: blank preview"));
 
     unmount();
     expect(trigger).not.toHaveFocus();
@@ -2465,7 +2465,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(await screen.findByText("Project: mullion")).toBeTruthy();
     expect(screen.getByText("GitHub")).toBeTruthy();
     expect(screen.queryByText("Git", { exact: true })).toBeNull();
-    expect(screen.queryByText("Open preview browser", { exact: true })).toBeNull();
+    expect(screen.queryByText("Open browser: preview…", { exact: true })).toBeNull();
     expect(screen.queryByText("GitHub settings")).toBeNull();
     for (const hidden of [
       "Agent Rules",
@@ -2722,7 +2722,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     renderPalette(openers(), { scope: "global", projectId: undefined });
 
     expect(await screen.findByText("New workspace")).toBeTruthy();
-    expect(screen.queryByText("New blank preview browser")).toBeNull();
+    expect(screen.queryByText("Open browser: blank preview")).toBeNull();
     expect(screen.queryByText(/^Project:/)).toBeNull();
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
   });
@@ -2808,8 +2808,8 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  // #3215: the pane menu's "Open Agent Browser", for the active session.
-  describe("Open Agent Browser", () => {
+  // #3215: the pane menu's "Open browser", for the active session.
+  describe("Open browser", () => {
     const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
 
     afterEach(() => {
@@ -2823,7 +2823,19 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       const user = userEvent.setup();
       renderPalette(openers(), { onOpenAgentBrowser: vi.fn() });
       await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
-      expect(screen.queryByText(/Open Agent Browser/)).toBeNull();
+      expect(screen.queryByText(/agent's browser ·/)).toBeNull();
+    });
+
+    it("still finds the entry by its old words", async () => {
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: `session-${session.id}`,
+        workspaces: [],
+      });
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser: vi.fn() });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      expect(await screen.findByText("Open browser: agent's browser · hotfix")).toBeInTheDocument();
     });
 
     it("opens the active session's Agent Browser pane, naming the session", async () => {
@@ -2837,7 +2849,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       const user = userEvent.setup();
       renderPalette(openers(), { onOpenAgentBrowser, onClose });
       await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
-      await user.click(await screen.findByText("Open Agent Browser: hotfix"));
+      await user.click(await screen.findByText("Open browser: agent's browser · hotfix"));
       expect(onOpenAgentBrowser).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
       expect(onClose).toHaveBeenCalled();
     });
@@ -2856,7 +2868,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       const user = userEvent.setup();
       renderPalette(openers(), { onOpenAgentBrowser });
       await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
-      await user.click(await screen.findByText("Open Agent Browser: hotfix"));
+      await user.click(await screen.findByText("Open browser: agent's browser · hotfix"));
       expect(onOpenAgentBrowser).not.toHaveBeenCalled();
       const state = useDashboardStore.getState();
       expect(state.rightSidebarView).toBe("browser");
@@ -2867,7 +2879,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
 
   // #3370 — the palette and the pane menu share one band rule; rails-full
   // (a grid presentation, but the rail's Browser view) opens the view too.
-  describe("Open Agent Browser by band (#3370)", () => {
+  describe("Open browser by band (#3370)", () => {
     const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
 
     afterEach(() => vi.unstubAllGlobals());
@@ -2889,7 +2901,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       const user = userEvent.setup();
       renderPalette(openers(), { onOpenAgentBrowser });
       await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
-      await user.click(await screen.findByText("Open Agent Browser: hotfix"));
+      await user.click(await screen.findByText("Open browser: agent's browser · hotfix"));
       expect(onOpenAgentBrowser).toHaveBeenCalledTimes(railView ? 0 : 1);
       expect(useDashboardStore.getState().rightSidebarView).toBe(railView ? "browser" : "git");
     });
@@ -3158,7 +3170,7 @@ describe("CommandPalette -> default target follows the active pane", () => {
     useDashboardStore.setState({ activePanelId: "session-9" });
     renderGlobal(onOpenBrowser);
     await user.type(await screen.findByPlaceholderText(/Run a command/), "preview");
-    await user.click(await screen.findByText(/^Open preview browser$/));
+    await user.click(await screen.findByText(/^Open browser: preview…$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(2);
   });
 });
