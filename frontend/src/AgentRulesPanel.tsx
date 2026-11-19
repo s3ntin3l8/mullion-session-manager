@@ -42,12 +42,23 @@ function formatSize(bytes: number | null): string {
 // "fetch once" precedent as Source Control's branches/worktrees list, which cites
 // the same reasoning: unlike live git status, there's no tick-driven reason
 // to keep re-fetching).
-export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
+export function AgentRulesPanel({
+  params,
+  onDirtyChange,
+}: {
+  params: AgentRulesPanelParams;
+  // Told whenever the draft gains or loses unsaved changes, so the Project
+  // settings dialog can ask before closing over it (#3406).
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const [targets, setTargets] = useState<AgentRuleTarget[] | undefined>(undefined);
   const [loadError, setLoadError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);

@@ -14,7 +14,6 @@ import { initialPaneTitle } from "./paneTitle.js";
 import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
-import type { ProjectHubTab } from "./ProjectHubPanel.js";
 import { browserAgentTitle } from "./lib/browserTitles.js";
 import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 
@@ -26,9 +25,15 @@ import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 export function handleGlobalEscape(actions: {
   clearPalette: () => void;
   closeSettings: () => void;
+  // Asks rather than closes over an unsaved draft (#3406).
+  closeProjectSettings: () => void;
+  // The palette or Settings is open: it sits above Project settings, so this
+  // Escape is theirs and the project dialog stays (one Escape, one close).
+  overlayOpen: boolean;
 }): void {
   actions.clearPalette();
   actions.closeSettings();
+  if (!actions.overlayOpen) actions.closeProjectSettings();
 }
 
 // Issue #1189 — same "extracted here so it's directly unit-testable"
@@ -864,11 +869,11 @@ type PanelPlacement =
  * The two differences are the point of the extraction (issue #2410) — they
  * are spelled out here rather than left to each caller's own copy:
  *
- *  - `retargetParams`: three of the openers (openProjectHubPanel,
- *    openFileEditorPanel, openExternalFilePanel) re-target an ALREADY-OPEN
+ *  - `retargetParams`: two of the openers (openFileEditorPanel,
+ *    openExternalFilePanel) re-target an ALREADY-OPEN
  *    panel through `updateParameters` — a fresh `rev`, so the panel switches
  *    to what was just asked for instead of showing its previous target. The
- *    other eight leave the open panel exactly as it is.
+ *    others leave the open panel exactly as it is.
  *  - `applyDesktopPositioning`: the project-panel opener applies the tier
  *    positioning only conditionally — phone always (phonePositioning's own
  *    float-avoidance, issue #1452), desktop and tablet only when the panel's
@@ -1187,31 +1192,6 @@ function nextRev(): number {
   return revCounter;
 }
 
-/** Opens (or focuses and re-targets) the project's tabbed Project panel on
- * `tab` — a fresh `rev` makes an already-open panel switch to that tab. */
-export function openProjectHubPanel(
-  api: DockviewApi,
-  projectId: number,
-  projects: { id: number; name: string | null }[],
-  layout: LayoutContext,
-  tab?: ProjectHubTab,
-  dockView?: "previews",
-): void {
-  const project = projects.find((p) => p.id === projectId);
-  openOrFocusPanel(
-    api,
-    `project-hub-${projectId}`,
-    {
-      component: "project-hub",
-      title: project ? `Project: ${project.name}` : "Project",
-      params: { projectId, tab, dockView },
-      // A fresh rev makes an already-open panel switch to that tab.
-      retargetParams: { projectId, tab, dockView, rev: nextRev() },
-    },
-    layout,
-  );
-}
-
 /** Opens the project's file editor on `target.path` — focusing the existing
  * panel and re-targeting it (a fresh `rev` makes the panel reopen the same
  * path even if it was navigated away from meanwhile) rather than opening a
@@ -1413,27 +1393,23 @@ function collectFloatingPanelIds(
 const LEGACY_PANEL_IDS = ["tasks"] as const;
 
 // Component kinds whose panels are swept by *kind* rather than by fixed id,
-// because their ids are per project (`git-<projectId>`, the retired dock Git
-// panel and the retired GitHub grid panel — both live in the right
-// sidebar now; see GitPanelRedirect.tsx / GitHubPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
-// registered in panels/registry.tsx.
-const LEGACY_PANEL_KINDS = ["git", "github"] as const;
-
-// The five per-project setup panels that now live as tabs of one
-// `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component
-// kinds stay registered (panels/registry.tsx renders the hub on the matching
-// tab) so a saved layout can never throw on restore; migrateLegacyProjectPanels
-// below is the self-heal half that converts any found in a live dockview.
-const LEGACY_PROJECT_PANEL_KINDS: Record<string, ProjectHubTab> = {
-  "agent-rules": "agent-rules",
-  "project-briefing": "briefing",
-  "project-setup": "scaffold",
-  "dock-config": "dock",
-  skills: "skills",
-};
-
-const LEGACY_PROJECT_PANEL_ID_RE =
-  /^(agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
+// because their ids are per project (`<kind>-<projectId>`). Each stays
+// registered in panels/registry.tsx (like LEGACY_PANEL_IDS) as a redirect stub:
+//  - `git` and `github`: the retired dock Git panel and GitHub grid panel,
+//    both right-sidebar views now (GitPanelRedirect.tsx / GitHubPanelRedirect.tsx).
+//  - `project-hub` and the five setup panels it once replaced: the retired
+//    Project panel (#3406), whose editors are the Project settings dialog now
+//    and Skills a drill-in of the sidebar's Project view (ProjectPanelRedirect.tsx).
+const LEGACY_PANEL_KINDS = [
+  "git",
+  "github",
+  "project-hub",
+  "agent-rules",
+  "project-briefing",
+  "project-setup",
+  "dock-config",
+  "skills",
+] as const;
 
 const PROJECT_PANEL_ID_RE =
   /^(?:project-hub|file-editor|agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
@@ -1455,48 +1431,16 @@ export function staleProjectPanelIds(
   });
 }
 
-// Replaces each legacy per-project setup panel with the project's hub panel,
-// in the same group (`within`); several legacy panels of one project merge
-// into one hub (the first one found picks the tab). Matches on the panel id
-// (`<kind>-<projectId>`, openOrFocusProjectPanel's scheme) rather than a
-// component-name field. Returns true if anything changed, so the caller
-// persists the cleaned layout — same contract as closeLegacyPanels.
-export function migrateLegacyProjectPanels(
-  api: DockviewApi,
-  projects: { id: number; name: string | null }[] = [],
-): boolean {
-  let changed = false;
-  for (const panel of [...api.panels]) {
-    const match = LEGACY_PROJECT_PANEL_ID_RE.exec(panel.id);
-    if (!match) continue;
-    const projectId = Number(match[2]);
-    const hubId = `project-hub-${projectId}`;
-    if (!api.getPanel(hubId)) {
-      const project = projects.find((p) => p.id === projectId);
-      api.addPanel({
-        id: hubId,
-        component: "project-hub",
-        title: project?.name ? `Project: ${project.name}` : "Project",
-        params: { projectId, tab: LEGACY_PROJECT_PANEL_KINDS[match[1]] },
-        position: { referencePanel: panel.id, direction: "within" },
-      });
-    }
-    panel.api.close();
-    changed = true;
-  }
-  return changed;
-}
-
 // Returns true if it closed anything, so the caller (App.tsx's restore
 // effect) knows to persist the cleaned layout — same shape as its existing
 // closedKilledPanels flag, kept separate from it since the two sweeps close
 // panels for unrelated reasons.
 //
-// `onRetiredPanel` is told the `projectId` of each swept retired-kind panel
-// (the dock Git panel): fromJSON renders panel content on a later React pass,
-// so the sweep closes the panel before GitPanelRedirect could ever mount —
-// this callback is how the restore still lands the user in the Source Control
-// sidebar view the panel became.
+// `onRetiredPanel` is told the kind and `projectId` of each swept retired-kind
+// panel: fromJSON renders panel content on a later React pass, so the sweep
+// closes the panel before its redirect stub could ever mount — this callback
+// is how the restore still lands the user where the panel went (the caller
+// decides which kinds open anything).
 export function closeLegacyPanels(
   api: DockviewApi,
   onRetiredPanel?: (kind: string, projectId: number | undefined) => void,

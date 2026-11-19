@@ -32,7 +32,7 @@ A project's own section can also show:
 
 ## Quick start
 
-Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root) — or, from the dashboard itself, open the project's **Dock** tab (the project hub in the right sidebar) or the Command Palette → **Dock: \<project\>** and use the built-in editor (see [Editing from the UI](#editing-from-the-ui) below); either way produces the same file:
+Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root) — or, from the dashboard itself, open **Project settings → Dock** (the **Dock** row of the right sidebar's Project view, or the Command Palette → **Project › Dock**) and use the built-in editor (see [Editing from the UI](#editing-from-the-ui) below); either way produces the same file:
 
 ```json
 {
@@ -224,8 +224,9 @@ persisting something the merge would later have to shrug off as empty.
 
 ### Editing from the UI
 
-Open the Command Palette (project scope) and choose **Dock: \<project\>** to
-edit a project's own `.crs/dock.json` from the dashboard — a structured
+Open the project's **Project settings** dialog on its **Dock** section (the
+right sidebar's Project view → **Dock**, or the Command Palette → **Project ›
+Dock**) to edit a project's own `.crs/dock.json` from the dashboard — a structured
 form (add/remove a monitor, edit its fields) rather than a raw-JSON editor,
 since `dock.json` is small, fixed-shape data. A few things to know:
 
@@ -235,7 +236,7 @@ since `dock.json` is small, fixed-shape data. A few things to know:
   Adding only edits the draft; nothing is written until you Save.
 - **Only the project-scope file.** The global `<configDir>/dock.json`
   default (see [Global vs. per-project config](#global-vs-per-project-config)
-  below) isn't editable from this panel yet — hand-edit it on the host, same
+  below) isn't editable from this section yet — hand-edit it on the host, same
   as today.
 - **Whole-file replace, not a per-control patch.** Saving writes the
   editor's full monitor list back to `.crs/dock.json`; it never merges in

@@ -481,11 +481,15 @@ describe("ProjectBriefingPanel", () => {
 
       await user.click(screen.getByText("Skill"));
       await screen.findByPlaceholderText(/No project skill set yet/);
-      expect(screen.getByText(/Recommended: use Scaffold Mullion/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Recommended: use this dialog’s Scaffold Mullion/),
+      ).toBeInTheDocument();
 
       await user.click(screen.getByText("Reviewer agent"));
       await screen.findByPlaceholderText(/No project reviewer subagent set yet/);
-      expect(screen.getByText(/Recommended: use Scaffold Mullion/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Recommended: use this dialog’s Scaffold Mullion/),
+      ).toBeInTheDocument();
     });
 
     // Issue #1083 — codex/agy only ever see this content via a committed
@@ -876,7 +880,7 @@ describe("ProjectBriefingPanel", () => {
         await screen.findByText(/won't change what codex\/agy actually see until you re-scaffold/),
       ).toBeInTheDocument();
       expect(
-        screen.getByText(/Recommended: use Scaffold Mullion \(Command Palette/),
+        screen.getByText(/Recommended: use this dialog’s Scaffold Mullion section/),
       ).toBeInTheDocument();
       expect(screen.queryByText(/only supports local-host projects/)).not.toBeInTheDocument();
     });

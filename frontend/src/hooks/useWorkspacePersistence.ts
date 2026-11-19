@@ -7,7 +7,6 @@ import {
   serializeForPersist,
   applyLayoutPresentation,
   closeLegacyPanels,
-  migrateLegacyProjectPanels,
   reseedSessionPanelTitles,
 } from "../panelUtils.js";
 import { resolveLayoutPresentation } from "../lib/layoutTier.js";
@@ -359,6 +358,8 @@ export function useWorkspacePersistence({
       // A swept retired `git` panel opens its project's Source Control view
       // (once — several stale panels would just fight over the drawer).
       // The retired `github` grid panel does the same for the GitHub view.
+      // The retired Project panel kinds open nothing: a dialog popping up on a
+      // workspace switch would be a surprise (#3406).
       const openedViews = new Set<string>();
       closedLegacyPanels = closeLegacyPanels(dockviewApi, (kind, projectId) => {
         if ((kind !== "git" && kind !== "github") || projectId == null) return;
@@ -366,12 +367,6 @@ export function useWorkspacePersistence({
         openedViews.add(kind);
         useDashboardStore.getState().openRightSidebarView(kind, projectId);
       });
-      // Same self-heal for the five per-project setup panels that are now
-      // tabs of one `project-hub` panel (ProjectHubPanel.tsx): converts any
-      // restored legacy panel in place and flags the layout for re-save.
-      closedLegacyPanels =
-        migrateLegacyProjectPanels(dockviewApi, useDashboardStore.getState().projects) ||
-        closedLegacyPanels;
       // Terminal panel titles are deliberately excluded from the persisted
       // blob (panelUtils.ts's stripSessionPanelTitles, part of the
       // workspace-autosave rate-limit-storm fix) — re-derive them here the

@@ -437,38 +437,42 @@ describe("useWorkspacePersistence", () => {
     expect(saveWorkspaceLayout).toHaveBeenCalledWith(1, { panels: {} });
   });
 
-  it("migrates a restored legacy project panel into the project hub, then persists the cleaned layout", () => {
-    vi.useFakeTimers();
-    const { api, addPanel } = makeMockApi();
-    projects = [{ id: 3, name: "demo" }];
-    const legacy = addPanel("skills-3", { projectId: 3 });
-    const workspace = makeWorkspace();
+  // #3406 — the Project panel and the five setup panels it replaced are
+  // retired: swept silently (no dialog, no sidebar view), then persisted.
+  it.each(["project-hub", "skills"])(
+    "sweeps a restored retired %s panel without opening anything, then persists the cleaned layout",
+    (kind) => {
+      vi.useFakeTimers();
+      openRightSidebarView.mockClear();
+      const { api, addPanel } = makeMockApi();
+      projects = [{ id: 3, name: "demo" }];
+      const retired = addPanel(`${kind}-3`, { projectId: 3 });
+      (retired.api as unknown as { component: string }).component = kind;
+      const workspace = makeWorkspace();
 
-    renderHook(() =>
-      useWorkspacePersistence({
-        dockviewApi: api,
-        activeWorkspaceId: 1,
-        workspaces: [workspace],
-        layoutTier: "desktop",
-        setPanelsVersion: makeSetPanelsVersion(),
-      }),
-    );
+      renderHook(() =>
+        useWorkspacePersistence({
+          dockviewApi: api,
+          activeWorkspaceId: 1,
+          workspaces: [workspace],
+          layoutTier: "desktop",
+          setPanelsVersion: makeSetPanelsVersion(),
+        }),
+      );
 
-    expect(api.addPanel).toHaveBeenCalledWith({
-      id: "project-hub-3",
-      component: "project-hub",
-      title: "Project: demo",
-      params: { projectId: 3, tab: "skills" },
-      position: { referencePanel: "skills-3", direction: "within" },
-    });
-    expect(legacy.api.close).toHaveBeenCalledTimes(1);
-    // Done while restoringRef was true, so — like the stale-panel sweep — the
-    // restore effect must persist the migrated layout itself.
-    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(0);
-    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
-    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
-  });
+      expect(retired.api.close).toHaveBeenCalledTimes(1);
+      expect(api.addPanel).not.toHaveBeenCalledWith(
+        expect.objectContaining({ component: "project-hub" }),
+      );
+      expect(openRightSidebarView).not.toHaveBeenCalled();
+      // Done while restoringRef was true, so — like the stale-panel sweep — the
+      // restore effect must persist the cleaned layout itself.
+      expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(0);
+      vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+      expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("sweeps a restored retired github grid panel and opens the GitHub sidebar view for it", () => {
     vi.useFakeTimers();

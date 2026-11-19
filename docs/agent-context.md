@@ -75,8 +75,9 @@ for the per-CLI injection channel).
 
 ## Authoring it from the UI instead
 
-The **Mullion Briefing** panel (Command Palette → "Mullion Briefing:
-\<project\>", or a project-scoped dockview panel) lets you author a pinned
+The **Mullion Briefing** section of the project's **Project settings**
+dialog (the right sidebar's Project view → Mullion Briefing, or the Command
+Palette → "Project › Mullion Briefing") lets you author a pinned
 note, a skill, and a reviewer subagent per project, stored as one row in the
 `project_tooling` table (`src/services/project-tooling.ts`), with **no repo
 write**:
@@ -287,7 +288,7 @@ skill field for exactly this reason.
 For codex/agy (which need a real repo write regardless), or for any team
 that would rather commit its Mullion tooling and share it via git than
 author it per-project in Mullion's own UI, the **Scaffold Mullion**
-panel (Command Palette → "Scaffold Mullion: \<project\>") turns the same
+section of Project settings (Command Palette → "Project › Scaffold Mullion") turns the same
 three artifacts into a real, reviewable pull request:
 
 **Skill and reviewer agent (issue #2473).** The panel's _Skill and reviewer

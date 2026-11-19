@@ -1189,6 +1189,50 @@ export interface ScaffoldSlice {
   clearScaffoldDraft: (projectId: number) => void;
 }
 
+// #3406 — the Project settings dialog and the Project view's Skills drill-in
+// (slices/projectSettings.ts).
+export type ProjectSettingsSection = "agent-rules" | "briefing" | "scaffold" | "dock";
+
+export interface ProjectSettingsTarget {
+  projectId: number;
+  section: ProjectSettingsSection;
+  /** Dock opened straight on its Previews list. */
+  dockView?: "previews";
+  /** Bumped by every open, so asking again for the section already shown
+   * (after the user moved to another) switches back to it. */
+  rev: number;
+}
+
+export interface ProjectSettingsSlice {
+  /** The open dialog, or null. */
+  projectSettings: ProjectSettingsTarget | null;
+  /** An editor in the dialog holds an unsaved draft. */
+  projectSettingsDirty: boolean;
+  /** Leaving was asked for while a draft is unsaved: the dialog asks first.
+   * `next` is where to go once confirmed: another project's dialog, or null
+   * to close. */
+  projectSettingsLeave: { next: ProjectSettingsTarget | null } | null;
+  /** A one-shot "show Skills" request for the sidebar's Project view; the
+   * view applies it, then clears it. */
+  projectSkillsRequest: { projectId: number; nonce: number } | null;
+  openProjectSettings: (
+    projectId: number,
+    section: ProjectSettingsSection,
+    dockView?: "previews",
+  ) => void;
+  /** Every way out of the dialog (close button, backdrop, Escape, phone
+   * back) goes through here: closes, or asks first over an unsaved draft. A
+   * second request while asking keeps editing. */
+  requestCloseProjectSettings: () => void;
+  /** Confirms the pending leave: drops the drafts. */
+  confirmLeaveProjectSettings: () => void;
+  /** Keeps editing. */
+  cancelLeaveProjectSettings: () => void;
+  setProjectSettingsDirty: (dirty: boolean) => void;
+  openProjectSkills: (projectId: number) => void;
+  clearProjectSkillsRequest: () => void;
+}
+
 export type DashboardState = ProjectsSlice &
   SessionsSlice &
   GitSlice &
@@ -1201,7 +1245,8 @@ export type DashboardState = ProjectsSlice &
   UiSlice &
   ToastsSlice &
   PreviewsSlice &
-  ScaffoldSlice;
+  ScaffoldSlice &
+  ProjectSettingsSlice;
 
 /**
  * The rail's Browser view (#3372). `mode` is the mode it was last in, Agent's

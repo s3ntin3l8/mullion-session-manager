@@ -14,7 +14,6 @@ import {
   closeFilePanelsUnder,
   openDevicePanel,
   openOrFocusProjectPanel,
-  openProjectHubPanel,
   openSessionPanel,
   openTaskDetailPanel,
   openTimelinePanel,
@@ -24,7 +23,6 @@ import {
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
 import { subscribeFilePathGone } from "../lib/filePathEvents.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
-import type { ProjectHubTab } from "../ProjectHubPanel.js";
 import { BROWSER_PREVIEW_TITLE, browserPreviewTitle } from "../lib/browserTitles.js";
 import { previewOpensInRail } from "../right-sidebar/viewBands.js";
 import { previewResetPatch } from "../lib/browserHandoff.js";
@@ -106,11 +104,10 @@ export interface UsePanelOpenerResult {
   // Opens the Source Control view in the right sidebar for a project (the
   // dock Git panel it used to open is retired — see GitPanelRedirect.tsx).
   onOpenGit: (projectId: number) => void;
-  // Opens (or focuses) a project's tabbed Project panel, optionally on a
-  // specific tab (Agent Rules, Briefing, Scaffold, Dock, Skills).
-  onOpenProjectHub: (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => void;
-  // Opens (or focuses) a project's agent-rules editor (issue #431) — the
-  // Project panel's Agent Rules tab.
+  // Agent Rules, Briefing, Scaffold and Dock open the project's Project
+  // settings dialog on that section; Skills opens the sidebar's Project view
+  // on its Skills drill-in (#3406).
+  // The agent-rules editor (issue #431).
   onOpenAgentRules: (projectId: number) => void;
   // Opens (or focuses) a project's file editor (tree + CodeMirror).
   onOpenFileEditor: (projectId: number) => void;
@@ -118,14 +115,13 @@ export interface UsePanelOpenerResult {
   // Opens a specific file (project-relative path) in the project's file
   // editor — the right sidebar's Files view.
   onOpenFile: (projectId: number, path: string, sessionId?: number) => void;
-  // Opens (or focuses) a project's DB-backed Mullion briefing editor.
+  // The DB-backed Mullion briefing editor.
   onOpenProjectBriefing: (projectId: number) => void;
-  // PR-6 — opens (or focuses) a project's "scaffold Mullion integration as
-  // a PR" setup panel.
+  // PR-6 — the "scaffold Mullion integration as a PR" wizard.
   onOpenProjectSetup: (projectId: number) => void;
-  // U4 — opens (or focuses) a project's dock-config editor.
+  // U4 — the dock-config editor, optionally on its Previews list.
   onOpenDockConfig: (projectId: number, view?: "previews") => void;
-  // Opens (or focuses) a project's (read-only) skills panel (issue #432).
+  // The skills list (issue #432).
   onOpenSkills: (projectId: number) => void;
   // Opens (or focuses) a project's dev-server browser preview pane (issue
   // #28). See BROWSER_CONFIG's own comment above for the one respect in
@@ -332,36 +328,30 @@ export function usePanelOpener({
     [leaveTaskView],
   );
 
-  const onOpenProjectHub = useCallback(
-    (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => {
-      if (!dockviewApi) return;
-      leaveTaskView();
-      openProjectHubPanel(dockviewApi, projectId, projects, layout, tab, dockView);
-    },
-    [dockviewApi, projects, layout, leaveTaskView],
-  );
-
-  // The five setup panels are tabs of one Project panel now; these keep their
-  // old single-argument shape so existing callers (Sidebar, App) don't churn.
+  // #3406 — the four editors are sections of the Project settings dialog and
+  // Skills a drill-in of the sidebar's Project view: none needs dockview or
+  // leaves Tasks mode, so they work from every mode and tier.
   const onOpenAgentRules = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "agent-rules"),
-    [onOpenProjectHub],
+    (projectId: number) =>
+      useDashboardStore.getState().openProjectSettings(projectId, "agent-rules"),
+    [],
   );
   const onOpenProjectBriefing = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "briefing"),
-    [onOpenProjectHub],
+    (projectId: number) => useDashboardStore.getState().openProjectSettings(projectId, "briefing"),
+    [],
   );
   const onOpenProjectSetup = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "scaffold"),
-    [onOpenProjectHub],
+    (projectId: number) => useDashboardStore.getState().openProjectSettings(projectId, "scaffold"),
+    [],
   );
   const onOpenDockConfig = useCallback(
-    (projectId: number, view?: "previews") => onOpenProjectHub(projectId, "dock", view),
-    [onOpenProjectHub],
+    (projectId: number, view?: "previews") =>
+      useDashboardStore.getState().openProjectSettings(projectId, "dock", view),
+    [],
   );
   const onOpenSkills = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "skills"),
-    [onOpenProjectHub],
+    (projectId: number) => useDashboardStore.getState().openProjectSkills(projectId),
+    [],
   );
 
   const onOpenFileEditor = useCallback(
@@ -593,7 +583,6 @@ export function usePanelOpener({
     onOpenAgentBrowser,
     onOpenGitHub,
     onOpenGit,
-    onOpenProjectHub,
     onOpenAgentRules,
     onOpenFileEditor,
     onOpenExternalFile,

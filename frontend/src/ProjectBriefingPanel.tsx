@@ -90,7 +90,7 @@ to be.
 // shown for the pinned note — that field has no Scaffold Mullion equivalent
 // at all (a live note, not a repo-committable artifact).
 const SCAFFOLD_RECOMMENDATION_NOTICE =
-  "Recommended: use Scaffold Mullion (Command Palette → “Scaffold Mullion: <project>”) and " +
+  "Recommended: use this dialog’s Scaffold Mullion section and " +
   "choose “Write it with an agent” to write this from your actual codebase — a sandboxed " +
   "agent turn analyzing this project produces higher-quality, project-specific content than a " +
   "blank text box (the “Starter template” path only writes placeholders). Edit the field " +
@@ -418,13 +418,23 @@ function ToolingFieldEditor({
 //
 // Fetched once on open, never polled — same "these change rarely" precedent
 // as AgentRulesPanel/Source Control's own fetch-once posture.
-export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelParams }) {
+export function ProjectBriefingPanel({
+  params,
+  onDirtyChange,
+}: {
+  params: ProjectBriefingPanelParams;
+  // Same contract as AgentRulesPanel's (#3406).
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const [tooling, setTooling] = useState<
     { briefing: string | null; skill: string | null; reviewerAgent: string | null } | undefined
   >(undefined);
   const [loadError, setLoadError] = useState(false);
   const [activeField, setActiveField] = useState<ToolingFieldKey>("briefing");
   const [activeFieldDirty, setActiveFieldDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange?.(activeFieldDirty);
+  }, [activeFieldDirty, onDirtyChange]);
 
   // Issue #884 — per-project override of the two global session-injection
   // settings. Read from the project list already in the store (same
