@@ -129,6 +129,7 @@ import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-ap
 import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
 import {
   CLEARED_MERGE_ERROR,
+  CLEARED_NEEDS_HUMAN,
   mergeRecordedSet,
   describeBlockingThreads,
   type MergeBlockedThreads,
@@ -3544,7 +3545,7 @@ export async function autoReturnTask(
       // it explicitly anyway so this write is the one place that can never
       // leave a stale announcement behind if that invariant ever slips.
       autoReturnCapAnnouncedAt: null,
-      needsHumanReason: null,
+      ...CLEARED_NEEDS_HUMAN,
       // Issue #1357 — this is a fresh worker spell (a new session, per
       // reseedTaskIfSessionExited's force:true just below), same reasoning
       // as reject's own claimedAt reset (routes/tasks.ts): leaving the
@@ -4489,7 +4490,7 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
       .update(tasks)
       .set({
         autoReturnCapAnnouncedAt: null,
-        needsHumanReason: null,
+        ...CLEARED_NEEDS_HUMAN,
         reviewSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
@@ -5235,7 +5236,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // design), so any prior announcement is stale the instant
                 // this lands, same as the sibling session-id fields above.
                 autoReturnCapAnnouncedAt: null,
-                needsHumanReason: null,
+                ...CLEARED_NEEDS_HUMAN,
                 // The round is over either way: its stored seed prompt must not
                 // outlive it and be replayed into an unrelated round.
                 suggestionsSeedPrompt: null,
