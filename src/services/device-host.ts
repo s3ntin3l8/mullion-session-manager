@@ -14,6 +14,7 @@ import type { HostDeviceSupport } from "./remote-host-devices.js";
 import { performDeviceAction } from "./device-drivers/actions.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import { HostRequestError } from "./remote-host-errors.js";
 import type { DeviceSpawnSpec } from "./device-wire.js";
 import { listIosSimulators, type IosSimulator } from "./ios-simulators.js";
 
@@ -124,6 +125,42 @@ class LocalDeviceHost implements DeviceHost {
   }
 }
 
+/**
+ * Unwraps an agent's 424 Failed Dependency response back into a
+ * DeviceActionError with a clamped 5xx status (defaulting to `fallbackStatus`
+ * when `deviceStatus` is missing or not an integer in 500..599) and a string
+ * message (falling back to a generic message if unparseable or non-string).
+ * Any other HostRequestError or HostUnreachableError passes through unchanged.
+ */
+function unwrapDeviceFailure(err: unknown, hostId: string, fallbackStatus: number): unknown {
+  if (!(err instanceof HostRequestError) || err.statusCode !== 424) return err;
+  let status = fallbackStatus;
+  let message = `the device failed on host ${hostId}`;
+  try {
+    const parsed: unknown = JSON.parse(err.body);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const { deviceStatus, message: rawMessage } = parsed as {
+        deviceStatus?: unknown;
+        message?: unknown;
+      };
+      if (
+        typeof deviceStatus === "number" &&
+        Number.isInteger(deviceStatus) &&
+        deviceStatus >= 500 &&
+        deviceStatus <= 599
+      ) {
+        status = deviceStatus;
+      }
+      if (typeof rawMessage === "string") {
+        message = rawMessage;
+      }
+    }
+  } catch {
+    // Unparseable body: keep generic message and fallbackStatus.
+  }
+  return new DeviceActionError(status, message);
+}
+
 class RemoteDeviceHost implements DeviceHost {
   readonly isLocal = false;
   constructor(
@@ -172,11 +209,15 @@ class RemoteDeviceHost implements DeviceHost {
     return res;
   }
 
-  terminate(id: number, kind: DeviceKind, platform?: DevicePlatform): Promise<void> {
+  async terminate(id: number, kind: DeviceKind, platform?: DevicePlatform): Promise<void> {
     const devices = this.client.devices;
-    return platform === "ios"
-      ? devices.terminate(String(id), kind, platform)
-      : devices.terminate(String(id), kind);
+    try {
+      await (platform === "ios"
+        ? devices.terminate(String(id), kind, platform)
+        : devices.terminate(String(id), kind));
+    } catch (err) {
+      throw unwrapDeviceFailure(err, this.hostId, 500);
+    }
   }
 
   async info(id: number): Promise<DeviceInfo | undefined> {
@@ -184,8 +225,12 @@ class RemoteDeviceHost implements DeviceHost {
     return live.find((d) => d.id === String(id));
   }
 
-  action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
-    return this.client.devices.action(String(id), action);
+  async action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
+    try {
+      return await this.client.devices.action(String(id), action);
+    } catch (err) {
+      throw unwrapDeviceFailure(err, this.hostId, 502);
+    }
   }
 
   simulators(): Promise<IosSimulator[] | null> {

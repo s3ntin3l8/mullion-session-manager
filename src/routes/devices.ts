@@ -184,6 +184,9 @@ function toListItem(
  * an agent's own refusal is forwarded with its status; a host that did not
  * answer is 503 (or 502 when the request may have landed). */
 function replyDeviceError(reply: FastifyReply, host: DeviceHost, err: unknown, what: string) {
+  if (err instanceof DeviceActionError) {
+    return reply.send(reply.server.httpErrors.createError(err.statusCode, err.message));
+  }
   if (host.isLocal || err instanceof DevicePlacementError) {
     return reply.badRequest(err instanceof Error ? err.message : String(err));
   }
