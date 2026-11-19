@@ -1269,10 +1269,11 @@ topology: the `hosts` table's `local` row simply becomes the Mac, and
 up in the primary's list under the **agent's** host id, and the terminal
 attach proxies to whichever host the session actually lives on.
 
-#### The Android device panel on macOS
+#### The device panel on macOS
 
 The device panel ([`device-panel.md`](device-panel.md)) works on macOS with
-`DEVICE_ENABLED=true`, for both kinds of device:
+`DEVICE_ENABLED=true`, for physical Android phones, Android emulators, and iOS
+Simulators:
 
 - **Physical** devices — an Android phone over adb wireless debugging — need no
   scope (`adb` is the only binary used), including the mDNS scanner that finds
@@ -1282,6 +1283,9 @@ The device panel ([`device-panel.md`](device-panel.md)) works on macOS with
   way a session's dtach master does and are recovered on the next start. The
   scope is chosen on the host that owns the emulator, from its own platform
   (`getDeviceScopeBackend`), like the session scope.
+- **iOS Simulators** require a macOS host with `DEVICE_IOS_ENABLED=true`, the
+  `xcode` capability, and an executable `DEVICE_IDB_COMPANION_PATH` — see
+  [`device-panel.md`](device-panel.md#ios-simulator).
 
 The Linux scope is a `systemd --user` unit; macOS has no equivalent, which is why
 the macOS one is process-based. See
@@ -1291,14 +1295,45 @@ the history.
 
 #### Devices on agent hosts
 
-A device can run on an agent host, which is where a Mac's Android tooling (and,
-later, the iOS Simulator) lives. `POST /api/devices` takes a `hostId`; the
-device's row records it, and the REST routes, the panel's WebSocket and
-`mullion device` all resolve the owning host and go there. The agent serves
-`/internal/devices*` behind the same auth as every other `/internal/*` route and
-reports the kinds it can run at `/internal/devices/kinds`. See
-[`device-panel.md`](device-panel.md#devices-on-agent-hosts-issue-3200) for the
-request shapes, port handling and what is not covered yet.
+A device (Android emulator, physical Android phone, or iOS Simulator) can run
+on an agent host, which is where a Mac's Xcode/iOS Simulator or Android tooling
+lives. Every route on the primary resolves the device's host through a
+`DeviceHost` (`src/services/device-host.ts`):
+
+- **Placement and `hostId`.** `POST /api/devices` takes an optional `hostId`
+  (defaults to the project's host, else `"local"`). The `devices` row records
+  it, and the REST routes, the panel's WebSocket, and `mullion device` all
+  resolve the owning host and forward there. `GET /api/devices/hosts` queries
+  the primary and every registered agent in parallel (5 s timeout, 10 s cache)
+  and returns `{hostId, name, status, deviceKinds, platforms}` (`status` is
+  `ok`, `unsupported`, or `unreachable`).
+- **`platforms` on `GET /internal/devices/kinds`.** The agent serves
+  `/internal/devices*` behind the same auth as every other `/internal/*` route
+  and reports `{deviceKinds, platforms}` at `GET /internal/devices/kinds`
+  (evaluated from the agent's own `DEVICE_*` config and `xcode` capability).
+  An agent that omits `platforms` is treated as Android-only (`["android"]`
+  when `deviceKinds` is non-empty, `[]` otherwise), and an agent that predates
+  `GET /internal/simulators` (404) is refused for iOS with `"Host <hostId>
+does not report simulator support — update its agent."`. For `platform: "ios"`,
+  `POST /api/devices` requires `"ios"` in `platforms` and verifies the `udid`
+  against `GET /internal/simulators`.
+- **The WebSocket proxy.** The primary's `/ws/device/:deviceId` proxies to the
+  agent's `/internal/ws/device/:id` (`proxyToRemoteDevice` in
+  `src/routes/device.ts`), passing `kind`, `avdName`, `serial`, `label`,
+  `port`, `platform`, and `udid` as query parameters. It first ensures the
+  device is live via `POST /internal/devices`, then relays binary H.264 video
+  frames down and JSON control messages up. When the browser socket backs up
+  (`bufferedAmount`), the proxy drops delta data frames, waits for a keyframe,
+  and sends `{"type":"requestKeyframe"}` upstream (retrying on a stall timer).
+- **When the host is offline.** `GET /api/devices` still succeeds when an agent
+  is down and marks its rows `hostUnreachable: true` with `live: null` (the UI
+  shows `"unavailable — host unreachable"` and disables Start/Stop). Mutating
+  calls (`start`, `stop`, `delete`, `action`) answer `503` (or `502` when the
+  request may have been delivered), and the one read that has to reach the host
+  (`GET /api/simulators?hostId=…`) fails the same way.
+
+See [`device-panel.md`](device-panel.md#devices-on-agent-hosts-issue-3200) for
+the internal request shapes, port reservation, and what is not covered yet.
 
 ### Windows agents (preview)
 

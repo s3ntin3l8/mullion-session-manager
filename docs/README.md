@@ -16,10 +16,11 @@ when you'd reach for it.
   server or an external URL in-dashboard, with working HMR.
 - [`browser-automation.md`](browser-automation.md) — drive a project's
   Playwright-controlled Chromium programmatically or watch it live.
-- [`device-panel.md`](device-panel.md) — run an Android emulator (or attach
-  a physical phone over adb) and stream its screen into a dockview panel,
-  plus the `mullion device` CLI/MCP surface for an agent to screenshot, tap,
-  and read logcat to verify its own UI changes.
+- [`device-panel.md`](device-panel.md) — run an Android emulator, attach a
+  physical Android phone over adb, or boot an iOS Simulator (on macOS) and
+  stream its screen into a dockview panel, plus the `mullion device` CLI/MCP
+  surface for an agent to screenshot, tap, press buttons, and read logs to
+  verify its own UI changes.
 - [`github-integration.md`](github-integration.md) — connect a repo for
   issue/PR/CI status, webhook-driven real-time updates, and the optional
   GitHub App.
