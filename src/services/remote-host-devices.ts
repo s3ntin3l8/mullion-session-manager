@@ -1,4 +1,5 @@
 import type { WebSocket as NodeWebSocket } from "ws";
+import type { AgentChannelStreamKind } from "../shared/agent-channel.js";
 import { HostRequestError } from "./remote-host-errors.js";
 import type {
   DeviceAction,
@@ -42,6 +43,16 @@ export type DeviceRequest = <T>(path: string, init?: RequestInit, timeoutMs?: nu
 export interface DevicesClientDeps {
   request: DeviceRequest;
   openInbound: (requestTarget: string) => NodeWebSocket;
+  /**
+   * The outbound-channel stream opener (#2571) — null when this host is
+   * reached inbound (a legacy peer), and a refusal (not a fallback) when its
+   * channel is down.
+   */
+  openChannel: (
+    kind: AgentChannelStreamKind,
+    identity: string,
+    query?: Record<string, string>,
+  ) => NodeWebSocket | null;
 }
 
 /** The agent's own budget for one of these calls is longer than the client's
@@ -69,7 +80,22 @@ function deviceWsTarget(id: string, query: DeviceWsQuery): string {
   return `/internal/ws/device/${encodeURIComponent(id)}?${params.toString()}`;
 }
 
-export function createDevicesClient({ request, openInbound }: DevicesClientDeps) {
+/** The open head's query for a `device` stream: the route's query plus the
+ * `id` the route takes from its path. */
+function deviceStreamQuery(id: string, query: DeviceWsQuery): Record<string, string> {
+  return {
+    id,
+    kind: query.kind,
+    ...(query.avdName !== undefined ? { avdName: query.avdName } : {}),
+    ...(query.serial !== undefined ? { serial: query.serial } : {}),
+    ...(query.label !== undefined ? { label: query.label } : {}),
+    ...(query.port !== undefined ? { port: query.port } : {}),
+    ...(query.platform !== undefined ? { platform: query.platform } : {}),
+    ...(query.udid !== undefined ? { udid: query.udid } : {}),
+  };
+}
+
+export function createDevicesClient({ request, openInbound, openChannel }: DevicesClientDeps) {
   return {
     /** The device kinds and platforms this host can run, or null when the agent
      * predates the device routes (a 404), which a caller must tell apart from
@@ -143,10 +169,13 @@ export function createDevicesClient({ request, openInbound }: DevicesClientDeps)
       return request(devicePath(id, "action"), jsonPost(action), DEVICE_REQUEST_TIMEOUT_MS);
     },
 
-    /** The device panel's video/input socket on this host. Always the inbound
-     * transport for now: an agent reached only over the outbound channel has no
-     * device stream kind yet (#3273). */
+    /** The device panel's video/input socket on this host. Over the host's
+     * outbound channel when it negotiated `channel-streams` (#3273); the
+     * inbound transport for a legacy peer, and a refusal (never a fallback)
+     * when a channel-bound host's channel is down. */
     openSocket(id: string, query: DeviceWsQuery): NodeWebSocket {
+      const viaChannel = openChannel("device", id, deviceStreamQuery(id, query));
+      if (viaChannel) return viaChannel;
       return openInbound(deviceWsTarget(id, query));
     },
   };

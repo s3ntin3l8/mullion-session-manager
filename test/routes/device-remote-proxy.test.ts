@@ -261,6 +261,18 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
       });
     });
 
+    it("a refused socket says why, like a failed upgrade does (#3273)", async () => {
+      // The outbound channel reports a refusal as its own event, not as an
+      // error: the panel must be told, not just disconnected.
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, { statusCode: 400 });
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket",
+      });
+      expect(browser.closeSpy).toHaveBeenCalled();
+    });
+
     it("tolerates a browser socket error without throwing", async () => {
       await start();
       expect(() => browser.emit("error", new Error("reset"))).not.toThrow();

@@ -147,6 +147,10 @@ export interface AgentStreamHandlers {
   preview(socket: ChannelSocket, query: Record<string, string | undefined>): void;
   validateConfiguredPreview(query: Record<string, string | undefined>): string | null;
   configuredPreview(socket: ChannelSocket, query: Record<string, string | undefined>): void;
+  /** Returns why the device socket must be refused, or null (#3273). May be
+   *  async: the iOS availability check the device gate runs is. */
+  validateDevice(query: Record<string, string | undefined>): string | null | Promise<string | null>;
+  device(socket: ChannelSocket, query: Record<string, string | undefined>): void;
 }
 
 function parseStreamHead(raw: string): ChannelStreamOpenHead | null {
@@ -195,8 +199,26 @@ export function serveChannel(
   let pending = Buffer.alloc(0);
   let pendingEof = false;
   let refused = false;
+  // A stream's validation is still running (the device's is async): the bytes
+  // that arrive meanwhile are the STREAM's payload, not another head.
+  let starting = false;
 
-  const startStream = (head: ChannelStreamOpenHead, rest: Buffer): ChannelSink | null => {
+  /** Why this stream must be refused, or null. */
+  const validationError = async (
+    kind: AgentChannelStreamKind,
+    query: Record<string, string>,
+  ): Promise<string | null> => {
+    if (kind === "attach") return handlers.validateAttach(query);
+    if (kind === "preview") return handlers.validatePreview(query);
+    if (kind === "configured-preview") return handlers.validateConfiguredPreview(query);
+    if (kind === "device") return await handlers.validateDevice(query);
+    return null;
+  };
+
+  const startStream = async (
+    head: ChannelStreamOpenHead,
+    rest: Buffer,
+  ): Promise<ChannelSink | null> => {
     const socket = new ChannelSocket({ expectHead: false });
     socket.bind(channel);
     const reject = (status: number, message: string): null => {
@@ -208,16 +230,10 @@ export function serveChannel(
       return reject(404, "unknown stream");
     }
     const query = stringQuery(head.query);
-    if (head.stream === "attach") {
-      const error = handlers.validateAttach(query);
-      if (error !== null) return reject(400, error);
-    } else if (head.stream === "preview") {
-      const error = handlers.validatePreview(query);
-      if (error !== null) return reject(400, error);
-    } else if (head.stream === "configured-preview") {
-      const error = handlers.validateConfiguredPreview(query);
-      if (error !== null) return reject(400, error);
-    }
+    // Awaited: a stream that has not been accepted yet must not carry frames,
+    // and the device's validation is async (the iOS availability check).
+    const error = await validationError(head.stream, query);
+    if (error !== null) return reject(400, error);
     socket.sendRaw(acceptHead(200, undefined, head.resumed === true));
     try {
       if (head.stream === "attach") handlers.attach(socket, query);
@@ -225,6 +241,7 @@ export function serveChannel(
       else if (head.stream === "control-relay") handlers.controlRelay(socket);
       else if (head.stream === "preview") handlers.preview(socket, query);
       else if (head.stream === "configured-preview") handlers.configuredPreview(socket, query);
+      else if (head.stream === "device") handlers.device(socket, query);
       else handlers.sshAgent(socket);
     } catch (err) {
       app.log.warn({ err, stream: head.stream }, "[agent-channel] stream handler failed");
@@ -254,11 +271,31 @@ export function serveChannel(
       channel.acknowledgeConsumed(nl + 1);
       const rest = pending.subarray(nl + 1);
       pending = Buffer.alloc(0);
-      sink = startStream(head, rest);
-      if (sink === null) {
-        refused = true;
-        return;
-      }
+      starting = true;
+      void startStream(head, rest).then(
+        (started) => {
+          starting = false;
+          if (started === null) {
+            refused = true;
+            return;
+          }
+          sink = started;
+          // Whatever arrived while the validation ran is this stream's payload.
+          if (pending.length > 0) {
+            const buffered = pending;
+            pending = Buffer.alloc(0);
+            sink.data(buffered);
+          }
+          if (pendingEof) sink.eof();
+        },
+        (err: unknown) => {
+          starting = false;
+          refused = true;
+          app.log.warn({ err, stream: head.stream }, "[agent-channel] stream setup failed");
+          channel.close();
+        },
+      );
+      return;
     }
     if (pendingEof) sink.eof();
   };
@@ -267,13 +304,18 @@ export function serveChannel(
     if (sink) return sink.data(chunk);
     if (refused) return;
     pending = Buffer.concat([pending, chunk]);
+    // A stream that is still being validated owns these bytes.
+    if (starting) return;
     decide();
   });
+
   channel.onEof(() => {
     if (sink) return sink.eof();
     if (refused) return;
     pendingEof = true;
     // EOF before a complete head: the tunnel answers a malformed request.
+    // A stream that is still being validated gets its EOF once it starts.
+    if (starting) return;
     if (pending.length > 0 && pending.indexOf(0x0a) === -1) {
       sink = createRequestSink(app, channel, authToken, peerId);
       sink.data(pending);

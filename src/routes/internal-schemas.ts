@@ -5,6 +5,10 @@ import type { SessionGithubAuth } from "../services/session-github-token.js";
 import type { PromoteDecision } from "../shared/promote-decision.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
+// The device id pattern is the device wire contract's (services/device-wire.ts):
+// the `device` stream over the outbound channel validates its `id` with the
+// same one, so the two transports cannot drift on what a device id is.
+import { DEVICE_ID_PATTERN } from "../services/device-wire.js";
 
 // The JSON Schema bodies/params for `internalRoutes` (internal.ts) — the
 // DB-less agent's own token-gated API. Extracted from internal.ts, which
@@ -56,7 +60,7 @@ export const BROWSER_TARGET_SCHEMA = {
 export const DEVICE_ID_PARAMS_SCHEMA = {
   type: "object",
   required: ["id"],
-  properties: { id: { type: "string", pattern: "^[0-9]{1,18}$" } },
+  properties: { id: { type: "string", pattern: DEVICE_ID_PATTERN } },
 } as const;
 
 export const DEVICE_KIND_SCHEMA = { type: "string", enum: ["emulator", "physical"] } as const;

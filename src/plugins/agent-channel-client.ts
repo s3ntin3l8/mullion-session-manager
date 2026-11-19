@@ -9,11 +9,13 @@ import { acceptControlRelayConnection } from "./control-relay.js";
 import {
   acceptAttachStream,
   acceptConfiguredPreviewStream,
+  acceptDeviceStream,
   acceptEventsStream,
   acceptPreviewStream,
   acceptSshAgentStream,
   attachQueryError,
   configuredPreviewQueryError,
+  deviceQueryError,
   previewQueryError,
 } from "../services/internal-streams.js";
 import { toWsUrl } from "../services/ws-pipe.js";
@@ -87,6 +89,10 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
     validateConfiguredPreview: configuredPreviewQueryError,
     configuredPreview: (socket, query) =>
       acceptConfiguredPreviewStream(app, socket, { url: query.url ?? "" }),
+    // The device panel's socket (#3273): the same gating and the same attach
+    // the agent's own `/internal/ws/device/:id` route runs.
+    validateDevice: (query) => deviceQueryError(app, query, query.id ?? ""),
+    device: (socket, query) => acceptDeviceStream(app, socket, query, query.id ?? ""),
   };
   const status: AgentChannelClientStatus = {
     state: "idle",

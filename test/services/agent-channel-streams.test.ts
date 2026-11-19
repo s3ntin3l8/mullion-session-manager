@@ -13,6 +13,7 @@ import {
   type AgentStreamHandlers,
 } from "../../src/services/agent-channel-streams.js";
 import type { ChannelSocket } from "../../src/services/channel-socket.js";
+import { acceptDeviceStream, deviceQueryError } from "../../src/services/internal-streams.js";
 import { channelFetch } from "../../src/services/agent-channel-tunnel.js";
 import { RemoteHostClient } from "../../src/services/remote-host-client.js";
 import type { ConnectedAgentChannel } from "../../src/plugins/agent-channel.js";
@@ -85,6 +86,8 @@ async function rig(overrides: Partial<AgentStreamHandlers> = {}): Promise<Rig> {
     preview: echo("preview"),
     validateConfiguredPreview: (q) => (q.url ? null : "Invalid configured preview destination"),
     configuredPreview: echo("configured-preview"),
+    validateDevice: (q) => (q.id ? null : "id must be a number"),
+    device: echo("device"),
     ...overrides,
   };
   agentMux.onChannel((channel) => serveChannel(app, channel, TOKEN, handlers));
@@ -509,5 +512,210 @@ describe("ssh-agent forwarding stays opt-in (#2571)", () => {
     s.close();
     await sleep(100);
     expect(gone).toHaveBeenCalled();
+  });
+});
+
+describe("the device panel's socket over the channel (#3273)", () => {
+  it("carries a device stream both ways, binary frames included", async () => {
+    const r = await rig();
+    const s = openChannelStream(
+      r.app,
+      r.entry,
+      "device",
+      { id: "7", kind: "emulator", avdName: "dev35" },
+      "7",
+    ) as never as ChannelSocket;
+    await opened(s);
+    expect(r.calls).toEqual([
+      { kind: "device", query: { id: "7", kind: "emulator", avdName: "dev35" } },
+    ]);
+    const got: Array<[string, boolean]> = [];
+    s.on("message", (d: Buffer, bin: boolean) => got.push([d.toString(), bin]));
+    s.send(Buffer.from("frame"), { binary: true });
+    await sleep(100);
+    expect(got).toEqual([["frame", true]]);
+  });
+
+  it("a device the agent refuses is a rejection, not an unreachable host", async () => {
+    const r = await rig({ validateDevice: () => "kind must be emulator or physical" });
+    const s = openChannelStream(
+      r.app,
+      r.entry,
+      "device",
+      { id: "7" },
+      "7",
+    ) as never as ChannelSocket;
+    const status = new Promise<number>((resolve) =>
+      s.once("unexpected-response", (_req: unknown, res: { statusCode: number }) =>
+        resolve(res.statusCode),
+      ),
+    );
+    const err = vi.fn();
+    s.on("error", err);
+    expect(await status).toBe(400);
+    await sleep(50);
+    expect(err).not.toHaveBeenCalled();
+    expect(r.calls).toHaveLength(0);
+  });
+
+  it("flags a device stream reopened on a later connection as resumed", async () => {
+    const r = await rig();
+    const first = openChannelStream(
+      r.app,
+      r.entry,
+      "device",
+      { id: "7" },
+      "7",
+    ) as never as ChannelSocket;
+    await opened(first);
+    expect(first.resumed).toBe(false);
+
+    // The agent redials: a new connection of the same host, new connectedAt.
+    const r2 = await rig();
+    const entry2 = { ...r2.entry, connectedAt: 2000 } as ConnectedAgentChannel;
+    const second = openChannelStream(
+      r.app,
+      entry2,
+      "device",
+      { id: "7" },
+      "7",
+    ) as never as ChannelSocket;
+    await opened(second);
+    expect(second.resumed).toBe(true);
+    // Another device on the same host is not a resume.
+    const other = openChannelStream(
+      r.app,
+      entry2,
+      "device",
+      { id: "8" },
+      "8",
+    ) as never as ChannelSocket;
+    await opened(other);
+    expect(other.resumed).toBe(false);
+  });
+
+  it("counts the device stream against the normal stream cap, not the preview one", async () => {
+    const r = await rig();
+    const spy = vi.spyOn(r.primaryMux, "openChannel");
+    openChannelStream(r.app, r.entry, "device", { id: "7" }, "7");
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toEqual({ stream: true });
+  });
+
+  it("RemoteHostClient opens the device socket over the channel when it is negotiated", async () => {
+    const r = await rig();
+    const client = new RemoteHostClient({
+      hostId: "h1",
+      baseUrl: "http://127.0.0.1:1",
+      token: "unused",
+      channelApp: r.app,
+      resolveTransport: () => ({ kind: "channel", channel: r.entry }),
+    });
+    const sock = client.devices.openSocket("7", {
+      kind: "emulator",
+      avdName: "dev35",
+      port: "5554",
+    }) as never as ChannelSocket;
+    await opened(sock);
+    expect(r.calls).toEqual([
+      {
+        kind: "device",
+        query: { id: "7", kind: "emulator", avdName: "dev35", port: "5554" },
+      },
+    ]);
+  });
+
+  it("fails the device socket as unreachable (never an inbound dial) when the channel is down", async () => {
+    const r = await rig();
+    const client = new RemoteHostClient({
+      hostId: "h1",
+      baseUrl: "http://127.0.0.1:1",
+      token: "unused",
+      channelApp: r.app,
+      resolveTransport: () => ({ kind: "channel-down" }),
+    });
+    const sock = client.devices.openSocket("7", { kind: "emulator" }) as never as ChannelSocket;
+    const err = new Promise<Error>((res) => sock.once("error", res));
+    expect((await err).message).toContain("not falling back");
+    expect(r.calls).toHaveLength(0);
+  });
+});
+
+describe("the device stream with the agent's own handlers (#3273)", () => {
+  /** A stand-in for the agent's app: the device gates the shared validation
+   *  reads, and a driver that hands out its video packets. */
+  function agentApp(panelEnabled: boolean) {
+    const state: {
+      video?: (packet: { type: string; keyframe?: boolean; data: Uint8Array }) => void;
+    } = {};
+    const app = {
+      devicePanelEnabled: panelEnabled,
+      deviceEmulatorEnabled: panelEnabled,
+      devicePanelUnavailableMessage: "Device panel is disabled — set DEVICE_ENABLED=true.",
+      deviceEmulatorUnavailableMessage: "Device panel is disabled — set DEVICE_ENABLED=true.",
+      log: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+      config: { DEVICE_IOS_ENABLED: false },
+      device: {
+        getOrCreateDriver: vi.fn(async () => ({
+          onVideoPacket: (fn: typeof state.video) => {
+            state.video = fn;
+            return () => {};
+          },
+          onExit: () => () => {},
+          onClipboard: () => () => {},
+          requestKeyframe: vi.fn().mockResolvedValue(undefined),
+          hasLiveControl: true,
+          input: vi.fn().mockResolvedValue(undefined),
+        })),
+      },
+    } as unknown as FastifyInstance;
+    return { app, state };
+  }
+
+  it("refuses a device the agent's own gating rejects", async () => {
+    const { app } = agentApp(false);
+    const r = await rig({
+      validateDevice: (query) => deviceQueryError(app, query, query.id ?? ""),
+    });
+    const s = openChannelStream(
+      r.app,
+      r.entry,
+      "device",
+      { id: "7", kind: "emulator" },
+      "7",
+    ) as never as ChannelSocket;
+    const refusal = new Promise<{ statusCode: number; statusMessage: string }>((resolve) =>
+      s.once(
+        "unexpected-response",
+        (_req: unknown, res: { statusCode: number; statusMessage: string }) => resolve(res),
+      ),
+    );
+    expect(await refusal).toMatchObject({
+      statusCode: 400,
+      statusMessage: "Device panel is disabled — set DEVICE_ENABLED=true.",
+    });
+  });
+
+  it("attaches an accepted device and streams its frames", async () => {
+    const { app, state } = agentApp(true);
+    const r = await rig({
+      validateDevice: (query) => deviceQueryError(app, query, query.id ?? ""),
+      device: (socket, query) => acceptDeviceStream(app, socket, query, query.id ?? ""),
+    });
+    const s = openChannelStream(
+      r.app,
+      r.entry,
+      "device",
+      { id: "7", kind: "emulator" },
+      "7",
+    ) as never as ChannelSocket;
+    await opened(s);
+    const frames: Array<[string, boolean]> = [];
+    s.on("message", (d: Buffer, bin: boolean) => frames.push([d.toString("hex"), bin]));
+    state.video?.({ type: "data", keyframe: true, data: new Uint8Array([1, 2]) });
+    await sleep(100);
+    // [type=1 (data)][flags=1 (keyframe)][payload 1, 2] — the device's own
+    // framing, unchanged by the transport.
+    expect(frames).toEqual([["01010102", true]]);
   });
 });

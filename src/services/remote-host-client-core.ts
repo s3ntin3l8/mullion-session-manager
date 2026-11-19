@@ -373,6 +373,7 @@ export class RemoteHostClient {
   readonly devices: DevicesClient = createDevicesClient({
     request: this.boundRequest,
     openInbound: (target) => this.inboundStream(target, false),
+    openChannel: (kind, identity, query) => this.channelStream(kind, identity, query),
   });
 
   readonly browser: BrowserClient = createBrowserClient({
