@@ -17,7 +17,7 @@ import {
 // query, resumed}` + "\n"), the agent answers an accept head (`{status}` +
 // "\n"), and from then on both sides exchange the framed WebSocket-shaped
 // messages of services/channel-socket.ts. The agent runs the SAME handlers
-// the inbound `/internal/ws/*` routes run (routes/internal-streams.ts), so
+// the inbound `/internal/ws/*` routes run (services/internal-streams.ts), so
 // validation and authorization do not fork. Contract: docs/agent-channel.md.
 //
 // Nothing here falls back to another transport: when the channel is down the
