@@ -33,6 +33,7 @@ import {
 } from "./task-prompt.js";
 import {
   promptLiveTaskWorker,
+  readLiveWorkerState,
   reseedTaskIfSessionExited,
   type LiveWorkerState,
 } from "./task-reseed.js";
@@ -84,7 +85,8 @@ export async function deliverRejectFeedback(
       )
     : undefined;
   if (wasActive) {
-    if (worker?.kind === "unreachable") {
+    const state = worker ?? (await readLiveWorkerState(app, task));
+    if (state.kind === "unreachable") {
       app.log.info(
         { taskId: task.id, sessionId: task.sessionId },
         "task reject: the worker's host did not answer, leaving the session alone",
@@ -97,7 +99,7 @@ export async function deliverRejectFeedback(
         task,
         buildRejectFollowUpPrompt({ branchName, feedback, commitTitlePath }),
         "task reject",
-        worker,
+        state,
       );
       if (delivery === "typed") return true;
       // The worker's host is not answering: the session may be healthy, and
