@@ -9,6 +9,18 @@
 import { request } from "./client.js";
 import type { Preview, ProjectPreviewConfig } from "./types.js";
 
+/** Which preview shows a page of the agent's browser (#3373). */
+export type PreviewForAgentAddress =
+  | {
+      kind: "project";
+      previewSlug?: string;
+      targetId?: string;
+      label: string;
+      path: string;
+    }
+  | { kind: "external"; url: string }
+  | { kind: "disabled"; reason: string };
+
 export const browserApi = {
   // Drops a session's browser binding (DELETE /api/sessions/:id/browser): the
   // way out of a `binding_unavailable` browser — its checkout or host is gone —
@@ -24,6 +36,22 @@ export const browserApi = {
   // attaching one is what launches (and binds) the browser.
   getSessionBrowserBindings: (sessionId: number) =>
     request<unknown[]>(`/api/sessions/${sessionId}/browser`),
+
+  // #3373 — the Browser pane's ⇄ button. Read-only on the server: neither
+  // binds nor launches the session's browser. `slug` names one of the
+  // project's previews (absent: the checkout's dev server), never the
+  // iframe's address, so the preview token is never sent.
+  getAgentAddressForPreview: (sessionId: number, slug?: string) =>
+    request<{ ok: true; url: string } | { ok: false; reason: string }>(
+      `/api/sessions/${sessionId}/browser/address-for-preview` +
+        (slug ? `?slug=${encodeURIComponent(slug)}` : ""),
+    ),
+  getPreviewForAgentAddress: (sessionId: number, url: string) =>
+    // A POST so the agent's page address stays out of the request log.
+    request<PreviewForAgentAddress>(`/api/sessions/${sessionId}/browser/preview-for-address`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
 
   getProjectPreviewTargets: (projectId: number) =>
     request<ProjectPreviewConfig>(`/api/projects/${projectId}/preview-targets`),

@@ -26,6 +26,7 @@ import type { LayoutContext } from "../lib/layoutTier.js";
 import type { ProjectHubTab } from "../ProjectHubPanel.js";
 import { BROWSER_PREVIEW_TITLE, browserPreviewTitle } from "../lib/browserTitles.js";
 import { previewOpensInRail } from "../right-sidebar/viewBands.js";
+import { previewResetPatch } from "../lib/browserHandoff.js";
 
 // The near-identical project-scoped panel kinds (GitHub, Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
@@ -413,8 +414,11 @@ export function usePanelOpener({
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, BROWSER_CONFIG);
       // An open project pane may show Agent's browser by now (#3371); the
-      // preview was asked for.
-      dockviewApi.getPanel(`browser-${projectId}`)?.api.updateParameters({ mode: "preview" });
+      // preview was asked for. And ⇄ may have opened another address in it
+      // (#3373): the project's own preview was asked for.
+      const panel = dockviewApi.getPanel(`browser-${projectId}`);
+      const reset = previewResetPatch(panel?.api.getParameters?.(), { projectId });
+      panel?.api.updateParameters({ ...reset, mode: "preview" });
     },
     [dockviewApi, projects, layout, leaveTaskView],
   );
@@ -508,8 +512,14 @@ export function usePanelOpener({
             targetName,
             targetRev: Date.now(),
           });
-        // The pane may show Agent's browser by now (#3371).
-        existing.api.updateParameters({ mode: "preview" });
+        // The pane may show Agent's browser by now (#3371), or another
+        // address ⇄ opened in it (#3373).
+        const reset = previewResetPatch(existing.api.getParameters?.(), {
+          projectId,
+          previewSlug: slug,
+          targetName,
+        });
+        existing.api.updateParameters({ ...reset, mode: "preview" });
         focusPanelForTier(dockviewApi, existing, layout.tier);
       } else {
         const panel = dockviewApi.addPanel({

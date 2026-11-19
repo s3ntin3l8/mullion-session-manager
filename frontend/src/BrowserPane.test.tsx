@@ -675,3 +675,58 @@ describe("BrowserPane", () => {
     });
   });
 });
+
+// #3373 — the Browser pane's ⇄ button: the page's address goes up, and an
+// address to open comes down, even before the socket has opened.
+describe("open in the other browser (#3373)", () => {
+  const navigates = () =>
+    fakeSocket.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)) as Record<string, unknown>)
+      .filter((m) => m.type === "navigate");
+
+  it("reports the page's own address", () => {
+    const onUrlChange = vi.fn();
+    render(<BrowserPane params={{ sessionId: 1 }} onUrlChange={onUrlChange} />);
+    openSocket();
+    emitControlMessage({ type: "url", url: "http://localhost:5173/a" });
+    expect(onUrlChange).toHaveBeenLastCalledWith("http://localhost:5173/a");
+  });
+
+  it("holds an address asked for before the socket opens, and sends it once open", () => {
+    render(
+      <BrowserPane
+        params={{ sessionId: 1 }}
+        navigateTo={{ url: "http://localhost:5173/", rev: 1 }}
+      />,
+    );
+    expect(navigates()).toEqual([]);
+    openSocket();
+    expect(navigates()).toEqual([{ type: "navigate", url: "http://localhost:5173/" }]);
+  });
+
+  it("sends each new request once, on an open socket", () => {
+    const { rerender } = render(<BrowserPane params={{ sessionId: 1 }} />);
+    openSocket();
+    rerender(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "https://a.example/", rev: 1 }} />,
+    );
+    rerender(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "https://a.example/", rev: 1 }} />,
+    );
+    rerender(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "https://b.example/", rev: 2 }} />,
+    );
+    expect(navigates()).toEqual([
+      { type: "navigate", url: "https://a.example/" },
+      { type: "navigate", url: "https://b.example/" },
+    ]);
+  });
+
+  it("never sends an address that is not http or https", () => {
+    render(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "file:///etc/passwd", rev: 1 }} />,
+    );
+    openSocket();
+    expect(navigates()).toEqual([]);
+  });
+});

@@ -12,6 +12,8 @@ import { describeError } from "./lib/describeError.js";
 import { TextInput } from "./ui/primitives.js";
 import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 import type { BrowserPanelParams } from "./lib/browserPanelParams.js";
+import { addressHandoffRefusal } from "./lib/browserHandoff.js";
+import type { PreviewSource } from "./lib/browserHandoff.js";
 
 // Lives in lib/ so the store can name it without importing this component.
 export type { BrowserPanelParams } from "./lib/browserPanelParams.js";
@@ -65,9 +67,27 @@ const PREVIEW_TOKEN_QUERY_PARAM = "__mullion_preview";
 // appending in one place. `token` is omitted entirely (not just empty) when
 // previewAuthRequired is false, so a gate-off deployment's iframe src is
 // unchanged from before this feature existed.
-function buildPreviewSrc(scheme: string, slug: string, baseHost: string, token?: string): string {
+function buildPreviewSrc(
+  scheme: string,
+  slug: string,
+  baseHost: string,
+  token?: string,
+  path?: string,
+): string {
   const base = `${scheme}//preview-${slug}.${baseHost}/`;
-  return token ? `${base}?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}` : base;
+  if (!path || path === "/") {
+    return token ? `${base}?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}` : base;
+  }
+  // #3373 — a page the agent's browser was on. Its parts are assigned one by
+  // one, never resolved against the base: a path starting with "//" must not
+  // become a network-path reference that changes the authority.
+  const url = new URL(base);
+  const [, pathname = "/", search = "", hash = ""] = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(path) ?? [];
+  url.pathname = pathname || "/";
+  url.search = search;
+  if (token) url.searchParams.set(PREVIEW_TOKEN_QUERY_PARAM, token);
+  url.hash = hash;
+  return url.href;
 }
 
 // Mints a preview's bootstrap token only when the server requires one (see
@@ -159,6 +179,8 @@ export function BrowserPanel({
   api: panelApi,
   toolbarStart,
   toolbarEnd,
+  onSourceChange,
+  onShowInAgentBrowser,
 }: {
   params: BrowserPanelParams;
   api?: Pick<DockviewPanelApi, "updateParameters">;
@@ -166,6 +188,12 @@ export function BrowserPanel({
   toolbarStart?: ReactNode;
   /** Rendered last in the toolbar, after reload. */
   toolbarEnd?: ReactNode;
+  /** #3373 — what the preview loaded, for the ⇄ button. Never the iframe's
+   * address (see PreviewSource). */
+  onSourceChange?: (source: PreviewSource | null) => void;
+  /** #3373 — opens the current address in the agent's browser; offered in
+   * an external preview's "unavailable" state. */
+  onShowInAgentBrowser?: () => void;
 }) {
   // Dockview replaces the full params object on write-back. Keep the latest
   // snapshot without making that write effect depend on its own output.
@@ -199,6 +227,9 @@ export function BrowserPanel({
   // behavior intact.
   const [previewViaProxy, setPreviewViaProxy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  // #3373 — the page to open below the project preview's root. Cleared when
+  // the user picks another target from the dropdown.
+  const [previewPath, setPreviewPath] = useState(params.previewPath);
   const [currentUrl, setCurrentUrl] = useState(initialUrl);
   const [addressInput, setAddressInput] = useState(initialUrl);
   const [activeSavedUrlId, setActiveSavedUrlId] = useState<number | null>(
@@ -318,6 +349,7 @@ export function BrowserPanel({
               previewSlug,
               info.previewBaseHost,
               token,
+              previewPath,
             );
             if (await isPreviewProxyError(src)) {
               if (cancelled) return;
@@ -386,6 +418,7 @@ export function BrowserPanel({
             preview.slug,
             info.previewBaseHost,
             token,
+            previewPath,
           );
           if (await isPreviewProxyError(src)) {
             if (cancelled) return;
@@ -418,6 +451,7 @@ export function BrowserPanel({
     reloadKey,
     activeSavedUrlId,
     savedUrls,
+    previewPath,
   ]);
 
   // Update dockview parameters so layout saves/restores the current URL/slug correctly.
@@ -433,8 +467,9 @@ export function BrowserPanel({
       slug,
       activeSavedUrlId,
       activeSavedUrlLabel,
+      previewPath,
     });
-  }, [panelApi, currentUrl, fetchState, activeSavedUrlId, activeSavedUrlLabel]);
+  }, [panelApi, currentUrl, fetchState, activeSavedUrlId, activeSavedUrlLabel, previewPath]);
 
   // Follow Agent URL sync
   const activeSessionId = useDashboardStore((s) => sessionIdFromSessionPaneId(s.activePanelId));
@@ -518,6 +553,7 @@ export function BrowserPanel({
 
   const navigateToSavedUrl = (id: number, url: string, label: string) => {
     setFollowAgent(false);
+    setPreviewPath(undefined);
     setActiveSavedUrlId(id);
     setActiveSavedUrlLabel(label);
     setDropdownOpen(false);
@@ -527,6 +563,7 @@ export function BrowserPanel({
 
   const navigateToDevServer = () => {
     setFollowAgent(false);
+    setPreviewPath(undefined);
     setActiveSavedUrlId(null);
     setActiveSavedUrlLabel(null);
     setDropdownOpen(false);
@@ -587,6 +624,35 @@ export function BrowserPanel({
         : isExternal && !currentUrl
           ? { status: "empty" }
           : fetchState;
+
+  // #3373 — what the preview loaded, for ⇄. A cross-origin iframe does not
+  // report where the user clicked, so this is the address it was given: the
+  // one typed, saved or followed, or the project preview it shows by slug.
+  const savedUrlAddress =
+    activeSavedUrlId !== null ? savedUrls.find((u) => u.id === activeSavedUrlId)?.url : undefined;
+  const source = useMemo<PreviewSource | null>(() => {
+    if (isExternal || followAgent) return currentUrl ? { kind: "address", url: currentUrl } : null;
+    if (activeSavedUrlId !== null) {
+      return savedUrlAddress ? { kind: "address", url: normalizeUrl(savedUrlAddress) } : null;
+    }
+    if (previewSlug) return { kind: "project", slug: previewSlug };
+    return devServerUrl ? { kind: "project" } : null;
+  }, [
+    isExternal,
+    followAgent,
+    currentUrl,
+    activeSavedUrlId,
+    savedUrlAddress,
+    previewSlug,
+    devServerUrl,
+  ]);
+  const onSourceChangeRef = useRef(onSourceChange);
+  useEffect(() => {
+    onSourceChangeRef.current = onSourceChange;
+  });
+  useEffect(() => {
+    onSourceChangeRef.current?.(source);
+  }, [source]);
 
   const navigate = () => {
     setFollowAgent(false);
@@ -909,7 +975,27 @@ export function BrowserPanel({
         </div>
       )}
       {state.status === "loading" && <div className="browser-panel-empty">Loading…</div>}
-      {state.status === "unavailable" && <div className="browser-panel-empty">{state.message}</div>}
+      {state.status === "unavailable" && (
+        <div className="browser-panel-empty">
+          <div>{state.message}</div>
+          {/* #3373 — the agent's browser loads what an iframe cannot. Offered
+              only for an address it would accept. */}
+          {onShowInAgentBrowser && addressHandoffRefusal(currentUrl) === null && (
+            <>
+              <div style={{ marginTop: 8 }}>
+                This site cannot be shown as a preview. The agent's browser can show it.
+              </div>
+              <button
+                className="browser-panel-go"
+                style={{ marginTop: 8 }}
+                onClick={onShowInAgentBrowser}
+              >
+                Open in the agent's browser
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {state.status === "ready" && (
         <iframe
           key={`${reloadKey}:${params.targetRev ?? 0}`}

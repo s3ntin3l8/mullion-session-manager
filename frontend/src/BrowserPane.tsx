@@ -97,6 +97,11 @@ export function BrowserPane(props: {
   toolbarStart?: ReactNode;
   /** Rendered last in the toolbar, after reload. */
   toolbarEnd?: ReactNode;
+  /** #3373 — the page's own address, as the server reports it. */
+  onUrlChange?: (url: string) => void;
+  /** #3373 — an address to load, once per `rev`. Held until the socket is
+   * open, so a first attach still gets it; only http(s) is ever sent. */
+  navigateTo?: { url: string; rev: number };
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -115,9 +120,15 @@ export function BrowserPane(props: {
   const sendControlRef = useRef<(message: Record<string, unknown>) => void>(() => {});
   const retryRef = useRef<() => void>(() => {});
   const onTitleChangeRef = useRef(props.onTitleChange);
+  const onUrlChangeRef = useRef(props.onUrlChange);
   useEffect(() => {
     onTitleChangeRef.current = props.onTitleChange;
+    onUrlChangeRef.current = props.onUrlChange;
   });
+  // #3373 — a navigation asked for before the socket opened, and the mount
+  // effect's way to send it once it can.
+  const pendingNavigateRef = useRef<string | null>(null);
+  const flushNavigateRef = useRef<() => void>(() => {});
 
   // "Re-bind" drops the dead binding and attaches again, which resolves the
   // session's current host and checkout; "Unbind" only drops it (the next
@@ -167,6 +178,12 @@ export function BrowserPane(props: {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
     }
     sendControlRef.current = sendControl;
+    flushNavigateRef.current = () => {
+      const url = pendingNavigateRef.current;
+      if (url == null || ws?.readyState !== WebSocket.OPEN) return;
+      pendingNavigateRef.current = null;
+      sendControl({ type: "navigate", url });
+    };
 
     const RECONNECT_BASE_DELAY_MS = 500;
     const RECONNECT_MAX_DELAY_MS = 8000;
@@ -190,6 +207,7 @@ export function BrowserPane(props: {
         setStatus("open");
         setLastError(null);
         setBindingError(null);
+        flushNavigateRef.current();
       });
 
       socket.addEventListener("message", (event) => {
@@ -198,6 +216,7 @@ export function BrowserPane(props: {
           if (!message) return;
           if (message.type === "url") {
             setAddressInput(isBlankAddress(message.url) ? "" : message.url);
+            onUrlChangeRef.current?.(message.url);
           } else if (message.type === "title") onTitleChangeRef.current?.(message.title);
           else if (message.type === "exited") setStatus("failed");
           else if (message.type === "error") {
@@ -456,11 +475,22 @@ export function BrowserPane(props: {
       canvas.removeEventListener("paste", onPaste);
       ws?.close();
       sendControlRef.current = () => {};
+      flushNavigateRef.current = () => {};
       retryRef.current = () => {};
     };
     // Bound to the session id, not this panel's own lifetime — matches
     // TerminalPane.tsx's own mount-effect dependency.
   }, [props.params.sessionId]);
+
+  const navigateRev = props.navigateTo?.rev;
+  const navigateUrl = props.navigateTo?.url;
+  useEffect(() => {
+    if (navigateRev == null || navigateUrl == null) return;
+    // The server refuses anything else too (routes/browser.ts); never send it.
+    if (!/^https?:\/\//i.test(navigateUrl)) return;
+    pendingNavigateRef.current = navigateUrl;
+    flushNavigateRef.current();
+  }, [navigateRev, navigateUrl]);
 
   const navigate = () => {
     const trimmed = addressInput.trim();

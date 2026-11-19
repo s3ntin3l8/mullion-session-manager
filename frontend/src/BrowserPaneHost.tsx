@@ -41,6 +41,9 @@ export interface BrowserHostParams extends BrowserPanelParams {
   previewTarget?: string;
   /** Bumped by each explicit open of the session's browser (openBrowserPanePanel). */
   openRev?: number;
+  /** #3373 — bumped by an opener that resets the preview to these params,
+   * dropping a target ⇄ opened in it. */
+  previewRev?: number;
 }
 
 export type BrowserHostComponent = "browser" | "browserPane";
@@ -192,7 +195,15 @@ export function BrowserPaneHost({
         ? previewTargetFromTitle(api?.title)
         : undefined,
   );
-  const previewTarget = titleTarget || project?.name || "";
+  // #3373 — ⇄ opened another target in the preview: the title names that.
+  const [retargetLabel, setRetargetLabel] = useState<string | null>(null);
+  const [seenPreviewRev, setSeenPreviewRev] = useState(params.previewRev);
+  if (params.previewRev !== seenPreviewRev) {
+    // An opener reset the preview; the title names what it opened.
+    setSeenPreviewRev(params.previewRev);
+    setRetargetLabel(null);
+  }
+  const previewTarget = (retargetLabel ?? titleTarget) || project?.name || "";
 
   const agentSession =
     browserFeature === false ? null : mode === "agent" ? pinnedLive : (pinnedLive ?? candidate);
@@ -214,7 +225,13 @@ export function BrowserPaneHost({
     if (params.mode !== mode) patch.mode = mode;
     if (pinnedId != null && paramPin !== pinnedId) patch.agentSessionId = pinnedId;
     if (params.projectId == null && projectId != null) patch.projectId = projectId;
-    if (params.previewTarget == null && previewTarget) patch.previewTarget = previewTarget;
+    if (
+      previewTarget &&
+      params.previewTarget !== previewTarget &&
+      (params.previewTarget == null || retargetLabel != null)
+    ) {
+      patch.previewTarget = previewTarget;
+    }
     if (Object.keys(patch).length > 0) api.updateParameters(patch);
   }, [
     api,
@@ -226,6 +243,7 @@ export function BrowserPaneHost({
     projectId,
     params.previewTarget,
     previewTarget,
+    retargetLabel,
   ]);
 
   const previewParams = useMemo<BrowserPanelParams>(() => {
@@ -237,6 +255,7 @@ export function BrowserPaneHost({
     delete preview.previewTarget;
     delete preview.sessionId;
     delete preview.openRev;
+    delete preview.previewRev;
     if (preview.projectId == null && projectId != null) preview.projectId = projectId;
     return preview;
   }, [params, projectId]);
@@ -263,6 +282,8 @@ export function BrowserPaneHost({
       agentSessionTitle={agentSessionTitle}
       agentDisabledReason={agentDisabledReason}
       attachSessionIds={explicit}
+      onPreviewRetarget={setRetargetLabel}
+      previewRev={params.previewRev}
     />
   );
 }

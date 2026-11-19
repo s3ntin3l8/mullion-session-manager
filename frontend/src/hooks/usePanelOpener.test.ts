@@ -1166,3 +1166,54 @@ describe("usePanelOpener — previews below 1100px open the rail's Browser view 
     expect(openRailBrowserPreview).not.toHaveBeenCalled();
   });
 });
+
+// #3373 — ⇄ can open another address in a preview pane. An opener that
+// focuses that pane asked for the pane's own target, so it resets it.
+describe("usePanelOpener — a preview pane ⇄ retargeted (#3373)", () => {
+  function withParams(api: DockviewApi, id: string, params: Record<string, unknown>) {
+    const panel = api.getPanel(id)!;
+    (panel.api as unknown as { getParameters: () => unknown }).getParameters = () => params;
+    return panel;
+  }
+
+  it("onOpenPreview resets a pane that ⇄ pointed at an external address", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    const panel = withParams(api, "browser-preview-s1", {
+      projectId: 1,
+      kind: "external",
+      url: "https://example.com/",
+    });
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    expect(panel.api.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mode: "preview",
+        projectId: 1,
+        previewSlug: "s1",
+        kind: undefined,
+        url: undefined,
+        previewRev: expect.any(Number),
+      }),
+    );
+  });
+
+  it("onOpenBrowser resets the project's pane, and leaves one showing its preview alone", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenBrowser(1);
+    const panel = withParams(api, "browser-1", { projectId: 1 });
+    result.current.onOpenBrowser(1);
+    expect(panel.api.updateParameters).toHaveBeenLastCalledWith({ mode: "preview" });
+    withParams(api, "browser-1", { projectId: 1, previewSlug: "br", previewPath: "/x" });
+    result.current.onOpenBrowser(1);
+    expect(panel.api.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mode: "preview",
+        previewSlug: undefined,
+        previewPath: undefined,
+        previewRev: expect.any(Number),
+      }),
+    );
+  });
+});
