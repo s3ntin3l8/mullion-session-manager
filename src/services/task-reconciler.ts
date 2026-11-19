@@ -4519,55 +4519,10 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
 }
 
 /**
- * Phase 6 Task Master (6.2/#215) — the automatic-transition half of the
- * state machine (task-state.ts owns the legal-transition table; this is
- * what actually walks it). Polls every task in "claimed"/"in_progress" and:
- *
- *  - flips it to "reviewing" once its worker session's derived status is
- *    "finished" (the same "turn is over" signal session-status.ts already
- *    derives — see deriveSessionStatus's own precedence rules; not a new
- *    heuristic) — but only while Task Master is enabled. Hermes review, PR
- *    #480 (second pass): approve/reject are the only routes that can
- *    resolve a "reviewing" task, and both are gated on the same "enabled"
- *    flag, so entering "reviewing" while disabled would strand the task
- *    with no way out short of re-enabling. A finished session while
- *    disabled is left in claimed/in_progress instead — still reachable by
- *    the budget force-fail below, and it transitions normally on the next
- *    tick once re-enabled.
- *  - does NOT flip "claimed" to "in_progress" — that transition used to
- *    live here (on the session showing any signal beyond pure idle
- *    silence), but task-claim queueing (the rate-limit-storm fix) moved it
- *    into dispatch's own reservation transaction, synchronous with the
- *    claim itself. A "claimed" row therefore never has a session by the
- *    time this loop's own query (an INNER JOIN on `sessions`) could
- *    observe one — see this loop's own comment further down, at its
- *    former call site, for the detail (also why task-state.ts's
- *    `claimed -> reviewing` edge, while still legal for the type system,
- *    is unreachable via this path today).
- *  - flips it to "failed" (and terminates the session) once
- *    MULLION_TASK_BUDGET_MINUTES has elapsed since claimedAt, regardless of
- *    what the session is doing — the budget is a hard backstop, not a
- *    negotiation with the agent's own judgment.
- *  - on entering "reviewing" (either path above), opens a draft PR
- *    (maybeOpenDraftPR above — best-effort, never blocks the transition)
- *    and spawns the configured review agent if one is set (see
- *    maybeSpawnReviewAgent above) — advisory only, in the worker's own
- *    worktree.
- *
- * Does NOT otherwise touch "reviewing" tasks — the roadmap's own
- * distinction: a reviewing task's session exiting doesn't fail it (the turn
- * is over, the work is committed on its branch, still promotable), so
- * reviewing tasks have no liveness/budget dependency here. That's #282's
- * job for claimed/in_progress specifically (session-reconciler.ts), and
- * approve/reject/give-up's job for reviewing. `processReviewingTasks` above
- * is the one narrow exception — it reads a finished REVIEW session's
- * output, never the worker session's, and never fails or terminates
- * anything.
- *
- * Grouped one liveStatus call per host, same shape as
- * session-reconciler.ts's reconcileExitedSessions — a host that's merely
- * unreachable right now is skipped entirely for this pass, never treated as
- * "every task on it should fail."
+ * Shared failure-cleanup path for active (`claimed` / `in_progress`) tasks
+ * failed by the reconciler (`budget-exceeded` or `worker-stalled`). Captures
+ * diagnostics before killing the session, transitions the row via CAS, records
+ * the transition, syncs GitHub, and removes a clean failed worktree.
  */
 async function failActiveTaskWithDiagnostics(
   app: FastifyInstance,
@@ -4628,6 +4583,60 @@ async function failActiveTaskWithDiagnostics(
   await removeFailedTaskWorktree(app, task, project, hostId, `${label} failure`);
 }
 
+/**
+ * Phase 6 Task Master (6.2/#215) — the automatic-transition half of the
+ * state machine (task-state.ts owns the legal-transition table; this is
+ * what actually walks it). Polls every task in "claimed"/"in_progress" and:
+ *
+ *  - flips it to "reviewing" once its worker session's derived status is
+ *    "finished" (the same "turn is over" signal session-status.ts already
+ *    derives — see deriveSessionStatus's own precedence rules; not a new
+ *    heuristic) — but only while Task Master is enabled. Hermes review, PR
+ *    #480 (second pass): approve/reject are the only routes that can
+ *    resolve a "reviewing" task, and both are gated on the same "enabled"
+ *    flag, so entering "reviewing" while disabled would strand the task
+ *    with no way out short of re-enabling. A finished session while
+ *    disabled is left in claimed/in_progress instead — still reachable by
+ *    the budget force-fail below, and it transitions normally on the next
+ *    tick once re-enabled.
+ *  - does NOT flip "claimed" to "in_progress" — that transition used to
+ *    live here (on the session showing any signal beyond pure idle
+ *    silence), but task-claim queueing (the rate-limit-storm fix) moved it
+ *    into dispatch's own reservation transaction, synchronous with the
+ *    claim itself. A "claimed" row therefore never has a session by the
+ *    time this loop's own query (an INNER JOIN on `sessions`) could
+ *    observe one — see this loop's own comment further down, at its
+ *    former call site, for the detail (also why task-state.ts's
+ *    `claimed -> reviewing` edge, while still legal for the type system,
+ *    is unreachable via this path today).
+ *  - flips it to "failed" (and terminates the session) once
+ *    MULLION_TASK_BUDGET_MINUTES has elapsed since claimedAt, regardless of
+ *    what the session is doing — the budget is a hard backstop, not a
+ *    negotiation with the agent's own judgment — or early (`via:
+ *    "worker-stalled"`) when `nudgeStalledWorker` sees an open mid-turn
+ *    worker stay silent past `WORKER_STALL_MS` and then past
+ *    `NUDGE_TURN_GRACE_MS` after a stall nudge.
+ *  - on entering "reviewing" (either path above), opens a draft PR
+ *    (maybeOpenDraftPR above — best-effort, never blocks the transition)
+ *    and spawns the configured review agent if one is set (see
+ *    maybeSpawnReviewAgent above) — advisory only, in the worker's own
+ *    worktree.
+ *
+ * Does NOT otherwise touch "reviewing" tasks — the roadmap's own
+ * distinction: a reviewing task's session exiting doesn't fail it (the turn
+ * is over, the work is committed on its branch, still promotable), so
+ * reviewing tasks have no liveness/budget dependency here. That's #282's
+ * job for claimed/in_progress specifically (session-reconciler.ts), and
+ * approve/reject/give-up's job for reviewing. `processReviewingTasks` above
+ * is the one narrow exception — it reads a finished REVIEW session's
+ * output, never the worker session's, and never fails or terminates
+ * anything.
+ *
+ * Grouped one liveStatus call per host, same shape as
+ * session-reconciler.ts's reconcileExitedSessions — a host that's merely
+ * unreachable right now is skipped entirely for this pass, never treated as
+ * "every task on it should fail."
+ */
 export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // Independent of the claimed/in_progress pass below — must not sit behind
   // its own `rows.length === 0` early return, or a reviewing task's

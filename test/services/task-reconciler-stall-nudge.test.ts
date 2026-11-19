@@ -85,10 +85,13 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
       .run();
 
     const silentSince = Date.now() - (WORKER_STALL_MS + 60_000);
+    // PtyManager caps agentTurnInFlight at 15m, so by 45m+ of silence it is
+    // false while lastTurnEndedAt remains null (or < claimedAt).
     vi.spyOn(app.pty, "get").mockReturnValue({
       toInfo: () =>
         fakeInfo({
-          agentTurnInFlight: true,
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
           lastActivityAt: silentSince,
         }),
     } as never);
@@ -99,9 +102,20 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
     expect(row.status).toBe("in_progress");
     expect(row.nudgeCount).toBe(1);
     expect(row.lastNudgedAt).not.toBeNull();
+    expect(row.lastStallNudgedAt).not.toBeNull();
     expect(mockPromptLiveTaskWorker).toHaveBeenCalledTimes(1);
 
-    // Next tick within NUDGE_TURN_GRACE_MS must neither re-nudge nor fail.
+    // Next tick within NUDGE_TURN_GRACE_MS must neither re-nudge nor fail, even
+    // when the nudge's own TUI redraw bumped lastActivityAt right after typing.
+    const nudgeEchoAt = row.lastStallNudgedAt!.getTime() + 1_000;
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          agentTurnInFlight: true,
+          lastTurnEndedAt: null,
+          lastActivityAt: nudgeEchoAt,
+        }),
+    } as never);
     await reconcileTasks(app);
 
     row = await getTask(app, taskId);
@@ -112,7 +126,7 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
     await app.close();
   });
 
-  it("fails the task with worker-stalled when still silent NUDGE_TURN_GRACE_MS after the nudge", async () => {
+  it("fails the task with worker-stalled when still silent NUDGE_TURN_GRACE_MS after the nudge (including nudge echo)", async () => {
     const app = await buildApp();
     const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
     const transitions: Array<{ taskId: number; to: string; via: string }> = [];
@@ -122,11 +136,11 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
 
     const { taskId, sessionId } = await createSessionAndTask(app, "in_progress");
     const claimedAt = new Date(Date.now() - 70 * 60_000);
-    const silentSince = Date.now() - (WORKER_STALL_MS + NUDGE_TURN_GRACE_MS + 60_000);
     const nudgedAt = new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000));
+    const nudgeEchoAt = nudgedAt.getTime() + 1_000;
     app.db
       .update(tasks)
-      .set({ claimedAt, nudgeCount: 1, lastNudgedAt: nudgedAt })
+      .set({ claimedAt, nudgeCount: 1, lastNudgedAt: nudgedAt, lastStallNudgedAt: nudgedAt })
       .where(eq(tasks.id, taskId))
       .run();
 
@@ -134,7 +148,8 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
       toInfo: () =>
         fakeInfo({
           agentTurnInFlight: true,
-          lastActivityAt: silentSince,
+          lastTurnEndedAt: null,
+          lastActivityAt: nudgeEchoAt,
         }),
     } as never);
 
@@ -156,12 +171,14 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
   it("never nudges or fails a worker with an outstanding background task", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "in_progress");
+    const nudgedAt = new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000));
     app.db
       .update(tasks)
       .set({
         claimedAt: new Date(Date.now() - 70 * 60_000),
         nudgeCount: 1,
-        lastNudgedAt: new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000)),
+        lastNudgedAt: nudgedAt,
+        lastStallNudgedAt: nudgedAt,
       })
       .where(eq(tasks.id, taskId))
       .run();
@@ -169,7 +186,8 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
     vi.spyOn(app.pty, "get").mockReturnValue({
       toInfo: () =>
         fakeInfo({
-          agentTurnInFlight: true,
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
           lastActivityAt: Date.now() - (WORKER_STALL_MS + NUDGE_TURN_GRACE_MS + 60_000),
           outstandingBackgroundTasks: [
             { id: "bg-1", kind: "shell", description: "make test", startedAt: Date.now() - 60_000 },
@@ -201,7 +219,8 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
     vi.spyOn(app.pty, "get").mockReturnValue({
       toInfo: () =>
         fakeInfo({
-          agentTurnInFlight: true,
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
           lastActivityAt: Date.now() - (WORKER_STALL_MS + 60_000),
         }),
     } as never);
@@ -219,12 +238,14 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
   it("never fails a worker that produced output after the nudge", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "in_progress");
+    const nudgedAt = new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000));
     app.db
       .update(tasks)
       .set({
         claimedAt: new Date(Date.now() - 70 * 60_000),
         nudgeCount: 1,
-        lastNudgedAt: new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000)),
+        lastNudgedAt: nudgedAt,
+        lastStallNudgedAt: nudgedAt,
       })
       .where(eq(tasks.id, taskId))
       .run();
@@ -233,6 +254,7 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
       toInfo: () =>
         fakeInfo({
           agentTurnInFlight: true,
+          lastTurnEndedAt: null,
           lastActivityAt: Date.now() - 10_000,
         }),
     } as never);
@@ -261,10 +283,70 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
         // Simulate a concurrent transition to reviewing after the tick's SELECT.
         app.db.update(tasks).set({ status: "reviewing" }).where(eq(tasks.id, taskId)).run();
         return fakeInfo({
-          agentTurnInFlight: true,
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
           lastActivityAt: Date.now() - (WORKER_STALL_MS + 60_000),
         });
       },
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("reviewing");
+    expect(row.nudgeCount).toBe(0);
+    expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("does not fail on a continuation nudge (lastStallNudgedAt null) before WORKER_STALL_MS", async () => {
+    const app = await buildApp();
+    const { taskId } = await createSessionAndTask(app, "in_progress");
+    const nudgedAt = new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000));
+    app.db
+      .update(tasks)
+      .set({
+        claimedAt: new Date(Date.now() - 70 * 60_000),
+        nudgeCount: 1,
+        lastNudgedAt: nudgedAt,
+        lastStallNudgedAt: null,
+      })
+      .where(eq(tasks.id, taskId))
+      .run();
+
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          agentTurnInFlight: true,
+          lastTurnEndedAt: null,
+          lastActivityAt: nudgedAt.getTime() + 1_000,
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("in_progress");
+    expect(row.nudgeCount).toBe(1);
+    expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("ignores a worker whose turn already ended in this spell", async () => {
+    const app = await buildApp();
+    const { taskId } = await createSessionAndTask(app, "in_progress");
+    const claimedAt = new Date(Date.now() - 70 * 60_000);
+    app.db.update(tasks).set({ claimedAt }).where(eq(tasks.id, taskId)).run();
+
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          agentTurnInFlight: false,
+          lastTurnEndedAt: claimedAt.getTime() + 60_000,
+          lastActivityAt: Date.now() - (WORKER_STALL_MS + 60_000),
+        }),
     } as never);
 
     await reconcileTasks(app);
@@ -286,12 +368,14 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
     });
 
     const { taskId } = await createSessionAndTask(app, "in_progress");
+    const nudgedAt = new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000));
     app.db
       .update(tasks)
       .set({
         claimedAt: new Date(Date.now() - 130 * 60_000),
         nudgeCount: 1,
-        lastNudgedAt: new Date(Date.now() - (NUDGE_TURN_GRACE_MS + 60_000)),
+        lastNudgedAt: nudgedAt,
+        lastStallNudgedAt: nudgedAt,
       })
       .where(eq(tasks.id, taskId))
       .run();
@@ -299,7 +383,8 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
     vi.spyOn(app.pty, "get").mockReturnValue({
       toInfo: () =>
         fakeInfo({
-          agentTurnInFlight: true,
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
           lastActivityAt: Date.now() - (WORKER_STALL_MS + NUDGE_TURN_GRACE_MS + 60_000),
         }),
     } as never);

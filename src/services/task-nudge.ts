@@ -30,6 +30,11 @@ export const WORKER_STALL_MS = 45 * 60_000;
 // tolerant of clock skew between a remote worker and this process.
 const CLOCK_SKEW_TOLERANCE_MS = 5_000;
 
+// Typing a stall nudge causes the TUI to echo/redraw the submitted prompt
+// shortly after `lastStallNudgedAt`. Output within this window is treated as
+// the nudge's own echo rather than proof the worker resumed.
+const NUDGE_ECHO_WINDOW_MS = 15_000;
+
 const SHELL_JOB_DESC_MAX_CHARS = 200;
 
 export function buildContinuationNudge(branchName: string | null): string {
@@ -75,6 +80,7 @@ type NudgeTask = Pick<
   | "claimedAt"
   | "nudgeCount"
   | "lastNudgedAt"
+  | "lastStallNudgedAt"
   | "lastRateLimitAt"
   | "branchName"
   | "sessionId"
@@ -152,13 +158,18 @@ async function sendWorkerNudge(
   now: Date,
   message: string,
   label: string,
+  isStall = false,
 ): Promise<boolean> {
   const outcome = await promptLiveTaskWorker(app, task, message, label);
   if (outcome !== "typed") return false;
 
   app.db
     .update(tasks)
-    .set({ nudgeCount: sent + 1, lastNudgedAt: now })
+    .set({
+      nudgeCount: sent + 1,
+      lastNudgedAt: now,
+      ...(isStall ? { lastStallNudgedAt: now } : {}),
+    })
     .where(eq(tasks.id, task.id))
     .run();
   broadcastTaskEvent({ taskId: task.id, projectId: task.projectId, kind: "nudge", ts: Date.now() });
@@ -244,11 +255,25 @@ export async function nudgeShellTailWorker(
 export type StallNudgeResult =
   { action: "none" } | { action: "nudged" } | { action: "fail"; silentMinutes: number };
 
+// `PtyManager.agentTurnInFlight` caps at AGENT_TURN_IN_FLIGHT_MAX_MS (15m),
+// which expires long before WORKER_STALL_MS (45m). Treat the turn as open
+// whenever `agentTurnInFlight` is true OR no `lastTurnEndedAt` has landed
+// in the current in_progress spell (since `claimedAt` / `lastNudgedAt`).
+function isTurnOpenInSpell(
+  info: SessionInfo,
+  task: Pick<NudgeTask, "claimedAt" | "lastNudgedAt">,
+): boolean {
+  if (info.agentTurnInFlight === true) return true;
+  if (info.lastTurnEndedAt === null) return true;
+  const anchorMs = Math.max(task.claimedAt?.getTime() ?? 0, task.lastNudgedAt?.getTime() ?? 0);
+  return anchorMs > 0 && info.lastTurnEndedAt < anchorMs - CLOCK_SKEW_TOLERANCE_MS;
+}
+
 /**
  * Nudges, and if still silent past `NUDGE_TURN_GRACE_MS` fails, an `in_progress`
- * worker whose turn is in flight (`agentTurnInFlight === true`), has no
- * outstanding background tasks, is not in rate-limit grace, and has produced
- * no output for at least `WORKER_STALL_MS`.
+ * worker whose turn is still open in the current spell, has no outstanding
+ * background tasks or active subagents, is not in rate-limit grace, and has
+ * produced no output for at least `WORKER_STALL_MS`.
  */
 export async function nudgeStalledWorker(
   app: FastifyInstance,
@@ -260,32 +285,37 @@ export async function nudgeStalledWorker(
     task.status !== "in_progress" ||
     info === null ||
     info.alive === false ||
-    info.agentTurnInFlight !== true ||
+    !isTurnOpenInSpell(info, task) ||
     info.outstandingBackgroundTasks.length > 0 ||
+    info.subagentCount > 0 ||
     info.errorState === "api_error" ||
     info.lastActivityAt === null ||
     info.lastActivityAt === undefined
   ) {
     return { action: "none" };
   }
-
-  const silentMs = now.getTime() - info.lastActivityAt;
-  if (silentMs < WORKER_STALL_MS) return { action: "none" };
   if (isTaskInRateLimitGrace(task, resolveTaskMasterConfig(app).rateLimitGraceMinutes)) {
     return { action: "none" };
   }
 
+  const silentMs = now.getTime() - info.lastActivityAt;
   const silentMinutes = Math.floor(silentMs / 60_000);
-  const sent = nudgesThisSpell(task);
-  if (
-    sent > 0 &&
-    task.lastNudgedAt !== null &&
-    task.lastNudgedAt.getTime() >= info.lastActivityAt
-  ) {
-    return now.getTime() - task.lastNudgedAt.getTime() < NUDGE_TURN_GRACE_MS
+  const stallNudgedAt =
+    task.lastStallNudgedAt !== null &&
+    task.claimedAt !== null &&
+    task.lastStallNudgedAt.getTime() >= task.claimedAt.getTime()
+      ? task.lastStallNudgedAt.getTime()
+      : null;
+  if (stallNudgedAt !== null && info.lastActivityAt <= stallNudgedAt + NUDGE_ECHO_WINDOW_MS) {
+    const silentSinceNudgeMs = now.getTime() - Math.max(stallNudgedAt, info.lastActivityAt);
+    return silentSinceNudgeMs < NUDGE_TURN_GRACE_MS
       ? { action: "none" }
       : { action: "fail", silentMinutes };
   }
+
+  if (silentMs < WORKER_STALL_MS) return { action: "none" };
+
+  const sent = nudgesThisSpell(task);
   if (sent >= MAX_WORKER_NUDGES) {
     return { action: "fail", silentMinutes };
   }
@@ -301,6 +331,7 @@ export async function nudgeStalledWorker(
     now,
     buildStallNudge(task.branchName),
     "task stall nudge",
+    true,
   );
   if (!typed) return { action: "none" };
 
