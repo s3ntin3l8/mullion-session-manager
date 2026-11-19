@@ -48,6 +48,7 @@ const { CODEX_TRUST_HOLD_DETAIL, enqueueTask, dispatchClaimedTask, dispatchQueue
   await import("../../src/services/task-claim.js");
 const { enqueueRetry } = await import("../../src/services/task-retry.js");
 const { dispatchQueuedTasks } = await import("../../src/services/task-dispatch.js");
+const { countOccupiedSlots } = await import("../../src/services/task-watcher.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const { createTaskGitRepo, createTaskProject, insertFailedTaskWithPreservedBranch } =
   await import("../helpers/task-retry-fixture.js");
@@ -111,7 +112,8 @@ describe("codex /hooks trust gate at task dispatch", () => {
     expect(heldRow.status).toBe("claimed");
     expect(heldRow.sessionId).toBeNull();
     expect(heldRow.failureReason).toBe(CODEX_TRUST_HOLD_DETAIL);
-    expect(heldRow.dispatchHeld).toBe(false);
+    expect(heldRow.dispatchHeld).toBe(true);
+    expect(countOccupiedSlots(app)).toBe(0);
 
     // Subsequent tick while still pending keeps the hold without failing or spawning.
     const heldAgain = await dispatchClaimedTask(app, task.id);
@@ -316,11 +318,14 @@ describe("codex /hooks trust gate at task dispatch", () => {
       .all();
 
     try {
+      const occupiedWhileHeld = countOccupiedSlots(app);
       mockGetCodexHookTrust.mockReturnValue("trusted");
       const capped = await dispatchClaimedTask(app, task.id);
       expect(capped).toMatchObject({ ok: false, reason: "cap" });
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.failureReason).toBeNull();
+      expect(row.dispatchHeld).toBe(false);
+      expect(countOccupiedSlots(app)).toBe(occupiedWhileHeld + 1);
     } finally {
       app.db.delete(tasks).where(eq(tasks.id, other.id)).run();
       fs.rmSync(cwd, { recursive: true, force: true });

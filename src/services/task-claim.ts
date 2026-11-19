@@ -64,8 +64,8 @@ import {
 } from "./task-agent-resolve.js";
 import { resolveOpenCodeModel, resolveWorkerSpawnModels } from "./task-model-resolve.js";
 import { commandAgentBin, commandIsOpencode } from "./hook-adapters/index.js";
-import { codexTrustHold } from "./task-codex-trust-hold.js";
-export { CODEX_TRUST_HOLD_DETAIL } from "./task-codex-trust-hold.js";
+import { codexTrustHold, CODEX_TRUST_HOLD_DETAIL } from "./task-codex-trust-hold.js";
+export { CODEX_TRUST_HOLD_DETAIL };
 import { syncTaskTransition } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
@@ -660,13 +660,15 @@ export async function dispatchClaimedTask(
     startMaterialize(app, project.id, placement.hostId);
     return holdClaim(describePreparing(placement.hostId));
   }
+  const trustHeld = codexTrustHold(app, task, project, command, placement.hostId);
+  if (trustHeld) return trustHeld;
   // Placement succeeded, so a hold recorded earlier (the host was not eligible)
   // no longer describes the task — it may now wait for a worker slot instead,
   // and the card must not keep saying the host is unavailable, nor count that
   // wait toward the 6h give-up. Only a HOLD is dropped: the reason of a failed
   // attempt (an unreachable base ref, a worktree git cannot cut) is still the
   // last known truth until a dispatch succeeds.
-  if (task.dispatchHeld) {
+  if (task.dispatchHeld && task.failureReason !== CODEX_TRUST_HOLD_DETAIL) {
     const cleared = app.db
       .update(tasks)
       .set({ failureReason: null, dispatchFailingSince: null, dispatchHeld: false })
@@ -677,8 +679,6 @@ export async function dispatchClaimedTask(
       broadcastTaskEvent({ taskId, projectId: project.id, kind: "dispatch", ts: Date.now() });
     }
   }
-  const trustHeld = codexTrustHold(app, task, project, command, placement.hostId);
-  if (trustHeld) return trustHeld;
   // The project root ON THE PLACEMENT HOST. Null would mean the placement
   // chose a host this project is not on — unreachable in practice (the
   // policy only ever chooses a host the project is mapped on), but the
