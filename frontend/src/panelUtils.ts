@@ -1393,27 +1393,23 @@ function collectFloatingPanelIds(
 const LEGACY_PANEL_IDS = ["tasks"] as const;
 
 // Component kinds whose panels are swept by *kind* rather than by fixed id,
-// because their ids are per project (`git-<projectId>`, the retired dock Git
-// panel and the retired GitHub grid panel — both live in the right
-// sidebar now; see GitPanelRedirect.tsx / GitHubPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
-// registered in panels/registry.tsx.
-const LEGACY_PANEL_KINDS = ["git", "github"] as const;
-
-// The retired Project panel (`project-hub-<projectId>`) and the five
-// single-purpose panels it once replaced (#3406: its editors are the Project
-// settings dialog now, Skills a drill-in of the sidebar's Project view). Swept
-// by kind like LEGACY_PANEL_KINDS, but silently: a dialog opening on a
-// workspace switch would be a surprise. Kept apart from LEGACY_PANEL_KINDS,
-// whose sweep reports each panel to the caller. Every kind stays registered in
-// panels/registry.tsx (ProjectPanelRedirect.tsx).
-const RETIRED_PROJECT_PANEL_KINDS: readonly string[] = [
+// because their ids are per project (`<kind>-<projectId>`). Each stays
+// registered in panels/registry.tsx (like LEGACY_PANEL_IDS) as a redirect stub:
+//  - `git` and `github`: the retired dock Git panel and GitHub grid panel,
+//    both right-sidebar views now (GitPanelRedirect.tsx / GitHubPanelRedirect.tsx).
+//  - `project-hub` and the five setup panels it once replaced: the retired
+//    Project panel (#3406), whose editors are the Project settings dialog now
+//    and Skills a drill-in of the sidebar's Project view (ProjectPanelRedirect.tsx).
+const LEGACY_PANEL_KINDS = [
+  "git",
+  "github",
   "project-hub",
   "agent-rules",
   "project-briefing",
   "project-setup",
   "dock-config",
   "skills",
-];
+] as const;
 
 const PROJECT_PANEL_ID_RE =
   /^(?:project-hub|file-editor|agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
@@ -1440,11 +1436,11 @@ export function staleProjectPanelIds(
 // closedKilledPanels flag, kept separate from it since the two sweeps close
 // panels for unrelated reasons.
 //
-// `onRetiredPanel` is told the `projectId` of each swept retired-kind panel
-// (the dock Git panel): fromJSON renders panel content on a later React pass,
-// so the sweep closes the panel before GitPanelRedirect could ever mount —
-// this callback is how the restore still lands the user in the Source Control
-// sidebar view the panel became.
+// `onRetiredPanel` is told the kind and `projectId` of each swept retired-kind
+// panel: fromJSON renders panel content on a later React pass, so the sweep
+// closes the panel before its redirect stub could ever mount — this callback
+// is how the restore still lands the user where the panel went (the caller
+// decides which kinds open anything).
 export function closeLegacyPanels(
   api: DockviewApi,
   onRetiredPanel?: (kind: string, projectId: number | undefined) => void,
@@ -1457,9 +1453,6 @@ export function closeLegacyPanels(
       panel.api.close();
       closed = true;
       onRetiredPanel?.(kind, projectId);
-    } else if (RETIRED_PROJECT_PANEL_KINDS.includes(kind)) {
-      panel.api.close();
-      closed = true;
     }
   }
   for (const id of LEGACY_PANEL_IDS) {

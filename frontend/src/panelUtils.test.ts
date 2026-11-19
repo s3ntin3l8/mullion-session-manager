@@ -1030,8 +1030,8 @@ describe("closeLegacyPanels", () => {
   });
 
   // #3406 — the retired Project panel and the five setup panels it replaced
-  // are swept silently: no callback, so restoring a workspace never opens the
-  // Project settings dialog by itself.
+  // join the same by-kind sweep. Whether a swept kind opens anything is the
+  // caller's call (useWorkspacePersistence opens nothing for these).
   it.each([
     "project-hub",
     "agent-rules",
@@ -1039,7 +1039,7 @@ describe("closeLegacyPanels", () => {
     "project-setup",
     "dock-config",
     "skills",
-  ])("closes a retired %s panel without reporting it", (kind) => {
+  ])("sweeps a retired %s panel by kind and reports it, like git/github", (kind) => {
     const api = mockDockviewApi();
     api.addPanel({ id: `${kind}-4`, component: kind, params: { projectId: 4 } });
     api.addPanel({ id: "file-editor-4", component: "file-editor", params: { projectId: 4 } });
@@ -1055,7 +1055,7 @@ describe("closeLegacyPanels", () => {
     expect(closed).toBe(true);
     expect(api.getPanel(`${kind}-4`)!.api.close).toHaveBeenCalledTimes(1);
     expect(api.getPanel("file-editor-4")!.api.close).not.toHaveBeenCalled();
-    expect(onRetired).not.toHaveBeenCalled();
+    expect(onRetired).toHaveBeenCalledWith(kind, 4);
   });
 
   it("is a no-op and reports false when no legacy panel is present", () => {

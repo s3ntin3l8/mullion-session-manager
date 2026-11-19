@@ -91,7 +91,6 @@ function Harness({ surface }: { surface: "palette" | "sidebar" }) {
           projectId={5}
           actions={{
             onOpenGit: vi.fn(),
-            onOpenGitHub: vi.fn(),
             onOpenFileEditor: vi.fn(),
             onOpenFile: vi.fn(),
             onOpenAgentRules: o.onOpenAgentRules,

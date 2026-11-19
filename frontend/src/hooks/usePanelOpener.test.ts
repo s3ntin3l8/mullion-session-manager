@@ -723,28 +723,28 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
   });
 
-  it("Agent Rules (a project panel kind) DOES apply desktop positioning with a tiled panel present", () => {
+  // The file editor is the project panel kind that applies desktop
+  // positioning now that Agent Rules and the rest open the Project settings
+  // dialog (#3406) and GitHub a sidebar view (#3405).
+  it("the file editor (a project panel kind) DOES apply desktop positioning with a tiled panel present", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
     const { result } = setup({ dockviewApi: api });
 
-    result.current.onOpenAgentRules(1);
+    result.current.onOpenFileEditor(1);
 
-    const githubCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call) => call[0].id === "project-hub-1",
+    const editorCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0].id === "file-editor-1",
     )![0];
     // An explicit size, not dockview's own cramped 300x300 default — see
     // panelUtils.ts's desktopPositioning/DEFAULT_FLOATING_PANEL_SIZE.
-    expect(githubCall).toHaveProperty("floating", { width: 720, height: 460 });
+    expect(editorCall).toHaveProperty("floating", { width: 720, height: 460 });
   });
 
-  it.each(["onOpenBrowser"] as const)(
-    "%s no-ops when dockviewApi is null",
-    (fnName) => {
-      const { result } = setup({ dockviewApi: null });
-      expect(() => (result.current[fnName] as (projectId: number) => void)(1)).not.toThrow();
-    },
-  );
+  it.each(["onOpenBrowser"] as const)("%s no-ops when dockviewApi is null", (fnName) => {
+    const { result } = setup({ dockviewApi: null });
+    expect(() => (result.current[fnName] as (projectId: number) => void)(1)).not.toThrow();
+  });
 });
 
 describe("usePanelOpener — onOpenTasks", () => {
@@ -851,15 +851,12 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
-  it.each(["onOpenBrowser"] as const)(
-    "%s resets viewMode to list before opening",
-    (fnName) => {
-      const api = mockDockviewApi();
-      const { result } = setup({ dockviewApi: api });
-      (result.current[fnName] as (projectId: number) => void)(1);
-      expect(setViewMode).toHaveBeenCalledWith("list");
-    },
-  );
+  it.each(["onOpenBrowser"] as const)("%s resets viewMode to list before opening", (fnName) => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    (result.current[fnName] as (projectId: number) => void)(1);
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
 
   it.each(["onOpenBrowser"] as const)(
     "%s does NOT reset viewMode when dockviewApi is null (a true no-op)",

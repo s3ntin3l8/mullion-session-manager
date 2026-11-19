@@ -358,6 +358,8 @@ export function useWorkspacePersistence({
       // A swept retired `git` panel opens its project's Source Control view
       // (once — several stale panels would just fight over the drawer).
       // The retired `github` grid panel does the same for the GitHub view.
+      // The retired Project panel kinds open nothing: a dialog popping up on a
+      // workspace switch would be a surprise (#3406).
       const openedViews = new Set<string>();
       closedLegacyPanels = closeLegacyPanels(dockviewApi, (kind, projectId) => {
         if ((kind !== "git" && kind !== "github") || projectId == null) return;
@@ -365,9 +367,6 @@ export function useWorkspacePersistence({
         openedViews.add(kind);
         useDashboardStore.getState().openRightSidebarView(kind, projectId);
       });
-      // The same sweep closes a retired Project panel (and the five setup
-      // panels it replaced) silently: their editors are the Project settings
-      // dialog now (#3406).
       // Terminal panel titles are deliberately excluded from the persisted
       // blob (panelUtils.ts's stripSessionPanelTitles, part of the
       // workspace-autosave rate-limit-storm fix) — re-derive them here the
