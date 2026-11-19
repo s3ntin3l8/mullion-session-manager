@@ -49,7 +49,7 @@
      `1fr/auto` grid (see `.pane-tab`), so the 1fr column already constrains this
      wrapper's width — `overflow: hidden` is redundant for text-overflow
      purposes and can be removed. The title's own `overflow: hidden;
-     text-overflow: ellipsis; min-width: 0` (line 86-93) still handles
+     text-overflow: ellipsis; min-width: 0` (see `.pane-tab-name`) still handles
      title truncation within the wrapper. */
 }
 /* Right-column cluster: close + ⋯ kebab. Auto-sized to its children so
