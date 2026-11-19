@@ -1055,15 +1055,23 @@ export function openBrowserPanePanel(
 
 /**
  * Focuses a Browser pane already open in the workspace: an agent's-browser
- * `browserPane`, or a preview/legacy `browser` panel (#3403). Returns whether
- * there was one, so the caller opens one only when there was not.
+ * `browserPane`, or a preview/legacy `browser` panel (#3403). A pane `prefer`
+ * accepts (the followed session's, or its project's) wins over any other, so
+ * a rail following one project does not land on another project's pane while
+ * its own is open. Returns whether there was one, so the caller opens one
+ * only when there was not.
  */
-export function focusOpenBrowserPane(api: DockviewApi): boolean {
-  const panel = api.panels.find(
+export function focusOpenBrowserPane(
+  api: DockviewApi,
+  layout: LayoutContext,
+  prefer: (params: Record<string, unknown>) => boolean,
+): boolean {
+  const panes = api.panels.filter(
     (p) => p.api.component === "browserPane" || p.api.component === "browser",
   );
+  const panel = panes.find((p) => prefer(p.api.getParameters?.() ?? {})) ?? panes[0];
   if (!panel) return false;
-  panel.api.setActive();
+  focusPanelForTier(api, panel, layout.tier);
   return true;
 }
 

@@ -65,19 +65,21 @@ function OutOfBandButton({
   const Icon = view.icon;
   // No project in the rail: nothing to open, so the icon is disabled.
   const session = useFollowedSession(projectId ?? -1);
-  // BROWSER_ENABLED: null until the server answers; off, there is no agent's
-  // browser to open, so the project's preview is.
+  // BROWSER_ENABLED: off, there is no agent's browser to open, so the
+  // project's preview is. Only an answer that says off counts: until the
+  // server answers (or if it never does) the session's browser is opened,
+  // and the pane itself falls back to Preview on an explicit off.
   const serverInfo = useServerInfo();
-  const agentBrowser = serverInfo?.features?.browser === true;
+  const featureOff = serverInfo != null && serverInfo.features?.browser !== true;
   return (
     <button
       type="button"
       className="right-rail-btn"
       aria-label={view.label}
       title={`Open ${view.label.toLowerCase()}`}
-      disabled={projectId == null}
+      disabled={projectId == null || !onOpen}
       onClick={() => {
-        if (projectId != null) onOpen?.(projectId, agentBrowser ? session : null);
+        if (projectId != null) onOpen?.(projectId, featureOff ? null : session);
       }}
     >
       <Icon size={17} />

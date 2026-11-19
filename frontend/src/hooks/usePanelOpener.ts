@@ -480,14 +480,23 @@ export function usePanelOpener({
   // project's preview, as the palette's "Open browser: preview…" does.
   const onOpenRailBrowser = useCallback(
     (projectId: number, session: Session | null) => {
-      if (dockviewApi && focusOpenBrowserPane(dockviewApi)) {
+      // The followed session's pane, or one of this project's, before any
+      // other project's.
+      const sessions = useDashboardStore.getState().sessions;
+      const prefer = (params: Record<string, unknown>) => {
+        if (session && params.sessionId === session.id) return true;
+        if (params.projectId === projectId) return true;
+        const owner = sessions.find((s) => s.id === params.sessionId);
+        return owner?.projectId === projectId;
+      };
+      if (dockviewApi && focusOpenBrowserPane(dockviewApi, layout, prefer)) {
         leaveTaskView();
         return;
       }
       if (session) onOpenAgentBrowser(session);
       else onOpenPreviewTargets(projectId);
     },
-    [dockviewApi, leaveTaskView, onOpenAgentBrowser, onOpenPreviewTargets],
+    [dockviewApi, layout, leaveTaskView, onOpenAgentBrowser, onOpenPreviewTargets],
   );
 
   const onOpenBlankBrowser = useCallback(() => {

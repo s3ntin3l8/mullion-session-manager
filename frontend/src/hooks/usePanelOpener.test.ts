@@ -516,6 +516,25 @@ describe("usePanelOpener — onOpenRailBrowser (#3403)", () => {
     },
   );
 
+  it("focuses this project's pane before another project's", () => {
+    const api = mockDockviewApi();
+    const withParams = (id: string, params: Record<string, unknown>) => {
+      const panel = api.addPanel({ id, component: "browser" } as never);
+      (panel.api as unknown as { getParameters: () => unknown }).getParameters = () => params;
+      return panel;
+    };
+    const other = withParams("browser-2", { projectId: 2 });
+    const own = withParams("browser-1", { projectId: 1 });
+    (api.addPanel as ReturnType<typeof vi.fn>).mockClear();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenRailBrowser(1, null);
+
+    expect(own.api.setActive).toHaveBeenCalled();
+    expect(other.api.setActive).not.toHaveBeenCalled();
+    expect(api.addPanel).not.toHaveBeenCalled();
+  });
+
   it("opens the project's preview with no followed session", () => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });

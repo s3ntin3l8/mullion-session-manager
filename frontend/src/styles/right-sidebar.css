@@ -37,9 +37,13 @@
   color: var(--muted);
   cursor: pointer;
 }
-.right-rail-btn:hover {
+.right-rail-btn:hover:not(:disabled) {
   color: var(--fg);
   background: var(--seg);
+}
+.right-rail-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .right-rail-btn.active {
   color: var(--fg);
