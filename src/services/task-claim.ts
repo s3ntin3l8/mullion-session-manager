@@ -12,6 +12,7 @@ import {
   takeFailedMaterialize,
 } from "./checkout-materialize.js";
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
+import { CLEARED_NEEDS_HUMAN } from "./task-merge-human.js";
 import { modelFamily, resolveTaskModelPatch } from "./task-model-patch.js";
 import {
   resolveSessionHostId,
@@ -1699,7 +1700,7 @@ export async function dispatchQueuedRetry(
           completedAt: null,
           // Issue #1038 — same stale-announcement clears as the success patch.
           autoReturnCapAnnouncedAt: null,
-          needsHumanReason: null,
+          ...CLEARED_NEEDS_HUMAN,
           approvalCarriedAt: null,
         };
         const adopted = app.db
@@ -1752,7 +1753,7 @@ export async function dispatchQueuedRetry(
       // the one path that can otherwise carry a stale announcement into a
       // fresh in_progress run.
       autoReturnCapAnnouncedAt: null,
-      needsHumanReason: null,
+      ...CLEARED_NEEDS_HUMAN,
       approvalCarriedAt: null,
     };
     app.db.update(tasks).set(patch).where(eq(tasks.id, taskId)).run();

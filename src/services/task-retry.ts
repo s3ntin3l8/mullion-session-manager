@@ -4,6 +4,7 @@ import { projects, tasks } from "../db/schema.js";
 import { killSession } from "./session-lifecycle.js";
 import { recordTaskTransition } from "./task-state.js";
 import { syncTaskTransition } from "./task-github-sync.js";
+import { CLEARED_NEEDS_HUMAN } from "./task-merge-human.js";
 import { agentChangeModelClears, SUPERSEDED_RETRY_DETAIL } from "./task-claim.js";
 
 export type EnqueueRetryOutcome =
@@ -112,7 +113,7 @@ export async function enqueueRetry(
       sessionId: null,
       // Stale "needs a human" markers from the failed run (give-up from review).
       autoReturnCapAnnouncedAt: null,
-      needsHumanReason: null,
+      ...CLEARED_NEEDS_HUMAN,
       approvalCarriedAt: null,
       prUrl: null,
       prNumber: null,

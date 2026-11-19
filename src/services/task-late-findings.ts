@@ -5,6 +5,7 @@ import { projects, tasks, type sessions } from "../db/schema.js";
 import { stopHermesRunQuietly } from "./hermes-task-review.js";
 import { killSession } from "./session-lifecycle.js";
 import { CLEARED_REVIEW_RUN, hasReviewHandle } from "./task-review-handle.js";
+import { CLEARED_NEEDS_HUMAN } from "./task-merge-human.js";
 import { resolveMaxAutoReturnRounds } from "./task-auto-return-rounds.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -376,10 +377,12 @@ async function flagExhaustedInconclusiveReviews(app: FastifyInstance): Promise<v
  */
 export function staleReviewFlagPatch(task: {
   needsHumanReason: string | null;
-}): { needsHumanReason: null; autoReturnCapAnnouncedAt?: null } | Record<string, never> {
-  if (task.needsHumanReason === "review-post-failed") return { needsHumanReason: null };
+}):
+  | { needsHumanReason: null; ciHoldNote: null; autoReturnCapAnnouncedAt?: null }
+  | Record<string, never> {
+  if (task.needsHumanReason === "review-post-failed") return { ...CLEARED_NEEDS_HUMAN };
   if (task.needsHumanReason === "review-inconclusive") {
-    return { needsHumanReason: null, autoReturnCapAnnouncedAt: null };
+    return { ...CLEARED_NEEDS_HUMAN, autoReturnCapAnnouncedAt: null };
   }
   return {};
 }

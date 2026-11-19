@@ -539,6 +539,24 @@ describe("reconcileTasks — review round cap and re-arm", () => {
       await app.close();
     });
 
+    it("clears ciHoldNote alongside needsHumanReason when re-arming a CI-parked task", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app, {
+        needsHumanReason: "ci-unfixable",
+        ciHoldNote: "test-merge — dependency-audit fails on base",
+      });
+      setRepoPRsStatus("o", "r", prStatus(9, "sha-new"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
+      expect(row.needsHumanReason).toBeNull();
+      expect(row.ciHoldNote).toBeNull();
+
+      await app.close();
+    });
+
     it("clears an external reviewer's run too when it re-arms (#2369)", async () => {
       const app = await buildApp();
       const { task } = await createCappedAnnouncedTask(app, {
