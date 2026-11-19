@@ -10,10 +10,11 @@
      long title text could blow past the action buttons (the prior comment
      below called this out as "still not ideal"). Anchoring the actions in
      their own column guarantees they're always at the right edge, and
-     `minmax(0, 1fr)` on the left column means the title ellipsizes into
-     whatever's left instead of overflowing into the actions. Plain `1fr` is
-     `minmax(auto, 1fr)`, whose track can't shrink below its content's
-     min-content, so a long title grew the track and pushed the actions out. */
+     `1fr` on the left column means the title ellipsizes into whatever's
+     left instead of overflowing into the actions. Written `minmax(0, 1fr)`
+     as hardening: plain `1fr` is `minmax(auto, 1fr)`, so the track would
+     stop shrinking below its content if `.pane-tab-leading` ever lost its
+     `min-width: 0` (which is what currently lets it shrink). */
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
@@ -45,7 +46,7 @@
   /* Hermes review, PR #1366, line 43 — the `overflow: hidden` here clipped
      the rename input's 3px `box-shadow` focus ring, which extends beyond
      the wrapper's content-box on focus. The parent `.pane-tab` is now a
-     `1fr/auto` grid (line 20), so the 1fr column already constrains this
+     `1fr/auto` grid (see `.pane-tab`), so the 1fr column already constrains this
      wrapper's width — `overflow: hidden` is redundant for text-overflow
      purposes and can be removed. The title's own `overflow: hidden;
      text-overflow: ellipsis; min-width: 0` (line 86-93) still handles
@@ -58,7 +59,6 @@
    including close↔kebab) — keeps the action cluster visually identical
    to before the grid split. */
 .pane-tab-actions {
-  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;

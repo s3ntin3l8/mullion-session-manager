@@ -9,7 +9,7 @@ const files = import.meta.glob("./terminal.css", {
 const css = files["./terminal.css"];
 
 // jsdom has no layout, so this pins the CSS contract that keeps a long task title from running
-// behind the close/kebab buttons; the rendered result is covered by the visual scenes.
+// behind the close/kebab buttons. It is only a CSS contract: no visual scene opens a tab with a long task title.
 
 function rule(selector: string): string {
   const start = css.indexOf(`\n${selector} {`);
@@ -30,7 +30,7 @@ describe("pane tab title truncation", () => {
     expect(name).toMatch(/text-overflow:\s*ellipsis/);
     expect(name).toMatch(/min-width:\s*0/);
   });
-  it("never shrinks the actions", () => {
-    expect(rule(".pane-tab-actions")).toMatch(/flex-shrink:\s*0/);
+  it("keeps the actions in their own auto-sized track", () => {
+    expect(rule(".pane-tab")).toMatch(/grid-template-columns:[^;]*\sauto\s*;/);
   });
 });
