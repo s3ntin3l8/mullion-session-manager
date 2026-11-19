@@ -89,6 +89,16 @@ export const DEVICE_TERMINATE_SCHEMA = {
   properties: { kind: DEVICE_KIND_SCHEMA, platform: { type: "string", enum: ["android", "ios"] } },
 } as const;
 
+export const DEVICE_PAIR_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["pairingAddress", "pairingCode"],
+  properties: {
+    pairingAddress: { type: "string", minLength: 1, maxLength: 256 },
+    pairingCode: { type: "string", minLength: 6, maxLength: 6 },
+  },
+} as const;
+
 export const SESSION_ID_PARAMS_SCHEMA = {
   type: "object",
   required: ["id"],

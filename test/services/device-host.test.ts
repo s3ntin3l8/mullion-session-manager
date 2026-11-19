@@ -30,6 +30,8 @@ const devices = {
   live: vi.fn(),
   terminate: vi.fn(),
   action: vi.fn(),
+  pair: vi.fn(),
+  discovered: vi.fn(),
 };
 const client = { devices };
 vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
@@ -212,5 +214,33 @@ describe("DeviceHost", () => {
     expect(lives.get(a2.id)).toEqual({ live: undefined, unreachable: false });
     expect(lives.get(b1.id)).toEqual({ live: undefined, unreachable: true });
     expect(lives.get(localRow.id)).toEqual({ live: undefined, unreachable: false });
+  });
+
+  it("routes pair and discovered to the remote client or local manager", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const remote = getDeviceHost(app, mac);
+    const sample = [
+      {
+        id: "Android.local",
+        name: "Pixel 7",
+        host: "192.168.1.23",
+        pairingAddress: "192.168.1.23:41234",
+        connectAddress: "192.168.1.23:37251",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    client.devices.pair.mockResolvedValue(undefined);
+    client.devices.discovered.mockResolvedValue(sample);
+
+    await remote.pair("192.168.1.23:41234", "123456");
+    expect(client.devices.pair).toHaveBeenCalledWith("192.168.1.23:41234", "123456");
+    await expect(remote.discovered()).resolves.toEqual(sample);
+
+    const local = getDeviceHost(app, "local");
+    const pairSpy = vi.spyOn(app.device, "pair").mockResolvedValue(undefined);
+    await local.pair("192.168.1.24:41234", "654321");
+    expect(pairSpy).toHaveBeenCalledWith("192.168.1.24:41234", "654321");
+    await expect(local.discovered()).resolves.toEqual([]);
   });
 });

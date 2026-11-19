@@ -1,4 +1,5 @@
 import type { DeviceInfo, DeviceKind, DevicePlatform } from "./device-drivers/types.js";
+import type { DiscoveredDevice } from "./device-discovery.js";
 import type { IosSimulator } from "./ios-simulators.js";
 
 // The request/response shapes of the agent's `/internal/devices*` routes
@@ -44,6 +45,19 @@ export interface LiveDevicesResponse {
 
 export interface SimulatorsResponse {
   simulators: IosSimulator[];
+}
+
+export interface DevicePairRequest {
+  pairingAddress: string;
+  pairingCode: string;
+}
+
+export interface DevicePairResponse {
+  ok: true;
+}
+
+export interface DiscoveredDevicesResponse {
+  devices: DiscoveredDevice[];
 }
 
 export interface DeviceKindsResponse {

@@ -130,6 +130,7 @@ describe("devices on an agent host (issue #3200)", () => {
     getOrCreate: ReturnType<typeof vi.spyOn>;
     terminate: ReturnType<typeof vi.spyOn>;
     setReservedPorts: ReturnType<typeof vi.spyOn>;
+    pair: ReturnType<typeof vi.spyOn>;
   };
 
   const getOrCreateCalls = () =>
@@ -167,6 +168,7 @@ describe("devices on an agent host (issue #3200)", () => {
       getOrCreate: vi.spyOn(dev, "getOrCreate"),
       terminate: vi.spyOn(dev, "terminate"),
       setReservedPorts: vi.spyOn(dev, "setReservedPorts"),
+      pair: vi.spyOn(dev, "pair"),
     };
   });
 
@@ -210,6 +212,7 @@ describe("devices on an agent host (issue #3200)", () => {
       live.delete(id);
     });
     spies.setReservedPorts.mockReset().mockImplementation(() => {});
+    spies.pair.mockReset().mockResolvedValue(undefined);
     vi.spyOn(agent.app.device, "list").mockImplementation(() =>
       [...live.values()].map((l) => l.info),
     );
@@ -752,6 +755,232 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(messages.map((m) => JSON.parse(m))).toEqual([
         expect.objectContaining({ type: "error", message: expect.stringContaining("Scope dead") }),
       ]);
+    });
+  });
+
+  describe("pairing and discovery on agent hosts (#3271)", () => {
+    const sampleDiscovered = {
+      id: "Pixel-7.local",
+      name: "Pixel 7",
+      host: "192.168.1.23",
+      pairingAddress: "192.168.1.23:41234",
+      connectAddress: "192.168.1.23:37251",
+      discoveredAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    it("requires the agent bearer token on /internal/devices/pair and /discovered and validates addresses", async () => {
+      const anonDiscovered = await agent.app.inject({
+        method: "GET",
+        url: "/internal/devices/discovered",
+      });
+      expect([401, 403]).toContain(anonDiscovered.statusCode);
+
+      const anonPair = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/pair",
+        payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+      });
+      expect([401, 403]).toContain(anonPair.statusCode);
+
+      const badAddr = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/pair",
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        payload: { pairingAddress: "192.168.1.23:99999", pairingCode: "123456" },
+      });
+      expect(badAddr.statusCode).toBe(400);
+
+      const badCode = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/pair",
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "abcdef" },
+      });
+      expect(badCode.statusCode).toBe(400);
+
+      const badPhysicalSpawn = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices",
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        payload: {
+          id: "9",
+          kind: "physical",
+          avdName: null,
+          serial: "bad:1:2",
+          label: null,
+          port: null,
+          reservedPorts: [],
+        },
+      });
+      expect(badPhysicalSpawn.statusCode).toBe(400);
+    });
+
+    it("lists discovered devices on an agent and answers 503 when unreachable", async () => {
+      const discSpy = vi
+        .spyOn(agent.app.deviceDiscovery, "getDiscovered")
+        .mockReturnValue([sampleDiscovered]);
+      try {
+        const res = await primary.app.inject({
+          method: "GET",
+          url: `/api/devices/discovered?hostId=${hostId}`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual([sampleDiscovered]);
+
+        const down = await primary.app.inject({
+          method: "GET",
+          url: `/api/devices/discovered?hostId=${deadHostId}`,
+        });
+        expect(down.statusCode).toBe(503);
+
+        const unknown = await primary.app.inject({
+          method: "GET",
+          url: "/api/devices/discovered?hostId=no-such-host",
+        });
+        expect(unknown.statusCode).toBe(400);
+      } finally {
+        discSpy.mockRestore();
+      }
+    });
+
+    it("routes POST /api/devices/pair to the agent and answers 503 when unreachable", async () => {
+      const res = await primary.app.inject({
+        method: "POST",
+        url: "/api/devices/pair",
+        payload: {
+          pairingAddress: "192.168.1.23:41234",
+          pairingCode: "123456",
+          hostId,
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      expect(spies.pair).toHaveBeenCalledWith("192.168.1.23:41234", "123456");
+
+      spies.pair.mockRejectedValueOnce(new Error("wrong code"));
+      const bad = await primary.app.inject({
+        method: "POST",
+        url: "/api/devices/pair",
+        payload: {
+          pairingAddress: "192.168.1.23:41234",
+          pairingCode: "123456",
+          hostId,
+        },
+      });
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json().message).toContain("wrong code");
+
+      const down = await primary.app.inject({
+        method: "POST",
+        url: "/api/devices/pair",
+        payload: {
+          pairingAddress: "192.168.1.23:41234",
+          pairingCode: "123456",
+          hostId: deadHostId,
+        },
+      });
+      expect(down.statusCode).toBe(503);
+    });
+
+    it("routes pair-and-connect to the agent, scopes discoveryId per host, and scopes collision guard per host", async () => {
+      const agentDiscSpy = vi
+        .spyOn(agent.app.deviceDiscovery, "getDiscovered")
+        .mockReturnValue([sampleDiscovered]);
+      const localDiscSpy = vi
+        .spyOn(primary.app.deviceDiscovery, "getById")
+        .mockImplementation((id) =>
+          id === "Local-Phone.local"
+            ? {
+                id: "Local-Phone.local",
+                name: "Local Phone",
+                host: "192.168.1.50",
+                pairingAddress: "192.168.1.50:41234",
+                connectAddress: "192.168.1.50:37251",
+                discoveredAt: "2026-01-01T00:00:00.000Z",
+              }
+            : undefined,
+        );
+      try {
+        // Cross-host discoveryId is refused: primary cannot use agent's discoveryId,
+        // and agent cannot use primary's discoveryId.
+        const agentIdOnPrimary = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: { discoveryId: sampleDiscovered.id, pairingCode: "123456", hostId: "local" },
+        });
+        expect(agentIdOnPrimary.statusCode).toBe(400);
+
+        const primaryIdOnAgent = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: { discoveryId: "Local-Phone.local", pairingCode: "123456", hostId },
+        });
+        expect(primaryIdOnAgent.statusCode).toBe(400);
+        expect(primaryIdOnAgent.json().message).toContain("no longer in the discovery cache");
+
+        // Valid discoveryId on the agent pairs and connects on the agent.
+        const ok = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: { discoveryId: sampleDiscovered.id, pairingCode: "123456", hostId, name: "Lab" },
+        });
+        expect(ok.statusCode).toBe(201);
+        expect(ok.json()).toMatchObject({
+          hostId,
+          kind: "physical",
+          serial: sampleDiscovered.connectAddress,
+          name: "Lab",
+        });
+        expect(spies.pair).toHaveBeenCalledWith(sampleDiscovered.pairingAddress, "123456");
+        expect(getOrCreateCalls()).toEqual([
+          expect.objectContaining({
+            kind: "physical",
+            serial: sampleDiscovered.connectAddress,
+          }),
+        ]);
+
+        // Duplicate connectAddress on the SAME hostId is refused with 409.
+        const dup = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: {
+            pairingAddress: "192.168.1.23:41234",
+            connectAddress: sampleDiscovered.connectAddress,
+            pairingCode: "123456",
+            hostId,
+          },
+        });
+        expect(dup.statusCode).toBe(409);
+
+        // Same connectAddress on a DIFFERENT hostId is allowed (separate LAN).
+        const localRow = insertDevice(primary.app, {
+          kind: "physical",
+          serial: sampleDiscovered.connectAddress,
+          avdName: null,
+          projectId: null,
+          name: "Local same IP",
+          hostId: "local",
+        });
+        expect(localRow.hostId).toBe("local");
+
+        // Unreachable host rolls back the row and answers 503.
+        const beforeCount = primary.app.db.select().from(devices).all().length;
+        const down = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: {
+            pairingAddress: "192.168.1.99:41234",
+            connectAddress: "192.168.1.99:37251",
+            pairingCode: "123456",
+            hostId: deadHostId,
+          },
+        });
+        expect(down.statusCode).toBe(503);
+        expect(primary.app.db.select().from(devices).all()).toHaveLength(beforeCount);
+      } finally {
+        agentDiscSpy.mockRestore();
+        localDiscSpy.mockRestore();
+      }
     });
   });
 });

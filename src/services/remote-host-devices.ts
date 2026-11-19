@@ -9,12 +9,15 @@ import type {
 } from "./device-drivers/types.js";
 import type {
   DeviceKindsResponse,
+  DevicePairResponse,
   DeviceSpawnSpec,
   DeviceWsQuery,
+  DiscoveredDevicesResponse,
   LiveDevicesResponse,
   SimulatorsResponse,
   SpawnDeviceResponse,
 } from "./device-wire.js";
+import type { DiscoveredDevice } from "./device-discovery.js";
 import type { IosSimulator } from "./ios-simulators.js";
 
 // RemoteHostClient facet convention (issue #3289 / #3301):
@@ -92,6 +95,18 @@ export function createDevicesClient({ request, openInbound }: DevicesClientDeps)
 
     async live(): Promise<DeviceInfo[]> {
       return (await request<LiveDevicesResponse>("/internal/devices/live")).devices;
+    },
+
+    async discovered(): Promise<DiscoveredDevice[]> {
+      return (await request<DiscoveredDevicesResponse>("/internal/devices/discovered")).devices;
+    },
+
+    async pair(pairingAddress: string, pairingCode: string): Promise<void> {
+      await request<DevicePairResponse>(
+        "/internal/devices/pair",
+        jsonPost({ pairingAddress, pairingCode }),
+        DEVICE_REQUEST_TIMEOUT_MS,
+      );
     },
 
     /** Available iOS simulators on this host, or null when the agent predates

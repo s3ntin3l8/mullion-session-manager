@@ -410,9 +410,10 @@ needs:
   agent skips those when it allocates a fresh port, because it keeps no record
   of them across a restart. It answers the live info and the port it holds,
   which the primary persists on the row.
-- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate` and
-  `POST /internal/devices/:id/action` are the live-list, stop/delete and
-  one-shot-action counterparts. The action runs through the same `DeviceDriver`
+- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate`,
+  `POST /internal/devices/:id/action`, `POST /internal/devices/pair` and
+  `GET /internal/devices/discovered` are the live-list, stop/delete,
+  one-shot-action, pairing and mDNS discovery counterparts. The action runs through the same `DeviceDriver`
   as a local one, so a driver's 4xx (no live adb connection, unsupported
   action) is forwarded with its own status and message. A device-reason failure
   on an agent (such as a 5xx `DeviceActionError` or a failed teardown) is
@@ -441,10 +442,7 @@ and each registered agent) as `{hostId, name, status, deviceKinds, platforms}`: 
 is cached for 10 s; `features.deviceKinds` in `/api/server-info` still reports
 only the primary's own kinds.
 
-Not covered yet, each tracked on its own issue: pairing and mDNS discovery
-still run on the primary only, so a physical device on an agent host is added
-by its adb address ([#3271](https://github.com/s3ntin3l8/mullion-session-manager/issues/3271));
-AVD and system-image management (`/api/avds`, `/api/system-images`) is
+Not covered yet, each tracked on its own issue: AVD and system-image management (`/api/avds`, `/api/system-images`) is
 primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)), so the
 create form's Host picker offers remote hosts but its AVD list is still the primary's;
 and the panel's socket to an agent reached only over the outbound channel needs a

@@ -16,6 +16,7 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { HostRequestError } from "./remote-host-errors.js";
 import type { DeviceSpawnSpec } from "./device-wire.js";
+import type { DiscoveredDevice } from "./device-discovery.js";
 import { listIosSimulators, type IosSimulator } from "./ios-simulators.js";
 
 // The primary's view of "the machine a device runs on" (issue #3200). A device's
@@ -64,6 +65,10 @@ export interface DeviceHost {
   action(id: number, action: DeviceAction): Promise<DeviceActionResult>;
   /** Available iOS simulators on this host, or null when a remote agent predates `/internal/simulators`. */
   simulators(): Promise<IosSimulator[] | null>;
+  /** Pair a physical Android device with this host's adb server. */
+  pair(pairingAddress: string, pairingCode: string): Promise<void>;
+  /** mDNS-discovered Android phones on this host's LAN. */
+  discovered(): Promise<DiscoveredDevice[]>;
 }
 
 class LocalDeviceHost implements DeviceHost {
@@ -122,6 +127,15 @@ class LocalDeviceHost implements DeviceHost {
 
   simulators(): Promise<IosSimulator[]> {
     return listIosSimulators();
+  }
+
+  pair(pairingAddress: string, pairingCode: string): Promise<void> {
+    return this.app.device.pair(pairingAddress, pairingCode);
+  }
+
+  async discovered(): Promise<DiscoveredDevice[]> {
+    if (!this.app.bootDeviceDiscoveryEnabled) return [];
+    return this.app.deviceDiscovery.getDiscovered();
   }
 }
 
@@ -235,6 +249,14 @@ class RemoteDeviceHost implements DeviceHost {
 
   simulators(): Promise<IosSimulator[] | null> {
     return this.client.devices.simulators();
+  }
+
+  pair(pairingAddress: string, pairingCode: string): Promise<void> {
+    return this.client.devices.pair(pairingAddress, pairingCode);
+  }
+
+  discovered(): Promise<DiscoveredDevice[]> {
+    return this.client.devices.discovered();
   }
 }
 

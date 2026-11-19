@@ -2,9 +2,11 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { attachSocketToDevice } from "./device.js";
 import {
   DEVICE_ID_PARAMS_SCHEMA,
+  DEVICE_PAIR_SCHEMA,
   DEVICE_SPAWN_SCHEMA,
   DEVICE_TERMINATE_SCHEMA,
 } from "./internal-schemas.js";
+import { isValidDeviceAddress, isValidPairingCode } from "../services/device-address.js";
 import {
   iosSimulatorAvailable,
   localDeviceKinds,
@@ -16,8 +18,11 @@ import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceKind, DevicePlatform } from "../services/device-drivers/types.js";
 import type {
   DeviceKindsResponse,
+  DevicePairRequest,
+  DevicePairResponse,
   DeviceSpawnSpec,
   DeviceWsQuery,
+  DiscoveredDevicesResponse,
   LiveDevicesResponse,
   SimulatorsResponse,
   SpawnDeviceResponse,
@@ -98,6 +103,13 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
             : app.devicePanelUnavailableMessage,
         );
       }
+      if (
+        spec.platform !== "ios" &&
+        spec.kind === "physical" &&
+        !isValidDeviceAddress(spec.serial)
+      ) {
+        return reply.badRequest("serial must be host:port (e.g. 192.168.1.23:37251)");
+      }
       app.device.setReservedPorts(spec.reservedPorts);
       try {
         const device = await app.device.getOrCreate({
@@ -119,6 +131,39 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
   app.get<{ Reply: LiveDevicesResponse }>("/internal/devices/live", rateLimit, async () => ({
     devices: app.device.list(),
   }));
+
+  app.get<{ Reply: DiscoveredDevicesResponse }>(
+    "/internal/devices/discovered",
+    rateLimit,
+    async () => ({
+      devices: app.bootDeviceDiscoveryEnabled ? app.deviceDiscovery.getDiscovered() : [],
+    }),
+  );
+
+  // Dials an arbitrary network address a caller supplies: same full-scope-only
+  // blast-radius reasoning as the primary's `device.pair` control-socket op,
+  // and gated behind the agent bearer token here. Both address and code are
+  // re-validated on the agent because `adb pair` builds the adb service string.
+  app.post<{ Body: DevicePairRequest; Reply: DevicePairResponse }>(
+    "/internal/devices/pair",
+    { ...rateLimit, schema: { body: DEVICE_PAIR_SCHEMA } },
+    async (request, reply) => {
+      if (!app.devicePanelEnabled) return reply.badRequest(app.devicePanelUnavailableMessage);
+      const { pairingAddress, pairingCode } = request.body;
+      if (!isValidDeviceAddress(pairingAddress)) {
+        return reply.badRequest("pairingAddress must be host:port (e.g. 192.168.1.23:41234)");
+      }
+      if (!isValidPairingCode(pairingCode)) {
+        return reply.badRequest("pairingCode must be the 6-digit code shown on the device");
+      }
+      try {
+        await app.device.pair(pairingAddress, pairingCode);
+      } catch (err) {
+        return reply.badRequest(err instanceof Error ? err.message : String(err));
+      }
+      return { ok: true };
+    },
+  );
 
   // Same teardown the primary's own stop/delete runs locally. Not gated on
   // DEVICE_ENABLED: tearing a device down must keep working while the panel is
