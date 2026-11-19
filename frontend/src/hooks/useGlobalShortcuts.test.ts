@@ -12,6 +12,7 @@ import { APP_SHORTCUTS, matchShortcut } from "../lib/shortcutCatalog.js";
 const toggleRightSidebar = vi.fn();
 const toggleRightSidebarView = vi.fn();
 const toggleViewMode = vi.fn();
+const requestCloseProjectSettings = vi.fn();
 let viewMode: string = "list";
 
 function storeState() {
@@ -19,6 +20,7 @@ function storeState() {
     toggleRightSidebar,
     toggleRightSidebarView,
     toggleViewMode,
+    requestCloseProjectSettings,
     viewMode,
   };
 }
@@ -171,14 +173,16 @@ describe("useGlobalShortcuts", () => {
     expect(openSettings).not.toHaveBeenCalled();
   });
 
-  it("on Escape, closes the palette and closes settings", () => {
+  it("on Escape, closes the palette and settings, and asks Project settings to close", () => {
     const setPalette = vi.fn();
     const setSettingsOpen = vi.fn();
+    requestCloseProjectSettings.mockClear();
     const { openSettings } = renderShortcuts({ setPalette, setSettingsOpen });
 
     dispatchKeyDown({ key: "Escape" });
 
     expect(setSettingsOpen).toHaveBeenCalledWith(false);
+    expect(requestCloseProjectSettings).toHaveBeenCalledTimes(1);
     expect(setPalette).toHaveBeenCalledTimes(1);
     const updater = setPalette.mock.calls[0][0] as (p: unknown) => unknown;
     expect(updater({ open: true, scope: "global", projectId: null })).toEqual({
