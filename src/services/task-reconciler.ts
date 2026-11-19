@@ -3619,6 +3619,7 @@ export async function autoReturnTask(
         // null, though every designed caller already had it null here.
         autoReturnCapAnnouncedAt: task.autoReturnCapAnnouncedAt,
         needsHumanReason: task.needsHumanReason,
+        ciHoldNote: task.ciHoldNote,
         // Issue #1357 — claimedAt rolls back too: a failed re-seed means no
         // new spell actually started, so the clock the budget check reads
         // must not have moved either. Same "roll back together" reasoning
