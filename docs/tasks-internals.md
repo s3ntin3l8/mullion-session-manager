@@ -522,6 +522,16 @@ done, so `failReviewingGate` (`task-gate-failure.ts`) first asks
   naming the outstanding job's description so it can check or kill a stuck wait
   loop; if it cannot be typed into or stays behind the same job, it is left
   alone until a new turn ends and the budget remains the backstop.
+- A worker whose turn is still in flight (`agentTurnInFlight === true`) with no
+  entry in `outstandingBackgroundTasks`, not in rate-limit grace, and no PTY
+  output (`lastActivityAt`) for at least `WORKER_STALL_MS` (45 minutes) is
+  handled by `nudgeStalledWorker` (`task-nudge.ts`) from the `in_progress`
+  sweep in `reconcileTasks`: on the first stall (sharing `MAX_WORKER_NUDGES` and
+  the fresh-row guard), it types a short continuation prompt; if the worker
+  remains silent for `NUDGE_TURN_GRACE_MS` (10 minutes) after that nudge (or
+  hits `MAX_WORKER_NUDGES` on a later stall), the reconciler fails it early
+  with `worker stalled: no output for <N> minutes` and `via: "worker-stalled"`
+  through the same diagnostics/kill/sync/worktree-cleanup path as the budget.
 
 ## The agent's contract
 
