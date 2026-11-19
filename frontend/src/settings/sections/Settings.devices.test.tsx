@@ -296,7 +296,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     });
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
     expect(
-      await screen.findByText(/Emulators are not supported on this server/),
+      await screen.findByText(/Emulators and simulators are not supported on this server/),
     ).toBeInTheDocument();
     expect(screen.queryByText("Create a device")).not.toBeInTheDocument();
     expect(screen.getByText("Pair a phone or tablet")).toBeInTheDocument();
@@ -314,7 +314,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   it("shows the empty state when no device exists", async () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    expect(await screen.findByText(/No Android devices yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No devices yet/)).toBeInTheDocument();
   });
 
   it("shows a load error instead of the empty state when the list fetch fails", async () => {
@@ -322,7 +322,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     expect(await screen.findByText("Couldn't load devices.")).toBeInTheDocument();
-    expect(screen.queryByText(/No Android devices yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No devices yet/)).not.toBeInTheDocument();
   });
 
   it("lists a streaming device with its name, avd name, and status", async () => {

@@ -638,8 +638,8 @@ export function DevicesSection() {
       {loaded && devices.length === 0 && !loadError && !createOpen && (
         <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 10 }}>
           {emulatorOn
-            ? "No Android devices yet. Pair a phone or create an emulator to open its screen from the sidebar."
-            : "No Android devices yet. Pair a phone to open its screen from the sidebar. Emulators are not supported on this server's platform."}
+            ? "No devices yet. Pair a phone or create a device to open its screen from the sidebar."
+            : "No devices yet. Pair a phone to open its screen from the sidebar. Emulators and simulators are not supported on this server's platform."}
         </div>
       )}
 
