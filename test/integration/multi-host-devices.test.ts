@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import crypto from "node:crypto";
 import type * as ChildProcess from "node:child_process";
@@ -105,6 +106,7 @@ const driver = {
   platform: "android" as const,
   hasLiveControl: true,
   supports: () => true,
+  screenshot: vi.fn(),
   tap: vi.fn(),
   input: vi.fn(),
   requestKeyframe: vi.fn(),
@@ -180,6 +182,7 @@ describe("devices on an agent host (issue #3200)", () => {
     live.clear();
     nextPort = 5554;
     videoListeners = [];
+    driver.screenshot.mockReset().mockResolvedValue(new Uint8Array());
     driver.tap.mockReset().mockResolvedValue(undefined);
     driver.input.mockReset().mockResolvedValue(undefined);
     driver.requestKeyframe.mockReset().mockResolvedValue(undefined);
@@ -276,6 +279,82 @@ describe("devices on an agent host (issue #3200)", () => {
         });
         expect(res.statusCode, query).toBe(400);
       }
+    });
+
+    it("answers 424 with deviceStatus for a 5xx DeviceActionError, keeps 4xx, and leaves unexpected errors as 500", async () => {
+      live.set("1", {
+        port: 5554,
+        info: {
+          id: "1",
+          kind: "emulator",
+          avdName: "dev35",
+          label: null,
+          status: "booting",
+          serial: "emulator-5554",
+          error: null,
+        },
+      });
+      const headers = { authorization: `Bearer ${AGENT_TOKEN}` };
+
+      driver.tap.mockRejectedValueOnce(new DeviceActionError(502, "adb server unreachable"));
+      const r502 = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/action",
+        headers,
+        payload: { action: "tap", x: 1, y: 2 },
+      });
+      expect(r502.statusCode).toBe(424);
+      expect(r502.json()).toEqual({
+        statusCode: 424,
+        error: "Failed Dependency",
+        message: "adb server unreachable",
+        deviceStatus: 502,
+      });
+
+      driver.tap.mockRejectedValueOnce(new DeviceActionError(400, "bad coords"));
+      const r400 = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/action",
+        headers,
+        payload: { action: "tap", x: 1, y: 2 },
+      });
+      expect(r400.statusCode).toBe(400);
+      expect(r400.json().message).toContain("bad coords");
+
+      driver.tap.mockRejectedValueOnce(new Error("boom"));
+      const r500 = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/action",
+        headers,
+        payload: { action: "tap", x: 1, y: 2 },
+      });
+      expect(r500.statusCode).toBe(500);
+    });
+
+    it("answers 424 with deviceStatus 500 when terminate throws, and 204 on success", async () => {
+      const headers = { authorization: `Bearer ${AGENT_TOKEN}` };
+      spies.terminate.mockRejectedValueOnce(new Error("scope stuck"));
+      const fail = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/terminate",
+        headers,
+        payload: { kind: "emulator" },
+      });
+      expect(fail.statusCode).toBe(424);
+      expect(fail.json()).toEqual({
+        statusCode: 424,
+        error: "Failed Dependency",
+        message: "scope stuck",
+        deviceStatus: 500,
+      });
+
+      const ok = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/terminate",
+        headers,
+        payload: { kind: "emulator" },
+      });
+      expect(ok.statusCode).toBe(204);
     });
   });
 
@@ -441,21 +520,30 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(res.json().message).toContain("no live adb connection");
     });
 
-    // KNOWN GAP (reported with the PR that added this file): a DeviceActionError
-    // with a 5xx status (the Android driver throws 502 for a dead adb server) is
-    // flattened by RemoteHostTransport.request, which only forwards 4xx as a
-    // HostRequestError and turns any 5xx into HostUnreachableError. The primary
-    // therefore answers 503 "Host ... is unreachable" instead of the agent's 502
-    // and its message, unlike a local device. Update this when that is fixed.
-    it("currently answers 503 (not the agent's 502) for a 5xx DeviceActionError", async () => {
+    it("forwards a 502 from the agent's screenshot driver with its status and message", async () => {
       const { id } = (await createDevice()).json();
-      driver.tap.mockRejectedValueOnce(new DeviceActionError(502, "adb server unreachable"));
+      driver.screenshot.mockRejectedValueOnce(
+        new DeviceActionError(502, "screencap did not return a PNG"),
+      );
+      const res = await primary.app.inject({
+        method: "POST",
+        url: `/api/devices/${id}/action`,
+        payload: { action: "screenshot" },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().message).toContain("screencap did not return a PNG");
+    });
+
+    it("answers 503 unreachable when the agent's action route throws an unexpected error", async () => {
+      const { id } = (await createDevice()).json();
+      driver.tap.mockRejectedValueOnce(new Error("unexpected crash"));
       const res = await primary.app.inject({
         method: "POST",
         url: `/api/devices/${id}/action`,
         payload: { action: "tap", x: 1, y: 2 },
       });
       expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
     });
 
     it("answers 400 for a device the agent has no live driver for", async () => {
@@ -506,12 +594,80 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(getDeviceRow(primary.app, id)).toBeUndefined();
     });
 
-    it("DELETE keeps the row when the agent's teardown fails", async () => {
+    it("DELETE answers 500 with the teardown message and keeps the row when the agent's teardown fails", async () => {
       const { id } = (await createDevice()).json();
       spies.terminate.mockRejectedValueOnce(new Error("scope stuck"));
       const res = await primary.app.inject({ method: "DELETE", url: `/api/devices/${id}` });
-      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.statusCode).toBe(500);
+      expect(res.json().message).toContain("scope stuck");
       expect(getDeviceRow(primary.app, id)).toBeDefined();
+    });
+
+    it("POST /stop answers 500 with the teardown message and keeps the row when the agent's teardown fails", async () => {
+      const { id } = (await createDevice()).json();
+      spies.terminate.mockRejectedValueOnce(new Error("scope stuck"));
+      const res = await primary.app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().message).toContain("scope stuck");
+      expect(getDeviceRow(primary.app, id)).toBeDefined();
+    });
+
+    it("falls back to 502/500 with a generic message when an agent 424 has a garbage body or out-of-range deviceStatus", async () => {
+      let nextReply: { body: string } = { body: "not-json" };
+      const stubServer = http.createServer((_req, res) => {
+        res.statusCode = 424;
+        res.setHeader("content-type", "application/json");
+        res.end(nextReply.body);
+      });
+      await new Promise<void>((resolve) => stubServer.listen(0, "127.0.0.1", resolve));
+      const { port } = stubServer.address() as net.AddressInfo;
+      let stubHostId: string | undefined;
+      try {
+        const reg = await primary.app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "bad-424-agent", baseUrl: `http://127.0.0.1:${port}`, token: "t" },
+        });
+        stubHostId = reg.json().id as string;
+        const row = insertDevice(primary.app, {
+          kind: "emulator",
+          avdName: "far",
+          serial: null,
+          projectId: null,
+          name: null,
+          hostId: stubHostId,
+        });
+
+        nextReply = { body: "not-json" };
+        const badAction = await primary.app.inject({
+          method: "POST",
+          url: `/api/devices/${row.id}/action`,
+          payload: { action: "tap", x: 1, y: 2 },
+        });
+        expect(badAction.statusCode).toBe(502);
+        expect(badAction.json().message).toBe(`the device failed on host ${stubHostId}`);
+
+        nextReply = { body: JSON.stringify({ deviceStatus: 200, message: 123 }) };
+        const badTerminate = await primary.app.inject({
+          method: "POST",
+          url: `/api/devices/${row.id}/stop`,
+        });
+        expect(badTerminate.statusCode).toBe(500);
+        expect(badTerminate.json().message).toBe(`the device failed on host ${stubHostId}`);
+
+        const badActionStatus = await primary.app.inject({
+          method: "POST",
+          url: `/api/devices/${row.id}/action`,
+          payload: { action: "tap", x: 1, y: 2 },
+        });
+        expect(badActionStatus.statusCode).toBe(502);
+        expect(badActionStatus.json().message).toBe(`the device failed on host ${stubHostId}`);
+      } finally {
+        if (stubHostId) {
+          await primary.app.inject({ method: "DELETE", url: `/api/hosts/${stubHostId}` });
+        }
+        await new Promise<void>((resolve) => stubServer.close(() => resolve()));
+      }
     });
 
     it("DELETE keeps the row (503) when the agent is unreachable", async () => {

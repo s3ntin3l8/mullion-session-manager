@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { attachSocketToDevice } from "./device.js";
 import {
   DEVICE_ID_PARAMS_SCHEMA,
@@ -25,6 +25,21 @@ import type {
 
 function isDeviceKind(value: unknown): value is DeviceKind {
   return value === "emulator" || value === "physical";
+}
+
+/**
+ * Answers a deliberate device/teardown failure with 424 Failed Dependency so
+ * RemoteHostTransport forwards it instead of flattening a 5xx into
+ * HostUnreachableError; the primary's RemoteDeviceHost maps it back to the
+ * original status and message.
+ */
+function replyFailedDependency(reply: FastifyReply, message: string, deviceStatus: number) {
+  return reply.code(424).send({
+    statusCode: 424,
+    error: "Failed Dependency",
+    message,
+    deviceStatus,
+  });
 }
 
 /**
@@ -115,12 +130,18 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
       schema: { params: DEVICE_ID_PARAMS_SCHEMA, body: DEVICE_TERMINATE_SCHEMA },
     },
     async (request, reply) => {
-      // Deliberately not caught: a failed teardown must reach the primary, which
-      // keeps the row as the only handle to a possibly-surviving scope.
+      // A failed teardown is answered 424 (rather than 500, which
+      // RemoteHostTransport turns into HostUnreachableError) so the primary
+      // forwards 500 + message and keeps the row as the only handle to a
+      // possibly-surviving scope.
       const { kind, platform } = request.body;
-      await (platform === "ios"
-        ? app.device.terminate(request.params.id, kind, platform)
-        : app.device.terminate(request.params.id, kind));
+      try {
+        await (platform === "ios"
+          ? app.device.terminate(request.params.id, kind, platform)
+          : app.device.terminate(request.params.id, kind));
+      } catch (err) {
+        return replyFailedDependency(reply, err instanceof Error ? err.message : String(err), 500);
+      }
       reply.code(204);
     },
   );
@@ -146,6 +167,9 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
         return await performDeviceAction(driver, request.body);
       } catch (err) {
         if (err instanceof DeviceActionError) {
+          if (err.statusCode >= 500) {
+            return replyFailedDependency(reply, err.message, err.statusCode);
+          }
           return reply.send(app.httpErrors.createError(err.statusCode, err.message));
         }
         throw err;

@@ -414,7 +414,10 @@ needs:
   `POST /internal/devices/:id/action` are the live-list, stop/delete and
   one-shot-action counterparts. The action runs through the same `DeviceDriver`
   as a local one, so a driver's 4xx (no live adb connection, unsupported
-  action) is forwarded with its own status and message.
+  action) is forwarded with its own status and message. A device-reason failure
+  on an agent (such as a 5xx `DeviceActionError` or a failed teardown) is
+  answered with 424 by the agent and mapped back on the primary, so it keeps its
+  status and message instead of reading as unreachable.
 - `/internal/ws/device/:id` is the agent half of the panel's socket. The
   primary's `/ws/device/:id` proxies to it (`proxyToRemoteDevice`): it first
   runs the same get-or-create over REST, then relays control messages up and
