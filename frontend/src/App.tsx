@@ -659,6 +659,7 @@ export function App() {
     onOpenPreviewTargets,
     onOpenPreview,
     onOpenDevice,
+    onOpenRailBrowser,
   } = usePanelOpener({
     dockviewApi,
     layout,
@@ -1144,6 +1145,7 @@ export function App() {
       onOpenSkills,
       onOpenTasks,
       onOpenDevice,
+      onOpenRailBrowser,
     }),
     [
       onOpenGit,
@@ -1157,6 +1159,7 @@ export function App() {
       onOpenSkills,
       onOpenTasks,
       onOpenDevice,
+      onOpenRailBrowser,
     ],
   );
 

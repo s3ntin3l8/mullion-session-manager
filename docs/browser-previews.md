@@ -108,7 +108,12 @@ the "⋯" sheet lists it with the rail's other views, and it opens full screen
 for the current session's project. It is the Browser pane in the rail
 (#3372): the same **Preview** / **Agent's browser** switch, always on its own
 row above the address. From 1100px the view is not registered, and both
-modes are the grid's Browser pane.
+modes are the grid's Browser pane. The rail's Browser icon stays there (#3403),
+in the same place with the same name, as a button rather than a toggle
+(tooltip "Open browser"; disabled with no project in the rail): it focuses the
+Browser pane if one is open in the workspace, else opens the followed
+session's Agent's browser (the pane menu's "Open browser"), else the
+project's preview as the palette's "Open browser: preview…" does.
 
 Below 1100px every preview opens in this view, in Preview on its target,
 never as a pane: the palette's preview entries (the target picker, the blank

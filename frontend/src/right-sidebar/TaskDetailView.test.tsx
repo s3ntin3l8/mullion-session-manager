@@ -163,6 +163,7 @@ describe("TaskDetailView keyboard access in the real right sidebar", () => {
     onOpenSkills: vi.fn(),
     onOpenTasks: vi.fn(),
     onOpenDevice: vi.fn(),
+    onOpenRailBrowser: vi.fn(),
   };
 
   it("focuses the portalled Back button when a card selects a task, so Enter does not land on <body>", () => {

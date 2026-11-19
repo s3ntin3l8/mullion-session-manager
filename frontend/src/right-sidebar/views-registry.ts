@@ -102,15 +102,20 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
   // layouts the screen is a session with its companions beside it, and on the
   // phone they are rows of the "more" sheet that open full screen for the
   // current session's project. From 1100px they stay a grid pane and the
-  // bottom Dock, and are not registered here.
+  // bottom Dock, and are not views: Dock has no rail icon there, Browser keeps
+  // its icon as a button that opens the grid pane (`railButtonOutsideBands`).
   {
     id: "browser",
     label: "Browser",
     icon: GlobeIcon,
     Component: BrowserSidebarView,
     useBadge: useNoBadge,
+    // Enabled as a view in the companion bands only: the phone's "more" sheet
+    // reads this too. The rail's icon is in every band (#3403) because
+    // `railButtonOutsideBands` has it skip this and open the grid pane.
     useEnabled: useEnabledInCompanionBands,
     bands: COMPANION_BANDS,
+    railButtonOutsideBands: true,
   },
   {
     id: "dock",

@@ -453,7 +453,9 @@ export function RightSidebar({
           {rightHalf}
         </aside>
       )}
-      <RightRail projectId={followed.effectiveProjectId}>{railSessions}</RightRail>
+      <RightRail projectId={followed.effectiveProjectId} onOpenBrowser={actions.onOpenRailBrowser}>
+        {railSessions}
+      </RightRail>
     </>
   );
 }

@@ -41,6 +41,7 @@ const actions = {
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
   onOpenDevice: vi.fn(),
+  onOpenRailBrowser: vi.fn(),
 };
 
 const entry = (name: string, kind: ProjectDirEntry["kind"], over = {}): ProjectDirEntry => ({

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { RightRail } from "./RightRail.js";
 import { RightSidebar } from "./RightSidebar.js";
 import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
@@ -36,6 +37,7 @@ const actions = {
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
   onOpenDevice: vi.fn(),
+  onOpenRailBrowser: vi.fn(),
 };
 
 function matchQueries(...queries: string[]) {
@@ -101,17 +103,65 @@ describe("Browser and Dock registration (#3012)", () => {
     expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
   });
 
-  it("are not registered from 1100px", () => {
+  it("keep only the Browser icon from 1100px; Dock is gone", () => {
     matchQueries(DESKTOP_NARROW_BAND_QUERY);
     const { unmount } = render(<RightRail projectId={1} />);
-    expect(screen.queryByRole("button", { name: "Browser" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dock" })).toBeNull();
     // Git and the rest are still there.
     expect(screen.getByRole("button", { name: "Git" })).toBeInTheDocument();
     unmount();
     setLayoutMode("desktop");
     render(<RightRail projectId={1} />);
+    expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dock" })).toBeNull();
+  });
+
+  it("puts the Browser icon in the same rail position in both band groups", () => {
+    const order = () => screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"));
+    setLayoutMode("tablet");
+    const below = render(<RightRail projectId={1} />);
+    const belowOrder = order().filter((n) => n !== "Dock");
+    below.unmount();
+    setLayoutMode("auto");
+    matchQueries(DESKTOP_NARROW_BAND_QUERY);
+    render(<RightRail projectId={1} />);
+    expect(order()).toEqual(belowOrder);
+  });
+
+  it("below 1100px the icon toggles the rail's Browser view, not the opener", async () => {
+    setLayoutMode("tablet");
+    const onOpenBrowser = vi.fn();
+    render(<RightRail projectId={1} onOpenBrowser={onOpenBrowser} />);
+    const btn = screen.getByRole("button", { name: "Browser" });
+    expect(btn).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(btn);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(useDashboardStore.getState().rightSidebarView).toBe("browser");
+    expect(onOpenBrowser).not.toHaveBeenCalled();
+  });
+
+  it("from 1100px the icon calls the opener, sets no rail view, and is never pressed", async () => {
+    matchQueries(DESKTOP_NARROW_BAND_QUERY);
+    const onOpenBrowser = vi.fn();
+    render(<RightRail projectId={1} onOpenBrowser={onOpenBrowser} />);
+    const btn = screen.getByRole("button", { name: "Browser" });
+    expect(btn).not.toHaveAttribute("aria-pressed");
+    expect(btn).toHaveAttribute("title", "Open browser");
+    await userEvent.click(btn);
+    expect(onOpenBrowser).toHaveBeenCalledWith(1, null);
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+  });
+
+  it("from 1100px the icon is disabled with no project in the rail", async () => {
+    matchQueries(DESKTOP_NARROW_BAND_QUERY);
+    const onOpenBrowser = vi.fn();
+    render(<RightRail projectId={null} onOpenBrowser={onOpenBrowser} />);
+    const btn = screen.getByRole("button", { name: "Browser" });
+    expect(btn).toBeDisabled();
+    await userEvent.click(btn);
+    expect(onOpenBrowser).not.toHaveBeenCalled();
   });
 
   it("render in the panel in their band", () => {

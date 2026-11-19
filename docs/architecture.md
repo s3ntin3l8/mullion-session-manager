@@ -710,7 +710,9 @@ resolves to the two-halves band, so it gets no left sidebar either.
 700px, never floating. The rail's views are Git, History, GitHub, Tasks (when
 Task Master is on), Files, Project and Devices, plus **Browser** and **Dock**
 below 1100px (`viewBands.ts`), where there is no room for a browser pane or the
-bottom Dock beside the grid. A view's detail (a task, a PR, an issue) opens
+bottom Dock beside the grid. From 1100px the Browser icon stays on the rail as
+a button that opens or focuses the grid Browser pane (`railButtonOutsideBands`,
+#3403); Dock has no icon there. A view's detail (a task, a PR, an issue) opens
 inside the sidebar; the task detail is that one surface on every width, with a
 pop-out to a docked panel from 1100px (`useCanPopOutTask`).
 

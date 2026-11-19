@@ -1053,6 +1053,20 @@ export function openBrowserPanePanel(
   );
 }
 
+/**
+ * Focuses a Browser pane already open in the workspace: an agent's-browser
+ * `browserPane`, or a preview/legacy `browser` panel (#3403). Returns whether
+ * there was one, so the caller opens one only when there was not.
+ */
+export function focusOpenBrowserPane(api: DockviewApi): boolean {
+  const panel = api.panels.find(
+    (p) => p.api.component === "browserPane" || p.api.component === "browser",
+  );
+  if (!panel) return false;
+  panel.api.setActive();
+  return true;
+}
+
 // Opens (or focuses) a device's video/input panel (DevicePane.tsx, routes/
 // device.ts) — same open-or-focus-by-stable-id and tier-positioned shape as
 // openBrowserPanePanel above. A `device-<id>` panel id, not tied to any
