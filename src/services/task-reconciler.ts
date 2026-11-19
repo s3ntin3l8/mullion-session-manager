@@ -9,6 +9,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import { holdForUnpushedHead, setBounded } from "./task-unpushed-hold.js";
 import {
   healUntrackedLocalSession,
   TASK_REVIEW_STATUS,
@@ -536,11 +537,7 @@ const hermesDispatchFailures = new Map<number, number>();
 
 function bumpBounded<K>(map: Map<K, number>, key: K): number {
   const next = (map.get(key) ?? 0) + 1;
-  if (!map.has(key) && map.size >= HERMES_STATE_MAX_ENTRIES) {
-    const oldest = map.keys().next();
-    if (!oldest.done) map.delete(oldest.value);
-  }
-  map.set(key, next);
+  setBounded(map, key, next, HERMES_STATE_MAX_ENTRIES);
   return next;
 }
 
@@ -668,6 +665,19 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
               await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber!)
             ).headSha;
           })());
+        // The run reviews a clone of the PR's head, so commits that never
+        // reached it (a workflow-approval hold, a failed push) would be
+        // reviewed as the old head and the round reported as "no progress".
+        // Hold, retrying the push, until the PR carries the worktree's head.
+        if (
+          await holdForUnpushedHead(app, task, headSha, now, {
+            backoff: draftPrRetryBackoff,
+            push: () => maybeOpenDraftPR(app, task, project),
+          })
+        ) {
+          releaseClaim();
+          return;
+        }
         const priorRound = priorRoundFor(task, headSha);
         const roundsRemaining = Math.max(
           0,
@@ -1025,7 +1035,7 @@ async function maybeOpenDraftPR(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
-): Promise<void> {
+): Promise<string | null> {
   const result = await openDraftPRForTask(app, task, project, resolveTaskWorkerHost(app, task));
   if (!result.ok && result.reason === "push-forbidden") {
     // Permanent until the operator fixes the App installation: say so at warn
@@ -1036,7 +1046,7 @@ async function maybeOpenDraftPR(
     );
     permanentFailureTaskIds.add(task.id);
     setDraftPrRetryState(task.id, PERMANENT_FAILURE_ATTEMPTS, Date.now());
-    return;
+    return result.reason;
   }
   if (!result.ok) {
     // dirty-tree/no-worktree/remote-not-supported are ordinary, expected
@@ -1049,7 +1059,7 @@ async function maybeOpenDraftPR(
       { taskId: task.id, reason: result.reason, detail: result.detail },
       "task reconcile: draft PR not opened",
     );
-    return;
+    return result.reason;
   }
   // CAS'd on `status = "reviewing"` (independent review, PR #725) — the
   // retry sweep below awaits a real network call (openDraftPRForTask) per
@@ -1069,9 +1079,10 @@ async function maybeOpenDraftPR(
       { taskId: task.id, prUrl: result.prUrl },
       "task reconcile: draft PR opened but the task left 'reviewing' before this could record it — leaving the PR as-is for a human to notice",
     );
-    return;
+    return null;
   }
   app.log.info({ taskId: task.id, prUrl: result.prUrl }, "task reconcile: draft PR opened");
+  return null;
 }
 
 // Stranded draft-PR retry sweep (#722's investigation, task 213765) — a
@@ -2186,6 +2197,12 @@ const autoApproveRetryBackoff = createRetryBackoff<number>({
 
 export function resetAutoApproveBackoff(taskId: number): void {
   autoApproveRetryBackoff.reset(taskId);
+}
+
+/** Lets the next sweep retry a task's push at once (an operator just approved
+ * the workflow change that was holding it). */
+export function resetDraftPrRetryBackoff(taskId: number): void {
+  draftPrRetryBackoff.clear(taskId);
 }
 
 /**

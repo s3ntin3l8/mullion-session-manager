@@ -762,6 +762,17 @@ reviewing` transition itself — `task-reconciler.ts`'s
   dispatches as before. Once the PR reads mergeable again, the `Conflicts with`
   note the rebase flow left in `mergeError` is cleared.
 
+  **Commits the PR does not carry are not reviewed (#3382).** A Hermes run reviews
+  a clone of the PR's head, so `processHermesDispatch` holds (claim released)
+  while the task branch tip is strictly ahead of that head, i.e. the PR head is
+  its ancestor (`worktreeAheadOfPr`; a PR that is ahead or diverged never holds,
+  because the retry is a force-with-lease push). While held it retries the push
+  on the draft-PR backoff. After `UNPUSHED_HEAD_MAX_PUSHES` (3) refused pushes
+  for one tip it gives up, records a sync error on the card and reviews the PR
+  head. A refusal for workflow approval does not count: only a human clears it,
+  and approving resets the backoff. Session reviewers read the worktree and are
+  not held; their approved push is not retried (#3385).
+
   Model resolution for the reviewer follows the same per-CLI split as the
   worker's own (see [`tasks.md`](tasks.md#agent-selection)) — `commandIsOpencode`/
   `commandModelCli` pick opencode's `Reviewer-Model:`/`Model:` fallback chain

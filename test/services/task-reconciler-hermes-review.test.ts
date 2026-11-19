@@ -32,9 +32,28 @@ vi.mock("../../src/services/git-worktree.js", (io) => mockGitWorktreeFactory(io)
 vi.mock("../../src/services/github-integration.js", (io) => mockGithubIntegrationFactory(io));
 vi.mock("../../src/services/github-write.js", (io) => mockGithubWriteFactory(io));
 vi.mock("../../src/services/github.js", (io) => mockGithubFactory(io));
+// Pass through to the real resolvers unless a test pins the branch tip.
+const gitRefsMocks = vi.hoisted(() => ({
+  resolveCommitSha: vi.fn(),
+  isAncestorOf: vi.fn(),
+  real: {} as Record<string, (...args: never[]) => unknown>,
+}));
+vi.mock("../../src/services/git-refs.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  gitRefsMocks.real.resolveCommitSha = actual.resolveCommitSha as never;
+  gitRefsMocks.real.isAncestorOf = actual.isAncestorOf as never;
+  gitRefsMocks.resolveCommitSha.mockImplementation(actual.resolveCommitSha as never);
+  gitRefsMocks.isAncestorOf.mockImplementation(actual.isAncestorOf as never);
+  return {
+    ...actual,
+    resolveCommitSha: gitRefsMocks.resolveCommitSha,
+    isAncestorOf: gitRefsMocks.isAncestorOf,
+  };
+});
 
 const { buildApp } = await import("../../src/app.js");
-const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
+const { reconcileTasks, resetDraftPrRetryBackoff } =
+  await import("../../src/services/task-reconciler.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
@@ -48,6 +67,7 @@ const {
   mockGetPullRequestByNumber,
   mockFetchRunsForHead,
   mockCreatePullRequestReview,
+  mockOpenDraftPRForTask,
 } = reconcilerMocks;
 
 describe("reconcileTasks — Hermes review agent (#2369)", () => {
@@ -471,6 +491,158 @@ describe("reconcileTasks — Hermes review agent (#2369)", () => {
         await reconcileTasks(app);
         expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
         await app.close();
+      });
+
+      describe("a branch tip the pull request does not carry yet", () => {
+        // Each test uses its own tip: the hold's state is process-local and
+        // task ids restart at 1 with every fresh test database.
+        const BRANCH = "mullion/task-held";
+        const heldTask = (app: Awaited<ReturnType<typeof buildApp>>) =>
+          createHermesTask(app, { branchName: BRANCH });
+        const pinTip = (tip: string | null, aheadOfPr: boolean) => {
+          gitRefsMocks.resolveCommitSha.mockImplementation(((_cwd: string, ref: string) =>
+            Promise.resolve(ref === `refs/heads/${BRANCH}` ? tip : null)) as never);
+          gitRefsMocks.isAncestorOf.mockResolvedValue(aheadOfPr);
+        };
+
+        afterEach(() => {
+          gitRefsMocks.resolveCommitSha
+            .mockReset()
+            .mockImplementation(gitRefsMocks.real.resolveCommitSha as never);
+          gitRefsMocks.isAncestorOf
+            .mockReset()
+            .mockImplementation(gitRefsMocks.real.isAncestorOf as never);
+          mockOpenDraftPRForTask.mockReset();
+        });
+
+        it("holds the review and retries the push instead of reviewing the old head", async () => {
+          const app = await buildApp();
+          const taskId = await heldTask(app);
+          pinTip("tip-gated", true);
+          mockOpenDraftPRForTask.mockResolvedValue({
+            ok: false,
+            reason: "workflow-approval-required",
+            detail: "approve the workflow change to push it",
+          });
+
+          await reconcileTasks(app);
+
+          expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+          expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+          const row = await getTask(app, taskId);
+          expect(row.reviewRunId).toBeNull();
+          expect(row.reviewSpawnClaimedAt).toBeNull();
+          await app.close();
+        });
+
+        it("keeps holding for a human's workflow approval however many pushes it is refused", async () => {
+          const app = await buildApp();
+          const taskId = await heldTask(app);
+          pinTip("tip-gated-long", true);
+          mockOpenDraftPRForTask.mockResolvedValue({
+            ok: false,
+            reason: "workflow-approval-required",
+            detail: "approve the workflow change to push it",
+          });
+
+          for (let i = 0; i < 6; i++) {
+            resetDraftPrRetryBackoff(taskId);
+            await reconcileTasks(app);
+          }
+
+          expect(mockOpenDraftPRForTask.mock.calls.length).toBeGreaterThan(3);
+          expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+          await app.close();
+        });
+
+        it("dispatches on the next tick once the pull request carries the branch tip", async () => {
+          const app = await buildApp();
+          const taskId = await heldTask(app);
+          pinTip("sha2", true);
+          mockOpenDraftPRForTask.mockResolvedValue({
+            ok: true,
+            prUrl: "https://x/pull/9",
+            prNumber: 9,
+          });
+
+          await reconcileTasks(app);
+          expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+
+          // The push landed: the PR now shows the branch tip.
+          mockGetPullRequestByNumber.mockResolvedValue({
+            number: 9,
+            htmlUrl: "https://x/pull/9",
+            nodeId: "n",
+            draft: true,
+            headSha: "sha2",
+          });
+          mockFetchRunsForHead.mockResolvedValue([
+            {
+              name: "CI",
+              status: "completed",
+              conclusion: "success",
+              htmlUrl: "https://x/1",
+              headSha: "sha2",
+            },
+          ]);
+          await reconcileTasks(app);
+
+          expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+          expect(mockDispatchTaskReview.mock.calls[0][1].target.headSha).toBe("sha2");
+          expect((await getTask(app, taskId)).reviewRunHeadSha).toBe("sha2");
+          await app.close();
+        });
+
+        it("reviews the pull request's head and never pushes when the PR is ahead of or diverged from the branch", async () => {
+          const app = await buildApp();
+          await heldTask(app);
+          // The branch tip differs from the PR head but does not descend from it.
+          pinTip("tip-behind", false);
+
+          await reconcileTasks(app);
+
+          expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+          expect(mockDispatchTaskReview.mock.calls[0][1].target.headSha).toBe("sha1");
+          expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+          await app.close();
+        });
+
+        it("gives up after three refused pushes and reviews the pull request's head", async () => {
+          const app = await buildApp();
+          const taskId = await heldTask(app);
+          pinTip("tip-dirty", true);
+          mockOpenDraftPRForTask.mockResolvedValue({
+            ok: false,
+            reason: "dirty-tree",
+            detail: "uncommitted changes",
+          });
+
+          for (let i = 0; i < 3; i++) {
+            resetDraftPrRetryBackoff(taskId);
+            await reconcileTasks(app);
+            expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+          }
+          resetDraftPrRetryBackoff(taskId);
+          await reconcileTasks(app);
+
+          expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(3);
+          expect((await getTask(app, taskId)).githubSyncError).toContain("could not be pushed");
+          expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+          expect(mockDispatchTaskReview.mock.calls[0][1].target.headSha).toBe("sha1");
+          await app.close();
+        });
+
+        it("does not hold when the branch tip cannot be read", async () => {
+          const app = await buildApp();
+          await heldTask(app);
+          pinTip(null, true);
+
+          await reconcileTasks(app);
+
+          expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+          expect(mockOpenDraftPRForTask).not.toHaveBeenCalled();
+          await app.close();
+        });
       });
 
       it("keys a re-entry into reviewing at the same head differently, but a retry within one entry the same", async () => {
