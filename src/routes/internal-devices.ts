@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { attachSocketToDevice } from "./device.js";
+import { attachSocketToDevice } from "../services/device-attach.js";
+import { deviceQueryError, deviceStreamParams } from "../services/internal-streams.js";
 import { DEVICE_PAIR_RATE_LIMIT } from "./internal-rate-limits.js";
 import {
   DEVICE_ID_PARAMS_SCHEMA,
@@ -28,10 +29,6 @@ import type {
   SimulatorsResponse,
   SpawnDeviceResponse,
 } from "../services/device-wire.js";
-
-function isDeviceKind(value: unknown): value is DeviceKind {
-  return value === "emulator" || value === "physical";
-}
 
 /**
  * Answers a deliberate device/teardown failure with 424 Failed Dependency so
@@ -232,6 +229,8 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
   // The agent's half of the device panel's video/input socket. The primary's
   // proxy (routes/device.ts) relays frames both ways; the keyframe gating and
   // the backpressure drop live in attachSocketToDevice, so they stay agent-side.
+  // The gating below is the device socket's own (services/internal-streams.ts),
+  // shared with the `device` stream over the outbound channel (#3273).
   app.get<{ Params: { id: string }; Querystring: DeviceWsQuery }>(
     "/internal/ws/device/:id",
     {
@@ -239,43 +238,20 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
       config: rateLimit.config,
       schema: { params: DEVICE_ID_PARAMS_SCHEMA },
       preValidation: async (request, reply) => {
-        const { kind } = request.query;
-        if (!isDeviceKind(kind)) return reply.badRequest("kind must be emulator or physical");
-        const { platform } = request.query;
-        if (platform !== undefined && platform !== "android" && platform !== "ios") {
-          return reply.badRequest("platform must be android or ios");
-        }
-        if (platform === "ios") {
-          if (!(await iosSimulatorAvailable(app))) {
-            return reply.badRequest("iOS Simulator is not available on this host");
-          }
-          if (!request.query.udid) return reply.badRequest("udid is required for an ios device");
-        } else if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
-          return reply.badRequest(
-            kind === "emulator"
-              ? app.deviceEmulatorUnavailableMessage
-              : app.devicePanelUnavailableMessage,
-          );
-        }
-        const { port } = request.query;
-        // The same 1-65535 the spawn schema bounds the port to.
-        if (port !== undefined && !(/^[0-9]{1,5}$/.test(port) && +port >= 1 && +port <= 65535)) {
-          return reply.badRequest("port must be a number from 1 to 65535");
-        }
+        const error = await deviceQueryError(
+          app,
+          request.query as Record<string, string | undefined>,
+          request.params.id,
+        );
+        if (error !== null) return reply.badRequest(error);
       },
     },
     (socket, req) => {
-      const { kind, avdName, serial, label, port, platform, udid } = req.query;
-      void attachSocketToDevice(app, socket, {
-        deviceId: Number(req.params.id),
-        kind,
-        avdName: avdName ?? null,
-        serial: serial ?? null,
-        label: label ?? null,
-        port: port === undefined ? null : Number(port),
-        platform,
-        udid: udid ?? null,
-      });
+      void attachSocketToDevice(
+        app,
+        socket,
+        deviceStreamParams(req.query as Record<string, string | undefined>, req.params.id),
+      );
     },
   );
 }

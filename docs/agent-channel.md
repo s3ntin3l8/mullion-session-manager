@@ -5,7 +5,8 @@ still dials the agent's advertised address (`src/services/remote-host-client.ts`
 which needs inbound reachability on laptops. This channel is the transport
 seam that lets the **agent dial the primary** instead. Since #2451 it carries
 the primary's **request/response** operations (below); since #2571 also the four
-**streams** (attach, events, control relay, ssh-agent). #2572 drops the
+**streams** (attach, events, control relay, ssh-agent), since #2620 the preview
+WebSockets and since #3273 the **device panel's socket**. #2572 drops the
 advertised URL.
 
 ## Endpoint and handshake
@@ -92,9 +93,9 @@ browser WebSocket stays on the inbound transport.
 ## Streams (#2571)
 
 Every stream opener passes `{ stream: true }` to `openChannel`: the attach and
-events streams, the control relay (both ends), the ssh-agent fan-out and each
-per-SSH-connection ssh-agent session channel. The mux counts streams
-separately from requests: a stream counter is incremented on a stream open and
+events streams, the control relay (both ends), the ssh-agent fan-out, each
+per-SSH-connection ssh-agent session channel and the device panel's socket.
+The mux counts streams separately from requests: a stream counter is incremented on a stream open and
 released on close (or a failed open), and `AGENT_CHANNEL_MAX_STREAM_CHANNELS` (32)
 applies to that counter only. A stream open that has to queue because the total
 is full keeps its flag: queued stream opens count against the cap while they
@@ -110,7 +111,7 @@ subclasses with their own, smaller budgets, counted apart:
 slots each, 8). Each open dev tab holds its HMR socket for as long as the tab is
 open, so the sockets get a budget of their own: they cannot take the slots
 preview assets need, and neither budget can fill the stream slots that attach,
-events, control-relay and ssh-agent use. A page loading many modules in
+events, control-relay, ssh-agent and device use. A page loading many modules in
 parallel or a few open SSE previews therefore cannot starve them either. A
 preview response past its cap fails as `HostBusyError`, which the preview proxy
 answers with `503` and `Retry-After`; a preview WebSocket past its cap is
@@ -125,13 +126,16 @@ end). In-flight requests and peer-opened channels no
 longer eat stream slots, and 32 open streams still leave
 `AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS` (32) free for requests.
 
-Terminal attach, the events stream, the control relay and ssh-agent forwarding
-ride the channel when the host negotiated `channel-streams`. Each stream is one
-mux channel (`src/services/agent-channel-streams.ts`):
+Terminal attach, the events stream, the control relay, ssh-agent forwarding
+and the device panel's socket ride the channel when the host negotiated
+`channel-streams`. Each stream is one mux channel
+(`src/services/agent-channel-streams.ts`):
 
 1. The primary opens a channel and sends an open head line: `{"stream":
-"attach"|"events"|"control-relay"|"ssh-agent"|"preview"|"configured-preview","query":{...},"resumed":true?}`.
-   `query` is the query string of the matching `/internal/ws/*` route.
+"attach"|"events"|"control-relay"|"ssh-agent"|"preview"|"configured-preview"|"device","query":{...},"resumed":true?}`.
+   `query` is the query string of the matching `/internal/ws/*` route — for
+   `device` that is the query of `/internal/ws/device/:id` plus the `id` the
+   route takes from its path.
 2. The agent answers one accept head line, `{"status":200,"resumed"?}`, or a
    refusal (`400` for an attach that fails validation, `404` for an unknown
    stream) and closes the channel.
@@ -145,8 +149,33 @@ mux channel (`src/services/agent-channel-streams.ts`):
 The control relay and ssh-agent streams are themselves muxes; they nest inside
 the stream channel, so their 64-connection / 16-stream / 256-channel limits and
 the primary's `relayedSessionDenied` host binding apply unchanged. The agent runs
-the same code as the inbound routes (`src/routes/internal-streams.ts`), so the
+the same code as the inbound routes (`src/services/internal-streams.ts`), so the
 attach query validation is shared, not copied.
+
+- **The device socket.** The `device` stream (#3273) carries the device panel's
+  video/input socket — the same `/internal/ws/device/:id` the primary used to
+  dial on the agent's advertised address, which a host reached only over the
+  outbound channel could not serve. The device wire protocol is unchanged: the
+  H.264 frames, the control messages and the `requestKeyframe` message cross
+  the stream as they crossed the socket. The agent runs the same gating the
+  inbound route runs (the panel/emulator gates, the iOS availability check, the
+  kind/platform/port checks) and the same attach, so a device is accepted or
+  refused identically on either transport; a refusal is a `400`, like the
+  inbound route's. The stream counts against the normal stream cap, not the
+  preview-WebSocket one. One difference from the inbound socket: a frame
+  crosses the channel as one message, so it is bounded by
+  `AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES` (1 MiB) — a frame past that fails
+  the stream, where the inbound socket (dialled with `capPayload: false`, so
+  `ws`'s own 100 MiB default applies) took it. At the default
+  `DEVICE_VIDEO_MAX_SIZE` (1280) frames are far below the bound; a much
+  larger `DEVICE_VIDEO_MAX_SIZE` can produce an IDR past it. A refusal is
+  reported to the panel with the agent's own reason (the panel gate's
+  message, `kind must be emulator or physical`, …): over the channel it rides
+  the accept head's message, and over the inbound transport the refusal's
+  body, which the primary reads before it reports (a body that never arrives
+  is bounded, and the refusal is reported without it). An agent that predates
+  the `device` kind answers `404`, which the primary reports as an agent
+  that needs an update.
 
 - **Authorization.** The channel is bound to one host id by its machine
   credential, so a stream can only reach (or come from) that host. Per-session

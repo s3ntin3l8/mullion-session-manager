@@ -79,9 +79,10 @@ export const AGENT_CHANNEL_REQUESTS_OPERATION = "channel-requests";
 
 /** Advertised by an agent that also serves streams over the channel (#2571):
  * terminal attach, events, the control relay and the ssh-agent stream, plus
- * (#2620) the two preview WebSockets. The browser WS stays on the inbound
- * transport. Preview HTTP and the file-browser transfers are request/response
- * exchanges, so they ride `channel-requests`. */
+ * (#2620) the two preview WebSockets and (#3273) the device panel's socket.
+ * The browser WS stays on the inbound transport. Preview HTTP and the
+ * file-browser transfers are request/response exchanges, so they ride
+ * `channel-requests`. */
 export const AGENT_CHANNEL_STREAMS_OPERATION = "channel-streams";
 
 /** The stream kinds a channel can carry, named in the stream open head. */
@@ -92,6 +93,7 @@ export const AGENT_CHANNEL_STREAM_KINDS = [
   "ssh-agent",
   "preview",
   "configured-preview",
+  "device",
 ] as const;
 export type AgentChannelStreamKind = (typeof AGENT_CHANNEL_STREAM_KINDS)[number];
 
@@ -104,7 +106,9 @@ export const AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES = 1024 * 1024;
 export interface ChannelStreamOpenHead {
   stream: AgentChannelStreamKind;
   /** attach: the query params of `/internal/ws/attach`; events: `{cursors:"1"}`;
-   * preview: `{port, path}`; configured-preview: `{url}`. */
+   * preview: `{port, path}`; configured-preview: `{url}`; device: the query
+   * params of `/internal/ws/device/:id` plus the `id` the route takes from
+   * its path. */
   query?: Record<string, string>;
   /** True when the primary had a stream of this kind for this host before the
    * channel was lost, so the agent knows this is a re-establishment (#2571). */
