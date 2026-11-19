@@ -481,6 +481,7 @@ export function App() {
     openGlobalLauncher,
     rightSidebarEnabled: !isMobile,
     modeSwitchEnabled: !isMobile,
+    overlayOpen: palette.open || settingsOpen,
   });
 
   // Check for updates on mount and re-check every 30 minutes.

@@ -27,10 +27,13 @@ export function handleGlobalEscape(actions: {
   closeSettings: () => void;
   // Asks rather than closes over an unsaved draft (#3406).
   closeProjectSettings: () => void;
+  // The palette or Settings is open: it sits above Project settings, so this
+  // Escape is theirs and the project dialog stays (one Escape, one close).
+  overlayOpen: boolean;
 }): void {
   actions.clearPalette();
   actions.closeSettings();
-  actions.closeProjectSettings();
+  if (!actions.overlayOpen) actions.closeProjectSettings();
 }
 
 // Issue #1189 — same "extracted here so it's directly unit-testable"

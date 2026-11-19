@@ -282,6 +282,7 @@ describe("Project settings draft protection (#3406)", () => {
           clearPalette: vi.fn(),
           closeSettings: vi.fn(),
           closeProjectSettings: () => useDashboardStore.getState().requestCloseProjectSettings(),
+          overlayOpen: false,
         }),
       );
 

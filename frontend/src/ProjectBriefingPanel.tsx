@@ -90,7 +90,7 @@ to be.
 // shown for the pinned note — that field has no Scaffold Mullion equivalent
 // at all (a live note, not a repo-committable artifact).
 const SCAFFOLD_RECOMMENDATION_NOTICE =
-  "Recommended: use Scaffold Mullion (Command Palette → “Scaffold Mullion: <project>”) and " +
+  "Recommended: use this dialog’s Scaffold Mullion section and " +
   "choose “Write it with an agent” to write this from your actual codebase — a sandboxed " +
   "agent turn analyzing this project produces higher-quality, project-specific content than a " +
   "blank text box (the “Starter template” path only writes placeholders). Edit the field " +

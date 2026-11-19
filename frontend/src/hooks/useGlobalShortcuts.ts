@@ -55,6 +55,8 @@ export interface UseGlobalShortcutsParams {
   rightSidebarEnabled: boolean;
   /** Off on the phone tier, which has no left rail (#3009). */
   modeSwitchEnabled: boolean;
+  /** The palette or Settings is open, above Project settings (#3406). */
+  overlayOpen?: boolean;
 }
 
 // Extracted from App.tsx (PR 34d of the hook-extraction series) — the single
@@ -99,6 +101,7 @@ export function useGlobalShortcuts({
   openGlobalLauncher,
   rightSidebarEnabled,
   modeSwitchEnabled,
+  overlayOpen = false,
 }: UseGlobalShortcutsParams): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -132,6 +135,7 @@ export function useGlobalShortcuts({
           clearPalette: () => setPalette((p) => ({ ...p, open: false })),
           closeSettings: () => setSettingsOpen(false),
           closeProjectSettings: () => useDashboardStore.getState().requestCloseProjectSettings(),
+          overlayOpen,
         });
       }
     };
@@ -152,5 +156,6 @@ export function useGlobalShortcuts({
     setSettingsOpen,
     rightSidebarEnabled,
     modeSwitchEnabled,
+    overlayOpen,
   ]);
 }

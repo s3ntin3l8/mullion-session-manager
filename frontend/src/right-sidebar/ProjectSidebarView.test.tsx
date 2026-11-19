@@ -85,5 +85,7 @@ describe("ProjectSidebarView", () => {
     act(() => useDashboardStore.setState({ projectSkillsRequest: { projectId: 9, nonce: 42 } }));
 
     expect(screen.queryByTestId("skills-panel")).toBeNull();
+    // Left for the view of the project it names.
+    expect(useDashboardStore.getState().projectSkillsRequest).toEqual({ projectId: 9, nonce: 42 });
   });
 });

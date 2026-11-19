@@ -2703,11 +2703,26 @@ describe("handleGlobalEscape (U9)", () => {
     const closeSettings = vi.fn();
     const closeProjectSettings = vi.fn();
 
-    handleGlobalEscape({ clearPalette, closeSettings, closeProjectSettings });
+    handleGlobalEscape({ clearPalette, closeSettings, closeProjectSettings, overlayOpen: false });
 
     expect(clearPalette).toHaveBeenCalledTimes(1);
     expect(closeSettings).toHaveBeenCalledTimes(1);
     expect(closeProjectSettings).toHaveBeenCalledTimes(1);
+  });
+
+  // #3406 — one Escape, one close: the palette or Settings above Project
+  // settings takes this Escape, and the project dialog stays.
+  it("leaves Project settings open while the palette or Settings sits above it", () => {
+    const closeProjectSettings = vi.fn();
+
+    handleGlobalEscape({
+      clearPalette: vi.fn(),
+      closeSettings: vi.fn(),
+      closeProjectSettings,
+      overlayOpen: true,
+    });
+
+    expect(closeProjectSettings).not.toHaveBeenCalled();
   });
 });
 

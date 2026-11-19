@@ -72,13 +72,15 @@ export function ProjectSidebarView({ projectId, actions }: RightSidebarViewProps
   // in render keyed on its nonce, then cleared — GitSidebarView's prune shape.
   const request = useDashboardStore((s) => s.projectSkillsRequest);
   const [handledNonce, setHandledNonce] = useState(0);
-  if (request && request.projectId === projectId && request.nonce !== handledNonce) {
+  const applies = request !== null && request.projectId === projectId;
+  if (applies && request.nonce !== handledNonce) {
     setHandledNonce(request.nonce);
     setSkillsFor(projectId);
   }
+  // Only the view that applied the request consumes it.
   useEffect(() => {
-    if (request) useDashboardStore.getState().clearProjectSkillsRequest();
-  }, [request]);
+    if (applies) useDashboardStore.getState().clearProjectSkillsRequest();
+  }, [applies, request]);
 
   if (showSkills) {
     return (
