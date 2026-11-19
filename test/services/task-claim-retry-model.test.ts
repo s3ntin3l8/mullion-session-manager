@@ -38,6 +38,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 vi.mock("../../src/services/task-github-sync.js", () => ({
   syncTaskTransition: vi.fn().mockResolvedValue(undefined),
 }));
+// The first codex retry in this file installs hooks into the test's tmp HOME
+// with no interactive /hooks trust entry; stub trust here since this file tests
+// model resolution, not the #3341 trust gate.
+vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
+  getCodexHookTrust: vi.fn(() => "trusted"),
+}));
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");

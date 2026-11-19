@@ -64,6 +64,8 @@ import {
 } from "./task-agent-resolve.js";
 import { resolveOpenCodeModel, resolveWorkerSpawnModels } from "./task-model-resolve.js";
 import { commandAgentBin, commandIsOpencode } from "./hook-adapters/index.js";
+import { codexTrustHold } from "./task-codex-trust-hold.js";
+export { CODEX_TRUST_HOLD_DETAIL } from "./task-codex-trust-hold.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
@@ -104,7 +106,10 @@ export type DispatchTaskOutcome =
         | "placement-held"
         // Issue #2364 — an open GitHub `blocked_by` dependency; the task
         // stays `claimed` until the blocker closes.
-        | "blocked-held";
+        | "blocked-held"
+        // Issue #3341 — local Codex `/hooks` trust is pending; the task
+        // stays `claimed` until the user approves Mullion's hooks in codex.
+        | "codex-trust-held";
       detail?: string;
       /** Only set for "cap" — the concurrency limit that was hit. */
       limit?: number;
@@ -672,6 +677,8 @@ export async function dispatchClaimedTask(
       broadcastTaskEvent({ taskId, projectId: project.id, kind: "dispatch", ts: Date.now() });
     }
   }
+  const trustHeld = codexTrustHold(app, task, project, command, placement.hostId);
+  if (trustHeld) return trustHeld;
   // The project root ON THE PLACEMENT HOST. Null would mean the placement
   // chose a host this project is not on — unreachable in practice (the
   // policy only ever chooses a host the project is mapped on), but the
@@ -1136,7 +1143,10 @@ export type RetryTaskOutcome =
         // what ends it (the branch is on origin, so failing the task frees
         // something). It is its own reason, not "worktree-failed", because
         // that one comes from the RESUME and always fails the row.
-        | "checkout-failed";
+        | "checkout-failed"
+        // Issue #3341 — local Codex `/hooks` trust is pending; the retry
+        // stays `claimed` until the user approves Mullion's hooks in codex.
+        | "codex-trust-held";
       detail?: string;
       /** Only set for "cap" — mirrors claimTask's own shape. */
       limit?: number;
@@ -1354,6 +1364,9 @@ export async function dispatchQueuedRetry(
     });
     return { ok: false, reason: "retry-waiting", detail: describePreparing(workerHostId) };
   }
+
+  const trustHeld = codexTrustHold(app, task, project, command, workerHostId);
+  if (trustHeld) return trustHeld;
 
   // Same atomic reservation shape as dispatchClaimedTask: the cap check and
   // the claimed -> in_progress flip succeed or fail together. The budget clock
