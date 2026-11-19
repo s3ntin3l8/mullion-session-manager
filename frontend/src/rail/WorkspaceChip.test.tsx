@@ -287,13 +287,22 @@ describe("reordering in the picker", () => {
     const handle = within(list).getByRole("button", { name: "Reorder Mullion" });
     expect(handle).toHaveAccessibleDescription(/Arrow Up or Arrow Down/);
     handle.focus();
+    // The focus return runs in an animation frame. Hold the frames until the
+    // handle has lost focus: on a loaded host a real frame fires during the
+    // key press, finds focus still on the handle and does nothing.
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
     await user.keyboard("{ArrowDown}");
     expect(moveWorkspace).toHaveBeenCalledWith(useDashboardStore.getState().workspaces, 2, 2, 1);
     const status = within(list).getByRole("status");
     expect(status).toHaveTextContent("Mullion moved to position 2 of 2 in AI Usage");
     // Focus is put back on the handle once the list has re-rendered.
     handle.blur();
-    await act(() => new Promise((r) => requestAnimationFrame(() => r(undefined))));
+    raf.mockRestore();
+    act(() => frames.forEach((cb) => cb(performance.now())));
     expect(within(list).getByRole("button", { name: "Reorder Mullion" })).toHaveFocus();
 
     vi.mocked(moveWorkspace).mockClear();
