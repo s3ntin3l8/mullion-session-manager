@@ -490,23 +490,24 @@ describe("usePanelOpener — onOpenAgentBrowser (#3215)", () => {
 // branching itself is panelUtils.test.ts's concern (openOrFocusProjectPanel
 // is exercised for real, not mocked, here).
 describe("usePanelOpener — project-scoped panel kinds", () => {
-  it.each([
-    ["onOpenBrowser", "browser", "Browser · Preview: project-alpha"],
-  ] as const)("%s opens a %s-<projectId> panel titled %s", (fnName, kind, title) => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
+  it.each([["onOpenBrowser", "browser", "Browser · Preview: project-alpha"]] as const)(
+    "%s opens a %s-<projectId> panel titled %s",
+    (fnName, kind, title) => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
 
-    (result.current[fnName] as (projectId: number) => void)(1);
+      (result.current[fnName] as (projectId: number) => void)(1);
 
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: `${kind}-1`,
-        component: kind,
-        title,
-        params: { projectId: 1 },
-      }),
-    );
-  });
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: `${kind}-1`,
+          component: kind,
+          title,
+          params: { projectId: 1 },
+        }),
+      );
+    },
+  );
 
   it("onOpenGitHub opens the GitHub sidebar view, adding no dock panel", () => {
     const api = mockDockviewApi();
@@ -705,15 +706,13 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(githubCall).toHaveProperty("floating", { width: 720, height: 460 });
   });
 
-  it.each([
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s no-ops when dockviewApi is null", (fnName) => {
-    const { result } = setup({ dockviewApi: null });
-    expect(() => (result.current[fnName] as (projectId: number) => void)(1)).not.toThrow();
-  });
+  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+    "%s no-ops when dockviewApi is null",
+    (fnName) => {
+      const { result } = setup({ dockviewApi: null });
+      expect(() => (result.current[fnName] as (projectId: number) => void)(1)).not.toThrow();
+    },
+  );
 });
 
 describe("usePanelOpener — onOpenTasks", () => {
@@ -820,28 +819,24 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
-  it.each([
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s resets viewMode to list before opening", (fnName) => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
-    (result.current[fnName] as (projectId: number) => void)(1);
-    expect(setViewMode).toHaveBeenCalledWith("list");
-  });
+  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+    "%s resets viewMode to list before opening",
+    (fnName) => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      (result.current[fnName] as (projectId: number) => void)(1);
+      expect(setViewMode).toHaveBeenCalledWith("list");
+    },
+  );
 
-  it.each([
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s does NOT reset viewMode when dockviewApi is null (a true no-op)", (fnName) => {
-    const { result } = setup({ dockviewApi: null });
-    (result.current[fnName] as (projectId: number) => void)(1);
-    expect(setViewMode).not.toHaveBeenCalled();
-  });
+  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+    "%s does NOT reset viewMode when dockviewApi is null (a true no-op)",
+    (fnName) => {
+      const { result } = setup({ dockviewApi: null });
+      (result.current[fnName] as (projectId: number) => void)(1);
+      expect(setViewMode).not.toHaveBeenCalled();
+    },
+  );
 
   it("onOpenBrowserUrl resets viewMode to list before opening", () => {
     const api = mockDockviewApi();

@@ -451,7 +451,9 @@ export function buildPaletteCommands({
         id: "browser",
         movesFocus: !agent,
         title: "Browser",
-        subtitle: agent ? "The browser this session's agent drives" : "Open a preview of this project",
+        subtitle: agent
+          ? "The browser this session's agent drives"
+          : "Open a preview of this project",
         icon: GlobeIcon,
         keywords: ["browser", "preview", "web"],
         placement: "top",
