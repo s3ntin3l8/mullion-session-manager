@@ -1,12 +1,11 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
 import type {
   Device,
-  DeviceHostEntry,
   DiscoveredDevice,
-  SystemImage,
+  IosSimulator,
   AvailableSystemImage,
 } from "../../api/index.js";
 import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
@@ -18,7 +17,6 @@ import { useAsyncData } from "../../hooks/useAsyncData.js";
 import { useSystemImageInstall } from "../../hooks/useSystemImageInstall.js";
 import { useSdkLicenses } from "../../hooks/useSdkLicenses.js";
 import { DEVICES_POLL_MS } from "../../SidebarDevices.js";
-import { normalizeAvdHardware } from "../../../../src/shared/avd-hardware.js";
 import {
   AddButton,
   Dropdown,
@@ -35,6 +33,7 @@ import { ErrorText } from "../../ui/ErrorText.js";
 import { ProgressBar } from "../../ui/ProgressBar.js";
 import { Modal } from "../../ui/Modal.js";
 import { CloseIcon, PlusIcon, SearchIcon, TrashIcon } from "../../ui/icons.js";
+import { DeviceCreateForm } from "./DeviceCreateForm.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
 import { findReconnectSuggestions } from "./deviceReconnect.js";
 import { useServerInfo } from "../useServerInfo.js";
@@ -43,80 +42,6 @@ import {
   EmulatorGpuSetting,
   EmulatorWindowSetting,
 } from "../RuntimeSettings.js";
-
-// Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
-// client-side too so a bad name fails fast instead of round-tripping to the
-// server first; the server's own check is still authoritative. Two
-// independent, single-pass regexes (not one combined pattern) — see that
-// file's own comment on the catastrophic-backtracking regex CodeQL caught
-// in an earlier, combined version of this check.
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
-
-function isAvdNameValid(name: string): boolean {
-  return AVD_NAME_PATTERN.test(name) && AVD_NAME_HAS_ALPHANUMERIC.test(name);
-}
-
-function avdHardwareError(sdcard: string, ram: string, data: string): string | null {
-  const result = normalizeAvdHardware({
-    sdcardSize: sdcard,
-    ramSize: ram,
-    dataPartitionSize: data,
-  });
-  return result.ok ? null : result.message;
-}
-
-function optionalSize(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-// Names what's wrong with *this* value (the Row desc already states the
-// allowed set). Gating on the raw length (not trim) so a whitespace-only
-// name still gets an explanation instead of silently greying out Create AVD.
-function describeAvdNameError(raw: string): string | null {
-  if (raw.length === 0) return null; // empty field is the placeholder's job
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    // Fixed wording: interpolating raw here would render as “ ” once HTML
-    // collapses the whitespace, so the message would look like it lost its
-    // subject.
-    return "This name is only whitespace — use a name with letters or digits.";
-  }
-  if (AVD_NAME_PATTERN.test(trimmed)) {
-    if (AVD_NAME_HAS_ALPHANUMERIC.test(trimmed)) return null;
-    return `“${trimmed}” needs at least one letter or digit.`;
-  }
-  // Single-char membership via AVD_NAME_PATTERN itself — one source for the
-  // allowlist instead of re-spelling the char class here a third time.
-  // Invisible culprits get a visible label — interpolating the raw char
-  // would collapse to blank in HTML, the same failure the whitespace-only
-  // branch above was fixed for. `ch.trim() === ""` covers JS WhiteSpace
-  // (NBSP, thin space, …); `\p{Cf}` covers format chars (ZWSP, soft hyphen)
-  // that render blank but are not WhiteSpace, so trim alone misses them.
-  const badChars = [
-    ...new Set(
-      Array.from(trimmed)
-        .filter((ch) => !AVD_NAME_PATTERN.test(ch))
-        .map((ch) => {
-          if (ch.trim() === "" || /\p{Cf}/u.test(ch)) {
-            return ch === " "
-              ? "space"
-              : `U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
-          }
-          return ch;
-        }),
-    ),
-  ];
-  return `“${trimmed}” contains ${badChars.join(", ")} — remove ${badChars.length === 1 ? "it" : "them"}.`;
-}
-
-function describeSystemImage(image: SystemImage): string {
-  if (image.apiLevel && image.tagDisplay) {
-    return `API ${image.apiLevel} — ${image.tagDisplay} (${image.abi ?? image.packagePath})`;
-  }
-  return image.packagePath;
-}
 
 // Settings -> Devices (issue #1326) — the full-lifecycle management surface
 // (create / pair / edit address / start / stop / delete) for the Android
@@ -201,7 +126,6 @@ export function DevicesSection() {
   const serverInfo = useServerInfo();
   const devices = useDashboardStore(useShallow((s) => s.devices));
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
-  const createDevice = useDashboardStore((s) => s.createDevice);
   const startDevice = useDashboardStore((s) => s.startDevice);
   const stopDevice = useDashboardStore((s) => s.stopDevice);
   const deleteDevice = useDashboardStore((s) => s.deleteDevice);
@@ -222,48 +146,18 @@ export function DevicesSection() {
 
   const hosts = useDashboardStore(useShallow((s) => s.hosts));
   const [createOpen, setCreateOpen] = useState(false);
-  // Hosts that could hold the new device (GET /api/devices/hosts), fetched
-  // with the AVD list once the create form opens. `null` until answered (no
-  // picker yet); a failed fetch answers with an empty list, which also means
-  // no picker (primary only).
-  const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[] | null>(null);
-  const [createHostId, setCreateHostId] = useState(LOCAL_HOST_ID);
   // Physical phones are paired from their own dialog (issue #1379) — see
   // PairDeviceDialog.tsx. This section only owns whether it's open.
   const [pairOpen, setPairOpen] = useState(false);
-  const [avdName, setAvdName] = useState("");
-  const [name, setName] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-
-  // The AVD picker (GET /api/avds) — fetched lazily, only once the create
-  // form is actually open in emulator mode, not eagerly at mount (these
-  // routes shell out to avdmanager on the host). `avdName` above is REUSED
-  // as this picker's selected value, not free text anymore — submitCreate's
-  // own logic (POST /api/devices {avdName}) is unchanged either way.
-  const [avds, setAvds] = useState<string[]>([]);
-  const [avdsLoaded, setAvdsLoaded] = useState(false);
-  const [avdsError, setAvdsError] = useState<string | null>(null);
-
-  // The "New AVD" sub-form — system images/device profiles are fetched
-  // lazily too, only once this sub-form is actually opened.
-  const [newAvdOpen, setNewAvdOpen] = useState(false);
-  const [newAvdName, setNewAvdName] = useState("");
-  const [systemImages, setSystemImages] = useState<SystemImage[]>([]);
-  const [deviceProfiles, setDeviceProfiles] = useState<string[]>([]);
-  const [selectedSystemImage, setSelectedSystemImage] = useState("");
-  const [selectedDeviceProfile, setSelectedDeviceProfile] = useState("");
-  const [sdcardSize, setSdcardSize] = useState("");
-  const [ramSize, setRamSize] = useState("");
-  const [dataPartitionSize, setDataPartitionSize] = useState("");
-  const [provisioningLoaded, setProvisioningLoaded] = useState(false);
-  const [creatingAvd, setCreatingAvd] = useState(false);
-  const [createAvdError, setCreateAvdError] = useState<string | null>(null);
-  // Single source for the New-AVD name's invalid *message* — the input's
-  // aria-invalid and the inline ErrorText both read this. Create AVD's
-  // disabled check calls isAvdNameValid directly (it must stay disabled for
-  // an empty field, which deliberately has no error message).
-  const avdNameError = describeAvdNameError(newAvdName);
+  const [simulatorsByHost, setSimulatorsByHost] = useState<
+    Record<string, Record<string, IosSimulator>>
+  >({});
+  const handleSimulatorsLoaded = useCallback(
+    (hostId: string, byUdid: Record<string, IosSimulator>) => {
+      setSimulatorsByHost((prev) => ({ ...prev, [hostId]: byUdid }));
+    },
+    [],
+  );
 
   // Available system images browser — fetched lazily, only once the section
   // is actually visible. Filters out already-installed images and groups
@@ -286,59 +180,6 @@ export function DevicesSection() {
   const [showLicenseModal, setShowLicenseModal] = useState(false);
   const [pendingInstallPath, setPendingInstallPath] = useState<string | null>(null);
   const pendingInstallRef = useRef<string | null>(null);
-
-  // The AVD list — fetched only while the create form is open. The old
-  // hand-rolled effect's `if (!createOpen) return;` guard is the hook's
-  // `enabled` flag, and its `cancelled` flag is the hook's own guard, so a
-  // superseded request still cannot apply its result (issue #2411).
-  useAsyncData(
-    () => api.listAvds().then(({ avds: list }) => list),
-    (list) => {
-      setAvds(list);
-      setAvdsLoaded(true);
-      setAvdsError(null);
-      setAvdName((prev) => (list.includes(prev) ? prev : (list[0] ?? "")));
-    },
-    (err: unknown) => {
-      setAvdsError(err instanceof ApiError ? err.message : "Could not load AVDs");
-      setAvdsLoaded(true);
-    },
-    [createOpen],
-    { enabled: createOpen },
-  );
-
-  useAsyncData(
-    () => api.listDeviceHosts(),
-    (list) => setDeviceHosts(list),
-    () => setDeviceHosts([]),
-    [createOpen],
-    { enabled: createOpen },
-  );
-
-  // The "New AVD" sub-form's provisioning data — fetched only while that
-  // sub-form is open (issue #2411).
-  useAsyncData(
-    () =>
-      Promise.all([api.listSystemImages(), api.listDeviceProfiles()]).then(
-        ([imagesResult, profilesResult]) => ({ imagesResult, profilesResult }),
-      ),
-    ({ imagesResult, profilesResult }) => {
-      setSystemImages(imagesResult.systemImages);
-      setDeviceProfiles(profilesResult.deviceProfiles);
-      setProvisioningLoaded(true);
-      setCreateAvdError(null);
-      setSelectedSystemImage((prev) => prev || (imagesResult.systemImages[0]?.packagePath ?? ""));
-      setSelectedDeviceProfile((prev) => prev || (profilesResult.deviceProfiles[0] ?? ""));
-    },
-    (err: unknown) => {
-      setCreateAvdError(
-        err instanceof ApiError ? err.message : "Could not load system images/device profiles",
-      );
-      setProvisioningLoaded(true);
-    },
-    [newAvdOpen],
-    { enabled: newAvdOpen },
-  );
 
   // Available system images — fetched lazily, only once the SDK section is
   // actually expanded (same pattern as the AVD picker and provisioning data,
@@ -447,46 +288,6 @@ export function DevicesSection() {
     { enabled: installOp.status === "done" },
   );
 
-  // Refresh the installed-image list the New-AVD dropdown reads so a freshly
-  // installed image (e.g. a Play Store image) shows up without reopening the
-  // form. Only while the form is already open — reopening after the fact is
-  // covered by the newAvdOpen effect above — so opening the form later never
-  // fires this effect a second time for the same install.
-  const newAvdOpenRef = useRef(newAvdOpen);
-  useEffect(() => {
-    newAvdOpenRef.current = newAvdOpen;
-  }, [newAvdOpen]);
-  // The form-open check stays in the FETCHER, not in `enabled`: the old
-  // effect read the ref inside the effect body, so it saw the form's state
-  // as of the moment the effect ran. `enabled` is computed during render,
-  // one commit earlier, so a form that opens in the same commit as the
-  // install finishing would read a stale `false` there. The fetcher runs
-  // synchronously inside the effect, so it sees the same value the old
-  // guard did — and it keeps the request off the wire when the form is
-  // closed, exactly as the old early return did (issue #2411).
-  useAsyncData(
-    async () => {
-      if (!newAvdOpenRef.current) return null;
-      const { systemImages: images } = await api.listSystemImages();
-      return images;
-    },
-    (images) => {
-      if (!images) return;
-      setSystemImages(images);
-      setSelectedSystemImage((prev) =>
-        prev && images.some((img) => img.packagePath === prev)
-          ? prev
-          : (images[0]?.packagePath ?? ""),
-      );
-    },
-    () => {
-      // Non-critical — same posture as above: the dropdown keeps its
-      // current list and refetches the next time the form is opened.
-    },
-    [installOp.status],
-    { enabled: installOp.status === "done" },
-  );
-
   // Issue #1347 — editing a physical device's stored adb address in place,
   // without delete-and-recreate. Keyed by device id (not a boolean) so only
   // one row's form is open at a time, same "single open form" shape the
@@ -569,123 +370,42 @@ export function DevicesSection() {
       );
   };
 
-  // The picker lists every host the endpoint reports, but only when there is
-  // a real choice (more than the primary). A host that cannot be used is shown
-  // disabled with the reason; a usable one must run the emulator kind this
-  // form creates.
-  const hostOptions = useMemo(() => {
-    if (!deviceHosts || deviceHosts.length < 2) return [];
-    return deviceHosts.flatMap((h) => {
-      if (h.status === "unsupported") {
-        return [
-          {
-            value: h.hostId,
-            label: `${h.name} — unsupported (agent needs an update)`,
-            disabled: true,
-          },
-        ];
-      }
-      if (h.status === "unreachable") {
-        return [{ value: h.hostId, label: `${h.name} — unreachable`, disabled: true }];
-      }
-      if (!h.deviceKinds.includes("emulator")) return [];
-      return [{ value: h.hostId, label: h.name, disabled: false }];
-    });
-  }, [deviceHosts]);
-  const showHostPicker = hostOptions.length > 1;
-  // A selection that vanished or became unusable falls back to the primary.
-  const effectiveHostId = hostOptions.some((o) => o.value === createHostId && !o.disabled)
-    ? createHostId
-    : LOCAL_HOST_ID;
-
-  const submitCreate = () => {
-    if (creating) return;
-    const trimmedAvdName = avdName.trim();
-    if (!trimmedAvdName) return;
-    setCreateError(null);
-    setCreating(true);
-    createDevice(
-      trimmedAvdName,
-      name.trim() || undefined,
-      effectiveHostId === LOCAL_HOST_ID ? undefined : effectiveHostId,
-    )
-      .then(() => {
-        setCreateOpen(false);
-        setAvdName("");
-        setName("");
-        setCreateHostId(LOCAL_HOST_ID);
-      })
-      .catch((err: unknown) => {
-        // DEVICE_ENABLED off surfaces here verbatim (routes/devices.ts:
-        // "Device panel is disabled — set DEVICE_ENABLED=true.") — this repo
-        // has no frontend-visible feature flag for it, so the server's own
-        // 400 message IS the disabled-state UI.
-        setCreateError(err instanceof ApiError ? err.message : "Could not create this device");
-      })
-      .finally(() => setCreating(false));
-  };
-
-  const submitCreateAvd = () => {
-    if (creatingAvd) return;
-    const trimmedName = newAvdName.trim();
-    if (!isAvdNameValid(trimmedName) || !selectedSystemImage || !selectedDeviceProfile) {
-      return;
-    }
-    const hardwareError = avdHardwareError(sdcardSize, ramSize, dataPartitionSize);
-    if (hardwareError) {
-      setCreateAvdError(hardwareError);
-      return;
-    }
-    setCreateAvdError(null);
-    setCreatingAvd(true);
-    const sdcard = optionalSize(sdcardSize);
-    const ram = optionalSize(ramSize);
-    const data = optionalSize(dataPartitionSize);
-    api
-      .createAvd({
-        name: trimmedName,
-        systemImage: selectedSystemImage,
-        deviceProfile: selectedDeviceProfile,
-        ...(sdcard ? { sdcardSize: sdcard } : {}),
-        ...(ram ? { ramSize: ram } : {}),
-        ...(data ? { dataPartitionSize: data } : {}),
-      })
-      .then((created) => {
-        // Creation itself succeeded — close the sub-form and select the new
-        // AVD unconditionally from here on. A failure to refresh the
-        // picker's own list past this point is a separate, lesser problem
-        // (surfaced via avdsError, the same channel the picker's own load
-        // effect uses) and must NOT be reported as "could not create this
-        // AVD" (Hermes review) — the AVD was created; the picker is just
-        // stale until the next refresh. A `warning` means the same thing
-        // for a config.ini patch that did not land: the AVD exists, so
-        // select it instead of leaving the form open for a retry that
-        // would hit "already exists".
-        const warning = created.warning ?? null;
-        setNewAvdOpen(false);
-        setNewAvdName("");
-        setSdcardSize("");
-        setRamSize("");
-        setDataPartitionSize("");
-        setAvdName(trimmedName);
-        return api
-          .listAvds()
-          .then(({ avds: list }) => {
-            setAvds(list);
-            setAvdsLoaded(true);
-            setAvdsError(warning);
-          })
-          .catch((err: unknown) => {
-            const refresh =
-              err instanceof ApiError ? err.message : "Could not refresh the AVD list";
-            setAvdsError(warning ? `${warning} ${refresh}` : refresh);
-          });
-      })
-      .catch((err: unknown) => {
-        setCreateAvdError(err instanceof ApiError ? err.message : "Could not create this AVD");
-      })
-      .finally(() => setCreatingAvd(false));
-  };
+  const iosRowHostIds = useMemo(
+    () =>
+      [
+        ...new Set(
+          devices.filter((d) => d.platform === "ios" && !d.hostUnreachable).map((d) => d.hostId),
+        ),
+      ].sort(),
+    [devices],
+  );
+  const iosRowHostsKey = iosRowHostIds.join("\0");
+  useAsyncData(
+    async () => {
+      const entries = await Promise.all(
+        iosRowHostIds.map(async (hostId) => {
+          try {
+            const list = await api.listSimulators(hostId);
+            return [hostId, Object.fromEntries(list.map((s) => [s.udid, s]))] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return entries.filter((e): e is NonNullable<typeof e> => e !== null);
+    },
+    (entries) => {
+      if (entries.length === 0) return;
+      setSimulatorsByHost((prev) => {
+        const next = { ...prev };
+        for (const [hostId, byUdid] of entries) next[hostId] = byUdid;
+        return next;
+      });
+    },
+    () => {},
+    [iosRowHostsKey],
+    { enabled: iosRowHostIds.length > 0 },
+  );
 
   const toggleRunning = (device: Device, kind: "start" | "stop") => {
     setToggleError(null);
@@ -766,116 +486,131 @@ export function DevicesSection() {
       {!loaded && <div className="settings-readonly-value">Loading…</div>}
       {loaded && devices.length > 0 && (
         <StyledList>
-          {devices.map((device) => (
-            <Fragment key={device.id}>
-              <ListRow
-                testId={`device-row-${device.id}`}
-                dot={deviceDotClass(device)}
-                title={device.name || device.avdName || device.serial}
-                subtitle={
-                  device.hostId !== LOCAL_HOST_ID
-                    ? `${device.avdName ?? device.serial ?? ""} · ${hostDisplayName(device.hostId, hosts)}`
-                    : (device.avdName ?? device.serial)
-                }
-                unavailable={device.status === "killed" || device.hostUnreachable === true}
-                trailing={
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>
-                      {describeDevice(device)}
-                    </span>
-                    {/* Physical-only, but NO longer active-only: a stopped
-                        phone's address is exactly the thing you may need to
-                        fix (DHCP lease moved) before starting it, and PATCH
-                        persists it without touching the process (routes/
-                        devices.ts) — so gating this on `status === "active"`
-                        would have made the fix require a running device. */}
-                    {device.kind === "physical" && (
-                      <SecondaryButton
-                        onClick={() => (editingId === device.id ? cancelEdit() : startEdit(device))}
+          {devices.map((device) => {
+            const isIos = device.platform === "ios";
+            const sim =
+              isIos && device.udid ? simulatorsByHost[device.hostId]?.[device.udid] : undefined;
+            const rowTitle = isIos
+              ? device.name || sim?.name || device.udid || "iOS Simulator"
+              : device.name || device.avdName || device.serial;
+            const detailText = isIos
+              ? sim
+                ? `${sim.name} · ${sim.runtime}`
+                : (device.udid ?? "")
+              : (device.avdName ?? device.serial ?? "");
+            const rowSubtitle =
+              device.hostId !== LOCAL_HOST_ID
+                ? `${detailText} · ${hostDisplayName(device.hostId, hosts)}`
+                : detailText || undefined;
+            return (
+              <Fragment key={device.id}>
+                <ListRow
+                  testId={`device-row-${device.id}`}
+                  dot={deviceDotClass(device)}
+                  title={rowTitle}
+                  subtitle={rowSubtitle}
+                  unavailable={device.status === "killed" || device.hostUnreachable === true}
+                  trailing={
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>
+                        {describeDevice(device)}
+                      </span>
+                      {/* Physical-only, but NO longer active-only: a stopped
+                          phone's address is exactly the thing you may need to
+                          fix (DHCP lease moved) before starting it, and PATCH
+                          persists it without touching the process (routes/
+                          devices.ts) — so gating this on `status === "active"`
+                          would have made the fix require a running device. */}
+                      {device.kind === "physical" && (
+                        <SecondaryButton
+                          onClick={() =>
+                            editingId === device.id ? cancelEdit() : startEdit(device)
+                          }
+                        >
+                          {editingId === device.id ? "Cancel" : "Edit address"}
+                        </SecondaryButton>
+                      )}
+                      {device.status === "active" ? (
+                        <SecondaryButton
+                          onClick={() => toggleRunning(device, "stop")}
+                          disabled={toggling[device.id] != null || device.hostUnreachable === true}
+                        >
+                          {toggling[device.id] === "stop" ? "Stopping…" : "Stop"}
+                        </SecondaryButton>
+                      ) : (
+                        <SecondaryButton
+                          onClick={() => toggleRunning(device, "start")}
+                          disabled={toggling[device.id] != null || device.hostUnreachable === true}
+                        >
+                          {toggling[device.id] === "start" ? "Starting…" : "Start"}
+                        </SecondaryButton>
+                      )}
+                      {/* Available on EVERY row — the old active-only gate is
+                          what stranded stopped devices with no way to clear
+                          them (the bug this control set exists for). Delete
+                          now removes the row (see routes/devices.ts), so the
+                          copy says "removed" rather than the old soft-delete's
+                          "stream stops and any open panel shows it as
+                          disconnected". Hermes' earlier softening still holds
+                          for the open-panel half: nothing here closes a
+                          device-<id> panel (no DockviewApi in a Settings-owned
+                          slice), DevicePane just reports it. */}
+                      <ConfirmButton
+                        title={`Delete ${rowTitle}. The device is torn down and removed from this list permanently.`}
+                        onConfirm={() => remove(device)}
+                        disabled={deleting[device.id] ?? false}
                       >
-                        {editingId === device.id ? "Cancel" : "Edit address"}
-                      </SecondaryButton>
-                    )}
-                    {device.status === "active" ? (
-                      <SecondaryButton
-                        onClick={() => toggleRunning(device, "stop")}
-                        disabled={toggling[device.id] != null || device.hostUnreachable === true}
-                      >
-                        {toggling[device.id] === "stop" ? "Stopping…" : "Stop"}
-                      </SecondaryButton>
-                    ) : (
-                      <SecondaryButton
-                        onClick={() => toggleRunning(device, "start")}
-                        disabled={toggling[device.id] != null || device.hostUnreachable === true}
-                      >
-                        {toggling[device.id] === "start" ? "Starting…" : "Start"}
-                      </SecondaryButton>
-                    )}
-                    {/* Available on EVERY row — the old active-only gate is
-                        what stranded stopped devices with no way to clear
-                        them (the bug this control set exists for). Delete
-                        now removes the row (see routes/devices.ts), so the
-                        copy says "removed" rather than the old soft-delete's
-                        "stream stops and any open panel shows it as
-                        disconnected". Hermes' earlier softening still holds
-                        for the open-panel half: nothing here closes a
-                        device-<id> panel (no DockviewApi in a Settings-owned
-                        slice), DevicePane just reports it. */}
-                    <ConfirmButton
-                      title={`Delete ${device.name || device.avdName || device.serial}. The device is torn down and removed from this list permanently.`}
-                      onConfirm={() => remove(device)}
-                      disabled={deleting[device.id] ?? false}
-                    >
-                      {/* aria-hidden so the trashcan never joins the
-                          button's accessible name — "Delete" stays the
-                          exact role name the tests (and a screen reader's
-                          quick scan) match on. */}
-                      <TrashIcon size={13} aria-hidden="true" />
-                      Delete
-                    </ConfirmButton>
-                  </div>
-                }
-              />
-              {editingId !== device.id && reconnectSuggestions.has(device.id) && (
-                <ReconnectPrompt
-                  device={device}
-                  candidates={reconnectSuggestions.get(device.id)?.candidates ?? []}
-                  ambiguous={reconnectSuggestions.get(device.id)?.ambiguous ?? false}
-                  busy={reconnecting[device.id] ?? false}
-                  error={reconnectError[device.id]}
-                  onReconnect={(target) => reconnect(device, target)}
+                        {/* aria-hidden so the trashcan never joins the
+                            button's accessible name — "Delete" stays the
+                            exact role name the tests (and a screen reader's
+                            quick scan) match on. */}
+                        <TrashIcon size={13} aria-hidden="true" />
+                        Delete
+                      </ConfirmButton>
+                    </div>
+                  }
                 />
-              )}
-              {editingId === device.id && (
-                <div style={{ padding: "8px 12px" }}>
-                  <Row
-                    label="New address"
-                    desc="The IP address and port shown under Developer options → Wireless debugging on the phone. If the phone needs a new pairing code, delete it and pair it again."
-                  >
-                    <TextInput
-                      style={{ width: 220 }}
-                      placeholder="192.168.1.23:37251"
-                      value={editAddress}
-                      onChange={(e) => setEditAddress(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") submitEdit(device);
-                      }}
-                      autoFocus
-                    />
-                  </Row>
-                  <div style={{ marginTop: 8 }}>
-                    <SecondaryButton
-                      onClick={() => submitEdit(device)}
-                      disabled={editSaving || !editAddress.trim()}
+                {editingId !== device.id && reconnectSuggestions.has(device.id) && (
+                  <ReconnectPrompt
+                    device={device}
+                    candidates={reconnectSuggestions.get(device.id)?.candidates ?? []}
+                    ambiguous={reconnectSuggestions.get(device.id)?.ambiguous ?? false}
+                    busy={reconnecting[device.id] ?? false}
+                    error={reconnectError[device.id]}
+                    onReconnect={(target) => reconnect(device, target)}
+                  />
+                )}
+                {editingId === device.id && (
+                  <div style={{ padding: "8px 12px" }}>
+                    <Row
+                      label="New address"
+                      desc="The IP address and port shown under Developer options → Wireless debugging on the phone. If the phone needs a new pairing code, delete it and pair it again."
                     >
-                      {editSaving ? "Saving…" : "Save"}
-                    </SecondaryButton>
+                      <TextInput
+                        style={{ width: 220 }}
+                        placeholder="192.168.1.23:37251"
+                        value={editAddress}
+                        onChange={(e) => setEditAddress(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") submitEdit(device);
+                        }}
+                        autoFocus
+                      />
+                    </Row>
+                    <div style={{ marginTop: 8 }}>
+                      <SecondaryButton
+                        onClick={() => submitEdit(device)}
+                        disabled={editSaving || !editAddress.trim()}
+                      >
+                        {editSaving ? "Saving…" : "Save"}
+                      </SecondaryButton>
+                    </div>
+                    {editError && <ErrorText style={{ marginTop: 8 }}>{editError}</ErrorText>}
                   </div>
-                  {editError && <ErrorText style={{ marginTop: 8 }}>{editError}</ErrorText>}
-                </div>
-              )}
-            </Fragment>
-          ))}
+                )}
+              </Fragment>
+            );
+          })}
         </StyledList>
       )}
       {deleteError && <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>}
@@ -887,18 +622,7 @@ export function DevicesSection() {
           Pair a phone or tablet
         </AddButton>
         {emulatorOn && (
-          <AddButton
-            onClick={() => {
-              // Self-review (code-review high) — without this, closing the
-              // form after a failed create (e.g. DEVICE_ENABLED=false) and
-              // reopening it shows that same stale error before the user has
-              // typed or submitted anything.
-              setCreateError(null);
-              setCreateAvdError(null);
-              setNewAvdOpen(false);
-              setCreateOpen((open) => !open);
-            }}
-          >
+          <AddButton onClick={() => setCreateOpen((open) => !open)}>
             <PlusIcon size={13} />
             Create an emulator
           </AddButton>
@@ -920,181 +644,12 @@ export function DevicesSection() {
       )}
 
       {createOpen && emulatorOn && (
-        <div style={{ marginTop: 10 }}>
-          {!avdsLoaded && (
-            <div className="settings-readonly-value" style={{ marginTop: 4 }}>
-              Loading AVDs…
-            </div>
-          )}
-          {showHostPicker && (
-            <Row
-              label="Host"
-              desc="The machine that runs this emulator. The virtual device below is chosen from this machine's list; its name is resolved on the host you pick here."
-            >
-              <Dropdown
-                ariaLabel="Host"
-                options={hostOptions}
-                value={effectiveHostId}
-                onChange={setCreateHostId}
-              />
-            </Row>
-          )}
-          {avdsLoaded && avds.length > 0 && (
-            <Row
-              label="Virtual device"
-              desc="An Android virtual device (AVD) on this machine. Listing AVDs on other hosts is not supported yet."
-            >
-              <Dropdown
-                options={avds.map((n) => ({ value: n, label: n }))}
-                value={avdName}
-                onChange={setAvdName}
-              />
-            </Row>
-          )}
-          {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
-            <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
-              No virtual devices on this machine yet. Create one below.
-            </div>
-          )}
-          {avdsError && <ErrorText style={{ marginTop: 8 }}>{avdsError}</ErrorText>}
-
-          <div style={{ marginTop: 8 }}>
-            <SecondaryButton onClick={() => setNewAvdOpen((open) => !open)}>
-              {newAvdOpen ? "Cancel new AVD" : "+ New AVD"}
-            </SecondaryButton>
-          </div>
-
-          {newAvdOpen && (
-            <div style={{ marginTop: 10 }}>
-              <Row
-                label="New virtual device name"
-                desc="Letters, digits, periods, underscores, and hyphens only."
-              >
-                <TextInput
-                  style={{ width: 220 }}
-                  placeholder="Pixel_8_API_35"
-                  value={newAvdName}
-                  onChange={(e) => setNewAvdName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submitCreateAvd();
-                  }}
-                  aria-invalid={avdNameError !== null}
-                />
-              </Row>
-              {/* The Row desc above states the allowed set; this error
-                      names what's wrong with *this* value so Create AVD's
-                      disabled state (e.g. "Pixel 10 Pro XL" or "   ") isn't a
-                      silent mystery. role="alert" is the announce channel —
-                      no aria-describedby here, to avoid double-reading. */}
-              {avdNameError !== null && (
-                <ErrorText style={{ marginTop: 4 }}>{avdNameError}</ErrorText>
-              )}
-              {!provisioningLoaded && (
-                <div className="settings-readonly-value" style={{ marginTop: 4 }}>
-                  Loading system images and device profiles…
-                </div>
-              )}
-              {provisioningLoaded && systemImages.length > 0 && (
-                <Row label="System image" desc="An Android system image installed on this machine.">
-                  <Dropdown
-                    options={systemImages.map((img) => ({
-                      value: img.packagePath,
-                      label: describeSystemImage(img),
-                    }))}
-                    value={selectedSystemImage}
-                    onChange={setSelectedSystemImage}
-                  />
-                </Row>
-              )}
-              {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
-                <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
-                  No system images installed. Install one under "SDK system images" below.
-                </div>
-              )}
-              {provisioningLoaded && deviceProfiles.length > 0 && (
-                <Row label="Device profile" desc="The hardware to emulate.">
-                  <Dropdown
-                    options={deviceProfiles.map((p) => ({ value: p, label: p }))}
-                    value={selectedDeviceProfile}
-                    onChange={setSelectedDeviceProfile}
-                  />
-                </Row>
-              )}
-              {provisioningLoaded && !createAvdError && deviceProfiles.length === 0 && (
-                <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
-                  No device profiles found. Check the Android SDK command-line tools installation.
-                </div>
-              )}
-              <Row
-                label="SD card"
-                desc="Optional. A size like 2048M or 2G. Blank keeps the SDK default."
-              >
-                <TextInput
-                  style={{ width: 160 }}
-                  aria-label="SD card size"
-                  placeholder="2048M"
-                  value={sdcardSize}
-                  onChange={(e) => setSdcardSize(e.target.value)}
-                />
-              </Row>
-              <Row label="RAM" desc="Optional. Megabytes, or a size like 2048M or 2G.">
-                <TextInput
-                  style={{ width: 160 }}
-                  aria-label="RAM"
-                  placeholder="2048"
-                  value={ramSize}
-                  onChange={(e) => setRamSize(e.target.value)}
-                />
-              </Row>
-              <Row
-                label="Data partition"
-                desc="Optional. A size like 6G or 800M. Blank keeps the SDK default."
-              >
-                <TextInput
-                  style={{ width: 160 }}
-                  aria-label="Data partition"
-                  placeholder="6G"
-                  value={dataPartitionSize}
-                  onChange={(e) => setDataPartitionSize(e.target.value)}
-                />
-              </Row>
-              <div style={{ marginTop: 8 }}>
-                <SecondaryButton
-                  onClick={submitCreateAvd}
-                  disabled={
-                    creatingAvd ||
-                    !isAvdNameValid(newAvdName.trim()) ||
-                    !selectedSystemImage ||
-                    !selectedDeviceProfile
-                  }
-                >
-                  {creatingAvd ? "Creating AVD…" : "Create AVD"}
-                </SecondaryButton>
-              </div>
-              {createAvdError && <ErrorText style={{ marginTop: 8 }}>{createAvdError}</ErrorText>}
-            </div>
-          )}
-
-          <div style={{ marginTop: 14 }}>
-            <Row label="Name" desc="Optional. Defaults to the virtual device name.">
-              <TextInput
-                style={{ width: 220 }}
-                placeholder="Pixel 8"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") submitCreate();
-                }}
-              />
-            </Row>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <SecondaryButton onClick={submitCreate} disabled={creating || !avdName.trim()}>
-              {creating ? "Creating…" : "Create"}
-            </SecondaryButton>
-          </div>
-          {createError && <ErrorText style={{ marginTop: 8 }}>{createError}</ErrorText>}
-        </div>
+        <DeviceCreateForm
+          devices={devices}
+          installStatus={installOp.status}
+          onCreated={() => setCreateOpen(false)}
+          onSimulatorsLoaded={handleSimulatorsLoaded}
+        />
       )}
 
       {/* SDK system images section */}

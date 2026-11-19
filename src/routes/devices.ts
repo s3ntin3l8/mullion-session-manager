@@ -22,7 +22,11 @@ import {
 } from "../services/device-host.js";
 import { SimctlError } from "../services/ios-simulators.js";
 import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.js";
-import { iosSimulatorAvailable, localDeviceKinds } from "../services/device-kinds.js";
+import {
+  iosSimulatorAvailable,
+  localDeviceKinds,
+  localDevicePlatforms,
+} from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
@@ -76,9 +80,10 @@ export interface DeviceHostEntry {
   name: string;
   status: "ok" | "unsupported" | "unreachable";
   deviceKinds: DeviceKind[];
+  platforms: DevicePlatform[];
 }
 
-type RemoteKindsAnswer = Pick<DeviceHostEntry, "status" | "deviceKinds">;
+type RemoteKindsAnswer = Pick<DeviceHostEntry, "status" | "deviceKinds" | "platforms">;
 
 // Per app instance, so two apps in one process (tests) never share an answer.
 // The cached value is the in-flight promise: concurrent callers share one
@@ -96,10 +101,14 @@ async function askRemoteKinds(app: FastifyInstance, hostId: string): Promise<Rem
     });
     const support = await Promise.race([getDeviceHost(app, hostId).kinds(), timeout]);
     return support === null
-      ? { status: "unsupported", deviceKinds: [] }
-      : { status: "ok", deviceKinds: support.deviceKinds };
+      ? { status: "unsupported", deviceKinds: [], platforms: [] }
+      : {
+          status: "ok",
+          deviceKinds: support.deviceKinds,
+          platforms: support.platforms ?? ["android"],
+        };
   } catch {
-    return { status: "unreachable", deviceKinds: [] };
+    return { status: "unreachable", deviceKinds: [], platforms: [] };
   } finally {
     clearTimeout(timer);
   }
@@ -143,6 +152,7 @@ async function listDeviceHosts(app: FastifyInstance): Promise<DeviceHostEntry[]>
       name: local?.name ?? "Local",
       status: "ok",
       deviceKinds: localDeviceKinds(app),
+      platforms: await localDevicePlatforms(app),
     },
     ...remoteEntries,
   ];

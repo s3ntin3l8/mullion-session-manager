@@ -2,7 +2,18 @@
 // execution. Split out the same way bridges.ts is: one file per backend
 // route module (routes/devices.ts).
 import { request } from "./client.js";
-import type { Device, DeviceHostEntry, DiscoveredDevice, PairAndConnectBody } from "./types.js";
+import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
+import type {
+  Device,
+  DeviceHostEntry,
+  DiscoveredDevice,
+  IosSimulator,
+  PairAndConnectBody,
+} from "./types.js";
+
+export type CreateDeviceBody =
+  | { platform?: "android"; avdName: string; projectId?: number; name?: string; hostId?: string }
+  | { platform: "ios"; udid: string; projectId?: number; name?: string; hostId?: string };
 
 export const devicesApi = {
   listDevices: () => request<Device[]>("/api/devices"),
@@ -12,7 +23,14 @@ export const devicesApi = {
   // One entry per host that could hold a device, with the kinds it can run.
   listDeviceHosts: () => request<DeviceHostEntry[]>("/api/devices/hosts"),
 
-  createDevice: (body: { avdName: string; projectId?: number; name?: string; hostId?: string }) =>
+  listSimulators: (hostId?: string) =>
+    request<IosSimulator[]>(
+      hostId && hostId !== LOCAL_HOST_ID
+        ? `/api/simulators?hostId=${encodeURIComponent(hostId)}`
+        : "/api/simulators",
+    ),
+
+  createDevice: (body: CreateDeviceBody) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(body) }),
 
   // Issue #1378's mDNS snapshot of nearby phones in Wireless debugging mode.
