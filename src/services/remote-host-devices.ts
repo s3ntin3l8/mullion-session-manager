@@ -97,6 +97,10 @@ export function createDevicesClient({ request, openInbound }: DevicesClientDeps)
       return (await request<LiveDevicesResponse>("/internal/devices/live")).devices;
     },
 
+    liveWithPorts(): Promise<LiveDevicesResponse> {
+      return request<LiveDevicesResponse>("/internal/devices/live");
+    },
+
     async discovered(): Promise<DiscoveredDevice[]> {
       return (await request<DiscoveredDevicesResponse>("/internal/devices/discovered")).devices;
     },

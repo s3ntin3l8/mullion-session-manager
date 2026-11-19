@@ -129,9 +129,15 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
     },
   );
 
-  app.get<{ Reply: LiveDevicesResponse }>("/internal/devices/live", rateLimit, async () => ({
-    devices: app.device.list(),
-  }));
+  app.get<{ Reply: LiveDevicesResponse }>("/internal/devices/live", rateLimit, async () => {
+    const devices = app.device.list();
+    const ports: Record<string, number> = {};
+    for (const d of devices) {
+      const port = app.device.get(d.id)?.port ?? null;
+      if (port !== null) ports[d.id] = port;
+    }
+    return { devices, ports };
+  });
 
   app.get<{ Reply: DiscoveredDevicesResponse }>(
     "/internal/devices/discovered",

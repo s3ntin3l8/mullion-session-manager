@@ -41,6 +41,9 @@ export interface SpawnDeviceResponse {
 
 export interface LiveDevicesResponse {
   devices: DeviceInfo[];
+  /** Emulator ports keyed by device id. Absent from an agent that predates
+   * the field (#3290). */
+  ports?: Record<string, number>;
 }
 
 export interface SimulatorsResponse {

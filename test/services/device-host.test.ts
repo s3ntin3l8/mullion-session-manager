@@ -15,7 +15,7 @@ import {
   liveInfoForRows,
 } from "../../src/services/device-host.js";
 import { HostRequestError } from "../../src/services/remote-host-errors.js";
-import { getDeviceRow, insertDevice } from "../../src/services/device-store.js";
+import { getDeviceRow, insertDevice, setDevicePort } from "../../src/services/device-store.js";
 import { createHost } from "../../src/services/host-registry.js";
 import type { DeviceInfo } from "../../src/services/device-drivers/types.js";
 
@@ -33,6 +33,7 @@ const devices = {
   kinds: vi.fn(),
   spawn: vi.fn(),
   live: vi.fn(),
+  liveWithPorts: vi.fn(),
   terminate: vi.fn(),
   action: vi.fn(),
   pair: vi.fn(),
@@ -206,19 +207,69 @@ describe("DeviceHost", () => {
     const a2 = emulator(app, mac);
     const b1 = emulator(app, host(app, "down"));
     const localRow = emulator(app, "local");
-    client.devices.live.mockImplementation(async () => {
-      if (client.devices.live.mock.calls.length === 2) throw new Error("ECONNREFUSED");
-      return [info(a1.id)];
+    client.devices.liveWithPorts.mockImplementation(async () => {
+      if (client.devices.liveWithPorts.mock.calls.length === 2) throw new Error("ECONNREFUSED");
+      return { devices: [info(a1.id)] };
     });
     // Both hosts share one fake client, so make the first call "mac" and the second "down".
     const rows = [a1, a2, b1, localRow].map((r) => getDeviceRow(app, r.id)!);
     const lives = await liveInfoForRows(app, rows);
 
-    expect(client.devices.live).toHaveBeenCalledTimes(2);
+    expect(client.devices.liveWithPorts).toHaveBeenCalledTimes(2);
     expect(lives.get(a1.id)).toEqual({ live: info(a1.id), unreachable: false });
     expect(lives.get(a2.id)).toEqual({ live: undefined, unreachable: false });
     expect(lives.get(b1.id)).toEqual({ live: undefined, unreachable: true });
     expect(lives.get(localRow.id)).toEqual({ live: undefined, unreachable: false });
+    expect(getDeviceRow(app, a1.id)!.port).toBeNull();
+  });
+
+  it("backfills a null remote emulator port from liveInfoForRows and logs without overwriting a different persisted port", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const missing = emulator(app, mac);
+    const mismatch = emulator(app, mac);
+    setDevicePort(app, mismatch.id, 5556);
+    const warnSpy = vi.spyOn(app.log, "warn");
+    client.devices.liveWithPorts.mockResolvedValue({
+      devices: [info(missing.id), info(mismatch.id)],
+      ports: { [String(missing.id)]: 5554, [String(mismatch.id)]: 5558 },
+    });
+
+    await liveInfoForRows(app, [getDeviceRow(app, missing.id)!, getDeviceRow(app, mismatch.id)!]);
+
+    expect(getDeviceRow(app, missing.id)!.port).toBe(5554);
+    expect(getDeviceRow(app, mismatch.id)!.port).toBe(5556);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: mismatch.id,
+        hostId: mac,
+        persistedPort: 5556,
+        livePort: 5558,
+      }),
+      expect.stringContaining("differs from persisted port"),
+    );
+  });
+
+  it("logs when a remote spawn returns a different port than persisted", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const row = emulator(app, mac);
+    setDevicePort(app, row.id, 5554);
+    const warnSpy = vi.spyOn(app.log, "warn");
+    client.devices.spawn.mockResolvedValue({ info: info(row.id), port: 5556 });
+
+    await getDeviceHost(app, mac).getOrCreate(getDeviceRow(app, row.id)!);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: row.id,
+        hostId: mac,
+        persistedPort: 5554,
+        livePort: 5556,
+      }),
+      expect.stringContaining("different port than persisted"),
+    );
+    expect(getDeviceRow(app, row.id)!.port).toBe(5556);
   });
 
   it("routes pair and discovered to the remote client or local manager", async () => {
