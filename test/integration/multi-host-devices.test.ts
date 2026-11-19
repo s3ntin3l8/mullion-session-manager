@@ -33,8 +33,20 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return mockChildProcessSpawn(actual, { passthrough: ["git"] });
 });
+vi.mock("../../src/services/avd-manager.js", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    listAvds: vi.fn(),
+    listDeviceProfiles: vi.fn(),
+    listInstalledSystemImages: vi.fn(),
+    createAvd: vi.fn(),
+  };
+});
 
 const { buildApp } = await import("../../src/app.js");
+const { listAvds, listDeviceProfiles, listInstalledSystemImages, createAvd } =
+  await import("../../src/services/avd-manager.js");
 
 const AGENT_TOKEN = "device-agent-token";
 const primaryDb = path.join(
@@ -147,7 +159,13 @@ describe("devices on an agent host (issue #3200)", () => {
     fs.rmSync(primaryDb, { force: true });
     await warmSqliteBinding();
     agent = await buildAndListen(
-      { MULLION_ROLE: "agent", MULLION_AGENT_TOKEN: AGENT_TOKEN, DEVICE_ENABLED: "true" },
+      {
+        MULLION_ROLE: "agent",
+        MULLION_AGENT_TOKEN: AGENT_TOKEN,
+        DEVICE_ENABLED: "true",
+        DEVICE_AVDMANAGER_PATH: "/usr/bin/avdmanager",
+        DEVICE_ANDROID_SDK_ROOT: "/opt/android-sdk",
+      },
       "linux",
     );
     primary = await buildAndListen({ DATABASE_URL: `file:${primaryDb}` });
@@ -184,6 +202,19 @@ describe("devices on an agent host (issue #3200)", () => {
     live.clear();
     nextPort = 5554;
     videoListeners = [];
+    vi.mocked(listAvds).mockReset().mockResolvedValue(["dev35", "dev36"]);
+    vi.mocked(listDeviceProfiles).mockReset().mockResolvedValue(["pixel_7"]);
+    vi.mocked(listInstalledSystemImages)
+      .mockReset()
+      .mockReturnValue([
+        {
+          packagePath: "system-images;android-35;google_apis;x86_64",
+          apiLevel: "35",
+          tagDisplay: "Google APIs",
+          abi: "x86_64",
+        },
+      ]);
+    vi.mocked(createAvd).mockReset().mockResolvedValue(undefined);
     driver.screenshot.mockReset().mockResolvedValue(new Uint8Array());
     driver.tap.mockReset().mockResolvedValue(undefined);
     driver.input.mockReset().mockResolvedValue(undefined);
@@ -981,6 +1012,146 @@ describe("devices on an agent host (issue #3200)", () => {
         agentDiscSpy.mockRestore();
         localDiscSpy.mockRestore();
       }
+    });
+  });
+
+  describe("AVD listing and creation on an agent host (issue #3272)", () => {
+    it("rejects unauthenticated requests to /internal/avds* and /internal/system-images and /internal/device-profiles", async () => {
+      for (const [method, url] of [
+        ["GET", "/internal/avds"],
+        ["GET", "/internal/system-images"],
+        ["GET", "/internal/device-profiles"],
+        ["POST", "/internal/avds"],
+      ] as const) {
+        const res = await agent.app.inject({
+          method,
+          url,
+          ...(method === "POST"
+            ? {
+                payload: {
+                  name: "pixel_test",
+                  systemImage: "system-images;android-35;google_apis;x86_64",
+                  deviceProfile: "pixel_7",
+                },
+              }
+            : {}),
+        });
+        expect(res.statusCode).toBe(401);
+      }
+    });
+
+    it("lists the agent's AVDs, system images, and device profiles via ?hostId=", async () => {
+      vi.mocked(listAvds).mockResolvedValueOnce(["agent_avd_1", "agent_avd_2"]);
+      const avdsRes = await primary.app.inject({
+        method: "GET",
+        url: `/api/avds?hostId=${encodeURIComponent(hostId)}`,
+      });
+      expect(avdsRes.statusCode).toBe(200);
+      expect(avdsRes.json()).toEqual({ avds: ["agent_avd_1", "agent_avd_2"] });
+
+      const imagesRes = await primary.app.inject({
+        method: "GET",
+        url: `/api/system-images?hostId=${encodeURIComponent(hostId)}`,
+      });
+      expect(imagesRes.statusCode).toBe(200);
+      expect(imagesRes.json().systemImages).toEqual([
+        expect.objectContaining({ packagePath: "system-images;android-35;google_apis;x86_64" }),
+      ]);
+
+      const profilesRes = await primary.app.inject({
+        method: "GET",
+        url: `/api/device-profiles?hostId=${encodeURIComponent(hostId)}`,
+      });
+      expect(profilesRes.statusCode).toBe(200);
+      expect(profilesRes.json()).toEqual({ deviceProfiles: ["pixel_7"] });
+    });
+
+    it("creates an AVD on the agent host via POST /api/avds and forwards agent refusals", async () => {
+      const okRes = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId,
+          name: "remote_avd",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+          sdcardSize: "512M",
+        },
+      });
+      expect(okRes.statusCode).toBe(201);
+      expect(okRes.json()).toEqual({ name: "remote_avd" });
+      expect(createAvd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          avdmanagerPath: "/usr/bin/avdmanager",
+          name: "remote_avd",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+          sdcardSize: "512M",
+        }),
+      );
+
+      // Agent allowlists systemImage against its own installed images.
+      const badImageRes = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId,
+          name: "remote_avd_2",
+          systemImage: "system-images;android-99;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+        },
+      });
+      expect(badImageRes.statusCode).toBe(400);
+      expect(badImageRes.json().message).toContain("installed system images");
+
+      // Agent allowlists deviceProfile against its own known profiles.
+      const badProfileRes = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId,
+          name: "remote_avd_3",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "no_such_profile",
+        },
+      });
+      expect(badProfileRes.statusCode).toBe(400);
+      expect(badProfileRes.json().message).toContain("known device profiles");
+    });
+
+    it("answers 503 (not 500) when the agent host is unreachable, and 400 for an unknown hostId", async () => {
+      const deadGet = await primary.app.inject({
+        method: "GET",
+        url: `/api/avds?hostId=${encodeURIComponent(deadHostId)}`,
+      });
+      expect(deadGet.statusCode).toBe(503);
+
+      const deadPost = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId: deadHostId,
+          name: "remote_avd",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+        },
+      });
+      expect(deadPost.statusCode).toBe(503);
+
+      const unknownGet = await primary.app.inject({
+        method: "GET",
+        url: "/api/avds?hostId=no-such-host",
+      });
+      expect(unknownGet.statusCode).toBe(400);
+    });
+
+    it("refuses POST /api/devices with 400 naming the host and inserts no row when the agent lacks the AVD", async () => {
+      const res = await createDevice({ avdName: "missing_on_agent" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain(hostId);
+      expect(res.json().message).toContain("missing_on_agent");
+      expect(primary.app.db.select().from(devices).all()).toEqual([]);
+      expect(spies.getOrCreate).not.toHaveBeenCalled();
     });
   });
 });

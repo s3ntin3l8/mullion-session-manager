@@ -224,6 +224,20 @@ function safeReaddir(dir: string): string[] {
   }
 }
 
+export interface CreateAvdInput {
+  name?: string;
+  systemImage?: string;
+  deviceProfile?: string;
+  sdcardSize?: string;
+  ramSize?: string;
+  dataPartitionSize?: string;
+}
+
+export interface CreateAvdResult {
+  name: string;
+  warning?: string;
+}
+
 export interface CreateAvdOptions {
   avdmanagerPath: string;
   name: string;

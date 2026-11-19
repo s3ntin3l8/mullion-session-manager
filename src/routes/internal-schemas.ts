@@ -99,6 +99,29 @@ export const DEVICE_PAIR_SCHEMA = {
   },
 } as const;
 
+export interface AvdCreateBody {
+  name: string;
+  systemImage: string;
+  deviceProfile: string;
+  sdcardSize?: string;
+  ramSize?: string;
+  dataPartitionSize?: string;
+}
+
+export const AVD_CREATE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "systemImage", "deviceProfile"],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 256 },
+    systemImage: { type: "string", minLength: 1, maxLength: 256 },
+    deviceProfile: { type: "string", minLength: 1, maxLength: 256 },
+    sdcardSize: { type: "string", maxLength: 32 },
+    ramSize: { type: "string", maxLength: 32 },
+    dataPartitionSize: { type: "string", maxLength: 32 },
+  },
+} as const;
+
 export const SESSION_ID_PARAMS_SCHEMA = {
   type: "object",
   required: ["id"],

@@ -33,6 +33,7 @@ import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
 import { createBrowserClient, type BrowserClient } from "./remote-host-browser.js";
+import { createAvdsClient, type AvdsClient } from "./remote-host-avds.js";
 import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
 import { createStreamsClient, type StreamsClient } from "./remote-host-streams.js";
 import { createPreviewsClient, type PreviewsClient } from "./remote-host-previews.js";
@@ -363,6 +364,8 @@ export class RemoteHostClient {
   // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts, remote-host-browser.ts, remote-host-streams.ts).
   private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
+
+  readonly avds: AvdsClient = createAvdsClient({ request: this.boundRequest });
 
   readonly devices: DevicesClient = createDevicesClient({
     request: this.boundRequest,
