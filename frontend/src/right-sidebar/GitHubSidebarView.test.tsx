@@ -59,7 +59,6 @@ const status = (over: Partial<GitHubStatus> = {}): GitHubStatus => ({
 
 const actions = {
   onOpenGit: vi.fn(),
-  onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
   onOpenAgentRules: vi.fn(),
@@ -221,7 +220,6 @@ describe("GitHubSidebarView", () => {
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
     expect(screen.queryByRole("menuitem", { name: /GitHub panel/ })).toBeNull();
-    expect(actions.onOpenGitHub).not.toHaveBeenCalled();
   });
 
   it("the ⋯ menu opens the repo on GitHub", async () => {

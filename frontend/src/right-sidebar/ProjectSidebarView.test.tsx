@@ -6,7 +6,6 @@ import { ProjectSidebarView } from "./ProjectSidebarView.js";
 
 const actions = {
   onOpenGit: vi.fn(),
-  onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
   onOpenAgentRules: vi.fn(),

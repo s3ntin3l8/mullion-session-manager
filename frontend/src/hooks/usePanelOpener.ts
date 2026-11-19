@@ -184,14 +184,14 @@ export interface UsePanelOpenerResult {
 // hook at the exact position `onOpenSession`'s own declaration used to
 // occupy, before both of those.
 //
-// Five of the twelve (onOpenGitHub/onOpenAgentRules/
-// onOpenDockConfig/onOpenSkills/onOpenBrowser) share one truly identical
+// Four of the twelve (onOpenAgentRules/onOpenDockConfig/onOpenSkills/
+// onOpenBrowser) share one truly identical
 // shape (open-or-focus-by-`<kind>-<projectId>`, float-if-tiled-else-dock,
 // project-derived title) and are built from one shared pure helper,
 // openOrFocusProjectPanel (panelUtils.ts), parameterized by the config
 // table above — same "pure function in panelUtils.ts, wrapped in a
 // useCallback here" split as openSessionPanel/openTimelinePanel already
-// use. The other seven (onOpenGit, onOpenSession, onOpenSessionAsFloat, onOpenTimeline,
+// use. The other eight (onOpenGitHub, onOpenGit, onOpenSession, onOpenSessionAsFloat, onOpenTimeline,
 // onOpenTasks, onOpenBrowserUrl, onOpenBlankBrowser) each have genuinely
 // distinct logic — see their own doc comments below — and stay as
 // individually-written callbacks rather than being forced through a shared

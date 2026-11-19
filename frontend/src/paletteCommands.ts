@@ -1,5 +1,4 @@
 import type { SettingsSection } from "./settings/settingsSections.js";
-import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import type { ComponentType, CSSProperties } from "react";
 import {
   BotIcon,
@@ -119,7 +118,6 @@ export interface PaletteCommandOpeners {
 }
 
 export interface PaletteCommandContext {
-  layoutTier: LayoutTier;
   projectId: number | null;
   projectName: string | null;
   favoriteUrls: { id: number | string; url: string; label: string }[];

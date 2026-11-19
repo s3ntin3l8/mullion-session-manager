@@ -38,7 +38,6 @@ function status(overrides: Partial<GitStatus> = {}): GitStatus {
 
 const actions = {
   onOpenGit: vi.fn(),
-  onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
   onOpenAgentRules: vi.fn(),

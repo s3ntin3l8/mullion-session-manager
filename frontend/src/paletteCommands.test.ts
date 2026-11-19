@@ -28,7 +28,6 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     prune: vi.fn(),
   };
   const context: PaletteCommandContext = {
-    layoutTier: "desktop",
     projectId: 5,
     projectName: "mullion",
     favoriteUrls: [],
@@ -94,13 +93,12 @@ describe("buildPaletteCommands", () => {
     ]);
   });
 
-  it.each(["phone", "tablet", "desktop"] as const)(
-    "lists exactly the same default rows on %s",
-    (layoutTier) => {
+  // No tier input exists any more, so the list cannot differ by tier.
+  it("lists exactly the default rows, with every opener wired", () => {
+    {
       const { context } = ctx();
       const commands = buildPaletteCommands({
         ...context,
-        layoutTier,
         open: {
           ...context.open,
           newSession: vi.fn(),
@@ -119,8 +117,8 @@ describe("buildPaletteCommands", () => {
         "Project: mullion",
         "Settings",
       ]);
-    },
-  );
+    }
+  });
 
   it("Browser opens the agent's browser for the active session, else the preview targets", () => {
     const { context, open } = ctx();
@@ -518,14 +516,12 @@ describe("git / GitHub deep-link commands", () => {
   });
 });
 
-describe("tier-specific command placement", () => {
-  it.each(["phone", "tablet", "desktop"] as const)(
-    "keeps only general Settings visible on %s",
-    (layoutTier) => {
+describe("command placement", () => {
+  it("keeps only the default rows listed, and the rest search-only", () => {
+    {
       const { context } = ctx();
       const commands = buildPaletteCommands({
         ...context,
-        layoutTier,
         activeSession: makeSession({ id: 1 }),
         open: {
           ...context.open,
@@ -548,8 +544,8 @@ describe("tier-specific command placement", () => {
       ])
         expect(byId[id].placement).toBe("search");
       expect(byId.git).toBeUndefined();
-    },
-  );
+    }
+  });
   it.each([null, "phone-tier", "coarse-pointer"] as const)(
     "keeps Preview search-only whatever the Dock availability %s",
     (dockUnavailable) => {

@@ -2744,6 +2744,30 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.queryByText("Integrations")).toBeNull();
   });
 
+  it.each(["phone", "tablet", "desktop"] as const)(
+    "lists the same default rows, in the same two groups, on %s",
+    async (layoutTier) => {
+      renderPalette(openers(), { layoutTier, onOpenSettings: vi.fn() });
+
+      await screen.findByRole("button", { name: /New session…/ });
+      const rows = Array.from(
+        document.querySelectorAll(".cmd-palette-group-label, .cmd-palette-list button"),
+      ).map((el) =>
+        el.classList.contains("cmd-palette-group-label")
+          ? `# ${el.textContent}`
+          : (
+              el.querySelector(".cmd-palette-title, .cmd-palette-row-title")?.textContent ??
+              el.textContent ??
+              ""
+            ).trim(),
+      );
+      const text = rows.join("|");
+      expect(text).toMatch(
+        /^# Create\|New session….*\|New workspace.*\|# Go to\|Task board.*\|Browser.*\|Project: mullion.*\|Settings/,
+      );
+    },
+  );
+
   it("opens Devices, Hosts, and Settings through the same callbacks the rest of the UI uses", async () => {
     const onOpenDevices = vi.fn();
     const onOpenHosts = vi.fn();

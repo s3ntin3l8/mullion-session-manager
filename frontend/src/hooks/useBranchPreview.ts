@@ -17,8 +17,8 @@ import { useDashboardStore } from "../store/index.js";
  * live one unchanged, but also restarts one whose dock session has died, so
  * it is made even when the links index already knows the preview. A PR's
  * start always goes through its own route, which also refuses a fork's head.
- * Every path lands in the dock's browser pane through the store intent, so a
- * standalone GitHub panel works the same as the sidebar.
+ * Every path lands in the dock's browser pane through the store intent, so the
+ * GitHub view works the same wherever it is shown.
  */
 
 export type PreviewTarget =

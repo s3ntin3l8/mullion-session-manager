@@ -21,7 +21,6 @@ export type RailBadge =
 // App.tsx so the sidebar never imports panel-opening machinery itself.
 export interface RightSidebarActions {
   onOpenGit: (projectId: number) => void;
-  onOpenGitHub: (projectId: number) => void;
   onOpenFileEditor: (projectId: number) => void;
   onOpenFile: (projectId: number, path: string, sessionId?: number) => void;
   onOpenAgentRules: (projectId: number) => void;
