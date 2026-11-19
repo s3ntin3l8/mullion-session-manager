@@ -959,10 +959,10 @@ describe("RightSidebar on the phone", () => {
     document.body.appendChild(card);
     card.focus();
     renderSidebar("phone");
-    open("github");
+    open("tasks");
     await userEvent.click(screen.getByRole("button", { name: "More actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Open GitHub panel" }));
-    expect(actions.onOpenGitHub).toHaveBeenCalledWith(1);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open task board" }));
+    expect(actions.onOpenTasks).toHaveBeenCalled();
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
     // Focus belongs to the pane being opened, not back on what had it before.
     expect(document.activeElement).not.toBe(card);

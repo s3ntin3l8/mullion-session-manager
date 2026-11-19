@@ -1006,7 +1006,7 @@ describe("closeLegacyPanels", () => {
     expect(panel.api.close).toHaveBeenCalledTimes(1);
   });
 
-  it("closes retired git panels by component kind, whatever their per-project id", () => {
+  it("closes retired git and github panels by component kind, whatever their per-project id", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "git-3", component: "git", params: { projectId: 3 } });
     api.addPanel({ id: "git-9", component: "git", params: { projectId: 9 } });
@@ -1024,10 +1024,11 @@ describe("closeLegacyPanels", () => {
     expect(swept).toEqual([
       ["git", 3],
       ["git", 9],
+      ["github", 3],
     ]);
     expect(api.getPanel("git-3")!.api.close).toHaveBeenCalledTimes(1);
     expect(api.getPanel("git-9")!.api.close).toHaveBeenCalledTimes(1);
-    expect(api.getPanel("github-3")!.api.close).not.toHaveBeenCalled();
+    expect(api.getPanel("github-3")!.api.close).toHaveBeenCalledTimes(1);
   });
 
   it("is a no-op and reports false when no legacy panel is present", () => {

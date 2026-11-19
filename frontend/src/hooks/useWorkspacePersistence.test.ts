@@ -470,6 +470,30 @@ describe("useWorkspacePersistence", () => {
     expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
   });
 
+  it("sweeps a restored retired github grid panel and opens the GitHub sidebar view for it", () => {
+    vi.useFakeTimers();
+    openRightSidebarView.mockClear();
+    const { api, addPanel } = makeMockApi();
+    const gh = addPanel("github-5", { projectId: 5 });
+    (gh.api as unknown as { component: string }).component = "github";
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(gh.api.close).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarView).toHaveBeenCalledWith("github", 5);
+    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+  });
+
   it("sweeps a restored retired git panel and opens Source Control for it, once", () => {
     vi.useFakeTimers();
     openRightSidebarView.mockClear();

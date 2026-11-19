@@ -28,7 +28,7 @@ import { BROWSER_PREVIEW_TITLE, browserPreviewTitle } from "../lib/browserTitles
 import { previewOpensInRail } from "../right-sidebar/viewBands.js";
 import { previewResetPatch } from "../lib/browserHandoff.js";
 
-// The near-identical project-scoped panel kinds (GitHub, Agent
+// The near-identical project-scoped panel kinds (Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
 // header comment in panelUtils.ts for the shared open-or-focus shape these
 // configs drive. Module-level (not created per-render) so each is a stable
@@ -36,11 +36,6 @@ import { previewResetPatch } from "../lib/browserHandoff.js";
 // over — this is what lets onOpenGitHub/onOpenGit/etc. below list only the
 // values that can actually change (dockviewApi/projects/layout) in their own useCallback dependency arrays, with no need
 // to also list the config object itself.
-const GITHUB_CONFIG: ProjectPanelKindConfig = {
-  kind: "github",
-  titleLabel: "GitHub",
-  applyDesktopPositioning: true,
-};
 const FILE_EDITOR_CONFIG: ProjectPanelKindConfig = {
   kind: "file-editor",
   titleLabel: "Files",
@@ -104,7 +99,8 @@ export interface UsePanelOpenerResult {
   // The command palette's "Open browser" (#3215): the same pane the
   // pane menu's item opens, the session's server-side browser.
   onOpenAgentBrowser: (session: Session) => void;
-  // Opens (or focuses) a project's GitHub panel.
+  // Opens the GitHub view in the right sidebar for a project (the grid panel
+  // it used to open is retired — see GitHubPanelRedirect.tsx).
   onOpenGitHub: (projectId: number) => void;
   // Opens the Source Control view in the right sidebar for a project (the
   // dock Git panel it used to open is retired — see GitPanelRedirect.tsx).
@@ -316,11 +312,11 @@ export function usePanelOpener({
 
   const onOpenGitHub = useCallback(
     (projectId: number) => {
-      if (!dockviewApi) return;
+      // A right-sidebar view, not a dock panel: no dockviewApi to wait for.
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, GITHUB_CONFIG);
+      useDashboardStore.getState().openRightSidebarView("github", projectId);
     },
-    [dockviewApi, projects, layout, leaveTaskView],
+    [leaveTaskView],
   );
 
   const onOpenGit = useCallback(

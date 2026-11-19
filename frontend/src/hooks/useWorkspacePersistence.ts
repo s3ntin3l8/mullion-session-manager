@@ -358,11 +358,13 @@ export function useWorkspacePersistence({
       // panels for unrelated reasons.
       // A swept retired `git` panel opens its project's Source Control view
       // (once — several stale panels would just fight over the drawer).
-      let openedSourceControl = false;
+      // The retired `github` grid panel does the same for the GitHub view.
+      const openedViews = new Set<string>();
       closedLegacyPanels = closeLegacyPanels(dockviewApi, (kind, projectId) => {
-        if (kind !== "git" || projectId == null || openedSourceControl) return;
-        openedSourceControl = true;
-        useDashboardStore.getState().openRightSidebarView("git", projectId);
+        if ((kind !== "git" && kind !== "github") || projectId == null) return;
+        if (openedViews.has(kind)) return;
+        openedViews.add(kind);
+        useDashboardStore.getState().openRightSidebarView(kind, projectId);
       });
       // Same self-heal for the five per-project setup panels that are now
       // tabs of one `project-hub` panel (ProjectHubPanel.tsx): converts any

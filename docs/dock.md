@@ -20,7 +20,7 @@ A project's own section can also show:
 
 - **GitHub status** — open issue/PR counts and a CI status dot, if a
   GitHub account is connected and the project has a `github.com` origin
-  remote. Clicking opens the GitHub panel. See
+  remote. Clicking opens the GitHub view in the right sidebar. See
   [`docs/github-integration.md`](github-integration.md).
 - **Browser preview** — a shortcut to open the project's dev server URL
   in a dockview panel, if one is configured. Clicking opens the browser
@@ -566,7 +566,7 @@ out the dock's own width — that's what this design replaces.
 | **Collapse/expand a project's section**     | Click the chevron on that project's own rail header                                                                                    |
 | **Pin a project into the dock**             | Use the "+ Add project" dropdown in the Dock header                                                                                    |
 | **Remove a pinned project**                 | Click the "x" on a manually pinned section (not shown for workspace-derived ones)                                                      |
-| **Open GitHub panel**                       | Click the GitHub status glance on a project's own header row                                                                           |
+| **Open GitHub (sidebar view)**              | Click the GitHub status glance on a project's own header row                                                                           |
 | **Open browser preview**                    | Click the browser URL row in a project's section                                                                                       |
 | **Check/pull a Docker service**             | Click the ⋯ menu on a discovered Docker monitor                                                                                        |
 | **Pin a second log pane**                   | Click the "pin" tag on any row — in ANY tiled project, not just the active one — other than the row currently driving the primary pane |

@@ -574,7 +574,7 @@ separate work.
 
 Use **Project → Dock → Previews** to configure the existing Dev server and additional named destinations such as Docker web or API docs. The Dev server field has moved out of Edit project. Preview configuration is stored in Mullion's database; changing an address does not edit `.crs/dock.json` or restart monitors.
 
-Destinations accept a port, `IP:port`, `hostname:port`, or a full HTTP(S) URL with a path/query. Shorthand uses HTTP. Each additional target chooses **Project host** (the default) or **Main Mullion server** as the connection origin; localhost refers to that machine. The Dock's **Preview ▾** menu shows names and destinations, **New preview tab**, and **Manage previews…**. The palette's Preview action offers the same choices when the Dock is hidden.
+Destinations accept a port, `IP:port`, `hostname:port`, or a full HTTP(S) URL with a path/query. Shorthand uses HTTP. Each additional target chooses **Project host** (the default) or **Main Mullion server** as the connection origin; localhost refers to that machine. The Dock's **Preview ▾** menu shows names and destinations, **New preview tab**, and **Manage previews…**. The palette's **Browser** row (a default row) offers the same choices, and opens the active session's agent browser instead when a session pane is active.
 
 Named targets require `PREVIEW_BASE_HOST`. Each has its own stable pane and preview slug. Reopening or reloading uses its saved destination; removing a target removes its registered preview. Targets are explicit destinations, independent of Docker discovery, monitor lifecycle, bookmarks, and branch/PR previews.
 

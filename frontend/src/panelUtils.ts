@@ -1392,10 +1392,10 @@ const LEGACY_PANEL_IDS = ["tasks"] as const;
 
 // Component kinds whose panels are swept by *kind* rather than by fixed id,
 // because their ids are per project (`git-<projectId>`, the retired dock Git
-// panel — Source Control now lives in the right sidebar; see
-// GitPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
+// panel and the retired GitHub grid panel — both live in the right
+// sidebar now; see GitPanelRedirect.tsx / GitHubPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
 // registered in panels/registry.tsx.
-const LEGACY_PANEL_KINDS = ["git"] as const;
+const LEGACY_PANEL_KINDS = ["git", "github"] as const;
 
 // The five per-project setup panels that now live as tabs of one
 // `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component

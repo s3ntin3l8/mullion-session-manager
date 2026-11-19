@@ -11,9 +11,11 @@ connected GitHub identity.
 - A **Dock widget row** for any project with a github.com `origin` remote,
   showing `owner/repo`, open issue count, open PR count, and a CI status dot
   (success / failure / in progress).
-- A **GitHub panel** (open it from the Dock row, or the command palette's
-  Integrations section) listing open PRs and issues with links, plus the
-  latest run status per Actions workflow.
+- A **GitHub view** in the right sidebar (open it from the Dock row's GitHub
+  chip, the rail's GitHub icon, or by typing "GitHub" in the command palette)
+  listing open PRs and issues with links, plus the latest run status per
+  Actions workflow. There is no separate grid panel: a saved layout that still
+  holds one is closed on load and opens this view instead.
 - From a PR's or issue's drill-in in that panel: **comment** on it, **reply to**
   and **resolve** a PR's review threads, and **submit a review** (Comment,
   Approve or Request changes). These are writes; see
