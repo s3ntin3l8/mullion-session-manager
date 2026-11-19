@@ -19,6 +19,7 @@ import {
   openTaskDetailPanel,
   openTimelinePanel,
   openBrowserPanePanel,
+  focusOpenBrowserPane,
 } from "../panelUtils.js";
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
 import { subscribeFilePathGone } from "../lib/filePathEvents.js";
@@ -166,6 +167,8 @@ export interface UsePanelOpenerResult {
   // panelUtils.ts. Also starts a stopped device on the way in; see the
   // implementation below.
   onOpenDevice: (device: Device) => void;
+  // #3403 — the right rail's Browser icon from 1100px. See the implementation.
+  onOpenRailBrowser: (projectId: number, session: Session | null) => void;
 }
 
 // Extracted from App.tsx (PR 34h of the hook-extraction series, the final PR
@@ -471,6 +474,31 @@ export function usePanelOpener({
     useDashboardStore.getState().requestPreviewPicker(projectId);
   }, []);
 
+  // The rail's Browser icon from 1100px (#3403): one entry point, so it
+  // never stacks a second Browser pane. An open pane is focused; else the
+  // followed session's agent browser, as the pane kebab opens it; else the
+  // project's preview, as the palette's "Open browser: preview…" does.
+  const onOpenRailBrowser = useCallback(
+    (projectId: number, session: Session | null) => {
+      // The followed session's pane, or one of this project's, before any
+      // other project's.
+      const sessions = useDashboardStore.getState().sessions;
+      const prefer = (params: Record<string, unknown>) => {
+        if (session && params.sessionId === session.id) return true;
+        if (params.projectId === projectId) return true;
+        const owner = sessions.find((s) => s.id === params.sessionId);
+        return owner?.projectId === projectId;
+      };
+      if (dockviewApi && focusOpenBrowserPane(dockviewApi, layout, prefer)) {
+        leaveTaskView();
+        return;
+      }
+      if (session) onOpenAgentBrowser(session);
+      else onOpenPreviewTargets(projectId);
+    },
+    [dockviewApi, layout, leaveTaskView, onOpenAgentBrowser, onOpenPreviewTargets],
+  );
+
   const onOpenBlankBrowser = useCallback(() => {
     if (previewOpensInRail()) {
       // An empty address, on whatever project the rail follows.
@@ -586,5 +614,6 @@ export function usePanelOpener({
     onOpenPreviewTargets,
     onOpenPreview,
     onOpenDevice,
+    onOpenRailBrowser,
   };
 }

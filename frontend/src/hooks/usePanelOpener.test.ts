@@ -64,6 +64,7 @@ function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overr
       close: vi.fn(),
       updateParameters: vi.fn(),
       location: { type: locationType },
+      component: (overrides as { component?: string }).component,
     },
     ...overrides,
   } as unknown as ReturnType<DockviewApi["getPanel"]>;
@@ -481,6 +482,67 @@ describe("usePanelOpener — onOpenAgentBrowser (#3215)", () => {
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenAgentBrowser(SESSION)).not.toThrow();
+  });
+});
+
+describe("usePanelOpener — onOpenRailBrowser (#3403)", () => {
+  beforeEach(() => requestPreviewPicker.mockClear());
+
+  it("opens the followed session's agent browser when no Browser pane is open", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenRailBrowser(1, SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "browserPane-1", component: "browserPane" }),
+    );
+    expect(requestPreviewPicker).not.toHaveBeenCalled();
+  });
+
+  it.each(["browserPane", "browser"])(
+    "focuses an open %s panel instead of adding a second one",
+    (component) => {
+      const api = mockDockviewApi();
+      const existing = api.addPanel({ id: "browser-9", component } as never);
+      (api.addPanel as ReturnType<typeof vi.fn>).mockClear();
+      const { result } = setup({ dockviewApi: api });
+
+      result.current.onOpenRailBrowser(1, SESSION);
+
+      expect(existing.api.setActive).toHaveBeenCalled();
+      expect(api.addPanel).not.toHaveBeenCalled();
+      expect(requestPreviewPicker).not.toHaveBeenCalled();
+    },
+  );
+
+  it("focuses this project's pane before another project's", () => {
+    const api = mockDockviewApi();
+    const withParams = (id: string, params: Record<string, unknown>) => {
+      const panel = api.addPanel({ id, component: "browser" } as never);
+      (panel.api as unknown as { getParameters: () => unknown }).getParameters = () => params;
+      return panel;
+    };
+    const other = withParams("browser-2", { projectId: 2 });
+    const own = withParams("browser-1", { projectId: 1 });
+    (api.addPanel as ReturnType<typeof vi.fn>).mockClear();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenRailBrowser(1, null);
+
+    expect(own.api.setActive).toHaveBeenCalled();
+    expect(other.api.setActive).not.toHaveBeenCalled();
+    expect(api.addPanel).not.toHaveBeenCalled();
+  });
+
+  it("opens the project's preview with no followed session", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenRailBrowser(1, null);
+
+    expect(requestPreviewPicker).toHaveBeenCalledWith(1);
+    expect(api.addPanel).not.toHaveBeenCalled();
   });
 });
 

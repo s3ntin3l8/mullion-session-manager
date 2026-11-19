@@ -48,6 +48,7 @@ const actions = {
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
   onOpenDevice: vi.fn(),
+  onOpenRailBrowser: vi.fn(),
 };
 
 function renderSidebar(tier: LayoutTier = "desktop") {

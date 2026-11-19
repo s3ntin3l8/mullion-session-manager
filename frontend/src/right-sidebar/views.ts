@@ -6,7 +6,7 @@
 // components (issue #2414). The registry lives in views-registry.ts and the
 // badge hooks in views-badges.ts.
 import type { ComponentType, SVGProps } from "react";
-import type { Device } from "../api/index.js";
+import type { Device, Session } from "../api/index.js";
 import type { CheckoutChoice } from "../hooks/useCheckoutTarget.js";
 import type { LayoutBand } from "../lib/layoutTierTypes.js";
 
@@ -32,6 +32,10 @@ export interface RightSidebarActions {
   onOpenTasks: () => void;
   /** Open a device's screen as a grid pane. */
   onOpenDevice: (device: Device) => void;
+  /** The rail's Browser icon from 1100px (#3403): focus the open Browser pane,
+   * else open `session`'s (null: no session, or the browser feature is off),
+   * else the project's preview. */
+  onOpenRailBrowser: (projectId: number, session: Session | null) => void;
 }
 
 export interface RightSidebarViewProps {
@@ -72,6 +76,10 @@ interface RightSidebarViewBase {
   // Dock. Declarative so a surface other than the rail (the phone's "more"
   // sheet) can read it without calling a hook. Absent: every band.
   bands?: readonly LayoutBand[];
+  // The view's rail icon stays in the bands outside `bands` (#3403), as a
+  // button that opens the grid pane the view stands in for instead of a view.
+  // Only Browser: the Dock icon stays in the companion bands.
+  railButtonOutsideBands?: boolean;
 }
 
 export interface ProjectSidebarView extends RightSidebarViewBase {

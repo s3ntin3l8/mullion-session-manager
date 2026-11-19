@@ -4,7 +4,8 @@
 // and on the phone the "more" sheet lists what the rail lists (design 9.4),
 // each opening full screen. From 1100px the browser is a grid pane and the
 // Dock the bottom panel, as they always were, so the two views are not
-// registered there.
+// registered there. The Browser's rail icon stays (`railButtonOutsideBands`,
+// #3403) as a button that opens the pane; the Dock's does not.
 //
 // `bands` on a registry entry is the declarative record (the panel reads it
 // to close a view the current band has no place for);
