@@ -413,7 +413,12 @@ needs:
 - `GET /internal/devices/live`, `POST /internal/devices/:id/terminate`,
   `POST /internal/devices/:id/action`, `POST /internal/devices/pair` and
   `GET /internal/devices/discovered` are the live-list, stop/delete,
-  one-shot-action, pairing and mDNS discovery counterparts. The action runs through the same `DeviceDriver`
+  one-shot-action, pairing and mDNS discovery counterparts. On the primary,
+  `POST /api/devices/pair`, `POST /api/devices/pair-and-connect` and
+  `GET /api/devices/discovered?hostId=…` accept an optional `hostId` (default
+  `"local"`): an unknown host or an agent predating those routes answers `400`,
+  an unreachable agent answers `503`, and a `discoveryId` only resolves against
+  the host it was listed from. The action runs through the same `DeviceDriver`
   as a local one, so a driver's 4xx (no live adb connection, unsupported
   action) is forwarded with its own status and message. A device-reason failure
   on an agent (such as a 5xx `DeviceActionError` or a failed teardown) is
@@ -720,21 +725,23 @@ the row** (two-phase: if teardown throws it returns 500 and keeps the row,
 marked `killed`, so the deletion never reports success for something still
 half-alive). `POST /api/devices` takes either
 `{avdName, projectId?, name?}` (emulator) or `{kind: "physical", address,
-projectId?, name?}` (physical); `POST /api/devices/pair` takes
-`{pairingAddress, pairingCode}` and creates no row.
+projectId?, name?}` (physical); `POST /api/devices/pair` takes `{pairingAddress, pairingCode, hostId?}` and
+creates no row.
 `POST /api/devices/pair-and-connect` (issue #1378) takes either
-`{discoveryId, pairingCode, connectAddress?, name?}` (drives pair+connect
-from the cached mDNS snapshot returned by `GET /api/devices/discovered`)
-or `{pairingAddress, connectAddress, pairingCode, name?}` (manual fallback
+`{discoveryId, pairingCode, connectAddress?, name?, hostId?}` (drives pair+connect
+from the cached mDNS snapshot returned by `GET /api/devices/discovered` for that
+same `hostId` — a `discoveryId` only resolves against the host it was listed from)
+or `{pairingAddress, connectAddress, pairingCode, name?, hostId?}` (manual fallback
 for networks where mDNS doesn't reach — both ports must be supplied). It
 inserts the row first (sync collision guard → 409 if an active physical
-row already owns the same connect address), then awaits pair() — a wrong
+row on that host already owns the same connect address), then awaits pair() — a wrong
 code rolls the insert back and returns 400 so an immediate retry re-pairs
 instead of hitting 409 — then kicks off connect fire-and-forget and
 returns 201. Connect failures after that surface asynchronously via the
-device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` returns the current mDNS snapshot
+device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` (with optional `?hostId=`) returns the current mDNS snapshot
 (an empty array when `DEVICE_DISCOVERY_ENABLED=false` or nothing has been
-advertised). `PATCH /api/devices/:id`
+advertised; `400` for an unknown or outdated host and `503` when the target agent
+is unreachable). `PATCH /api/devices/:id`
 (issue #1347) takes `{address}` and is **physical-only** (an emulator's
 `serial` is synthesized from its own `port` column, not user-supplied) — it
 rewrites the row's `serial` in place (keeping `id`/`name`/`projectId`/

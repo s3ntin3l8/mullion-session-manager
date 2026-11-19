@@ -1328,9 +1328,10 @@ does not report simulator support — update its agent."`. For `platform: "ios"`
 - **When the host is offline.** `GET /api/devices` still succeeds when an agent
   is down and marks its rows `hostUnreachable: true` with `live: null` (the UI
   shows `"unavailable — host unreachable"` and disables Start/Stop). Mutating
-  calls (`start`, `stop`, `delete`, `action`) answer `503` (or `502` when the
-  request may have been delivered), and the one read that has to reach the host
-  (`GET /api/simulators?hostId=…`) fails the same way.
+  calls (`start`, `stop`, `delete`, `action`, `pair`, `pair-and-connect`) answer
+  `503` (or `502` when the request may have been delivered), and the reads that
+  have to reach the host (`GET /api/simulators?hostId=…` and
+  `GET /api/devices/discovered?hostId=…`) fail the same way.
 
 See [`device-panel.md`](device-panel.md#devices-on-agent-hosts-issue-3200) for
 the internal request shapes, port reservation, and what is not covered yet.

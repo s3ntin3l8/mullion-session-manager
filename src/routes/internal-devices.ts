@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { attachSocketToDevice } from "./device.js";
+import { DEVICE_PAIR_RATE_LIMIT } from "./internal-rate-limits.js";
 import {
   DEVICE_ID_PARAMS_SCHEMA,
   DEVICE_PAIR_SCHEMA,
@@ -146,7 +147,7 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
   // re-validated on the agent because `adb pair` builds the adb service string.
   app.post<{ Body: DevicePairRequest; Reply: DevicePairResponse }>(
     "/internal/devices/pair",
-    { ...rateLimit, schema: { body: DEVICE_PAIR_SCHEMA } },
+    { ...DEVICE_PAIR_RATE_LIMIT, schema: { body: DEVICE_PAIR_SCHEMA } },
     async (request, reply) => {
       if (!app.devicePanelEnabled) return reply.badRequest(app.devicePanelUnavailableMessage);
       const { pairingAddress, pairingCode } = request.body;

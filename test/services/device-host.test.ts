@@ -9,7 +9,12 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { getDeviceHost, liveInfoForRows } from "../../src/services/device-host.js";
+import {
+  DevicePlacementError,
+  getDeviceHost,
+  liveInfoForRows,
+} from "../../src/services/device-host.js";
+import { HostRequestError } from "../../src/services/remote-host-errors.js";
 import { getDeviceRow, insertDevice } from "../../src/services/device-store.js";
 import { createHost } from "../../src/services/host-registry.js";
 import type { DeviceInfo } from "../../src/services/device-drivers/types.js";
@@ -242,5 +247,26 @@ describe("DeviceHost", () => {
     await local.pair("192.168.1.24:41234", "654321");
     expect(pairSpy).toHaveBeenCalledWith("192.168.1.24:41234", "654321");
     await expect(local.discovered()).resolves.toEqual([]);
+  });
+
+  it("maps an older agent's 404 on pair() and discovered() to DevicePlacementError", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const remote = getDeviceHost(app, mac);
+
+    client.devices.pair.mockRejectedValue(new HostRequestError(mac, 404, "Not Found"));
+    await expect(remote.pair("192.168.1.23:41234", "123456")).rejects.toThrow(DevicePlacementError);
+    await expect(remote.pair("192.168.1.23:41234", "123456")).rejects.toThrow(/update its agent/);
+
+    client.devices.discovered.mockRejectedValue(new HostRequestError(mac, 404, "Not Found"));
+    await expect(remote.discovered()).rejects.toThrow(DevicePlacementError);
+    await expect(remote.discovered()).rejects.toThrow(/update its agent/);
+
+    // Non-404 errors pass through unchanged so replyDeviceError forwards their status.
+    client.devices.pair.mockRejectedValue(new HostRequestError(mac, 400, "bad code"));
+    await expect(remote.pair("192.168.1.23:41234", "123456")).rejects.toThrow(HostRequestError);
+
+    client.devices.discovered.mockRejectedValue(new HostRequestError(mac, 500, "boom"));
+    await expect(remote.discovered()).rejects.toThrow(HostRequestError);
   });
 });

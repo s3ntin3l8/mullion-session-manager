@@ -251,12 +251,30 @@ class RemoteDeviceHost implements DeviceHost {
     return this.client.devices.simulators();
   }
 
-  pair(pairingAddress: string, pairingCode: string): Promise<void> {
-    return this.client.devices.pair(pairingAddress, pairingCode);
+  async pair(pairingAddress: string, pairingCode: string): Promise<void> {
+    try {
+      await this.client.devices.pair(pairingAddress, pairingCode);
+    } catch (err) {
+      if (err instanceof HostRequestError && err.statusCode === 404) {
+        throw new DevicePlacementError(
+          `Host ${this.hostId} does not support pairing — update its agent.`,
+        );
+      }
+      throw err;
+    }
   }
 
-  discovered(): Promise<DiscoveredDevice[]> {
-    return this.client.devices.discovered();
+  async discovered(): Promise<DiscoveredDevice[]> {
+    try {
+      return await this.client.devices.discovered();
+    } catch (err) {
+      if (err instanceof HostRequestError && err.statusCode === 404) {
+        throw new DevicePlacementError(
+          `Host ${this.hostId} does not support device discovery — update its agent.`,
+        );
+      }
+      throw err;
+    }
   }
 }
 
